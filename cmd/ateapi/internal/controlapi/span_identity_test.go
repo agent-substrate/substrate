@@ -67,9 +67,8 @@ func assertSpanStr(t *testing.T, attrs map[attribute.Key]attribute.Value, key at
 func TestSetSpanActorAttributes(t *testing.T) {
 	t.Parallel()
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "a1", Uid: "uid-a1", Version: 3},
-		ActorTemplateNamespace: "ns1",
-		ActorTemplateName:      "tmpl1",
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "a1", Uid: "uid-a1", Version: 3},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 	}
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
@@ -80,7 +79,7 @@ func TestSetSpanActorAttributes(t *testing.T) {
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, "a1")
 	assertSpanStr(t, attrs, ateattr.ActorUIDKey, "uid-a1")
 	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
-	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, "ns1")
+	assertSpanStr(t, attrs, ateattr.TemplateAtespaceKey, "ns1")
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 3 {
 		t.Errorf("%s = %v, want int64 3", ateattr.ActorVersionKey, v.String())
 	}
@@ -96,7 +95,7 @@ func TestSetSpanActorRefAttributes(t *testing.T) {
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, "team-a")
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, "a1")
 	// The ref-only stamp must not invent uid/template/version (not known pre-resolve).
-	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.TemplateNameKey, ateattr.TemplateNamespaceKey, ateattr.ActorVersionKey} {
+	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.TemplateNameKey, ateattr.TemplateAtespaceKey, ateattr.ActorVersionKey} {
 		if _, ok := attrs[k]; ok {
 			t.Errorf("unexpected %s on ref-only stamp", k)
 		}

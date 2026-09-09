@@ -125,10 +125,10 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 
 	dp := rm.ScopeMetrics[0].Metrics[0].Data.(metricdata.Histogram[float64]).DataPoints[0]
 	wantAttrs := map[string]string{
-		"ate.template.namespace": "team-a-ns",
-		"ate.template.name":      "tmpl-a",
-		"ate.router.outcome":     "ok",
-		"ate.router.resume":      "triggered",
+		"ate.template.atespace": "team-a-ns",
+		"ate.template.name":     "tmpl-a",
+		"ate.router.outcome":    "ok",
+		"ate.router.resume":     "triggered",
 	}
 
 	for k, want := range wantAttrs {

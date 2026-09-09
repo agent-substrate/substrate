@@ -68,11 +68,6 @@ spec:
           spec:
             description: spec defines the desired state of WorkerPool
             properties:
-              ateomImage:
-                description: AteomImage is the ateom container image to deploy as
-                  workers.
-                minLength: 1
-                type: string
               replicas:
                 description: Replicas is the number of worker pods to run.
                 format: int32
@@ -82,22 +77,15 @@ spec:
                 default: gvisor
                 description: |-
                   SandboxClass selects the sandbox runtime family for this pool, which drives
-                  the worker pod shape (KVM/vhost device mounts and node placement) and which
-                  SandboxConfigs are eligible. The concrete binary is still selected by
-                  AteomImage. Defaults to gvisor.
+                  the worker pod shape (KVM/vhost device mounts and node placement). The
+                  concrete binary is still selected by WorkerImage. Defaults to gvisor.
+                  The sandbox binaries themselves come from the SandboxConfig each
+                  ActorTemplate names (required).
 
                   See Also: TODOs in ActorTemplate SandboxClass
                 enum:
                 - gvisor
                 - microvm
-                type: string
-              sandboxConfigName:
-                description: |-
-                  SandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
-                  sandbox binaries. It overrides the cluster-wide default SandboxConfig for
-                  this pool's SandboxClass. The referenced config's SandboxClass must match
-                  this pool's SandboxClass. If empty, the default SandboxConfig for the
-                  SandboxClass is used.
                 type: string
               template:
                 description: Template holds optional metadata, scheduling, and resource
@@ -447,21 +435,15 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                 type: object
+              workerImage:
+                description: WorkerImage is the ateom container image to deploy as
+                  workers.
+                minLength: 1
+                type: string
             required:
-            - ateomImage
             - replicas
+            - workerImage
             type: object
-            x-kubernetes-validations:
-            - message: nvidia.com/gpu is only supported when sandboxClass is 'gvisor'
-              rule: '!has(self.sandboxClass) || self.sandboxClass == ''gvisor'' ||
-                !has(self.template) || !has(self.template.resources) || !((has(self.template.resources.limits)
-                && ''nvidia.com/gpu'' in self.template.resources.limits) || (has(self.template.resources.requests)
-                && ''nvidia.com/gpu'' in self.template.resources.requests))'
-            - message: 'nvidia.com/gpu must be set in limits: Kubernetes does not
-                admit a request for an extended resource without a matching limit'
-              rule: '!has(self.template) || !has(self.template.resources) || !has(self.template.resources.requests)
-                || !(''nvidia.com/gpu'' in self.template.resources.requests) || (has(self.template.resources.limits)
-                && ''nvidia.com/gpu'' in self.template.resources.limits)'
           status:
             description: status is the observed state of WorkerPool
             properties:

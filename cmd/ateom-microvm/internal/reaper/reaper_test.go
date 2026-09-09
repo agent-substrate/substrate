@@ -15,10 +15,8 @@
 package reaper
 
 import (
-	"io"
 	"os/exec"
 	"testing"
-	"time"
 )
 
 func TestRunReturnsCommandResult(t *testing.T) {
@@ -38,41 +36,4 @@ func TestRunCombinedReturnsOutput(t *testing.T) {
 	if string(out) != "hello\n" {
 		t.Fatalf("RunCombined output = %q, want %q", out, "hello\n")
 	}
-}
-
-// TestRunHoldsReapLock verifies the invariant that makes Run safe against the child
-// reaper (#418): while a guarded command is executing, the exclusive lock the reaper
-// takes before wait4(-1) cannot be acquired, so the reaper cannot collect the child
-// out from under cmd.Wait (which would surface as "waitid: no child processes").
-func TestRunHoldsReapLock(t *testing.T) {
-	// cat blocks until its stdin closes, so we control exactly when the guarded
-	// command exits — no sleeps, no timing guesses.
-	pr, pw := io.Pipe()
-	cmd := exec.Command("cat")
-	cmd.Stdin = pr
-
-	done := make(chan error, 1)
-	go func() { done <- Run(cmd) }()
-
-	// Spin until Run has taken the shared lock (and thus forked the child): while it
-	// holds RLock, the exclusive TryLock the reaper would use must fail.
-	deadline := time.Now().Add(5 * time.Second)
-	for lock.TryLock() {
-		lock.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatal("Run never acquired the reap lock")
-		}
-		time.Sleep(time.Millisecond)
-	}
-
-	// Release the child and confirm Run succeeds and frees the lock afterward.
-	_ = pw.Close()
-	if err := <-done; err != nil {
-		t.Fatalf("guarded command failed: %v", err)
-	}
-	if !lock.TryLock() {
-		t.Fatal("reap lock still held after the guarded command returned")
-	}
-	lock.Unlock()
-	_ = pr.Close()
 }

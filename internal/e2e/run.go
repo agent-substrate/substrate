@@ -15,6 +15,7 @@
 package e2e
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,6 +56,25 @@ func RunCmd(t *testing.T, name string, args ...string) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("Command failed: %s %s: %v", name, strings.Join(args, " "), err)
 	}
+}
+
+// RunCmdOutput executes the given command with custom environment variables
+// appended to the current process environment, streaming stderr like RunCmd
+// does, and returns the captured stdout. Fails the test if the command
+// returns an error.
+func RunCmdOutput(t *testing.T, env []string, name string, args ...string) []byte {
+	t.Helper()
+	t.Logf("Running command: %s %s", name, strings.Join(args, " "))
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), env...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	stderrColor := &ColorWriter{W: os.Stderr, ANSI: ansiRed}
+	cmd.Stderr = NewIndentWriter(stderrColor, "        ")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Command failed: %s %s: %v", name, strings.Join(args, " "), err)
+	}
+	return stdout.Bytes()
 }
 
 // RunCmdWithEnv executes the given command with custom environment variables

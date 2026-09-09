@@ -21,26 +21,16 @@ data:
   config.yaml: |
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
-      # Actor sandboxes behind a worker IP are replaced between requests. Do
-      # not retain an idle connection that may belong to the previous actor.
       backend:
-        poolMaxSize: 0
+        poolIdleTimeout: 5s
 
     frontendPolicies:
       tracing:
         host: $AGENTGATEWAY_OTLP_ADDRESS
         protocol: grpc
-        # Matches the router's dataPlaneTraceRatio; static config, so a router
-        # OTEL_TRACES_SAMPLER override must adjust it in step.
+        # Keep in sync with the router's dataPlaneTraceRatio.
         randomSampling: 0.01
 
-    # http/https serve direct (non-CONNECT) actor traffic only. connect.mode is
-    # a single global setting with no per-gateway override, and Tunnel mode's
-    # CONNECT interception happens below the per-request pipeline (at raw
-    # connection accept, before the method is even known) -- so a bind can't
-    # mix direct and CONNECT-tunnel traffic. CONNECT is served on its own
-    # dedicated binds below instead, mirroring Envoy's separate
-    # connect_terminate/connect_terminate_tls listeners.
     gateways:
       http:
         port: 8080
@@ -52,6 +42,22 @@ data:
           cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
           key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
 
+    backends:
+    - name: dynamic
+      dynamic: {}
+      policies:
+        # All actor traffic reaches atunnel over mTLS CONNECT.
+        backendTunnel:
+          proxy:
+            backend: /dynamic
+          mode: connect
+          policies:
+            backendTLS:
+              cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+              key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+              root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
+              insecureHost: true
+
     routes:
     - name: substrate-actors
       gateways:
@@ -61,82 +67,33 @@ data:
       - path:
           pathPrefix: /
       policies:
-        extProc:
-          host: 127.0.0.1:50051
-          failureMode: failClosed
-          processingOptions:
-            requestHeaderMode: send
-            responseHeaderMode: skip
-            requestBodyMode: none
-            responseBodyMode: none
-            requestTrailerMode: skip
-            responseTrailerMode: skip
-          # The router's ext_proc server (cmd/atenet/internal/router/extproc.go)
-          # resolves the actor from
-          # attributes["envoy.filters.http.ext_proc"]["filter_state['dev.ate.authority']"].
-          # For direct (non-CONNECT) traffic on this route, request.host is the
-          # client's own :authority/Host -- there's no tunnel to look past.
-          requestAttributes:
-            "filter_state['dev.ate.authority']": request.host
+        substrateIngress:
+          host: api.ate-system.svc:443
+          # AgentGateway only uses atunnel's CONNECT listener.
+          connectTargetPort: 8443
+          policies:
+            backendTLS:
+              cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+              key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+              root: /run/servicedns-ca/trust-bundle.pem
       backends:
-      - dynamic:
-          # The router reports the resolved worker atunnel address (host:443)
-          # as dynamic metadata rather than rewriting :authority -- see
-          # OriginalDstMetadataKey/OriginalDstAddressKey in xds.go. Reading it
-          # here means :authority/Host stays the actor's real DNS name the
-          # whole way through, so atunnel authorizes it directly with no
-          # restore-the-original-Host header needed.
-          target: extproc["envoy.filters.listener.original_dst"]["local"]
-        policies:
-          # atunnel serves HTTPS on each worker pod IP. Verify its certificate
-          # against the podidentity CA and present the router's podidentity
-          # credential. Worker SPIFFE IDs vary with their workload namespace,
-          # so skip DNS/IP hostname matching while retaining CA verification.
-          backendTLS:
-            cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-            key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-            root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
-            insecureHost: true
+      - backend: /dynamic
 
-    # CONNECT ingress, on its own dedicated ports (matching Envoy's
-    # connect/connect-tls listeners) because tunnelProtocol only applies to a
-    # whole bind, and Tunnel mode's global connect.mode would otherwise turn
-    # http/https above into CONNECT-only too. Terminating the tunnel here
-    # (rather than Route mode's raw pass-through) means every request inside
-    # it -- not just the initial CONNECT -- goes through ext_proc and dynamic
-    # backend resolution below, exactly like ordinary traffic. That's what
-    # lets a client reach a port other than an actor's primary one: the
-    # CONNECT's own :authority carries the target port (e.g.
-    # "<actor-dns-name>:9090"), survives into source.connectHeaders across
-    # every re-entered request (see the wildcard bind below), and resolves
-    # the actor and port the same way request.host does for direct traffic.
+    # Terminate client CONNECT before internal HTTP routing.
     binds:
     - port: 8081
       tunnelProtocol: connect
       listeners:
-      # No routes: this listener only ever sees the CONNECT itself: the
-      # request that matters is re-entered into the wildcard bind below.
       - protocol: HTTP
         routes: []
     - port: 8444
       tunnelProtocol: connect
       listeners:
-      # Terminate the outer TLS before serving CONNECT, so the CONNECT
-      # request and its headers are encrypted on the wire -- otherwise this
-      # bind would ignore this listener's TLS config and serve CONNECT in
-      # plaintext on the raw socket.
       - protocol: HTTPS
         tls:
           cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
           key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
         routes: []
-    # The wildcard internal bind: opens no socket, and is reached only by
-    # CONNECT re-entry from the binds above (regardless of the CONNECT's
-    # destination port, since an actor's exposed port is arbitrary and can't
-    # be enumerated ahead of time). This is where the actual actor route
-    # lives -- content-wise the same as substrate-actors above, except
-    # resolving the actor from the original CONNECT authority rather than
-    # this (re-entered) request's own, unrelated Host header.
     - mode: internal
       listeners:
       - protocol: HTTP
@@ -146,67 +103,69 @@ data:
           - path:
               pathPrefix: /
           policies:
-            extProc:
-              host: 127.0.0.1:50051
-              failureMode: failClosed
-              processingOptions:
-                requestHeaderMode: send
-                responseHeaderMode: skip
-                requestBodyMode: none
-                responseBodyMode: none
-                requestTrailerMode: skip
-                responseTrailerMode: skip
-              requestAttributes:
-                "filter_state['dev.ate.authority']": source.connectHeaders["host"]
+            substrateIngress:
+              host: api.ate-system.svc:443
+              connectTargetPort: 8443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns-ca/trust-bundle.pem
           backends:
-          - dynamic:
-              # See substrate-actors' backend above.
-              target: extproc["envoy.filters.listener.original_dst"]["local"]
-            policies:
-              backendTLS:
-                cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
-                insecureHost: true
+          - backend: /dynamic
+
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: atenet-egress-agentgateway-config
+  name: atenet-egress-agentgateway-substrate-config
   namespace: ate-system
 data:
   config.yaml: |
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     frontendPolicies:
-      connect:
-        mode: route
+      accessLog:
+        add:
+          substrate.connect.authority: source.connectHeaders["host"]
 
-    gateways:
-      egress:
-        port: 8443
-        protocol: HTTPS
+    binds:
+    # Authenticate the actor before accepting CONNECT.
+    - port: 8443
+      tunnelProtocol: connect
+      listeners:
+      - protocol: HTTPS
         tls:
           cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
           key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
           root: /run/actor-id-ca-certs/ca.crt
+        # CONNECT re-enters the internal bind below.
+        routes: []
 
-    routes:
-    - name: substrate-egress
-      gateways:
-      - egress
-      policies:
-        extProc:
-          host: 127.0.0.1:50051
-          failureMode: failClosed
-          requestAttributes:
-            ate.extproc.direction: "'egress'"
-            source.certificate: source.certificate
-          processingOptions:
-            requestHeaderMode: send
-            responseHeaderMode: skip
-            requestBodyMode: none
-            responseBodyMode: none
-            requestTrailerMode: skip
-            responseTrailerMode: skip
-      backends:
-      - dynamic: {}
+    # Route tunneled HTTP and pass through opaque streams.
+    - mode: internal
+      protocol: AUTO
+      listeners:
+      - protocol: TLS
+        hostname: "*"
+        tcpRoutes:
+        - backends:
+          - dynamic:
+              target: source.connectHeaders["host"]
+      - protocol: HTTP
+        routes:
+        - policies:
+            substrateEgress:
+              host: api.ate-system.svc:443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns-ca/trust-bundle.pem
+          backends:
+          - dynamic:
+              target: source.connectHeaders["host"]
+      - protocol: TCP
+        tcpRoutes:
+        - backends:
+          - dynamic:
+              target: source.connectHeaders["host"]

@@ -13,12 +13,17 @@
 // limitations under the License.
 
 // Package storetest provides isolated PostgreSQL-backed stores for tests.
+//
+// One PostgreSQL container is shared by every test in a package; each test gets
+// its own database. Nothing stops that container when the test binary exits, so
+// packages using this package must call [Shutdown] from their TestMain.
 package storetest
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +31,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -102,24 +108,53 @@ func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor
 	return created
 }
 
-// MustCreateActorSnapshot ensures snapshot's parent atespace exists, then
-// creates snapshot. Use the store method directly only in tests that exercise
+// MustCreateTag ensures tag's parent atespace exists, then stores
+// tag as given — ready or still pending, whichever state the test needs to
+// start from. Use the store method directly only in tests that exercise
 // missing-parent behavior.
-func MustCreateActorSnapshot(t *testing.T, ctx context.Context, s store.Interface, snapshot *ateapipb.ActorSnapshot) *ateapipb.ActorSnapshot {
+func MustCreateTag(t *testing.T, ctx context.Context, s store.Interface, tag *ateapipb.Tag) *ateapipb.Tag {
 	t.Helper()
-	atespace := snapshot.GetMetadata().GetAtespace()
+	atespace := tag.GetMetadata().GetAtespace()
+	name := tag.GetMetadata().GetName()
 	MustCreateAtespace(t, ctx, s, atespace)
-	created, err := s.CreateActorSnapshot(ctx, snapshot)
+	created, err := s.CreateTag(ctx, tag)
 	if err != nil {
-		t.Fatalf("creating test actor snapshot %q/%q: %v", atespace, snapshot.GetMetadata().GetName(), err)
+		t.Fatalf("creating test tag %q/%q: %v", atespace, name, err)
 	}
 	return created
+}
+
+// RunTests runs m and terminates the shared PostgreSQL container afterwards.
+// Packages with no other TestMain work should use it as their whole TestMain;
+// the rest must call [Shutdown] themselves.
+func RunTests(m *testing.M) {
+	code := m.Run()
+	Shutdown()
+	os.Exit(code)
+}
+
+// Shutdown terminates the shared PostgreSQL container, if one was started.
+func Shutdown() {
+	if adminPool != nil {
+		adminPool.Close()
+		adminPool = nil
+	}
+	if containerPG != nil {
+		if err := containerPG.Terminate(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "terminating PostgreSQL testcontainer: %v\n", err)
+		}
+		containerPG = nil
+	}
 }
 
 func requireAdminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
+		if err := dockerenv.Configure(ctx); err != nil {
+			containerErr = err
+			return
+		}
 		containerPG, containerErr = postgres.Run(ctx, "postgres:18-alpine",
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("postgres"),

@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -26,23 +27,28 @@ import (
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -66,6 +72,7 @@ var (
 
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
+	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
@@ -151,7 +158,6 @@ func main() {
 	}
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
@@ -185,21 +191,30 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
+	objectStore, err := newObjectStore(ctx)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
+	}
+
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	controlSrv := controlapi.NewRPCService(persistence, workerCache, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins, objectStore)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, sandboxConfigLister)
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
 	templateReconciler.Start(shutdownCtx)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
-		serverboot.Fatal(ctx, "while loading the Actor ID CA", err)
+		serverboot.Fatal(ctx, "while loading the Actor ID certificate authority pool", err)
 	}
 
-	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, actorIDCAPool, persistence, workerCache)
-	debugSrv := debugapi.NewService(persistence)
+	actorIDJWTAuthorityPool, err := localjwtauthority.NewRefreshingPool(*actorIDJWTPoolFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
+	}
+
+	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, actorIDJWTAuthorityPool, actorIDCAPool, persistence, workerCache)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -234,7 +249,7 @@ func main() {
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
 	ateapipb.RegisterActorIdentityServer(mux, actorIdentitySrv)
-	ateapipb.RegisterDebugServer(mux, debugSrv)
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
@@ -287,6 +302,7 @@ func loadFlagsFromEnv() {
 		env  string
 	}{
 		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
+		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -301,6 +317,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("postgres-connection-string", *postgresConnectionString),
+		slog.String("postgres-schema", *postgresSchema),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -308,6 +325,35 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
+}
+
+// newObjectStore builds the client ate-api manages external snapshots with.
+// The backend is selected the same way atelet selects the one it reads and
+// writes snapshots through, so both ends of a snapshot's life agree on where
+// it lives.
+func newObjectStore(ctx context.Context) (objectstore.Store, error) {
+	switch backend := os.Getenv("ATE_STORAGE_BACKEND"); backend {
+	case "s3":
+		slog.InfoContext(ctx, "Using S3 storage backend")
+		// Depends on the standard AWS environment variables, which have to be
+		// set on the ate-api pod.
+		cfg, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading S3 config: %w", err)
+		}
+		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
+			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
+				o.UsePathStyle = true
+			}
+		})), nil
+	// GCS is currently the default, TODO: we assume workload identity / ADC
+	default:
+		client, err := storage.NewClient(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("creating GCS client: %w", err)
+		}
+		return objectstore.NewGCS(client), nil
+	}
 }
 
 // connectStore builds the PostgreSQL-backed store.Interface. Startup fails if
@@ -334,9 +380,12 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
 		if err == nil {
 			return persistence, nil
+		}
+		if !errors.Is(err, atepg.ErrUnavailable) {
+			return nil, err
 		}
 		connectErr = err
 		slog.WarnContext(ctx, "Failed to connect to PostgreSQL, retrying...", slog.Int("attempt", attempt), slog.Any("err", err))

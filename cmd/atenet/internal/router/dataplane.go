@@ -52,16 +52,16 @@ func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 func (s *RouterServer) startDataplane(ctx context.Context, g *errgroup.Group, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) error {
 	switch s.cfg.atenetRouter() {
 	case atenetRouterEnvoy:
-		s.startEnvoyDataplane(ctx, g, parkCfg, traceRootSamplingPercent)
+		return s.startEnvoyDataplane(ctx, g, parkCfg, traceRootSamplingPercent)
 	case atenetRouterAgentgateway:
 		// Agentgateway receives all routing configuration from its static file.
+		return nil
 	default:
 		return fmt.Errorf("unsupported atenet router %q", s.cfg.atenetRouter())
 	}
-	return nil
 }
 
-func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Group, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) {
+func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Group, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) error {
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 	xdsSrv.SetConnectPorts(s.cfg.ConnectPlainTextPort, s.cfg.ConnectTLSPort)
@@ -78,13 +78,15 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
-	ctrl := NewController(s.atStore, xdsSrv)
+
+	// The snapshot is a pure function of the configuration applied above, so it
+	// is built exactly once; an Envoy that connects later is served from the
+	// xDS cache.
+	if err := xdsSrv.UpdateSnapshot(); err != nil {
+		return fmt.Errorf("building the xDS snapshot: %w", err)
+	}
 
 	// Envoy receives all routing configuration from the local xDS server.
-	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting ActorTemplate controller")
-		return ctrl.Start(ctx)
-	})
 	g.Go(func() error {
 		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.Int("port", s.cfg.XdsPort))
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.XdsPort))
@@ -95,4 +97,5 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 
 		return xdsSrv.Serve(ctx, lis)
 	})
+	return nil
 }

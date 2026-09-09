@@ -18,7 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -194,6 +196,237 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 					}
 				}
 				cleanup()
+			}
+		})
+	}
+}
+
+// TestEnsureExternalSnapshotsReleased covers what a delete collects on its way
+// out: the external snapshot the actor owns, and any snapshot an abandoned
+// suspend left in flight, but never one the actor is only borrowing from a tag.
+func TestEnsureExternalSnapshotsReleased(t *testing.T) {
+	// inFlightSnapshotName names a snapshot written during a suspend operation
+	// that never finalized.
+	const inFlightSnapshotName = "2026-01-01t00-00-00z-abandoned"
+
+	tests := []struct {
+		name string
+		// tagOwnedSnapshot makes the actor's external snapshot a tag's rather than one
+		// it took itself, which is how an actor created from a tag starts out.
+		tagOwnedSnapshot bool
+		// inFlight, when set, names a snapshot an abandoned suspend left
+		// behind. It must always be collected by the delete.
+		inFlight            string
+		wantCurrentReleased bool
+	}{
+		{
+			name:                "releases the external snapshot the actor owns",
+			wantCurrentReleased: true,
+		},
+		{
+			// The actor can't delete a snapshot it only borrows from a tag:
+			// that snapshot goes away with the tag.
+			name:                "leaves an external snapshot borrowed from a tag in place",
+			tagOwnedSnapshot:    true,
+			wantCurrentReleased: false,
+		},
+		{
+			name:                "collects the external snapshot an abandoned suspend left in flight",
+			inFlight:            inFlightSnapshotName,
+			wantCurrentReleased: true,
+		},
+		{
+			name:                "collects an in-flight external snapshot even while borrowing",
+			tagOwnedSnapshot:    true,
+			inFlight:            inFlightSnapshotName,
+			wantCurrentReleased: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+			w, objects := newFinalizeWorkflow(persistence)
+
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
+			})
+
+			// The actor's prefix is keyed on the UID the store just assigned, so
+			// its snapshots can only be placed now.
+			current := mustActorSnapshotURI(t, template, actor, "current")
+			if tt.tagOwnedSnapshot {
+				current = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+			}
+			objects.PutSnapshot(t, current, "manifest.json")
+			inFlight := mustActorSnapshotURI(t, template, actor, inFlightSnapshotName)
+			if tt.inFlight != "" {
+				objects.PutSnapshot(t, inFlight, "manifest.json")
+			}
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: current.String()}
+				s.InProgressSnapshotName = tt.inFlight
+			})
+
+			if err := w.ensureExternalSnapshotsReleased(ctx, actor, template); err != nil {
+				t.Fatalf("ensureExternalSnapshotsReleased: %v", err)
+			}
+			if released := len(objects.Snapshot(t, current)) == 0; released != tt.wantCurrentReleased {
+				t.Errorf("current external snapshot released = %v, want %v", released, tt.wantCurrentReleased)
+			}
+			if tt.inFlight != "" && len(objects.Snapshot(t, inFlight)) != 0 {
+				t.Errorf("in-flight external snapshot %v was not released", inFlight)
+			}
+		})
+	}
+}
+
+// TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots covers that
+// any leaked resource in external storage is cleaned upon actor deletion because
+// they're under the same storage prefix:
+//   - objects that dont have an entry in the DB
+//   - a suspend that died before it recorded anything in the DB
+func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
+	})
+	otherActor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-2"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+
+	currentSnapshot := mustActorSnapshotURI(t, template, actor, "current")
+	strandedSnapshot := mustActorSnapshotURI(t, template, actor, "stranded")
+	otherActorsSnapshot := mustActorSnapshotURI(t, template, otherActor, "current")
+	for _, uri := range []resources.SnapshotURI{currentSnapshot, strandedSnapshot, otherActorsSnapshot} {
+		objects.PutSnapshot(t, uri, "manifest.json")
+	}
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: currentSnapshot.String()}
+	})
+
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor, template); err != nil {
+		t.Fatalf("ensureExternalSnapshotsReleased: %v", err)
+	}
+	if remaining := objects.Snapshot(t, strandedSnapshot); len(remaining) != 0 {
+		t.Errorf("stranded external snapshot %v was not released, %v remains", strandedSnapshot, remaining)
+	}
+	// Deletion should not release snapshots from other actors
+	if len(objects.Snapshot(t, otherActorsSnapshot)) == 0 {
+		t.Errorf("another actor's external snapshot %v was released", otherActorsSnapshot)
+	}
+}
+
+// TestDeleteActor_CollectsSnapshotsAfterWorkerDelete verifies that
+// deleting an actor whose suspend a worker delete crashed mid-finalize reclaims
+// every object that suspend wrote. CRASHED is terminal, so the actor delete is
+// the only collector left: whatever it cannot name is leaked for good.
+func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
+	tests := []struct {
+		name string
+		// hasBeenSuspended means the actor was replacing a snapshot it took
+		// itself, rather than suspending for the first time. Only the first
+		// suspend needs the retained in-progress name to find what it wrote; a
+		// replacement is already reachable through the snapshot it owns.
+		hasBeenSuspended bool
+	}{
+		{
+			name:             "replacing a snapshot the actor owned",
+			hasBeenSuspended: true,
+		},
+		{
+			name:             "first suspend, nothing to replace",
+			hasBeenSuspended: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+			objects := objectstoretest.New()
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			workerName := testWorkerUID("pod-1")
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						Worker:          &ateapipb.ObjectRef{Name: workerName},
+						WorkerNamespace: "worker-ns",
+						WorkerPool:      "pool",
+						WorkerPod:       "pod-1",
+						WorkerPodUid:    workerName,
+					},
+				},
+			})
+			if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+				Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
+				WorkerNamespace: "worker-ns",
+				WorkerPool:      "pool",
+				WorkerPod:       "pod-1",
+				WorkerPodUid:    workerName,
+				Status:          &ateapipb.WorkerStatus{},
+			}); err != nil {
+				t.Fatalf("CreateWorker: %v", err)
+			}
+			seedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
+				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorUid: actor.GetMetadata().GetUid(),
+			})
+
+			if tt.hasBeenSuspended {
+				previous := mustActorSnapshotURI(t, template, actor, "old")
+				objects.PutSnapshot(t, previous, "manifest.json")
+				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
+				})
+			}
+
+			actorWorkflow := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
+			// Suspend the actor as far as it gets: MarkSuspending mints the
+			// in-progress name, and the checkpoint writes under it
+			actor, err := actorWorkflow.ensureMarkedSuspending(ctx, actorRef, actor, template)
+			if err != nil {
+				t.Fatalf("ensureMarkedSuspending: %v", err)
+			}
+			fresh := mustActorSnapshotURI(t, template, actor, actor.GetStatus().GetInProgressSnapshotName())
+			objects.PutSnapshot(t, fresh, "manifest.json")
+
+			// The worker's pod goes away with the commit still outstanding, so
+			// the suspend never gets to finish.
+			if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker: %v", err)
+			}
+
+			// The actor is CRASHED and can only be deleted from here.
+			stored, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Fatalf("state = %v, want CRASHED", got)
+			}
+			if _, err := actorWorkflow.DeleteActor(ctx, actorRef, true); err != nil {
+				t.Fatalf("DeleteActor: %v", err)
+			}
+			if left := objects.Prefix(t, fresh.OwnerPrefix()); len(left) != 0 {
+				t.Errorf("deleting the actor left %v under its own prefix, want everything it wrote collected", left)
 			}
 		})
 	}

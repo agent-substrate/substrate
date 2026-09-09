@@ -16,6 +16,8 @@ package e2e
 
 import (
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -77,19 +79,21 @@ func renderServerPodDocs(t *testing.T, spec ServerPod) (*corev1.Pod, *corev1.Ser
 func TestRenderServerPod_GRPCProbe(t *testing.T) {
 	pod, service := renderServerPodDocs(t, ServerPod{
 		Name:       "grpcecho",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/grpcecho",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"grpc"},
 		Port:       50051,
 		GRPCProbe:  true,
 	})
 
 	container := pod.Spec.Containers[0]
-	if got, want := container.Image, "ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/grpcecho"; got != want {
+	if got, want := container.Image, "ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver"; got != want {
 		t.Errorf("container image = %q, want %q", got, want)
 	}
-	// The port has to reach the binary, the container port and the Service
-	// alike: the gateway's access log records whatever the caller dialed, and
-	// the networking suite greps for exactly this number.
-	if got, want := container.Args, []string{"--listen=:50051"}; len(got) != 1 || got[0] != want[0] {
+	// Args carry the subcommand ahead of the --listen the template appends. The
+	// port has to reach the binary, the container port and the Service alike:
+	// the gateway's access log records whatever the caller dialed, and the
+	// networking suite greps for exactly this number.
+	if got, want := container.Args, []string{"grpc", "--listen=:50051"}; !slices.Equal(got, want) {
 		t.Errorf("container args = %v, want %v", got, want)
 	}
 	if got := container.Ports[0].ContainerPort; got != 50051 {
@@ -132,7 +136,8 @@ func TestRenderServerPod_GRPCProbe(t *testing.T) {
 func TestRenderServerPod_HTTPProbe(t *testing.T) {
 	pod, _ := renderServerPodDocs(t, ServerPod{
 		Name:       "httporigin",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
 		Port:       8080,
 	})
 
@@ -151,6 +156,66 @@ func TestRenderServerPod_HTTPProbe(t *testing.T) {
 	}
 }
 
+// TestRenderServerPod covers where each port lands: every field kubelet or
+// the binary reaches follows the listener, while the Service alone keeps the
+// published port.
+func TestRenderServerPod(t *testing.T) {
+	tests := []struct {
+		name          string
+		spec          ServerPod
+		wantPublished int32 // the Service's port
+		wantListen    int   // args, containerPort, probe and Service targetPort
+	}{{
+		name: "maps a privileged published port to an unprivileged listener",
+		spec: ServerPod{
+			Name:       "egresshttp",
+			ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+			Args:       []string{"http"},
+			Port:       80,
+			TargetPort: 8080,
+		},
+		wantPublished: 80,
+		wantListen:    8080,
+	}, {
+		name: "defaults the listener to Port when TargetPort is unset",
+		spec: ServerPod{
+			Name:       "httporigin",
+			ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+			Args:       []string{"http"},
+			Port:       8080,
+		},
+		wantPublished: 8080,
+		wantListen:    8080,
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod, service := renderServerPodDocs(t, tc.spec)
+
+			container := pod.Spec.Containers[0]
+			if got, want := container.Args, []string{"http", "--listen=:" + strconv.Itoa(tc.wantListen)}; !slices.Equal(got, want) {
+				t.Errorf("container args = %v, want %v", got, want)
+			}
+			if got := container.Ports[0].ContainerPort; got != int32(tc.wantListen) {
+				t.Errorf("containerPort = %d, want the listen port %d", got, tc.wantListen)
+			}
+			probe := container.ReadinessProbe
+			if probe == nil || probe.HTTPGet == nil {
+				t.Fatalf("readinessProbe = %+v, want an httpGet probe", probe)
+			}
+			if got := probe.HTTPGet.Port.IntValue(); got != tc.wantListen {
+				t.Errorf("probe port = %d, want the listen port %d", got, tc.wantListen)
+			}
+
+			if got := service.Spec.Ports[0].Port; got != tc.wantPublished {
+				t.Errorf("service port = %d, want the published port %d", got, tc.wantPublished)
+			}
+			if got := service.Spec.Ports[0].TargetPort.IntValue(); got != tc.wantListen {
+				t.Errorf("service targetPort = %d, want the listen port %d", got, tc.wantListen)
+			}
+		})
+	}
+}
+
 // TestRenderServerPod_Volumes covers the credential-carrying shape the sdsmint
 // suite deploys, with both volume kinds it needs: a plain Secret and a
 // projection. A projection is the interesting one — it nests three levels, so
@@ -158,7 +223,8 @@ func TestRenderServerPod_HTTPProbe(t *testing.T) {
 func TestRenderServerPod_Volumes(t *testing.T) {
 	pod, _ := renderServerPodDocs(t, ServerPod{
 		Name:       "egressprobe",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"egressprobe"},
 		Port:       8080,
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "actor-identity", MountPath: "/run/actor-identity"},

@@ -549,7 +549,7 @@ func parseJWK(jwk jwkT) (*KeyAndID, error) {
 		}
 		return &KeyAndID{
 			KeyID:     jwk.KeyID,
-			PublicKey: &ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+			PublicKey: &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, //nolint:staticcheck // SA1019: constructing from JWK-decoded coordinates, not mutating an existing key.
 		}, nil
 
 	case "RSA":

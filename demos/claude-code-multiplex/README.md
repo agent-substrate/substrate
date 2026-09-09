@@ -38,7 +38,8 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 
 | Path | Purpose |
 |---|---|
-| `demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl` | Namespace, WorkerPool, and ActorTemplates in a single envsubst template |
+| `demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl` | Namespace and WorkerPool manifest |
+| `demos/claude-code-multiplex/agent-*-template.yaml.tmpl` | One protojson ActorTemplate per agent, created through the ate API with `kubectl ate create actor-template` |
 | `hack/install-demo-claude-code-multiplex.sh` | Sourced by `install-ate.sh`; registers `--deploy-demo-claude-code-multiplex` and `--delete-demo-claude-code-multiplex` |
 | `demos/claude-code-multiplex/workload/` | The agent container image source (Dockerfile + entrypoint that wires Claude Code; built and pushed by the deploy step) |
 | `demos/claude-code-multiplex/ui/` | Static dashboard (`index.html` + `server.go`) that talks to the cluster |
@@ -55,7 +56,7 @@ BUCKET_NAME=your-substrate-bucket \
   ./hack/install-ate.sh --deploy-demo-claude-code-multiplex
 ```
 
-This creates the `claude-multiplex-demo` namespace, a 2-pod `WorkerPool`, and three `ActorTemplate` objects named `agent-luna`, `agent-mars`, `agent-orion`. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the manifest template at apply time.
+This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, and waits for each template's golden snapshot. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the agent templates at apply time.
 
 ### 2. Start the dashboard
 
@@ -113,4 +114,4 @@ This demo currently applies workarounds at runtime for two Substrate issues. See
 ./hack/install-ate.sh --delete-demo-claude-code-multiplex
 ```
 
-This removes the `claude-multiplex-demo` namespace and all the resources created by the deploy step. You can also stop the port-forward and the dashboard processes in their respective terminals.
+This removes the demo's actors, templates, atespace, and the `claude-multiplex-demo` namespace with everything the deploy step created in it. You can also stop the port-forward and the dashboard processes in their respective terminals.

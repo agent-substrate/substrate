@@ -42,10 +42,10 @@ import (
 // result, which is where the polling loop will actually live.
 
 var testActor = resources.ActorAttribution{
-	Ref:               resources.ActorRef{Atespace: "space-a", Name: "actor-a"},
-	UID:               "uid-a",
-	TemplateNamespace: "ns-a",
-	TemplateName:      "template-a",
+	Ref:              resources.ActorRef{Atespace: "space-a", Name: "actor-a"},
+	UID:              "uid-a",
+	TemplateAtespace: "ns-a",
+	TemplateName:     "template-a",
 }
 
 var healthyCgroup = map[string]string{
@@ -96,17 +96,17 @@ func TestGetWorkloadStats(t *testing.T) {
 	got.GetSample().ObservedAtUnixNano = 0
 
 	want := &ateompb.GetWorkloadStatsResponse{Sample: &ateompb.WorkloadStatsSample{
-		Atespace:               "space-a",
-		ActorName:              "actor-a",
-		ActorUid:               "uid-a",
-		ActorTemplateNamespace: "ns-a",
-		ActorTemplateName:      "template-a",
-		SandboxClass:           ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
-		Source:                 ateompb.StatsSource_STATS_SOURCE_CGROUP,
-		MemoryCurrentBytes:     157286400,
-		MemoryPeakBytes:        209715200,
-		MemoryWorkingSetBytes:  136314880,
-		CpuUsageUsec:           1234567,
+		Atespace:              "space-a",
+		ActorName:             "actor-a",
+		ActorUid:              "uid-a",
+		ActorTemplateAtespace: "ns-a",
+		ActorTemplateName:     "template-a",
+		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+		MemoryCurrentBytes:    157286400,
+		MemoryPeakBytes:       209715200,
+		MemoryWorkingSetBytes: 136314880,
+		CpuUsageUsec:          1234567,
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("GetWorkloadStats() mismatch (-want +got):\n%s", diff)

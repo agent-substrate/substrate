@@ -70,7 +70,7 @@ type RouterClient struct {
 // NewRouterClient establishes a port-forward to the ingress atenet-router. Call Close
 // to tear it down.
 func NewRouterClient(ctx context.Context) (*RouterClient, error) {
-	config, err := ateclient.LoadConfig(KubeConfig, KubeContext)
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("loading kubeconfig: %w", err)
 	}
@@ -99,6 +99,11 @@ func (c *RouterClient) Close() {
 	if c.connectStop != nil {
 		c.connectStop()
 	}
+}
+
+// BaseURL returns the local router port-forward address.
+func (c *RouterClient) BaseURL() string {
+	return c.baseURL
 }
 
 // Get issues GET path to actor through the router, setting the actor's DNS Host

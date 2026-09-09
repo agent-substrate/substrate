@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -44,7 +45,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // the sentry. runsc starts that process from the root container's create and
 // from inside that container's cgroup — container.createRoot wraps the sandbox
 // and gofer spawn in cgroup.RunInCgroup — so the sentry lands in the leaf of
-// "pause", the first container RunWorkload and RestoreWorkload create.
+// the pause container, the first one RunWorkload and RestoreWorkload create.
 //
 // The leaf is a direct child of the delegated scope rather than of ateom's own
 // cgroup, because runsc resolves cgroupsPath against the parent of the cgroup
@@ -54,8 +55,8 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // ateom into /sys/fs/cgroup/ateom precisely so that one level up is the
 // delegated scope.
 //
-// The actor's own containers get leaves too, since cmdCreate calls
-// ensureContainerCgroupsPath for each of them, but those leaves stay empty by
+// The actor's own containers get leaves too, since cmdCreate shapes a
+// cgroupsPath into each of their specs, but those leaves stay empty by
 // design. gVisor's setupCgroupForSubcontainer creates them with empty resources
 // and explains why: "Since subcontainers run exclusively inside the sandbox,
 // subcontainer cgroups on the host have no effect on them. However, some tools
@@ -70,7 +71,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // What the leaf holds besides the actor's own work: the sentry's own overhead
 // (its Go heap, page tables, netstack) and the gofers. Process listings taken
 // on a live node in #161 put runsc-sandbox and both gofers — the pause
-// container's and the actor container's — in the "pause" cgroup. Those runs
+// container's and the actor container's — in the pause cgroup. Those runs
 // predate #496, so they establish the leaf name and the fact that everything
 // lands in one leaf, not the absolute path, which #496's delegation moved under
 // the pod scope.
@@ -84,9 +85,9 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // accounting, which the proto already says is not reported here.
 //
 // The name has to agree with the cgroupsPath convention in
-// runsc.ensureContainerCgroupsPath, which is "/" + containerName relative to
-// the same scope.
-const sandboxCgroupContainer = "pause"
+// ocispec.ShapeGVisor, which is "/" + containerName relative to the same
+// scope.
+const sandboxCgroupContainer = ocispec.PauseContainer
 
 // GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
 //
@@ -213,11 +214,11 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 	}
 
 	return &ateompb.WorkloadStatsSample{
-		Atespace:               active.Ref.Atespace,
-		ActorName:              active.Ref.Name,
-		ActorUid:               active.UID,
-		ActorTemplateNamespace: active.TemplateNamespace,
-		ActorTemplateName:      active.TemplateName,
+		Atespace:              active.Ref.Atespace,
+		ActorName:             active.Ref.Name,
+		ActorUid:              active.UID,
+		ActorTemplateAtespace: active.TemplateAtespace,
+		ActorTemplateName:     active.TemplateName,
 
 		SandboxClass: ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
 		Source:       ateompb.StatsSource_STATS_SOURCE_CGROUP,

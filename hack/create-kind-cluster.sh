@@ -112,6 +112,17 @@ runtimeConfig:
   "certificates.k8s.io/v1beta1": "true"
 networking:
   ipFamily: ${IP_FAMILY}
+# The install pulls ~570MB of third-party images (postgres, prometheus, the otel
+# collector, rustfs, envoy, jaeger) onto this one node. kubelet serializes image
+# pulls by default, so they queue behind one another and whichever workload draws
+# the back of the queue can miss its readiness deadline.
+# TODO: kind should probably default to parallel pulls for its single-node
+# clusters rather than leaving every user to patch it in.
+kubeadmConfigPatches:
+- |
+  kind: KubeletConfiguration
+  serializeImagePulls: false
+  maxParallelImagePulls: 4
 EOF
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."
@@ -170,13 +181,13 @@ for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); d
   docker exec "${node}" sysctl -e net.ipv6.conf.all.proxy_ndp=1
 done
 
-# 2.6 When KVM is available: make /dev/kvm usable inside the node and label
-# nodes so micro-VM WorkerPools (nodeSelector ate.dev/sandboxClass=microvm) schedule.
+# 2.6 When KVM is available: make /dev/kvm usable inside the node. Micro-VM
+# WorkerPools reach these nodes through the device atelet advertises for them,
+# so no node label is needed.
 if [ "${HAS_KVM}" = "1" ]; then
   echo "Preparing kind nodes for micro-VM (kata + cloud-hypervisor) runtime..."
   for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
     docker exec "${node}" chmod 666 /dev/kvm
-    kubectl --context="${KUBECTL_CONTEXT}" label node "${node}" ate.dev/sandboxClass=microvm --overwrite
   done
 fi
 

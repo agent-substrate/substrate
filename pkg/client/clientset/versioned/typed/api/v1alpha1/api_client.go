@@ -26,7 +26,6 @@ import (
 
 type ApiV1alpha1Interface interface {
 	RESTClient() rest.Interface
-	ActorTemplatesGetter
 	CSIDriverConfigsGetter
 	SandboxConfigsGetter
 	WorkerPoolsGetter
@@ -35,10 +34,6 @@ type ApiV1alpha1Interface interface {
 // ApiV1alpha1Client is used to interact with features provided by the api group.
 type ApiV1alpha1Client struct {
 	restClient rest.Interface
-}
-
-func (c *ApiV1alpha1Client) ActorTemplates(namespace string) ActorTemplateInterface {
-	return newActorTemplates(c, namespace)
 }
 
 func (c *ApiV1alpha1Client) CSIDriverConfigs() CSIDriverConfigInterface {
@@ -97,7 +92,9 @@ func setConfigDefaults(config *rest.Config) {
 	gv := apiv1alpha1.SchemeGroupVersion
 	config.GroupVersion = &gv
 	config.APIPath = "/apis"
-	config.NegotiatedSerializer = rest.CodecFactoryForGeneratedClient(scheme.Scheme, scheme.Codecs).WithoutConversion()
+	if config.NegotiatedSerializer == nil {
+		config.NegotiatedSerializer = rest.CodecFactoryForGeneratedClient(scheme.Scheme, scheme.Codecs).WithoutConversion()
+	}
 
 	if config.UserAgent == "" {
 		config.UserAgent = rest.DefaultKubernetesUserAgent()

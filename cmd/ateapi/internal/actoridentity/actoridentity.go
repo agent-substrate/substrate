@@ -23,13 +23,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"path"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
@@ -37,9 +38,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -47,11 +47,12 @@ import (
 type Server struct {
 	ateapipb.UnimplementedActorIdentityServer
 
+	// TODO(identity): Issuer is probably logically a property of the JWT
+	// signing pool.
 	actorIdentityJWTIssuer string
 
-	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
-	actorIDJWTPoolFile string
-	actorIDCAPool      localca.Pool
+	actorIDJWTPool localjwtauthority.Pool
+	actorIDCAPool  localca.Pool
 
 	// store is the actor database. MintCert consults it to confirm the caller
 	// is entitled to the actor it is asking for a credential for.
@@ -61,29 +62,17 @@ type Server struct {
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer string, actorIDJWTPool localjwtauthority.Pool, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
-		actorIDJWTPoolFile:     actorIDJWTPoolFile,
+		actorIDJWTPool:         actorIDJWTPool,
 		actorIDCAPool:          actorIDCAPool,
 		store:                  store,
 		workers:                workers,
 	}
 }
 
-// The SPIFFE identity that atelet client certs carry, as minted by the
-// podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
-//
-// These mirror the constants the atelet dialer verifies against in
-// cmd/ateapi/internal/controlapi/dialer.go. They are duplicated rather than
-// imported so that this package does not depend on controlapi for three
-// strings; if a third pkg that need these constants appears, they should move to a shared package.
-const (
-	ateletTrustDomain        = "cluster.local"
-	ateletNamespace          = "ate-system"
-	ateletSA                 = "atelet"
-	actorCertificateLifetime = time.Hour
-)
+const actorCertificateLifetime = time.Hour
 
 func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*ateapipb.MintJWTResponse, error) {
 	caller, ok := principal.FromContext(ctx)
@@ -94,18 +83,12 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor JWTs")
 	}
 
+	if errs := validateMintJWTRequest(ctx, req); len(errs) > 0 {
+		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+
 	// TODO: Cross-check the verified caller and requested actor against the actor database.
 
-	// TODO: Cache signing keys in memory, so we don't read from disk every time.
-	signingPoolBytes, err := os.ReadFile(s.actorIDJWTPoolFile)
-	if err != nil {
-		return nil, fmt.Errorf("while reading signing pool bytes: %w", err)
-	}
-
-	signingPool, err := localjwtauthority.Unmarshal(signingPoolBytes)
-	if err != nil {
-		return nil, fmt.Errorf("while unmarshaling signing pool: %w", err)
-	}
 	// We only issue tokens with audience bindings.
 	if len(req.GetAudience()) == 0 {
 		return nil, fmt.Errorf("at least one audience must be requested")
@@ -129,13 +112,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		},
 	}
 
-	actorWireClaims, err := actoridjwt.ClaimsToWire(actorClaims)
-	if err != nil {
-		return nil, fmt.Errorf("while making actor JWT claims: %w", err)
-	}
-
-	// Assume the first authority is the one to use for signing.
-	actorJWT, err := actoridjwt.Sign(actorWireClaims, signingPool.Authorities[0].SigningKey, signingPool.Authorities[0].Algorithm, signingPool.Authorities[0].ID)
+	actorJWT, err := s.actorIDJWTPool.SignJWT(actorClaims)
 	if err != nil {
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
@@ -146,19 +123,17 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 }
 
 func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*ateapipb.MintCertResponse, error) {
-	caller, err := authenticateAtelet(ctx)
+	caller, err := ateletauth.Authenticate(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if errs := validateMintCertRequest(ctx, req); len(errs) > 0 {
+		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+	// Validation bounds purpose to the enum's range; which purposes this
+	// server actually supports is a policy decision that stays here.
 	if req.GetPurpose() != ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL {
 		return nil, status.Error(codes.InvalidArgument, "unsupported actor certificate purpose")
-	}
-
-	if err := validateWorkerRef(req.GetWorker()); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid worker: %v", err)
-	}
-	if req.GetExpectedActorUid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "expected_actor_uid is required")
 	}
 	actor, actorRef, err := s.authorizeActor(ctx, caller, req)
 	if err != nil {
@@ -166,8 +141,9 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	}
 	atespace, actorName := actorRef.Atespace, actorRef.Name
 
-	// Actor identity comes only from ateapi state. expected_actor_uid is a
-	// fail-closed guard against a request crossing an assignment change.
+	// expected_actor_uid picked which actor to mint for (see authorizeActor);
+	// re-checking it here fails closed if the request crossed an assignment
+	// change.
 	actorUID := actor.GetMetadata().GetUid()
 	if actorUID == "" {
 		slog.ErrorContext(ctx, "MintCert: actor has no UID", slog.Any("actor", actorRef))
@@ -230,75 +206,26 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	}, nil
 }
 
-// ateletCaller is the verified identity of an atelet requesting an actor credential.
-type ateletCaller struct {
-	podName  string
-	nodeName string
+func validateMintJWTRequest(ctx context.Context, req *ateapipb.MintJWTRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return controlapi.Validate_MintJWTRequest(ctx, op, nil, req, nil)
 }
 
-// authenticateAtelet verifies that the RPC arrived over mTLS from an atelet,
-// and returns the identity that atelet's certificate asserts.
+func validateMintCertRequest(ctx context.Context, req *ateapipb.MintCertRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return controlapi.Validate_MintCertRequest(ctx, op, nil, req, nil)
+}
+
+// authorizeActor resolves the actor the request names among those the worker is
+// hosting and verifies the two still point at one another. Requester-supplied
+// identity never participates in the decision.
 //
-// The certificate chain is already verified by the TLS layer against the
-// pod-identity CA (see buildServerCreds in cmd/ateapi/main.go), so the
-// extensions read here are trustworthy: only the pod-identity signer can mint
-// a certificate carrying a given pod's node name.
-func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
-	p, ok := peer.FromContext(ctx)
-	if !ok {
-		return nil, status.Errorf(codes.Unauthenticated, "no peer transport information found")
-	}
-
-	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
-	if !ok {
-		return nil, status.Errorf(codes.Unauthenticated, "unexpected peer transport credentials")
-	}
-
-	if len(tlsInfo.State.PeerCertificates) == 0 {
-		return nil, status.Errorf(codes.Unauthenticated, "could not verify peer certificate")
-	}
-	leaf := tlsInfo.State.PeerCertificates[0]
-
-	// Only atelet may mint actor credentials. Everything else with a valid
-	// pod-identity certificate — including the actor workloads themselves — is
-	// rejected here.
-	expected := (&url.URL{
-		Scheme: "spiffe",
-		Host:   ateletTrustDomain,
-		Path:   path.Join("ns", ateletNamespace, "sa", ateletSA),
-	}).String()
-	if len(leaf.URIs) == 0 || leaf.URIs[0].String() != expected {
-		slog.WarnContext(ctx, "ActorIdentity denied: caller is not atelet",
-			slog.Any("uris", leaf.URIs), slog.String("expected", expected))
-		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor credentials")
-	}
-
-	identity, err := substratex509.PodIdentityFromCertificate(leaf)
-	if err != nil {
-		slog.WarnContext(ctx, "ActorIdentity denied: malformed PodIdentity extension", slog.Any("err", err))
-		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor credentials")
-	}
-	if identity == nil {
-		slog.WarnContext(ctx, "ActorIdentity denied: certificate has no PodIdentity extension")
-		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor credentials")
-	}
-
-	return &ateletCaller{podName: identity.PodName, nodeName: identity.NodeName}, nil
-}
-
-// validateWorkerRef checks the reference to the Worker the certificate is
-// minted for. Workers are global-scoped, so the reference carries no atespace.
-func validateWorkerRef(worker *ateapipb.ObjectRef) error {
-	return resources.ValidateGlobalObjectRef(worker, field.NewPath("worker")).ToAggregate()
-}
-
-// authorizeActor resolves the actor from the authenticated worker and verifies
-// that the worker and actor still point at one another. Actor identity supplied
-// by the requester never participates in this authorization decision.
 // The worker is resolved from cache first (hot path), but cache misses and
 // denials fall back to the authoritative store to handle watch-delivery lag
 // right after ResumeActor.
-func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, error) {
+func (s *Server) authorizeActor(ctx context.Context, caller *ateletauth.Caller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, error) {
 	reason := "worker not found"
 	worker, err := s.workers.Worker(req.GetWorker().GetName())
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -343,9 +270,9 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 // denyMint logs the internal reason and returns a uniform PermissionDenied.
 // Denials are deliberately indistinguishable from each other: a caller that
 // is not entitled to a worker should not learn its assignment.
-func (s *Server) denyMint(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest, reason string, args ...any) error {
+func (s *Server) denyMint(ctx context.Context, caller *ateletauth.Caller, req *ateapipb.MintCertRequest, reason string, args ...any) error {
 	slog.WarnContext(ctx, "ActorIdentity denied: "+reason,
-		append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
+		append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.PodName), slog.String("callerNode", caller.NodeName)}, args...)...)
 	return status.Error(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
 }
 
@@ -353,14 +280,22 @@ var errAssignmentMismatch = errors.New("assignment mismatch")
 
 // authorizeWithWorker returns errAssignmentMismatch and a reason string if the authorization failed
 // due to an assignment mismatch, indicating the caller may want to refetch the worker and retry.
-func (s *Server) authorizeWithWorker(ctx context.Context, worker *ateapipb.Worker, caller *ateletCaller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, string, error) {
-	if worker.GetNodeName() != caller.nodeName {
+func (s *Server) authorizeWithWorker(ctx context.Context, worker *ateapipb.Worker, caller *ateletauth.Caller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, string, error) {
+	if worker.GetNodeName() != caller.NodeName {
 		return nil, resources.ActorRef{}, "worker is hosted on a different node", errAssignmentMismatch
 	}
 
-	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
+	assigned, err := s.assignmentToMintFor(ctx, worker.GetMetadata().GetName(), req.GetExpectedActorUid())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, resources.ActorRef{}, "worker is not hosting the requested actor", errAssignmentMismatch
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "ActorIdentity: failed to read worker assignment", slog.Any("err", err))
+		return nil, resources.ActorRef{}, "", status.Error(codes.Internal, "failed to look up worker assignment")
+	}
+	actorRef := resources.ActorRefFromObjectRef(assigned.GetActor())
 	if actorRef == (resources.ActorRef{}) {
-		return nil, resources.ActorRef{}, "worker has no actor assignment", errAssignmentMismatch
+		return nil, resources.ActorRef{}, "worker assignment names no actor", errAssignmentMismatch
 	}
 
 	actor, err := s.store.GetActor(ctx, actorRef)
@@ -384,11 +319,38 @@ func (s *Server) authorizeWithWorker(ctx context.Context, worker *ateapipb.Worke
 		slog.ErrorContext(ctx, "ActorIdentity: running actor has no worker assignment", slog.Any("actor", actorRef))
 		return nil, resources.ActorRef{}, "", status.Error(codes.FailedPrecondition, "actor has no worker assigned")
 	}
-	if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
+	if assigned.GetActorUid() != actor.GetMetadata().GetUid() {
 		return nil, resources.ActorRef{}, "worker is no longer assigned to this actor incarnation", errAssignmentMismatch
 	}
 	if assignment.GetWorker().GetName() != worker.GetMetadata().GetName() {
 		return nil, resources.ActorRef{}, "actor no longer points to the requesting worker", errAssignmentMismatch
 	}
 	return actor, actorRef, "", nil
+}
+
+// assignmentToMintFor picks which of the worker's actors to mint for, or
+// ErrNotFound when it hosts none. expected_actor_uid selects from what ateapi
+// records the worker as hosting; it does not assert.
+//
+// Falling back to another of the worker's assignments keeps a bad binding
+// (PermissionDenied) apart from a stale expectation (retryable). Reads go to
+// the store: the binding was committed moments ago and the watch has not
+// delivered it. Only one other assignment is needed to tell the two apart, so
+// the fallback reads a single row rather than the Worker's whole occupancy.
+func (s *Server) assignmentToMintFor(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error) {
+	assigned, err := s.store.GetWorkerAssignment(ctx, workerName, actorUID)
+	if err == nil {
+		return assigned, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	page, err := s.store.ListWorkerAssignments(ctx, workerName, store.ListOptions{PageSize: 1})
+	if err != nil {
+		return nil, err
+	}
+	if len(page.Items) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return page.Items[0], nil
 }

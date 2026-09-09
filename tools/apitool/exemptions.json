@@ -1,0 +1,462 @@
+[
+  {
+    "rule": "delete-request-shape",
+    "subject": "ateapi.Control.DeleteActor",
+    "message": "field \"any_state\" is not a message, want ateapi.ObjectRef or ateapi.DeleteOptions - non-resource control fields belong in ateapi.DeleteOptions"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Actor",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorAssignment.actor_uid",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorMetadataItem.field",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.TagScope",
+    "message": "enum has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorState",
+    "message": "enum has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorStatus",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplate",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplate.containers",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplate.snapshots_config",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplate.status",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplate.volumes",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplateStatus",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplateStatus.golden_snapshot_status",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Container.name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Control.CreateActorTemplate",
+    "message": "method has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Control.GetActorTemplate",
+    "message": "method has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Control.ListActorTemplates",
+    "message": "method has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.CreateActorTemplateRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.CreateAtespaceRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.CreateWorkerRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteActorRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteTagRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteTagRequest.tag",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteActorTemplateRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteActorTemplateRequest.actor_template",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteAtespaceRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteAtespaceRequest.atespace",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteWorkerRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DrainWorkerRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ExternalVolume",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ExternalVolume.Status",
+    "message": "enum has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ExternalVolume.status",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetActorRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetTagRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetTagRequest.tag",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetActorTemplateRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetActorTemplateRequest.actor_template",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetAtespaceRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetAtespaceRequest.atespace",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetWorkerRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GoldenSnapshotStatus",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GoldenSnapshotStatus.error_message",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.HTTPGetAction.port",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Limits",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Limits.name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsResponse.tags",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsResponse.next_page_token",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListActorTemplatesRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListActorTemplatesResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListActorsResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListAtespacesRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListAtespacesResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListWorkersRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListWorkersResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.LocalSnapshotInfo",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.PauseActorRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.PauseActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.PauseActorResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.PauseActorResponse.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Resources",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ResumeActorRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ResumeActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ResumeActorResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ResumeActorResponse.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SnapshotContentScope",
+    "message": "enum has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SnapshotsConfig",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SuspendActorRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SuspendActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SuspendActorResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SuspendActorResponse.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SystemInfoDataSource",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.SystemInfoDataSource.trust_bundle",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.TrustBundleDataSource.name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.UpdateWorkerRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Volume",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Volume.external_volume_template",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Volume.system_info",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.ip",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.node_name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.worker_pod",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.worker_pod_uid",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.worker_pool",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.WorkerState",
+    "message": "enum has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.WorkerStatus",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.WorkerStatus.state",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "list-method-shape",
+    "subject": "ateapi.Control.ListWorkerActorAssignments",
+    "message": "field \"worker\" is not part of the standard List request shape - only atespace, page_size, and page_token are allowed (sorting/filtering per AIP-132 is not supported)"
+  },
+  {
+    "rule": "list-method-shape",
+    "subject": "ateapi.Control.ListWorkerActorAssignments",
+    "message": "repeated field is named \"actor_assignments\", want \"worker_actor_assignments\" (the plural resource name, matching the method name)"
+  }
+]

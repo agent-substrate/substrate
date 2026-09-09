@@ -15,6 +15,8 @@
 package controllers
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -26,7 +28,9 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
+	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -246,9 +250,10 @@ func TestBuildDeploymentApplyConfigMetadata(t *testing.T) {
 	}
 }
 
-// TestMicroVMPodShape asserts the micro-VM sandbox class adds the /dev/kvm
-// device (volume + container mount) and node placement (nodeSelector +
-// toleration on ate.dev/sandboxClass); other classes get none of it.
+// TestMicroVMPodShape asserts the micro-VM sandbox class requests the host
+// devices as extended resources (served by atelet's device plugin) and
+// tolerates the ate.dev/sandboxClass taint; other classes get none of it.
+// Placement comes from the device request, so no nodeSelector is added.
 func TestMicroVMPodShape(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -265,82 +270,154 @@ func TestMicroVMPodShape(t *testing.T) {
 			wp.Spec.SandboxClass = tt.class
 			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
 
-			hasVol := false
+			// /dev/kvm must come from the device plugin, never a hostPath: a
+			// hostPath mount carries no cgroup device allow rule, and the
+			// runtime denies /dev/kvm by default. /dev/net/tun is the
+			// opposite — allowed by default, so it is bind-mounted.
 			for _, v := range ps.Volumes {
-				if v.Name != nil && *v.Name == "dev-kvm" {
-					hasVol = true
-					if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != "/dev/kvm" ||
-						v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
-						t.Errorf("dev-kvm volume = %+v, want /dev/kvm CharDevice", v.HostPath)
-					}
+				if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path == tunDevicePath {
+					continue
+				}
+				if strings.HasPrefix(*v.HostPath.Path, "/dev/") {
+					t.Errorf("device %q must be requested as a resource, not hostPath-mounted", *v.HostPath.Path)
 				}
 			}
-			hasMount := false
-			for _, c := range ps.Containers {
-				for _, m := range c.VolumeMounts {
-					if m.MountPath != nil && *m.MountPath == "/dev/kvm" {
-						hasMount = true
-					}
+			hasTunMount := false
+			for _, v := range ps.Volumes {
+				if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != tunDevicePath {
+					continue
+				}
+				hasTunMount = true
+				// Without CharDevice, kubelet would happily create a directory
+				// there on a node where the tun module has yet to load.
+				if v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
+					t.Errorf("%s hostPath type = %v, want CharDevice", tunDevicePath, v.HostPath.Type)
 				}
 			}
-			_, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]
+			if hasTunMount && !containerMountsPath(ps.Containers[0], tunDevicePath) {
+				t.Errorf("%s is a pod volume but the ateom container does not mount it", tunDevicePath)
+			}
+
+			hasDeviceRequest := true
+			for _, name := range []string{deviceplugin.ResourceKVM} {
+				qty, ok := deviceLimit(ps.Containers[0], name)
+				if !ok {
+					hasDeviceRequest = false
+					continue
+				}
+				if qty != "1" {
+					t.Errorf("%s limit = %s, want 1", name, qty)
+				}
+			}
+
+			// The device request handles placement, so the class must not also
+			// pin a nodeSelector (which would re-introduce the hand-applied
+			// label as a scheduling requirement).
+			if _, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]; hasSelector {
+				t.Errorf("nodeSelector on ate.dev/sandboxClass should be gone; placement comes from the device request")
+			}
 			hasTol := false
 			for _, tol := range ps.Tolerations {
 				if tol.Key != nil && *tol.Key == "ate.dev/sandboxClass" {
 					hasTol = true
 				}
 			}
-			if hasVol != tt.wantMicroVM || hasMount != tt.wantMicroVM || hasSelector != tt.wantMicroVM || hasTol != tt.wantMicroVM {
-				t.Errorf("microvm shape: vol=%v mount=%v selector=%v toleration=%v, want all %v",
-					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
+			if hasDeviceRequest != tt.wantMicroVM || hasTol != tt.wantMicroVM || hasTunMount != tt.wantMicroVM {
+				t.Errorf("microvm shape: deviceRequest=%v toleration=%v tunMount=%v, want all %v",
+					hasDeviceRequest, hasTol, hasTunMount, tt.wantMicroVM)
 			}
 		})
 	}
 }
 
-// TestAteomSecurityContextByClass asserts the gVisor worker runs unprivileged
-// with the explicit capability set while the micro-VM worker stays privileged,
-// and that an empty class defaults to gVisor.
+// containerMountsPath reports whether c mounts anything at path.
+func containerMountsPath(c corev1ac.ContainerApplyConfiguration, path string) bool {
+	for _, m := range c.VolumeMounts {
+		if m.MountPath != nil && *m.MountPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+// deviceLimit returns the container's limit for an extended resource.
+func deviceLimit(c corev1ac.ContainerApplyConfiguration, name string) (string, bool) {
+	if c.Resources == nil || c.Resources.Limits == nil {
+		return "", false
+	}
+	qty, ok := (*c.Resources.Limits)[corev1.ResourceName(name)]
+	if !ok {
+		return "", false
+	}
+	return qty.String(), true
+}
+
+// A pod template's own resource limits must survive the device requests being
+// merged in.
+func TestMicroVMDeviceRequestsPreserveTemplateResources(t *testing.T) {
+	wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+		Resources: &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+		},
+	})
+	wp.Spec.SandboxClass = atev1alpha1.SandboxClassMicroVM
+	c := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec.Containers[0]
+
+	if got, ok := deviceLimit(c, string(corev1.ResourceMemory)); !ok || got != "2Gi" {
+		t.Errorf("memory limit = %q (present=%v), want 2Gi", got, ok)
+	}
+	if got, ok := deviceLimit(c, deviceplugin.ResourceKVM); !ok || got != "1" {
+		t.Errorf("%s limit = %q (present=%v), want 1", deviceplugin.ResourceKVM, got, ok)
+	}
+}
+
+// TestAteomSecurityContextByClass asserts no worker runs privileged: every class
+// drops ALL capabilities and adds back an explicit set. Only the micro-VM class
+// gives up the runtime's default seccomp profile, and only so virtiofsd can keep
+// its own sandbox. An empty class defaults to gVisor.
 func TestAteomSecurityContextByClass(t *testing.T) {
 	tests := []struct {
-		name           string
-		class          atev1alpha1.SandboxClass
-		wantPrivileged bool
-		wantCaps       bool
+		name     string
+		class    atev1alpha1.SandboxClass
+		wantCaps []corev1.Capability
+		// wantSeccompUnconfined holds for every class: both runsc's and
+		// virtiofsd's sandbox pivot_root(), which the default profile denies.
+		wantSeccompUnconfined bool
 	}{
-		{"gvisor default", "", false, true},
-		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, false, true},
-		{"microvm", atev1alpha1.SandboxClassMicroVM, true, false},
+		{"gvisor default", "", ateomGvisorCapabilities, true},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, ateomGvisorCapabilities, true},
+		{"microvm", atev1alpha1.SandboxClassMicroVM, ateomMicroVMCapabilities, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sc := ateomSecurityContext(tt.class)
-			if sc.Privileged == nil || *sc.Privileged != tt.wantPrivileged {
-				t.Errorf("Privileged = %v, want %v", sc.Privileged, tt.wantPrivileged)
+			if sc.Privileged == nil || *sc.Privileged {
+				t.Errorf("Privileged = %v, want false for every class", sc.Privileged)
 			}
 			if sc.RunAsUser == nil || *sc.RunAsUser != 0 || sc.RunAsGroup == nil || *sc.RunAsGroup != 0 {
 				t.Errorf("RunAsUser/Group = %v/%v, want 0/0", sc.RunAsUser, sc.RunAsGroup)
 			}
-			hasCaps := sc.Capabilities != nil && len(sc.Capabilities.Add) > 0
-			if hasCaps != tt.wantCaps {
-				t.Errorf("has capabilities = %v, want %v", hasCaps, tt.wantCaps)
+			if sc.Capabilities == nil {
+				t.Fatalf("capabilities must be set so the default set is dropped")
 			}
-			if tt.wantCaps {
-				if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
-					t.Errorf("capabilities drop = %v, want [ALL]", sc.Capabilities.Drop)
-				}
-				if diff := cmp.Diff(ateomGvisorCapabilities, sc.Capabilities.Add); diff != "" {
-					t.Errorf("capabilities add mismatch (-want +got):\n%s", diff)
-				}
+			if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+				t.Errorf("capabilities drop = %v, want [ALL]", sc.Capabilities.Drop)
 			}
-			// The gVisor worker runs AppArmor-unconfined (runsc + cgroup remount
-			// need mount); the privileged micro-VM worker leaves it unset.
-			wantAppArmor := tt.wantCaps
-			hasAppArmor := sc.AppArmorProfile != nil &&
-				sc.AppArmorProfile.Type != nil &&
-				*sc.AppArmorProfile.Type == corev1.AppArmorProfileTypeUnconfined
-			if hasAppArmor != wantAppArmor {
-				t.Errorf("AppArmor Unconfined = %v, want %v", hasAppArmor, wantAppArmor)
+			if diff := cmp.Diff(tt.wantCaps, sc.Capabilities.Add); diff != "" {
+				t.Errorf("capabilities add mismatch (-want +got):\n%s", diff)
+			}
+			// Every class mounts inside the worker, which the default AppArmor
+			// profile denies.
+			if sc.AppArmorProfile == nil || sc.AppArmorProfile.Type == nil ||
+				*sc.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
+				t.Errorf("AppArmorProfile = %v, want Unconfined", sc.AppArmorProfile)
+			}
+			// Every class declares Unconfined explicitly so it does not depend on
+			// the cluster leaving the seccomp profile unset.
+			gotSeccompUnconfined := sc.SeccompProfile != nil && sc.SeccompProfile.Type != nil &&
+				*sc.SeccompProfile.Type == corev1.SeccompProfileTypeUnconfined
+			if gotSeccompUnconfined != tt.wantSeccompUnconfined {
+				t.Errorf("seccomp Unconfined = %v, want %v", gotSeccompUnconfined, tt.wantSeccompUnconfined)
 			}
 		})
 	}
@@ -359,8 +436,8 @@ func TestTerminationGracePeriodSeconds(t *testing.T) {
 }
 
 // TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint and the
-// pod-scoped resource identity are set on the ateom container only when an endpoint
-// is configured, and that the $(POD_*) refs precede OTEL_RESOURCE_ATTRIBUTES.
+// resource identity are set on the ateom container only when an endpoint is
+// configured, and that every ref the value substitutes is declared ahead of it.
 func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	const endpoint = "http://collector.otel-system.svc:4317"
 	tests := []struct {
@@ -382,7 +459,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE"} {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE", "NODE_NAME"} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -393,11 +470,19 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"].value; got != endpoint {
 				t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", got, endpoint)
 			}
-			if got := env["OTEL_RESOURCE_ATTRIBUTES"].value; got != ateomOTelResourceAttributes {
-				t.Errorf("OTEL_RESOURCE_ATTRIBUTES = %q, want %q", got, ateomOTelResourceAttributes)
+			resourceAttrs := env["OTEL_RESOURCE_ATTRIBUTES"].value
+
+			wantKeys := []string{"k8s.namespace.name", "k8s.pod.name", "k8s.pod.uid", "k8s.node.name", "service.instance.id"}
+			if diff := cmp.Diff(wantKeys, envAttrKeys(resourceAttrs)); diff != "" {
+				t.Errorf("OTEL_RESOURCE_ATTRIBUTES keys (-want +got):\n%s", diff)
+			}
+
+			refs := envRefs(resourceAttrs)
+			if len(refs) == 0 {
+				t.Fatalf("OTEL_RESOURCE_ATTRIBUTES %q substitutes nothing, so the ref check below proves nothing", resourceAttrs)
 			}
 			raIdx := env["OTEL_RESOURCE_ATTRIBUTES"].index
-			for _, ref := range []string{"POD_UID", "POD_NAME", "POD_NAMESPACE"} {
+			for _, ref := range refs {
 				if _, ok := env[ref]; !ok {
 					t.Errorf("%s must be set for OTEL_RESOURCE_ATTRIBUTES substitution", ref)
 					continue
@@ -531,6 +616,33 @@ type envInfo struct {
 	value string
 }
 
+var envRefPattern = regexp.MustCompile(`\$\(([A-Za-z_][A-Za-z0-9_]*)\)`)
+
+// envRefs returns the distinct variables a value substitutes, first use first.
+func envRefs(value string) []string {
+	var refs []string
+	seen := make(map[string]bool)
+	for _, m := range envRefPattern.FindAllStringSubmatch(value, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		refs = append(refs, m[1])
+	}
+	return refs
+}
+
+// envAttrKeys returns the attribute keys of an OTEL_RESOURCE_ATTRIBUTES value.
+func envAttrKeys(value string) []string {
+	var keys []string
+	for _, pair := range strings.Split(value, ",") {
+		if k, _, ok := strings.Cut(pair, "="); ok {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
 func envByName(env []corev1ac.EnvVarApplyConfiguration) map[string]envInfo {
 	m := make(map[string]envInfo, len(env))
 	for i, e := range env {
@@ -546,179 +658,13 @@ func envByName(env []corev1ac.EnvVarApplyConfiguration) map[string]envInfo {
 	return m
 }
 
-func TestGPUPoolMountsToolkit(t *testing.T) {
-	gpu := resource.MustParse("1")
-	wp := &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-		Spec: atev1alpha1.WorkerPoolSpec{
-			AteomImage: "img",
-			Template: &atev1alpha1.WorkerPoolPodTemplate{
-				Resources: &corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
-				},
-			},
-		},
-	}
-	dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
-	pod := dep.Spec.Template.Spec
-
-	var found bool
-	for _, v := range pod.Volumes {
-		if v.Name != nil && *v.Name == "nvidia-toolkit" {
-			found = true
-			if v.HostPath == nil || *v.HostPath.Path != defaultNvidiaToolkitHostPath {
-				t.Fatalf("nvidia-toolkit volume has wrong hostPath: %+v", v.HostPath)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected nvidia-toolkit host mount on a GPU pool")
-	}
-
-	var mounted bool
-	for _, c := range pod.Containers {
-		for _, m := range c.VolumeMounts {
-			if m.Name != nil && *m.Name == "nvidia-toolkit" && *m.MountPath == nvidiaToolkitContainerPath {
-				mounted = true
-			}
-		}
-	}
-	if !mounted {
-		t.Fatal("expected nvidia-toolkit mount on the ateom container")
-	}
-
-	// A GPU pool keeps the same posture as any other unprivileged gVisor worker: no
-	// user namespace and no unmasked /proc, which the skipped update-ldcache hook
-	// would otherwise force.
-	if pod.HostUsers != nil {
-		t.Error("did not expect hostUsers to be set on a GPU pool")
-	}
-	for _, c := range pod.Containers {
-		if c.SecurityContext != nil && c.SecurityContext.ProcMount != nil {
-			t.Errorf("did not expect procMount to be set, got %v", *c.SecurityContext.ProcMount)
-		}
-	}
-}
-
-// TestGPUPoolDriverRootEnv covers the override reaching the worker: ateom derives the
-// driver library and binary paths from it, and nvidia-ctk cannot generate a CDI spec
-// without them. Unset, no env is added at all.
-func TestGPUPoolDriverRootEnv(t *testing.T) {
-	gpu := resource.MustParse("1")
-	newGPUPool := func() *atev1alpha1.WorkerPool {
-		return &atev1alpha1.WorkerPool{
-			ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-			Spec: atev1alpha1.WorkerPoolSpec{
-				AteomImage: "img",
-				Template: &atev1alpha1.WorkerPoolPodTemplate{
-					Resources: &corev1.ResourceRequirements{
-						Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
-					},
-				},
-			},
-		}
-	}
-	driverRootEnv := func(wp *atev1alpha1.WorkerPool) (string, bool) {
-		for _, c := range buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec.Containers {
-			for _, e := range c.Env {
-				if e.Name != nil && *e.Name == nvidiaDriverRootEnv {
-					return *e.Value, true
-				}
-			}
-		}
-		return "", false
-	}
-
-	if v, ok := driverRootEnv(newGPUPool()); ok {
-		t.Errorf("unset: expected no %s on the worker, got %q", nvidiaDriverRootEnv, v)
-	}
-
-	t.Setenv(nvidiaDriverRootEnv, "/opt/nvidia")
-	v, ok := driverRootEnv(newGPUPool())
-	if !ok || v != "/opt/nvidia" {
-		t.Errorf("set: want %s=/opt/nvidia on the worker, got %q (present=%v)", nvidiaDriverRootEnv, v, ok)
-	}
-}
-
-func TestNonGPUPoolHasNoToolkit(t *testing.T) {
-	wp := &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-		Spec:       atev1alpha1.WorkerPoolSpec{AteomImage: "img"},
-	}
-	dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
-	pod := dep.Spec.Template.Spec
-	for _, v := range pod.Volumes {
-		if v.Name != nil && *v.Name == "nvidia-toolkit" {
-			t.Fatal("non-GPU pool must not mount the toolkit")
-		}
-	}
-	// Non-GPU workers keep the tighter base posture: no user namespace, no
-	// unmasked /proc.
-	if pod.HostUsers != nil {
-		t.Error("non-GPU pool must not set hostUsers")
-	}
-	for _, c := range pod.Containers {
-		if c.SecurityContext != nil && c.SecurityContext.ProcMount != nil {
-			t.Error("non-GPU pool must not set procMount")
-		}
-	}
-}
-
-// TestGPUMicroVMPoolHasNoGPUPodShape asserts none of the GPU pod shaping is applied
-// to a non-gVisor pool: no toolkit volume, no toolkit mount, no driver-root env.
-//
-// A WorkerPool like this is rejected at apply time by the CEL rule on
-// WorkerPoolSpec, so it should never reach the controller. This covers the case
-// where one already exists — the rule was added after the fact, or the object was
-// written by a path that skipped CRD validation. The controller does not strip the
-// resource request itself, so such a pod still schedules onto a GPU node and holds a
-// device no actor can use; that gap is why the combination is rejected at the API
-// rather than only here.
-func TestGPUMicroVMPoolHasNoGPUPodShape(t *testing.T) {
-	// Set so the driver-root assertion below is not vacuous: a gVisor GPU pool would
-	// carry this env, a micro-VM one must not.
-	t.Setenv(nvidiaDriverRootEnv, "/opt/nvidia")
-	gpu := resource.MustParse("1")
-	wp := &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-		Spec: atev1alpha1.WorkerPoolSpec{
-			AteomImage:   "img",
-			SandboxClass: atev1alpha1.SandboxClassMicroVM,
-			Template: &atev1alpha1.WorkerPoolPodTemplate{
-				Resources: &corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
-				},
-			},
-		},
-	}
-	pod := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
-
-	for _, v := range pod.Volumes {
-		if v.Name != nil && *v.Name == "nvidia-toolkit" {
-			t.Error("micro-VM pool must not mount the NVIDIA toolkit even when it requests a GPU")
-		}
-	}
-	for _, c := range pod.Containers {
-		for _, m := range c.VolumeMounts {
-			if m.Name != nil && *m.Name == "nvidia-toolkit" {
-				t.Error("micro-VM pool must not get the toolkit volume mount")
-			}
-		}
-		for _, e := range c.Env {
-			if e.Name != nil && *e.Name == nvidiaDriverRootEnv {
-				t.Errorf("micro-VM pool must not get %s", nvidiaDriverRootEnv)
-			}
-		}
-	}
-}
-
 func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default", UID: "uid"},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:   2,
-			AteomImage: "ateom:v1",
-			Template:   tmpl,
+			Replicas:    2,
+			WorkerImage: "ateom:v1",
+			Template:    tmpl,
 		},
 	}
 }
@@ -731,6 +677,13 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithRunAsUser(0).
 			WithRunAsGroup(0)).
 		WithVolumes(
+			corev1ac.Volume().
+				WithName(ateomCapacityVolume).
+				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
+					WithItems(
+						resourceFieldRefFile(ateomcapacity.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(ateomcapacity.MemoryLimitFile, "limits.memory", wholeBytes),
+					)),
 			corev1ac.Volume().
 				WithName("run-ateom").
 				WithHostPath(corev1ac.HostPathVolumeSource().
@@ -768,11 +721,11 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		).
 		WithContainers(corev1ac.Container().
 			WithName("ateom").
-			WithImage(wp.Spec.AteomImage).
+			WithImage(wp.Spec.WorkerImage).
 			WithArgs(
 				"--pod-uid=$(POD_UID)",
-				"--atunnel-listen-address=0.0.0.0:443",
-				"--atunnel-connect-listen-address=0.0.0.0:444",
+				"--atunnel-listen-address=:443",
+				"--atunnel-connect-listen-address=:8443",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 				"--atunnel-egress-listen-address=0.0.0.0:15001",
@@ -784,7 +737,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithProtocol(corev1.ProtocolTCP),
 				corev1ac.ContainerPort().
 					WithName("connect").
-					WithContainerPort(444).
+					WithContainerPort(8443).
 					WithProtocol(corev1.ProtocolTCP),
 				corev1ac.ContainerPort().
 					WithName("readyz").
@@ -802,7 +755,9 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithDrop("ALL").
 					WithAdd(ateomGvisorCapabilities...)).
 				WithAppArmorProfile(corev1ac.AppArmorProfile().
-					WithType(corev1.AppArmorProfileTypeUnconfined))).
+					WithType(corev1.AppArmorProfileTypeUnconfined)).
+				WithSeccompProfile(corev1ac.SeccompProfile().
+					WithType(corev1.SeccompProfileTypeUnconfined))).
 			WithEnv(
 				corev1ac.EnvVar().
 					WithName("POD_UID").
@@ -811,6 +766,10 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 							WithFieldPath("metadata.uid"))),
 			).
 			WithVolumeMounts(
+				corev1ac.VolumeMount().
+					WithName(ateomCapacityVolume).
+					WithMountPath(ateomcapacity.CapacityMountPath).
+					WithReadOnly(true),
 				corev1ac.VolumeMount().
 					WithName("run-ateom").
 					WithMountPath(ateompath.BasePath).

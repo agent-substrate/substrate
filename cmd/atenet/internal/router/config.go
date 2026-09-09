@@ -37,20 +37,19 @@ const (
 // The mode is a floor on what an instance will answer, not just a hint. The mux
 // refuses a direction it has no handler for rather than falling back to the
 // other one, and an egress-only instance also skips the ingress control plane
-// (the xDS server and the ActorTemplate controller), which is what lets it run
-// without any Kubernetes access at all.
+// (the xDS server), which is what lets it run without any Kubernetes access
+// at all.
 type Mode string
 
 const (
 	// ModeIngress serves actor-addressed traffic arriving at the ingress
-	// gateway, and runs the ingress control plane — the xDS server and
-	// ActorTemplate controller — that configures its dataplane. Only the Envoy
-	// dataplane takes configuration from it; agentgateway is statically
-	// configured.
+	// gateway, and runs the ingress control plane — the xDS server — that
+	// configures its dataplane. Only the Envoy dataplane takes configuration
+	// from it; agentgateway is statically configured.
 	ModeIngress Mode = "ingress"
 	// ModeEgress serves actor CONNECTs leaving through the egress gateway.
 	// Nothing else runs: the egress gateway is statically configured, so there
-	// is no xDS server, no ActorTemplate controller, and no Kubernetes client.
+	// is no xDS server and no Kubernetes client.
 	ModeEgress Mode = "egress"
 	// ModeAll serves both directions from one instance. This is the default,
 	// and what a single-gateway or local development setup wants.
@@ -59,7 +58,7 @@ const (
 
 // ServesIngress reports whether this mode answers ingress requests. It also
 // gates the ingress control plane: the xDS server that configures the ingress
-// dataplane (Envoy only) and the ActorTemplate controller that feeds it.
+// dataplane (Envoy only).
 func (m Mode) ServesIngress() bool { return m != ModeEgress }
 
 // ServesEgress reports whether this mode answers egress CONNECTs.
@@ -84,7 +83,6 @@ type routerConfig struct {
 	XdsPort        int
 	ExtprocPort    int
 	ExtprocAddr    string
-	TemplatesFile  string
 	StatusPort     int
 	HealthInterval time.Duration
 	HttpsPort      int

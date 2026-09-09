@@ -49,27 +49,56 @@ type Fixture struct {
 	DeployWith string
 }
 
-// CounterFixture returns the counter demo for the sandbox class under test.
-// E2E_TEMPLATE_NAMESPACE / E2E_TEMPLATE_NAME override it, for a cluster that
-// installs the fixture somewhere else.
-func CounterFixture() Fixture {
-	f := Fixture{
-		Namespace:  "ate-demo-counter",
-		Name:       "counter",
-		DeployWith: "hack/install-ate-kind.sh --deploy-demo-counter",
+// SubstrateFixture identifies an installed substrate ActorTemplate (the proto
+// resource created through the ate API, not the CRD) plus the CRD WorkerPool
+// backing it. Suites copy the resolved runtime — container images, sandbox
+// config, sandbox size — out of the template, and the ateom image and sandbox
+// class out of the pool.
+type SubstrateFixture struct {
+	// Atespace and Name locate the ActorTemplate for GetActorTemplate.
+	Atespace string
+	Name     string
+	// PoolNamespace and PoolName locate the WorkerPool CRD.
+	PoolNamespace string
+	PoolName      string
+	// DeployWith is the install flag or script that creates the fixture, so a
+	// missing one reports how to fix it rather than just failing.
+	DeployWith string
+}
+
+// SubstrateCounterFixture returns the substrate-resource counter demo for the
+// sandbox class under test. E2E_SUBSTRATE_TEMPLATE_ATESPACE /
+// E2E_SUBSTRATE_TEMPLATE_NAME / E2E_SUBSTRATE_POOL_NAMESPACE /
+// E2E_SUBSTRATE_POOL_NAME override it, for a cluster that installs the
+// fixture somewhere else.
+func SubstrateCounterFixture() SubstrateFixture {
+	f := SubstrateFixture{
+		Atespace:      "ate-demo-counter",
+		Name:          "counter",
+		PoolNamespace: "ate-demo-counter",
+		PoolName:      "counter",
+		DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter",
 	}
 	if IsMicroVM() {
-		f = Fixture{
-			Namespace:  "ate-demo-counter-microvm",
-			Name:       "counter-microvm",
-			DeployWith: "hack/run-microvm-demo-kind.sh",
+		f = SubstrateFixture{
+			Atespace:      "ate-demo-counter-microvm",
+			Name:          "counter-microvm",
+			PoolNamespace: "ate-demo-counter-microvm",
+			PoolName:      "counter-microvm",
+			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-microvm",
 		}
 	}
-	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
-		f.Namespace = v
+	if v := os.Getenv("E2E_SUBSTRATE_TEMPLATE_ATESPACE"); v != "" {
+		f.Atespace = v
 	}
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
+	if v := os.Getenv("E2E_SUBSTRATE_TEMPLATE_NAME"); v != "" {
 		f.Name = v
+	}
+	if v := os.Getenv("E2E_SUBSTRATE_POOL_NAMESPACE"); v != "" {
+		f.PoolNamespace = v
+	}
+	if v := os.Getenv("E2E_SUBSTRATE_POOL_NAME"); v != "" {
+		f.PoolName = v
 	}
 	return f
 }
@@ -166,10 +195,10 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 
 	inline["${ATEOM_IMAGE}"] = "ko://github.com/agent-substrate/substrate/cmd/ateom-microvm"
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
-	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs. A
-	// micro-VM WorkerPool has to name it: it is deliberately not the class
-	// default, so a missing or stale one fails loudly.
-	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClass: microvm\n  sandboxConfigName: microvm"
+	// The micro-VM ActorTemplates name the cluster-wide SandboxConfig
+	// hack/install-microvm-deps.sh installs (configName: microvm), so a
+	// missing or stale one fails loudly. The pool only selects the class.
+	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClass: microvm"
 	// Must match the WorkerPool's: a snapshot is not portable across sandbox
 	// classes, so only same-class pools are eligible to run these actors.
 	blocks["${TEMPLATE_SANDBOX_CLASS}"] = "  sandboxClass: microvm"

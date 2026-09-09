@@ -92,7 +92,7 @@ func Init(ctx context.Context, serviceName string, sampler sdktrace.Sampler) (*s
 	}
 
 	// Route OTel SDK errors (export failures, queue drops) into slog so they
-	// land in boomer-glutton's stdout — runner.py pumps that into logs.txt.
+	// land in boomer-worker's stdout — runner.py pumps that into logs.txt.
 	// Without this they go to the SDK's default handler (stderr via log.Println)
 	// and can be lost depending on stream wiring.
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {

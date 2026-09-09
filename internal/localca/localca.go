@@ -39,12 +39,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"sync"
 	"time"
-
-	"k8s.io/utils/clock"
 )
 
 // Pool is the interface for a CA pool.
@@ -81,7 +80,6 @@ type Pool interface {
 // components to restart.
 type RefreshingPool struct {
 	stateFile string
-	clock     clock.PassiveClock
 
 	// lock covers nextLoad and pool
 	lock     sync.Mutex
@@ -94,8 +92,9 @@ var _ Pool = (*RefreshingPool)(nil)
 func NewRefreshingPool(stateFile string) (*RefreshingPool, error) {
 	rp := &RefreshingPool{
 		stateFile: stateFile,
-		clock:     clock.RealClock{},
 	}
+	rp.lock.Lock()
+	defer rp.lock.Unlock()
 	if err := rp.refreshIfNecessary(); err != nil {
 		return nil, fmt.Errorf("while loading pool: %w", err)
 	}
@@ -104,7 +103,7 @@ func NewRefreshingPool(stateFile string) (*RefreshingPool, error) {
 
 // refreshIfNecessary must be called while p.lock is held.
 func (p *RefreshingPool) refreshIfNecessary() error {
-	if p.pool != nil && p.clock.Now().Before(p.nextLoad) {
+	if p.pool != nil && time.Now().Before(p.nextLoad) {
 		return nil
 	}
 
@@ -119,7 +118,7 @@ func (p *RefreshingPool) refreshIfNecessary() error {
 	}
 
 	p.pool = pool
-	p.nextLoad = p.clock.Now().Add(time.Minute)
+	p.nextLoad = time.Now().Add(time.Minute)
 
 	return nil
 }
@@ -213,6 +212,29 @@ type CA struct {
 
 	// The root certificate for this CA pool.
 	RootCertificate *x509.Certificate
+}
+
+// TLSCertificateChainPEM returns the CA certificate in the PEM encoding used
+// by TLS servers.
+func (ca *CA) TLSCertificateChainPEM() ([]byte, error) {
+	if ca.RootCertificate == nil {
+		return nil, fmt.Errorf("ca certificate: is nil")
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.RootCertificate.Raw}), nil
+}
+
+// TLSPrivateKeyPEM returns the CA signing key in the PKCS#8 PEM encoding used
+// by TLS servers.
+func (ca *CA) TLSPrivateKeyPEM() ([]byte, error) {
+	if ca.SigningKey == nil {
+		return nil, fmt.Errorf("ca key: is nil")
+	}
+
+	key, err := x509.MarshalPKCS8PrivateKey(ca.SigningKey)
+	if err != nil {
+		return nil, fmt.Errorf("ca key: serializing PKCS#8: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), nil
 }
 
 type serializedPool struct {

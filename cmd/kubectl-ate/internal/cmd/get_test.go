@@ -31,6 +31,9 @@ func TestGetCommandArgs(t *testing.T) {
 		{name: "actors list", command: getActorsCmd},
 		{name: "actors get", command: getActorsCmd, args: []string{"actor-1"}},
 		{name: "actors get multiple", command: getActorsCmd, args: []string{"actor-1", "actor-2"}},
+		{name: "actortemplates list", command: getActorTemplatesCmd},
+		{name: "actortemplates get", command: getActorTemplatesCmd, args: []string{"counter"}},
+		{name: "actortemplates get multiple", command: getActorTemplatesCmd, args: []string{"counter", "counter-microvm"}},
 		{name: "atespaces list", command: getAtespacesCmd},
 		{name: "atespaces get", command: getAtespacesCmd, args: []string{"team-a"}},
 		{name: "atespaces get multiple", command: getAtespacesCmd, args: []string{"team-a", "team-b"}},
@@ -53,18 +56,11 @@ func TestGetCommandArgs(t *testing.T) {
 	}
 }
 
-func TestParseActorSnapshotFlags(t *testing.T) {
-	if got, err := parseActorSnapshotTagScope("published"); err != nil || got != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
-		t.Fatalf("parseActorSnapshotTagScope(published) = (%v, %v)", got, err)
+func TestParseTagScope(t *testing.T) {
+	if got, err := parseTagScope("published"); err != nil || got != ateapipb.TagScope_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("parseTagScope(published) = (%v, %v)", got, err)
 	}
-	if _, err := parseActorSnapshotTagScope("global"); err == nil {
-		t.Fatal("parseActorSnapshotTagScope(global) succeeded")
-	}
-	ref, err := parseNamespacedName("team-a/before-upgrade")
-	if err != nil || ref.GetAtespace() != "team-a" || ref.GetName() != "before-upgrade" {
-		t.Fatalf("parseNamespacedName = (%v, %v)", ref, err)
-	}
-	if _, err := parseNamespacedName("before-upgrade"); err == nil {
-		t.Fatal("parseNamespacedName without atespace succeeded")
+	if _, err := parseTagScope("global"); err == nil {
+		t.Fatal("parseTagScope(global) succeeded")
 	}
 }

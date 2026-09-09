@@ -39,7 +39,7 @@ import (
 )
 
 var (
-	requestCount             uint64
+	requestCount             atomic.Uint64
 	ready                    atomic.Bool
 	fileMutex                sync.Mutex
 	sigtermSleepDurationSecs atomic.Int64
@@ -89,7 +89,7 @@ func main() {
 	defaultMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		fileCounter := incrementFileCounter(filepath.Join(*fileCounterDirectory, "a.txt"))
-		memoryCounter := atomic.AddUint64(&requestCount, 1)
+		memoryCounter := requestCount.Add(1)
 		currentIP := getCurrentIP()
 
 		fileContentStr := ""
@@ -137,14 +137,14 @@ func main() {
 			http.Error(w, "missing duration parameter", http.StatusBadRequest)
 			return
 		}
-		d, err := strconv.Atoi(durationStr)
+		d, err := strconv.ParseInt(durationStr, 10, 64)
 		if err != nil || d < 0 {
 			http.Error(w, "invalid duration parameter", http.StatusBadRequest)
 			return
 		}
-		sigtermSleepDurationSecs.Store(int64(d))
+		sigtermSleepDurationSecs.Store(d)
 		response := fmt.Sprintf("SIGTERM sleep duration set to %d seconds\n", d)
-		slog.InfoContext(r.Context(), "Updated SIGTERM sleep duration", slog.Int("duration_secs", d))
+		slog.InfoContext(r.Context(), "Updated SIGTERM sleep duration", slog.Int64("duration_secs", d))
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(response))
 	})

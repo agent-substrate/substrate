@@ -115,3 +115,41 @@ func TestMetricNameFromLine(t *testing.T) {
 		}
 	}
 }
+
+const sampleNode = "kind-worker2"
+
+// The exporter dots-to-underscores each resource attribute and lifts
+// service.name to job. The trailing series carries job="atelet" too, so a hit on
+// it would mean the metric-name guard, not the job match, had failed.
+const sampleTargetInfo = `# HELP target_info Target metadata
+# TYPE target_info gauge
+target_info{job="atelet",instance="pod-uid-1",k8s_namespace_name="ate-system",k8s_pod_name="atelet-abc",k8s_node_name="` + sampleNode + `"} 1
+target_info{job="ateom-gvisor",instance="pod-uid-2",k8s_namespace_name="ate-system",k8s_pod_name="wp-xyz",k8s_node_name="` + sampleNode + `"} 1
+target_info{job="atecontroller",instance="pod-uid-3",k8s_namespace_name="ate-system",k8s_pod_name="ctrl-def"} 1
+ate_workerpool_workers{job="atelet",ate_workerpool_name="pool-a"} 3
+`
+
+func TestTargetInfoLabel(t *testing.T) {
+	tests := []struct {
+		name    string
+		scrape  string
+		service string
+		label   string
+		want    string
+	}{
+		{"node on the first resource", sampleTargetInfo, "atelet", "k8s_node_name", sampleNode},
+		{"node on a later resource", sampleTargetInfo, "ateom-gvisor", "k8s_node_name", sampleNode},
+		{"label absent for that service", sampleTargetInfo, "atecontroller", "k8s_node_name", ""},
+		{"service absent", sampleTargetInfo, "atenet", "k8s_node_name", ""},
+		{"other resource attributes still readable", sampleTargetInfo, "atelet", "k8s_pod_name", "atelet-abc"},
+		{"a non-target_info series is never matched", sampleTargetInfo, "atelet", "ate_workerpool_name", ""},
+		{"empty scrape", "", "atelet", "k8s_node_name", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TargetInfoLabel(tt.scrape, tt.service, tt.label); got != tt.want {
+				t.Errorf("TargetInfoLabel(_, %q, %q) = %q, want %q", tt.service, tt.label, got, tt.want)
+			}
+		})
+	}
+}

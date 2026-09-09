@@ -25,13 +25,12 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -40,7 +39,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -49,14 +47,15 @@ import (
 )
 
 const (
-	userClass    = "GluttonUser"
-	templateName = "glutton"
-	templateNS   = "benchmark-workloads"
-	actorDomain  = "actors.resources.substrate.ate.dev"
-	pingPath     = "/ping"
-
-	sourceClient = "client"
-	sourceServer = "server"
+	userClass        = "GluttonUser"
+	templateName     = "glutton"
+	templateAtespace = "benchmark-workloads"
+	actorDomain      = "actors.resources.substrate.ate.dev"
+	pingPath         = "/ping"
+	writeRAMPath     = "/writeram"
+	readRAMPath      = "/readram"
+	memLoadKey       = "memload"
+	memReadAll       = "all"
 )
 
 func init() {
@@ -89,7 +88,7 @@ type taskRuntime struct {
 // (the analog of locust's per-user on_start); subsequent calls run a
 // resume/ping/suspend cycle.
 func (r *taskRuntime) iterate() {
-	gid := goroutineID()
+	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
 		u, err := r.startUser(context.Background())
@@ -106,6 +105,20 @@ func (r *taskRuntime) iterate() {
 	if !user.resume(ctx) {
 		return
 	}
+	// Fill before the first suspend so every snapshot from cycle one on
+	// carries the full working set; glutton keeps the allocations across
+	// suspend/resume, so this runs once per actor (retried if it fails).
+	user.ensureRAMFilled(ctx)
+	// Walk the working set right after resume, before churn dirties it:
+	// under a demand-paged restore every touched page must be paged back
+	// in before the walk returns, so its latency measures the true cost
+	// of reaching the previous snapshot's memory.
+	user.readRAM(ctx)
+	// Re-dirty part of the working set each cycle so repeated suspends
+	// snapshot an actor whose memory is changing, like a live application's.
+	// Rotate mode advances through the array cycle over cycle, so the dirty
+	// window moves instead of re-dirtying the same prefix.
+	user.churnRAM(ctx)
 	user.ping(ctx)
 	user.suspend(ctx)
 
@@ -162,6 +175,7 @@ type gluttonUser struct {
 	hostHeader   string
 	firstResume  bool
 	actorRunning bool
+	ramFilled    bool
 }
 
 func (u *gluttonUser) ref() *ateapipb.ObjectRef {
@@ -195,9 +209,8 @@ func (u *gluttonUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplateNamespace: templateNS,
-				ActorTemplateName:      templateName,
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -256,11 +269,11 @@ func (u *gluttonUser) tracedCall(ctx context.Context, name string, do func(conte
 	err := do(ctx, &tr)
 	clientLatency := time.Since(start)
 
-	latency, source := elapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
-	if source == sourceServer {
-		span.SetAttributes(attribute.Float64("server.elapsed_ms", msFloat(latency)))
+	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
+	if source == boomerutil.SourceServer {
+		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
 	}
-	logSampledTrace(span, name, latency, source, err)
+	boomerutil.LogSampledTrace(span, name, latency, source, err)
 	if err != nil {
 		bmetrics.RecordFailure("grpc", name, userClass, latency, err.Error())
 		return err
@@ -306,80 +319,160 @@ func (u *gluttonUser) ping(ctx context.Context) {
 
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, httpErr)
+		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, httpErr)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, httpErr.Error())
 		return
 	}
 
 	pong := &gluttonpb.PingResponse{}
 	if err := proto.Unmarshal(respBody, pong); err != nil {
-		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, err)
+		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, err)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, err.Error())
 		return
 	}
 	if pong.Message != message {
 		mismatch := fmt.Errorf("ping echo mismatch: sent=%q recv=%q", message, pong.Message)
-		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, mismatch)
+		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, mismatch)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, mismatch.Error())
 		return
 	}
-	logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, nil)
+	boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, nil)
 	bmetrics.RecordSuccess("http", "GluttonPing", userClass, clientLatency, int64(len(respBody)))
 }
 
-// logSampledTrace emits a single structured line per sampled span. Operators
-// (and runner.py) grep stdout for `trace_id=` to find the trace IDs to look
-// up in the OTLP backend. Matches the format of the Python locust workers'
-// equivalent log line so a single regex covers both sources.
-func logSampledTrace(span trace.Span, name string, latency time.Duration, source string, err error) {
-	sc := span.SpanContext()
-	if !sc.IsSampled() {
+// ensureRAMFilled grows the actor's resident working set to the configured
+// mem_target through the glutton WriteRAM API. Runs once per actor:
+// glutton holds the allocation for its lifetime, so it persists across
+// suspend/resume and every snapshot from the first suspend onward is at
+// size. A failure leaves ramFilled unset so the next iteration retries.
+// The fill reports as its own GluttonFillRAM stats row so it never
+// pollutes ping or resume numbers.
+func (u *gluttonUser) ensureRAMFilled(ctx context.Context) {
+	if u.ramFilled {
 		return
 	}
-	attrs := []any{
-		slog.String("name", name),
-		slog.String("trace_id", sc.TraceID().String()),
-		slog.Float64("duration_ms", msFloat(latency)),
-		slog.String("source", source),
-	}
-	if err != nil {
-		attrs = append(attrs, slog.String("err", err.Error()))
-		slog.Info("traced span (failed)", attrs...)
+	target := u.cfg.Dyn.Load().MemTarget
+	if target == "" {
+		u.ramFilled = true
 		return
 	}
-	slog.Info("traced span", attrs...)
-}
 
-func elapsedFromMD(tr metadata.MD, key string, fallback time.Duration) (time.Duration, string) {
-	vals := tr.Get(key)
-	if len(vals) == 0 {
-		return fallback, sourceClient
-	}
-	us, err := strconv.ParseInt(vals[0], 10, 64)
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonFillRAM")
+	defer span.End()
+	start := time.Now()
+
+	err := u.writeRAM(ctx, memLoadKey, target, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE)
+	clientLatency := time.Since(start)
+	boomerutil.LogSampledTrace(span, "GluttonFillRAM", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
-		return fallback, sourceClient
+		bmetrics.RecordFailure("http", "GluttonFillRAM", userClass, clientLatency, err.Error())
+		return
 	}
-	return time.Duration(us) * time.Microsecond, sourceServer
+	u.ramFilled = true
+	bmetrics.RecordSuccess("http", "GluttonFillRAM", userClass, clientLatency, 0)
 }
 
-func msFloat(d time.Duration) float64 { return float64(d.Nanoseconds()) / 1e6 }
+// churnRAM re-randomizes mem_churn bytes of the working set in place
+// (WriteRAM rotate on the fill's key), so pages arrive dirty at every
+// suspend instead of only the first: a fill-once set is static, and any
+// future incremental snapshotting would make cycles two onward
+// unrepresentative of a live application. Rotate mode advances glutton's
+// per-key cursor past each write, wrapping at the end, so consecutive
+// cycles dirty a moving window rather than the same prefix. Runs once per
+// iteration, only after the fill has succeeded, and reports as its own
+// GluttonChurnRAM stats row.
+func (u *gluttonUser) churnRAM(ctx context.Context) {
+	churn := u.cfg.Dyn.Load().MemChurn
+	if churn == "" || !u.ramFilled {
+		return
+	}
 
-// goroutineID extracts the runtime's per-goroutine ID via the standard
-// runtime.Stack trick. Used to key per-VU state because boomer's Task model
-// has no built-in per-VU hook — see the runtime.shutdown comment for the
-// limitation this implies on user-count rescale.
-func goroutineID() int64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	line := string(buf[:n])
-	const prefix = "goroutine "
-	if !strings.HasPrefix(line, prefix) {
-		return 0
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonChurnRAM")
+	defer span.End()
+	start := time.Now()
+
+	err := u.writeRAM(ctx, memLoadKey, churn, gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE)
+	clientLatency := time.Since(start)
+	boomerutil.LogSampledTrace(span, "GluttonChurnRAM", clientLatency, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonChurnRAM", userClass, clientLatency, err.Error())
+		return
 	}
-	end := strings.IndexByte(line[len(prefix):], ' ')
-	if end < 0 {
-		return 0
+	bmetrics.RecordSuccess("http", "GluttonChurnRAM", userClass, clientLatency, 0)
+}
+
+// readRAM walks mem_read bytes of the working set (memReadAll walks all of
+// it) through the glutton ReadRAM API, one byte per page, and reports the
+// walk as its own GluttonReadRAM stats row. Placed right after resume, the
+// row's latency is the demand-paging cost of the previous snapshot's
+// memory; on an eagerly-restored actor it degenerates to a fast in-memory
+// scan, so the two restore modes are directly comparable.
+func (u *gluttonUser) readRAM(ctx context.Context) {
+	read := u.cfg.Dyn.Load().MemRead
+	if read == "" || !u.ramFilled {
+		return
 	}
-	id, _ := strconv.ParseInt(line[len(prefix):len(prefix)+end], 10, 64)
-	return id
+	size := read
+	if read == memReadAll {
+		size = "" // ReadRAM walks the whole array on empty size
+	}
+
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonReadRAM")
+	defer span.End()
+	start := time.Now()
+
+	resp := &gluttonpb.ReadRAMResponse{}
+	err := u.postProto(ctx, readRAMPath, &gluttonpb.ReadRAMRequest{Key: memLoadKey, Size: size}, resp)
+	clientLatency := time.Since(start)
+	boomerutil.LogSampledTrace(span, "GluttonReadRAM", clientLatency, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonReadRAM", userClass, clientLatency, err.Error())
+		return
+	}
+	bmetrics.RecordSuccess("http", "GluttonReadRAM", userClass, clientLatency, resp.GetSize())
+}
+
+// writeRAM POSTs one WriteRAM request to the actor through the router,
+// mirroring ping's wire format (protobuf over HTTP). size is a suffixed
+// string (e.g. "2Gi") passed through verbatim; glutton parses it.
+func (u *gluttonUser) writeRAM(ctx context.Context, key, size string, mode gluttonpb.WriteMode) error {
+	err := u.postProto(ctx, writeRAMPath, &gluttonpb.WriteRAMRequest{
+		Key:       key,
+		Size:      size,
+		WriteMode: mode,
+	}, &gluttonpb.WriteRAMResponse{})
+	if err != nil {
+		return fmt.Errorf("WriteRAM %s (%s): %w", key, size, err)
+	}
+	return nil
+}
+
+// postProto POSTs one protobuf request to the actor through the router and
+// unmarshals the protobuf response into resp.
+func (u *gluttonUser) postProto(ctx context.Context, path string, req, resp proto.Message) error {
+	body, err := proto.Marshal(req)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.RouterURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Host = u.hostHeader
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
+
+	httpResp, err := u.cfg.HTTPClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer httpResp.Body.Close()
+	respBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return err
+	}
+	if httpResp.StatusCode >= 400 {
+		return fmt.Errorf("%s: HTTP %d: %s", path, httpResp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return proto.Unmarshal(respBody, resp)
 }

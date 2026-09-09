@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -252,6 +253,41 @@ func TestSyncer_OmittedFields(t *testing.T) {
 	}
 	if len(got.GetLabels()) != 0 {
 		t.Errorf("worker labels = %v, want none", got.GetLabels())
+	}
+}
+
+// Capacity belongs to the Worker, which sets it over WorkerService. The
+// syncer must not infer one from the pod, even when the ateom container spells
+// its limits out: the pod's limits bound the sandbox, but what the ateom can
+// actually supply to Actors is the ateom's to say.
+func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ns, podName, poolName := "ns-syncer-capacity", "worker-unit-1", "pool1"
+
+	api := newFakeControl()
+	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "gvisor", nil))
+
+	pod := workerPod(ns, podName, poolName, testPodUID, "127.0.0.1")
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
+		Name:  "ateom",
+		Image: "ateom",
+		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("4"),
+			corev1.ResourceMemory: resource.MustParse("8Gi"),
+		}},
+	})
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	// The registry here is a fake, so what it holds is exactly what the syncer
+	// sent. The syncer writes no capacity: it comes from the Worker's own
+	// report, which is the ateom's to make.
+	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
+	if got.GetStatus().GetCapacity() != nil {
+		t.Errorf("worker capacity = %v, want none", got.GetStatus().GetCapacity())
 	}
 }
 

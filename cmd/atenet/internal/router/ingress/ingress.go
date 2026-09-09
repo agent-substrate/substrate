@@ -56,13 +56,6 @@ const (
 	OriginalDstAddressKey = "local"
 	// OriginalDstPortKey is the actor's target port.
 	OriginalDstPortKey = "port"
-
-	// AuthorityFilterStateKey is the filter-state key holding the request's
-	// :authority, set by xds.go's authorityFilterStateFilter.
-	AuthorityFilterStateKey = "dev.ate.authority"
-	// AuthorityFilterStateAttribute is the CEL expression ext_proc evaluates
-	// to read AuthorityFilterStateKey back out.
-	AuthorityFilterStateAttribute = "filter_state['" + AuthorityFilterStateKey + "']"
 )
 
 // Handler routes ingress requests to the worker hosting their actor.
@@ -97,9 +90,9 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// Resolved from filter state rather than Host/:authority directly: a
 	// reinjected CONNECT tunnel's own :authority has nothing to do with the
 	// actor, so xds.go captures the real one at connect_terminate instead.
-	authority := md.Attribute(AuthorityFilterStateAttribute)
+	authority := md.Attribute(extproc.AuthorityFilterStateAttribute)
 	if authority == "" {
-		return extproc.Result{}, invalidHostErr(md.Host, fmt.Errorf("missing %s request attribute", AuthorityFilterStateAttribute))
+		return extproc.Result{}, invalidHostErr(md.Host, fmt.Errorf("missing %s request attribute", extproc.AuthorityFilterStateAttribute))
 	}
 	actorRef, err := parseActorRef(authority)
 	if err != nil {
@@ -136,9 +129,9 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// Actor template identity, used as low-cardinality route-latency metric
 	// attributes.
 	res := extproc.Result{
-		TemplateNamespace: actor.GetActorTemplateNamespace(),
-		TemplateName:      actor.GetActorTemplateName(),
-		Resume:            string(resumeOutcome),
+		TemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+		TemplateName:     actor.GetActorTemplate().GetName(),
+		Resume:           string(resumeOutcome),
 	}
 
 	workerIP := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp()
@@ -152,15 +145,14 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 			"actor %s routing failed", actorRef)
 	}
 
-	// atunnel's ingress server listens on :443 (mTLS) and forwards to
-	// targetPort on the actor; the router's client cert comes from the
-	// ORIGINAL_DST cluster's upstream TLS context (xds.go).
+	// atunnel's regular HTTPS ingress listens on :443 and forwards to the
+	// actor's targetPort.
 	targetAddr := net.JoinHostPort(workerIP, "443")
 
 	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
-	// Envoy and agentgateway both pick the upstream from dynamic metadata,
-	// so the resolved address and port go there.
+	// ext_proc clients may use regular HTTPS on :443 or choose to CONNECT to
+	// atunnel instead.
 	dynamicMetadata, err := structpb.NewStruct(map[string]any{
 		OriginalDstMetadataKey: map[string]any{
 			OriginalDstAddressKey: targetAddr,

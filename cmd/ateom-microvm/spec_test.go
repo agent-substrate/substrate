@@ -17,9 +17,7 @@
 package main
 
 import (
-	"encoding/json"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,102 +28,8 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 )
-
-// The device allowlist and CPU shares from defaultKataResources are the
-// proven-good kata shape. Overlaying a memory limit must not drop them: a
-// container without the allowlist fails in ways that do not point back here.
-func TestMergeKataResources_KeepsDefaults(t *testing.T) {
-	limit := int64(64 * 1024 * 1024)
-	got := mergeKataResources(&specs.LinuxResources{
-		Memory: &specs.LinuxMemory{Limit: &limit},
-	})
-
-	assertDefaultDeviceAllowlist(t, got.Devices)
-	if got.CPU == nil || got.CPU.Shares == nil || *got.CPU.Shares != 1024 {
-		t.Errorf("CPU.Shares = %v, want 1024", got.CPU)
-	}
-	if got.Memory == nil || got.Memory.Limit == nil || *got.Memory.Limit != limit {
-		t.Errorf("Memory.Limit = %v, want %d", got.Memory, limit)
-	}
-}
-
-func TestMergeKataResources_NilIsDefaults(t *testing.T) {
-	got := mergeKataResources(nil)
-	assertDefaultDeviceAllowlist(t, got.Devices)
-	if got.Memory != nil {
-		t.Errorf("Memory = %v, want nil when nothing was set", got.Memory)
-	}
-}
-
-// A field the merge does not know about must reach the guest rather than being
-// dropped: silently discarding an upstream addition is the failure this merge
-// exists to prevent, and it would look identical to a runtime that ignores it.
-func TestMergeKataResources_CarriesUnknownFields(t *testing.T) {
-	pids := int64(128)
-	nvidia := int64(195)
-	got := mergeKataResources(&specs.LinuxResources{
-		Pids: &specs.LinuxPids{Limit: &pids},
-		Devices: []specs.LinuxDeviceCgroup{
-			{Allow: true, Type: "c", Major: &nvidia, Access: "rwm"},
-		},
-	})
-
-	if got.Pids == nil || got.Pids.Limit == nil || *got.Pids.Limit != pids {
-		t.Errorf("Pids = %v, want the caller's limit %d to survive", got.Pids, pids)
-	}
-	if len(got.Devices) != 1 || got.Devices[0].Major == nil || *got.Devices[0].Major != nvidia {
-		t.Errorf("Devices = %+v, want the caller's own allowlist to win", got.Devices)
-	}
-}
-
-// assertDefaultDeviceAllowlist compares the entries, not just the count: a
-// same-length slice of zero-valued or wrongly-populated rules would pass a
-// length check while denying the devices a container needs.
-func assertDefaultDeviceAllowlist(t *testing.T, got []specs.LinuxDeviceCgroup) {
-	t.Helper()
-	want := defaultKataResources().Devices
-	if len(got) != len(want) {
-		t.Fatalf("Devices = %d entries, want %d", len(got), len(want))
-	}
-	for i := range want {
-		g, w := got[i], want[i]
-		if g.Allow != w.Allow || g.Type != w.Type || g.Access != w.Access {
-			t.Errorf("Devices[%d] = {allow:%v type:%q access:%q}, want {allow:%v type:%q access:%q}",
-				i, g.Allow, g.Type, g.Access, w.Allow, w.Type, w.Access)
-			continue
-		}
-		if !eqInt64Ptr(g.Major, w.Major) || !eqInt64Ptr(g.Minor, w.Minor) {
-			t.Errorf("Devices[%d] major/minor = %v/%v, want %v/%v (nil is the wildcard)",
-				i, g.Major, g.Minor, w.Major, w.Minor)
-		}
-	}
-}
-
-func eqInt64Ptr(a, b *int64) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func TestMergeKataResources_CPUQuotaOverlaid(t *testing.T) {
-	quota := int64(20000)
-	period := uint64(100000)
-	got := mergeKataResources(&specs.LinuxResources{
-		CPU: &specs.LinuxCPU{Quota: &quota, Period: &period},
-	})
-
-	if got.CPU == nil || got.CPU.Quota == nil || *got.CPU.Quota != quota {
-		t.Fatalf("CPU.Quota = %v, want %d", got.CPU, quota)
-	}
-	if got.CPU.Period == nil || *got.CPU.Period != period {
-		t.Errorf("CPU.Period = %v, want %d", got.CPU.Period, period)
-	}
-	if got.CPU.Shares == nil || *got.CPU.Shares != 1024 {
-		t.Errorf("CPU.Shares = %v, want the default 1024 to survive", got.CPU.Shares)
-	}
-}
 
 // Limits the guest can never satisfy must be rejected before the containers
 // reach the agent, and as InvalidArgument: the template spec is immutable, so
@@ -314,58 +218,23 @@ func TestCheckResourceEnvelope_ErrorNamesSandboxConfigWhenUndeclared(t *testing.
 	}
 }
 
-// A container's own declared limit is what must bind inside the guest: it is
-// the only input to the spec, so nothing can stamp over it and silently
-// unbound the container.
-func TestEnsureKataCompatibleSpec_KeepsDeclaredContainerLimits(t *testing.T) {
-	const declared = 64 * 1024 * 1024
-	bundle := t.TempDir()
-	in := specs.Spec{Linux: &specs.Linux{Resources: &specs.LinuxResources{
-		Memory: &specs.LinuxMemory{Limit: ptr.To(int64(declared))},
-	}}}
-	b, err := json.Marshal(&in)
-	if err != nil {
-		t.Fatalf("marshaling input spec: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bundle, "config.json"), b, 0o600); err != nil {
-		t.Fatalf("writing config.json: %v", err)
-	}
-
-	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net")
-	if err != nil {
-		t.Fatalf("ensureKataCompatibleSpec() = %v", err)
-	}
-
-	if got.Linux.Resources.Memory == nil || got.Linux.Resources.Memory.Limit == nil {
-		t.Fatal("memory limit = nil, want the declared 64Mi")
-	}
-	if v := *got.Linux.Resources.Memory.Limit; v != declared {
-		t.Errorf("memory limit = %d, want %d (the container's own declared limit)", v, declared)
-	}
-}
-
-// A container that declares nothing must stay unbounded inside the guest: guest
-// RAM is the real ceiling, and a cap equal to the whole guest can never bind.
-func TestEnsureKataCompatibleSpec_LeavesUndeclaredContainerUnlimited(t *testing.T) {
-	bundle := t.TempDir()
-	in := specs.Spec{Linux: &specs.Linux{}}
-	b, err := json.Marshal(&in)
-	if err != nil {
-		t.Fatalf("marshaling input spec: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bundle, "config.json"), b, 0o600); err != nil {
-		t.Fatalf("writing config.json: %v", err)
-	}
-
-	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net")
-	if err != nil {
-		t.Fatalf("ensureKataCompatibleSpec() = %v", err)
-	}
-
-	if m := got.Linux.Resources.Memory; m != nil && m.Limit != nil && *m.Limit > 0 {
-		t.Errorf("memory limit = %d, want unset for a container that declared none", *m.Limit)
-	}
-	if c := got.Linux.Resources.CPU; c != nil && c.Quota != nil && *c.Quota > 0 {
-		t.Errorf("cpu quota = %d, want unset for a container that declared none", *c.Quota)
+// A volume's path relative to the share is the same on the host and in the
+// guest.
+func TestVolumeSubtreePathsMatchTheGuestShare(t *testing.T) {
+	const uid, cid, vol = "uid", "app", "data"
+	for name, tc := range map[string]struct{ host, guest string }{
+		"durable":     {filepath.Join(kata.SharedDir(uid), ocispec.ShareDurable, vol), filepath.Join(ocispec.GuestSharedDir, ocispec.ShareDurable, vol)},
+		"csi":         {filepath.Join(kata.SharedDir(uid), ocispec.ShareCSI, vol), filepath.Join(ocispec.GuestSharedDir, ocispec.ShareCSI, vol)},
+		"system-info": {filepath.Join(kata.SharedDir(uid), ocispec.ShareSystemInfo, vol), filepath.Join(ocispec.GuestSharedDir, ocispec.ShareSystemInfo, vol)},
+		"image":       {kata.SharedVolumeDir(uid, cid, vol), filepath.Join(ocispec.GuestSharedDir, cid, ocispec.ShareVolumes, vol)},
+	} {
+		hostRel, err := filepath.Rel(kata.SharedDir(uid), tc.host)
+		if err != nil {
+			t.Fatalf("%s: Rel(host): %v", name, err)
+		}
+		guestRel := strings.TrimPrefix(tc.guest, ocispec.GuestSharedDir+"/")
+		if hostRel != guestRel {
+			t.Errorf("%s: host-relative path %q != guest-relative path %q; find-paths would re-open the wrong file", name, hostRel, guestRel)
+		}
 	}
 }

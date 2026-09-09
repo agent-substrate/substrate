@@ -63,8 +63,10 @@ class UserMemUser(User):
                         metadata=ateapi_pb2.ResourceMetadata(
                             atespace=ATESPACE, name=self.actor_name
                         ),
-                        actor_template_namespace="benchmark-workloads",
-                        actor_template_name=self.template_name,
+                        actor_template=ateapi_pb2.ObjectRef(
+                            atespace="benchmark-workloads",
+                            name=self.template_name,
+                        ),
                     )
                 )
             )

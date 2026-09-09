@@ -18,9 +18,28 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
+import "pkg/proto/ateapipb/ateapi.proto";
+
 // CredentialBroker gives an authenticated worker its current actor credential.
 service CredentialBroker {
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
+}
+
+// WorkerCapacity is how a worker tells the node-local atelet what it can
+// supply to the actors it hosts, for atelet to forward to the control plane's
+// WorkerService.SetWorkerCapacity, which this mirrors. The worker is identified
+// by its mTLS certificate, never by the request.
+service WorkerCapacity {
+  rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse) {}
+}
+
+message SetWorkerCapacityRequest {
+  // What the worker can supply, in the same vocabulary the control plane
+  // records and an ActorTemplate asks in.
+  ateapi.WorkerResources capacity = 1;
+}
+
+message SetWorkerCapacityResponse {
 }
 
 message MintActorCertificateRequest {
@@ -69,7 +88,7 @@ message TerminateRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   WorkloadSpec spec = 7;
@@ -85,7 +104,7 @@ message RunRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   WorkloadSpec spec = 7;
@@ -337,7 +356,7 @@ message CheckpointRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on checkpoint: atelet uses the version the
@@ -366,7 +385,7 @@ message UploadPausedCheckpointRequest {
   string actor_uid = 3;
 
   // For metrics attribution, like on CheckpointRequest.
-  string actor_template_namespace = 4;
+  string actor_template_atespace = 4;
   string actor_template_name = 5;
 
   // The local checkpoint to upload: LocalSnapshotInfo.snapshot_name recorded
@@ -394,7 +413,7 @@ message RestoreRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on restore: the snapshot is

@@ -15,7 +15,7 @@
 """Stub DurdirUser declaration.
 
 The real load implementation lives in the boomer-Go worker at
-cmd/benchmarking/boomer-glutton/; this Python class is declared only so the
+cmd/benchmarking/boomer-worker/; this Python class is declared only so the
 master recognizes the name and attributes boomer's stats rows to it. The
 master loads this stub file (or glutton.py), selected by
 ${BENCHMARK_USER_CLASS} in locust/manifests/locust.yaml. The Python worker
@@ -29,7 +29,7 @@ if os.environ.get("LOCUST_NO_DURDIR_USER") != "1":
     from locust import User, task
     from common.boomer_config import init_boomer_config
 
-    # Master serves /boomer-config so the boomer-glutton workers can fetch
+    # Master serves /boomer-config so the boomer-worker workers can fetch
     # runtime flag values (trace probability, wait times, durdir config) the
     # operator set in the web UI form. No-op on workers without a web UI.
     init_boomer_config()

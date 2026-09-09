@@ -132,20 +132,34 @@ func grantAteletPermissions(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
+// validateIamFlags checks every flag the command needs before any of the
+// grants run. Each grant is a separate SetIamPolicy call, so a flag validated
+// partway through the sequence reports a usage error only after the earlier
+// grants have already been written to the project.
+func validateIamFlags(cfg *Config, bucketBindings bool) error {
+	if cfg.ProjectID == "" {
+		return errors.New("--project-id is required")
+	}
+	if cfg.ProjectNumber == "" {
+		return errors.New("--project-number is required")
+	}
+	if bucketBindings && cfg.BucketName == "" {
+		return errors.New("--bucket is required for bucket bindings")
+	}
+	return nil
+}
+
 var iamCmd = &cobra.Command{
 	Use:   "iam",
 	Short: "Create IAM bindings",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cfg.ProjectID == "" {
-			return errors.New("--project-id is required")
-		}
-		if cfg.ProjectNumber == "" {
-			return errors.New("--project-number is required")
-		}
-
 		gkeNodes, _ := cmd.Flags().GetBool("gke-nodes")
 		atelet, _ := cmd.Flags().GetBool("atelet")
 		bucketBindings, _ := cmd.Flags().GetBool("bucket-bindings")
+
+		if err := validateIamFlags(&cfg, bucketBindings); err != nil {
+			return err
+		}
 
 		if gkeNodes {
 			if err := grantGkeNodePermissions(cmd.Context(), &cfg); err != nil {
@@ -158,9 +172,6 @@ var iamCmd = &cobra.Command{
 			}
 		}
 		if bucketBindings {
-			if cfg.BucketName == "" {
-				return errors.New("--bucket is required for bucket bindings")
-			}
 			if err := createIamPolicyBindings(cmd.Context(), &cfg); err != nil {
 				return err
 			}

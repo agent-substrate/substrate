@@ -20,6 +20,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
@@ -36,15 +37,17 @@ import (
 type RPCService struct {
 	ateapipb.UnimplementedControlServer
 	impl                  serviceStore
+	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
-	workerPoolLister      listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister   listersv1alpha1.SandboxConfigLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	actorWorkflow         *ActorWorkflow
 	workerWorkflow        *WorkerWorkflow
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
+	objectStore           objectstore.Store
 }
 
 var _ ateapipb.ControlServer = (*RPCService)(nil)
@@ -58,11 +61,13 @@ type VolumePluginRegistry interface {
 // implements the outward-facing RPC interface.
 //
 // instruments may be nil; the record helpers no-op.
+//
+// objectStore may be nil, which leaves external snapshots in place instead of
+// copying and releasing them. Only tests that never reach those steps pass nil;
+// ate-api always builds one.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
-	actorTemplateLister listersv1alpha1.ActorTemplateLister,
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
@@ -70,18 +75,21 @@ func NewRPCService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
+	objectStore objectstore.Store,
 ) *RPCService {
-	impl := newServiceImpl(persistence, actorTemplateLister, storageClassLister)
+	impl := newServiceImpl(persistence, storageClassLister)
 	s := &RPCService{
 		impl:                  impl,
+		persistence:           persistence,
 		workerCache:           workerCache,
-		workerPoolLister:      workerPoolLister,
+		sandboxConfigLister:   sandboxConfigLister,
 		csiDriverConfigLister: csiDriverConfigLister,
 		dialer:                dialer,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
+		objectStore:           objectStore,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
@@ -93,12 +101,14 @@ type serviceStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)
-	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
-	ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error)
-	CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
-	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
-	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
-	DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
+	CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)
+	GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
+	UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error)
+	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
+	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
+	ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Tag], error)
+	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
+	DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error)
@@ -109,6 +119,7 @@ type serviceStore interface {
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
+	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
@@ -144,8 +155,7 @@ type ServiceImpl struct {
 	// methods we need to trap.
 	store store.Interface
 
-	actorTemplateLister listersv1alpha1.ActorTemplateLister
-	storageClassLister  storagev1listers.StorageClassLister
+	storageClassLister storagev1listers.StorageClassLister
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)
@@ -154,13 +164,11 @@ var _ store.Interface = (*ServiceImpl)(nil)
 // implementation layer.
 func newServiceImpl(
 	persistence store.Interface,
-	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	storageClassLister storagev1listers.StorageClassLister,
 ) *ServiceImpl {
 	s := &ServiceImpl{
-		store:               persistence,
-		actorTemplateLister: actorTemplateLister,
-		storageClassLister:  storageClassLister,
+		store:              persistence,
+		storageClassLister: storageClassLister,
 	}
 	return s
 }
@@ -168,9 +176,4 @@ func newServiceImpl(
 // Pass-through.
 func (s *ServiceImpl) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	return s.store.AcquireLease(ctx, key)
-}
-
-// Pass-through.
-func (s *ServiceImpl) DebugClearAll(ctx context.Context) error {
-	return s.store.DebugClearAll(ctx)
 }

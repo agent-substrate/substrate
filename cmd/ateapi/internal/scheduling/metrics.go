@@ -75,7 +75,7 @@ func (s *scheduler) recordEligibleWorkers(ctx context.Context, matching []*ateap
 		if _, ok := eligibleByPool[k]; !ok {
 			eligibleByPool[k] = 0
 		}
-		if w.GetStatus().GetAssignment() == nil {
+		if s.HasRoom(w, constraints) {
 			eligibleByPool[k]++
 		}
 	}

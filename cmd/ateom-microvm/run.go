@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -178,16 +179,8 @@ func workloadIDs(ctrs []actorContainer) []string {
 type actorContainer struct {
 	name         string
 	bundleRootfs string
-	spec         *specs.Spec
-	// durableMounts are the durable-dir volumes this container mounts, and where
-	// (see durable.go). Empty for containers that declare none.
-	durableMounts []*ateompb.DurableDirVolumeMount
-	// csiMounts are the CSI volumes this container mounts, and where (see csi.go).
-	// Empty for containers that declare none.
-	csiMounts []*ateompb.VolumeMount
-	// systemInfoMounts are the system-info volumes this container mounts, and
-	// where (see systeminfo.go). Empty for containers that declare none.
-	systemInfoMounts []*ateompb.SystemInfoVolumeMount
+	// spec is the container's OCI spec shaped for micro-VM execution.
+	spec *specs.Spec
 	// imageMounts are the image volumes this container mounts, and where.
 	imageMounts []*ateompb.ImageVolumeMount
 }
@@ -224,6 +217,10 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 // bundle rootfs (the overlay RO lower) so the guest gets cluster DNS: ateom drops
 // atelet's resolv.conf bind and sends no CreateSandbox.Dns, so the guest can
 // otherwise reach IPs but not resolve names.
+//
+// The rootfs is untrusted, so the write goes through os.Root and unlinks rather
+// than truncates: an image-planted /etc or /etc/resolv.conf symlink would
+// otherwise be followed and clobber that path on the worker pod as root.
 func writeGuestResolvConf(rootfs string) error {
 	content, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
@@ -232,11 +229,26 @@ func writeGuestResolvConf(rootfs string) error {
 	if len(content) == 0 {
 		return fmt.Errorf("host /etc/resolv.conf is empty")
 	}
-	etc := filepath.Join(rootfs, "etc")
-	if err := os.MkdirAll(etc, 0o755); err != nil {
-		return fmt.Errorf("creating %q: %w", etc, err)
+	root, err := os.OpenRoot(rootfs)
+	if err != nil {
+		return fmt.Errorf("opening rootfs %q: %w", rootfs, err)
 	}
-	if err := os.WriteFile(filepath.Join(etc, "resolv.conf"), content, 0o644); err != nil {
+	defer root.Close()
+	if err := root.Mkdir("etc", 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("creating %q: %w", filepath.Join(rootfs, "etc"), err)
+	}
+	if err := root.Remove("etc/resolv.conf"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing existing guest resolv.conf: %w", err)
+	}
+	f, err := root.OpenFile("etc/resolv.conf", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("creating guest resolv.conf: %w", err)
+	}
+	_, err = f.Write(content)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return fmt.Errorf("writing guest resolv.conf: %w", err)
 	}
 	return nil
@@ -274,14 +286,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	p := actorBootParams{
-		actorRef:      resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:      req.GetActorUid(),
-		templateNS:    req.GetActorTemplateNamespace(),
-		templateName:  req.GetActorTemplateName(),
-		containers:    req.GetSpec().GetContainers(),
-		assetPaths:    req.GetRuntimeAssetPaths(),
-		egressGateway: req.GetEgressGateway(),
-		size:          sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:         req.GetActorUid(),
+		templateAtespace: req.GetActorTemplateAtespace(),
+		templateName:     req.GetActorTemplateName(),
+		containers:       req.GetSpec().GetContainers(),
+		assetPaths:       req.GetRuntimeAssetPaths(),
+		egressGateway:    req.GetEgressGateway(),
+		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 
 	attribution := p.actorAttribution()
@@ -312,12 +324,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // request, or from a Restore request whose snapshot scope covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
-	actorRef     resources.ActorRef
-	actorUID     string
-	templateNS   string
-	templateName string
-	containers   []*ateompb.Container
-	assetPaths   map[string]string
+	actorRef         resources.ActorRef
+	actorUID         string
+	templateAtespace string
+	templateName     string
+	containers       []*ateompb.Container
+	assetPaths       map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
@@ -331,10 +343,10 @@ type actorBootParams struct {
 // request, for retention in AteomService.activeActor.
 func (p actorBootParams) actorAttribution() resources.ActorAttribution {
 	return resources.ActorAttribution{
-		Ref:               p.actorRef,
-		UID:               p.actorUID,
-		TemplateNamespace: p.templateNS,
-		TemplateName:      p.templateName,
+		Ref:              p.actorRef,
+		UID:              p.actorUID,
+		TemplateAtespace: p.templateAtespace,
+		TemplateName:     p.templateName,
 	}
 }
 
@@ -628,14 +640,16 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
 func (s *AteomService) buildActorContainers(actorUID string, containers []*ateompb.Container) ([]actorContainer, error) {
-	netnsPath := ateompath.AteomNetNSPath(s.podUID)
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
 		bundle := ateompath.OCIBundlePath(actorUID, cn)
-		spec, err := ensureKataCompatibleSpec(bundle, actorUID, netnsPath)
+		spec, err := ocispec.Load(bundle)
 		if err != nil {
-			return nil, fmt.Errorf("while preparing kata OCI spec for %q: %w", cn, err)
+			return nil, fmt.Errorf("while reading the OCI spec for %q: %w", cn, err)
+		}
+		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorUID: actorUID, ContainerID: cn}); err != nil {
+			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
 		// overlay mounted in this pod's namespace; no-op for bundles without an
@@ -655,13 +669,10 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 			return nil, fmt.Errorf("while writing guest resolv.conf for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
-			name:             cn,
-			bundleRootfs:     bundleRootfs,
-			spec:             spec,
-			durableMounts:    c.GetDurableDirVolumeMounts(),
-			csiMounts:        c.GetCsiVolumeMounts(),
-			systemInfoMounts: c.GetSystemInfoVolumeMounts(),
-			imageMounts:      c.GetImageVolumeMounts(),
+			name:         cn,
+			bundleRootfs: bundleRootfs,
+			spec:         spec,
+			imageMounts:  c.GetImageVolumeMounts(),
 		}
 	}
 	return ctrs, nil
@@ -915,12 +926,10 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 // stock kata flow: create + start against shared/<name>/rootfs). On failure it
 // dumps the guest's view of the shared tree.
 //
-// With a durable-dir volume, the container also binds it at its declared mount
-// paths (workloadSpec) — the merged rootfs is writable, so the agent can create
-// missing mount points.
+// Its spec binds every declared volume at its mount path.
 func startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.name, workloadSpec(c))
+	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
 	cancel()
 	if err != nil {
 		dump := kata.DebugConsoleDump(ctx, vsockPath,

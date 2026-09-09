@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -53,9 +54,9 @@ func TestFindUnknownFields(t *testing.T) {
 			in: func() proto.Message {
 				return &ateapipb.CreateActorRequest{
 					Actor: &ateapipb.Actor{
-						Metadata:          &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-						ActorTemplateName: "tmpl1",
-						WorkerSelector:    &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+						Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+						ActorTemplate:  &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl1"},
+						WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 					},
 				}
 			},
@@ -105,7 +106,7 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "several unknown fields on one message collapse to a single error",
 			in: func() proto.Message {
-				m := &ateapipb.Actor{ActorTemplateName: "tmpl1"}
+				m := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl1"}}
 				m.ProtoReflect().SetUnknown(append(unknownField(9998), unknownField(9999)...))
 				return m
 			},
@@ -116,8 +117,8 @@ func TestFindUnknownFields(t *testing.T) {
 			in: func() proto.Message {
 				return &ateapipb.ListActorsResponse{
 					Actors: []*ateapipb.Actor{
-						{ActorTemplateName: "tmpl1"},
-						withUnknown(&ateapipb.Actor{ActorTemplateName: "tmpl2"}, 9999),
+						{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl1"}},
+						withUnknown(&ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl2"}}, 9999),
 					},
 				}
 			},
@@ -126,9 +127,9 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "unknown field inside a map value message",
 			in: func() proto.Message {
-				return &ateapipb.SandboxAssets{
-					Assets: map[string]*ateapipb.ArchAssets{
-						"amd64": withUnknown(&ateapipb.ArchAssets{}, 9999),
+				return &ateletpb.SandboxAssets{
+					Assets: map[string]*ateletpb.ArchAssets{
+						"amd64": withUnknown(&ateletpb.ArchAssets{}, 9999),
 					},
 				}
 			},
@@ -158,7 +159,7 @@ func TestRejectUnknownFieldsUnaryInterceptor(t *testing.T) {
 
 	t.Run("clean request reaches the handler", func(t *testing.T) {
 		resp, err := RejectUnknownFieldsUnaryInterceptor(context.Background(),
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{ActorTemplateName: "tmpl1"}}, info, handler)
+			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl1"}}}, info, handler)
 		if err != nil {
 			t.Fatalf("interceptor error = %v, want nil", err)
 		}

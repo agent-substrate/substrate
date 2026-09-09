@@ -38,6 +38,11 @@ fi
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
+# Called by a ${demo}_cmdline handler for an argument it does not own.
+ate_demo_flag_unhandled() {
+  ATE_DEMO_FLAG_HANDLED=false
+}
+
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-egress.sh
@@ -68,7 +73,8 @@ function usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
-  echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
+  echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
+  echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
@@ -99,6 +105,29 @@ function usage() {
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
+  echo ""
+  echo "PostgreSQL configuration (either of the first two selects an external"
+  echo "database and skips the bundled instance):"
+  echo ""
+  echo "  ATE_API_POSTGRES_CONNECTION_STRING     DSN for any external PostgreSQL (stored in a Secret;"
+  echo "                                         pair with ATE_API_POSTGRES_SERVER_CA_FILE for sslmode=verify-ca)"
+  echo "  ATE_API_POSTGRES_CLOUDSQL_INSTANCE     Cloud SQL instance connection name (project:region:instance)."
+  echo "                                         Deploys the Cloud SQL Auth Proxy sidecar: connector-managed TLS"
+  echo "                                         and automatic IAM database auth, no passwords (see tools/setup-gcp/cloud-sql.md)."
+  echo "                                         Unset = keep the cluster's current Cloud SQL config; set to \"\" to remove it"
+  echo "  ATE_API_POSTGRES_CLOUDSQL_GSA          GSA email backing Workload Identity + the IAM database user"
+  echo "  ATE_API_POSTGRES_CLOUDSQL_IP_TYPE      private (default) | public | psc"
+  echo "  ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH     true (default) | false (password-over-proxy escape hatch)"
+  echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
+  echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
+  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
+  echo ""
+  echo "Authentication configuration:"
+  echo ""
+  echo "  EXPECTED_JWT_ISSUER                    Issuer URL ate-api-server requires in service account tokens, verbatim."
+  echo "                                         Default: derived from PROJECT_ID/CLUSTER_LOCATION/CLUSTER_NAME"
+  echo "                                         (https://container.googleapis.com/v1/projects/.../clusters/...),"
+  echo "                                         else the cluster's OIDC discovery document"
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -135,6 +164,26 @@ run_kubectl() {
 run_kubectl_fatal() {
   if ! run_kubectl "$@"; then
     echo "error: kubectl $* failed" >&2
+    exit 1
+  fi
+}
+
+# wait_for_pool_rollout waits for a WorkerPool's Deployment to roll out.
+# ate-controller creates that Deployment, so it does not exist yet when the
+# apply returns, and `kubectl rollout status` errors on a missing object rather
+# than waiting for it. Gate on creation first.
+wait_for_pool_rollout() {
+  local pool="$1" namespace="$2" timeout="${3:-300s}"
+  run_kubectl wait --for=create "deployment/${pool}" -n "${namespace}" \
+    --timeout="${timeout}" \
+    && run_kubectl rollout status "deployment/${pool}" -n "${namespace}" \
+      --timeout="${timeout}"
+}
+
+# wait_for_pool_rollout_fatal aborts the install on failure, like run_kubectl_fatal.
+wait_for_pool_rollout_fatal() {
+  if ! wait_for_pool_rollout "$@"; then
+    echo "error: worker pool $1 did not roll out" >&2
     exit 1
   fi
 }
@@ -202,6 +251,65 @@ default_postgres_connection_string() {
   echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 }
 
+# True if deploying the bundled in-cluster PostgreSQL. Returns false if an
+# external database is configured via an explicit DSN or a Cloud SQL instance
+# (whether provided in the environment or adopted from the cluster).
+use_bundled_postgres() {
+  [[ -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" && -z "$(resolve_cloudsql_instance)" ]]
+}
+
+# --- Versioned dataplane rendering ---
+#
+# The atelet DaemonSet is keyed by substrate version (name suffix + nodeSelector on
+# the ate.dev/substrate-version node label) so a rolling upgrade can run two
+# daemonset on disjoint node sets.
+
+SUBSTRATE_VERSION=""
+SUBSTRATE_VERSION_SUFFIX=""
+
+ensure_substrate_version() {
+  if [[ -n "${SUBSTRATE_VERSION}" ]]; then
+    return 0
+  fi
+  local version_flag=""
+  version_flag="$(make -s ldflags | grep 'internal/version\.Version=' | head -n 1 || true)"
+  local version_raw="${version_flag#*internal/version.Version=}"
+  if [[ -z "${version_raw}" ]]; then
+    echo "error: could not read the build version from 'make ldflags'" >&2
+    return 1
+  fi
+  # Verify the build label is valid format and derive the version string and object suffix.
+  local derived=""
+  derived="$(go run ./internal/versionlabel/cmd "${version_raw}")" || return 1
+  SUBSTRATE_VERSION="${derived%% *}"
+  SUBSTRATE_VERSION_SUFFIX="${derived##* }"
+}
+
+atelet_daemonset_name() {
+  echo "atelet-${SUBSTRATE_VERSION_SUFFIX}"
+}
+
+# substitute_version fills the ${SUBSTRATE_VERSION}/${SUBSTRATE_VERSION_SUFFIX}
+# placeholders in a rendered manifest stream. It runs after kustomize and ko to replace.
+substitute_version() {
+  ensure_substrate_version
+  sed -e "s/: \${SUBSTRATE_VERSION}\$/: \"${SUBSTRATE_VERSION}\"/" \
+      -e "s/\${SUBSTRATE_VERSION}/${SUBSTRATE_VERSION}/g" \
+      -e "s/\${SUBSTRATE_VERSION_SUFFIX}/${SUBSTRATE_VERSION_SUFFIX}/g"
+}
+
+# label_nodes_substrate_version stamps ate.dev/substrate-version on every node
+# that does not carry it yet. The versioned atelet DaemonSet and worker pods
+# schedule only to nodes labeled with their substrate version.
+label_nodes_substrate_version() {
+  ensure_substrate_version
+  log_step "label_nodes_substrate_version (${SUBSTRATE_VERSION})"
+  local node=""
+  for node in $(run_kubectl get nodes -l '!ate.dev/substrate-version' -o name); do
+    run_kubectl label "${node}" "ate.dev/substrate-version=${SUBSTRATE_VERSION}"
+  done
+}
+
 render_ate_system_manifests() {
   local router=""
   router="$(atenet_router)"
@@ -211,16 +319,16 @@ render_ate_system_manifests() {
     if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
       overlay="manifests/ate-install/kind-agentgateway"
     fi
-    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
     return
   fi
 
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     # Build everything resolved with Kustomize for Kind
-    kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
   else
     # Build everything resolved with base manifests for GKE
-    run_ko resolve -f manifests/ate-install
+    run_ko resolve -f manifests/ate-install | substitute_version
   fi
 }
 
@@ -257,7 +365,11 @@ render_atenet_egress_manifest() {
       echo "Error: --experimental-additional-egress-extproc-service requires --atenet-router=envoy" >&2
       return 1
     fi
-    kubectl kustomize manifests/ate-install/agentgateway-egress \
+    local agentgateway_egress="manifests/ate-install/agentgateway-egress"
+    if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]]; then
+      agentgateway_egress="manifests/ate-install/agentgateway-egress-mitm"
+    fi
+    kubectl kustomize "${agentgateway_egress}" \
       --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   elif additional_egress_extproc_enabled; then
     patch_atenet_egress_manifest | run_ko resolve -f -
@@ -300,6 +412,15 @@ apply_otel_config() {
   fi
 }
 
+apply_postgres() {
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    kubectl kustomize manifests/ate-install/kind/postgres \
+      --load-restrictor LoadRestrictionsNone | run_kubectl apply -f -
+  else
+    run_kubectl apply -f manifests/ate-install/postgres/postgres.yaml
+  fi
+}
+
 # --otlp-endpoint sends all control plane telemetry to a different collector for
 # the duration of a measurement. One patch is sufficient: each component reads
 # this ConfigMap through envFrom, and ate-controller copies the values to the
@@ -334,10 +455,16 @@ apply_otel_endpoint_override() {
 
   local workload
   for workload in deployment/ate-api-server deployment/ate-controller \
-                  deployment/atenet-router daemonset/atelet; do
+                  deployment/atenet-router; do
     if run_kubectl -n ate-system get "${workload}" >/dev/null 2>&1; then
       run_kubectl -n ate-system rollout restart "${workload}"
     fi
+  done
+  # atelet DaemonSet names carry a version suffix; restart whichever versions
+  # are installed.
+  local ds=""
+  for ds in $(run_kubectl -n ate-system get daemonset -l app=atelet -o name 2>/dev/null); do
+    run_kubectl -n ate-system rollout restart "${ds}"
   done
 }
 
@@ -407,10 +534,13 @@ create_egress_mitm_ca_pool_secret() {
     --key-type=ECDSAP256
 }
 
-# Only the sdsmint egress variant mounts this pool.
+# Both egress implementations read this pool only in their opt-in MITM mode:
+# AgentGateway consumes its exported TLS chain and key, while Envoy's sdsmint
+# sidecar consumes the serialized pool.
 ensure_egress_mitm_ca_pool_secret() {
-  [[ "$(atenet_router)" != "agentgateway" ]] || return 0
-  [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]] || return 0
+  if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
+    return 0
+  fi
   run_kubectl get secret -n ate-system egress-mitm-ca-pool >/dev/null 2>&1 \
     || create_egress_mitm_ca_pool_secret
 }
@@ -438,22 +568,219 @@ wait_for_podcertificate_trust_bundles() {
   done
 }
 
+# Cloud SQL intent: a SET ATE_API_POSTGRES_CLOUDSQL_INSTANCE wins, with the
+# empty string meaning an explicit "remove"; an UNSET variable adopts
+# whatever the cluster currently records.
+resolve_cloudsql_instance() {
+  if [[ -n "${ATE_API_POSTGRES_CLOUDSQL_INSTANCE+x}" ]]; then
+    echo "${ATE_API_POSTGRES_CLOUDSQL_INSTANCE}"
+    return
+  fi
+  run_kubectl get configmap -n ate-system ate-api-server-envvars \
+    -o jsonpath='{.data.ATE_API_POSTGRES_CLOUDSQL_INSTANCE}' 2>/dev/null || true
+}
+
+# resolve_cloudsql_gsa mirrors resolve_cloudsql_instance for the GSA,
+# adopting from the ServiceAccount's Workload Identity annotation.
+resolve_cloudsql_gsa() {
+  if [[ -n "${ATE_API_POSTGRES_CLOUDSQL_GSA:-}" ]]; then
+    echo "${ATE_API_POSTGRES_CLOUDSQL_GSA}"
+    return
+  fi
+  run_kubectl get serviceaccount ate-api-server -n ate-system \
+    -o "jsonpath={.metadata.annotations.iam\.gke\.io/gcp-service-account}" 2>/dev/null || true
+}
+
+# recorded_envvar echoes one key from the ate-api-server-envvars ConfigMap.
+recorded_envvar() {
+  run_kubectl get configmap -n ate-system ate-api-server-envvars \
+    -o "jsonpath={.data.$1}" 2>/dev/null || true
+}
+
+# Guards standalone --create-api-server-env-vars on older clusters.
+# Since the DSN moved from a ConfigMap to a Secret, updating the env vars alone
+# would prune the ConfigMap key and leave the running Deployment without a DSN.
+# Full deploys are safe because they update the Deployment manifest immediately.
+ensure_env_vars_safe_standalone() {
+  if ! run_kubectl get deployment ate-api-server -n ate-system >/dev/null 2>&1; then
+    return 0 # fresh install: the manifest applied later carries the secretRef
+  fi
+  local refs
+  refs="$(run_kubectl get deployment ate-api-server -n ate-system \
+    -o jsonpath='{.spec.template.spec.containers[0].envFrom[*].secretRef.name}' 2>/dev/null || true)"
+  if [[ "${refs}" != *ate-api-server-secret-envvars* ]]; then
+    echo "Error: the running ate-api-server Deployment does not reference the" \
+      "ate-api-server-secret-envvars Secret; rewriting the env vars alone would leave" \
+      "it without a DSN on its next restart. Run" \
+      "./hack/install-ate.sh --deploy-ate-apiserver instead, which also updates the Deployment." >&2
+    exit 1
+  fi
+}
+
+# Triggers a pod rollout when the ConfigMap or Secret changes. Since envFrom
+# updates don't roll pods automatically, we patch a hash of the config into
+# the deployment template.
+annotate_api_server_env_hash() {
+  if ! run_kubectl get deployment ate-api-server -n ate-system >/dev/null 2>&1; then
+    return 0 # fresh install: the first rollout starts with the new values
+  fi
+  local hash
+  hash="$({ run_kubectl get configmap -n ate-system ate-api-server-envvars \
+              -o jsonpath='{.data}' 2>/dev/null || true
+            run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
+              -o jsonpath='{.data}' 2>/dev/null || true; } \
+          | openssl dgst -sha256 | awk '{print $NF}')"
+  run_kubectl patch deployment ate-api-server -n ate-system --type=strategic -p \
+    "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"ate.dev/env-hash\":\"${hash}\"}}}}}"
+}
+
 create_api_server_env_vars() {
   log_step "create_api_server_env_vars"
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
   local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
+  local postgres_schema="${ATE_API_POSTGRES_SCHEMA:-public}"
+  # Distinguishes a DSN the operator supplied on this run from one
+  # synthesized, defaulted, or adopted back from the Secret: only the former
+  # outranks ATE_API_POSTGRES_POOL_MAX_CONNS below.
+  local dsn_from_operator=""
+  [[ -n "${postgres_connection_string}" ]] && dsn_from_operator="yes"
+  local cloudsql_instance cloudsql_gsa=""
+  local cloudsql_iam_auth="${ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH:-true}"
+  local cloudsql_ip_type="${ATE_API_POSTGRES_CLOUDSQL_IP_TYPE:-private}"
+  cloudsql_instance="$(resolve_cloudsql_instance)"
+  if [[ -n "${cloudsql_instance}" ]]; then
+    cloudsql_gsa="$(resolve_cloudsql_gsa)"
+    if [[ -z "${ATE_API_POSTGRES_CLOUDSQL_INSTANCE+x}" ]]; then
+      # Adopted from the cluster: inherit the recorded proxy settings and
+      # the existing DSN too, so a redeploy without the env vars regresses
+      # nothing to defaults.
+      echo "Cloud SQL config adopted from cluster: ${cloudsql_instance}"
+      if [[ -z "${ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH:-}" ]]; then
+        local recorded_iam
+        recorded_iam="$(recorded_envvar CSQL_PROXY_AUTO_IAM_AUTHN)"
+        [[ -n "${recorded_iam}" ]] && cloudsql_iam_auth="${recorded_iam}"
+      fi
+      if [[ -z "${ATE_API_POSTGRES_CLOUDSQL_IP_TYPE:-}" ]]; then
+        if [[ -n "$(recorded_envvar CSQL_PROXY_PSC)" ]]; then
+          cloudsql_ip_type="psc"
+        elif [[ -z "$(recorded_envvar CSQL_PROXY_PRIVATE_IP)" ]]; then
+          cloudsql_ip_type="public"
+        fi
+      fi
+      if [[ -z "${postgres_connection_string}" ]]; then
+        postgres_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
+          -o jsonpath='{.data.ATE_API_POSTGRES_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
+      fi
+    fi
+  fi
   if [[ -z "${postgres_connection_string}" ]]; then
-    postgres_connection_string="$(default_postgres_connection_string)"
+    if [[ -n "${cloudsql_instance}" ]]; then
+      # Cloud SQL via the Auth Proxy sidecar: ateapi talks plaintext to the
+      # proxy on pod-local loopback; the proxy owns TLS and IAM database
+      # authentication. The database username is the GSA email with the
+      # .gserviceaccount.com suffix trimmed.
+      #
+      # The synthesized DSN is passwordless, which only logs in when the
+      # proxy injects an IAM token. With IAM auth disabled the operator must
+      # supply the credentials themselves; failing here beats a Postgres
+      # authentication error at pod startup.
+      if [[ "${cloudsql_iam_auth}" == "false" ]]; then
+        echo "Error: ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false disables automatic IAM database" \
+          "authentication, so a passwordless DSN cannot be synthesized; set" \
+          "ATE_API_POSTGRES_CONNECTION_STRING explicitly (host=127.0.0.1 to stay on the proxy)" >&2
+        exit 1
+      fi
+      if [[ -z "${cloudsql_gsa}" ]]; then
+        echo "Error: ATE_API_POSTGRES_CLOUDSQL_INSTANCE requires ATE_API_POSTGRES_CLOUDSQL_GSA" \
+          "(or an explicit ATE_API_POSTGRES_CONNECTION_STRING)" >&2
+        exit 1
+      fi
+      postgres_connection_string="user=${cloudsql_gsa%.gserviceaccount.com} host=127.0.0.1 port=5432 dbname=atepg sslmode=disable"
+    else
+      postgres_connection_string="$(default_postgres_connection_string)"
+    fi
+  fi
+  # Appends pgxpool sizing (pool_max_conns) to the DSN to prevent silent client
+  # queuing. Precedence: An explicitly provided DSN wins over the env var. However, 
+  # the env var overwrites values in adopted cluster DSNs, ensuring scaling updates 
+  # aren't silently ignored on redeploys. Handles both URI and keyword/value formats.
+  if [[ -n "${ATE_API_POSTGRES_POOL_MAX_CONNS:-}" ]]; then
+    if [[ "${postgres_connection_string}" == *pool_max_conns=* ]]; then
+      if [[ -z "${dsn_from_operator}" ]]; then
+        postgres_connection_string="$(printf '%s' "${postgres_connection_string}" \
+          | sed -E "s/pool_max_conns=[^ &]*/pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}/")"
+      fi
+    elif [[ "${postgres_connection_string}" == *"://"*"?"* ]]; then
+      postgres_connection_string+="&pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
+    elif [[ "${postgres_connection_string}" == *"://"* ]]; then
+      postgres_connection_string+="?pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
+    else
+      postgres_connection_string+=" pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
+    fi
   fi
 
-  echo "POSTGRES_CONNECTION_STRING: ${postgres_connection_string}"
+  # Redact any password before logging (URI user:pw@host and keyword password=).
+  echo "POSTGRES_CONNECTION_STRING: $(printf '%s' "${postgres_connection_string}" \
+    | sed -E 's#(://[^:/@]*):[^@]*@#\1:***@#; s/(password=)[^ &]*/\1***/g')"
 
+  # Empty unless Cloud SQL is configured; expanded below with the
+  # ${arr[@]+...} idiom because bash 3.2's nounset rejects "${arr[@]}" on an
+  # empty array.
+  local cm_args=()
+  if [[ -n "${cloudsql_instance}" ]]; then
+    # Configuration for the Cloud SQL Auth Proxy sidecar
+    # (manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml). The proxy reads any
+    # of its flags from CSQL_PROXY_* env vars; the instance connection name
+    # is expanded into its args from this ConfigMap. Health checks listen on
+    # 9801 because ateapi's metrics own 9090.
+    cm_args+=(
+      --from-literal=ATE_API_POSTGRES_CLOUDSQL_INSTANCE="${cloudsql_instance}"
+      --from-literal=CSQL_PROXY_AUTO_IAM_AUTHN="${cloudsql_iam_auth}"
+      --from-literal=CSQL_PROXY_PORT="5432"
+      --from-literal=CSQL_PROXY_HEALTH_CHECK="true"
+      --from-literal=CSQL_PROXY_HTTP_ADDRESS="0.0.0.0"
+      --from-literal=CSQL_PROXY_HTTP_PORT="9801"
+      --from-literal=CSQL_PROXY_STRUCTURED_LOGS="true"
+    )
+    case "${cloudsql_ip_type}" in
+      private) cm_args+=(--from-literal=CSQL_PROXY_PRIVATE_IP="true") ;;
+      psc) cm_args+=(--from-literal=CSQL_PROXY_PSC="true") ;;
+      public) ;;
+      *)
+        echo "Error: ATE_API_POSTGRES_CLOUDSQL_IP_TYPE must be private, public, or psc, got '${cloudsql_ip_type}'" >&2
+        exit 1
+        ;;
+    esac
+  fi
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
-    --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
+    ${cm_args[@]+"${cm_args[@]}"} \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
+
+  # The Postgres DSN may carry a password (external databases without IAM
+  # auth), so it lives in a Secret, not the ConfigMap above. The deployment
+  # lists the secretRef after the configMapRef, so this value wins if both
+  # define the key.
+  run_kubectl create secret generic -n ate-system ate-api-server-secret-envvars \
+    --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
+    --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+
+  # Server CA for an external Postgres, mounted by the deployment at
+  # /run/postgres-server-ca/server-ca.pem for sslmode=verify-ca DSNs. For
+  # Cloud SQL: gcloud sql ssl server-ca-certs list --instance=<name> \
+  #   --format="value(cert)" > server-ca.pem
+  if [[ -n "${ATE_API_POSTGRES_SERVER_CA_FILE:-}" ]]; then
+    run_kubectl create secret generic -n ate-system postgres-server-ca \
+      --from-file=server-ca.pem="${ATE_API_POSTGRES_SERVER_CA_FILE}" \
+      --dry-run=client -o yaml \
+      | run_kubectl apply -f -
+  fi
+
+  annotate_api_server_env_hash
 }
 
 apply_podcert_workers_override() {
@@ -481,8 +808,13 @@ create_api_authentication_config() {
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
+  # ate-api-server accepts a token only if its iss claim equals this string
+  # exactly. EXPECTED_JWT_ISSUER, when set, is that string; the derivation
+  # below is for clusters whose issuer follows the standard form.
   local jwt_issuer=""
-  if [[ -n "${PROJECT_ID:-}" && -n "${CLUSTER_LOCATION:-}" && -n "${CLUSTER_NAME:-}" ]]; then
+  if [[ -n "${EXPECTED_JWT_ISSUER:-}" ]]; then
+    jwt_issuer="${EXPECTED_JWT_ISSUER}"
+  elif [[ -n "${PROJECT_ID:-}" && -n "${CLUSTER_LOCATION:-}" && -n "${CLUSTER_NAME:-}" ]]; then
     jwt_issuer="https://container.googleapis.com/v1/projects/${PROJECT_ID}/locations/${CLUSTER_LOCATION}/clusters/${CLUSTER_NAME}"
   else
     jwt_issuer=$(run_kubectl get --raw /.well-known/openid-configuration 2>/dev/null | grep -o '"issuer":"[^"]*' | sed 's/"issuer":"//' || true)
@@ -499,6 +831,8 @@ create_api_authentication_config() {
   esac
   local authentication_config
   authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n%s' "${jwt_issuer}" "${discovery_config}")
+  echo "ate-api-authentication authentication.yaml:"
+  echo "  | ${authentication_config//$'\n'/$'\n'  | }"
   run_kubectl create configmap -n ate-system ate-api-authentication \
     --from-literal=authentication.yaml="${authentication_config}" \
     --dry-run=client -o yaml \
@@ -507,7 +841,7 @@ create_api_authentication_config() {
 
 ensure_crds() {
   log_step "ensure_crds"
-  if run_kubectl get crd workerpools.ate.dev actortemplates.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
+  if run_kubectl get crd workerpools.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
     return
   fi
 
@@ -519,30 +853,66 @@ deploy_crds() {
   run_ko apply -f manifests/ate-install/generated
 }
 
+require_kind_for_hostpath() {
+  if [[ "${ATE_INSTALL_KIND:-false}" != "true" ]]; then
+    echo "Error: the hostpath CSI driver is only supported on Kind." >&2
+    exit 1
+  fi
+}
+
 setup_csi() {
-  log_step "setup_csi"
-  "${ROOT}/hack/setup-csi-hostpath-kind.sh"
-  "${ROOT}/hack/setup-csi-nfs-kind.sh"
+  local driver="${SETUP_CSI:-none}"
+  case "${driver}" in
+    ""|none|false)
+      return
+      ;;
+  esac
+  log_step "setup_csi (${driver})"
+  case "${driver}" in
+    nfs)
+      "${ROOT}/hack/setup-csi-nfs-kind.sh"
+      ;;
+    hostpath)
+      require_kind_for_hostpath
+      "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+      ;;
+    both|true)
+      require_kind_for_hostpath
+      "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+      "${ROOT}/hack/setup-csi-nfs-kind.sh"
+      ;;
+    *)
+      echo "Error: unknown CSI driver \"${driver}\" (valid options: nfs, hostpath, both, none)." >&2
+      exit 1
+      ;;
+  esac
 }
 
 deploy_ate_system() {
   log_step "deploy_ate_system"
+  # Fail fast on an unusable build version before touching the cluster.
+  ensure_substrate_version
+
   # Ensure namespace exists before applying RBAC or CRDs
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  # The atelet DaemonSet applied below and the demo WorkerPools' worker pods
+  # schedule only to version-labeled nodes.
+  label_nodes_substrate_version
 
   # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
   # schemas and RBAC (role.yaml has no other apply path).
   deploy_crds
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
-  # SandboxConfig so the defaults below are validated too).
+  # SandboxConfig so the configs below are validated too).
   run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
 
-  # Install the cluster-wide default sandbox config(s). Sandbox binaries live on
-  # cluster-scoped SandboxConfigs resolved via each WorkerPool's SandboxClass
-  # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
-  # they name their own SandboxConfig.
+  # Install the cluster-wide sandbox config(s). Sandbox binaries live on
+  # cluster-scoped SandboxConfigs each ActorTemplate names via
+  # sandboxConfig.configName; gVisor templates name this one unless they
+  # create their own SandboxConfig.
   run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
 
   # Ahead of the bundle below, for the same reason as the namespace: every
@@ -566,17 +936,28 @@ deploy_ate_system() {
   # exist. The ghostunnel sidecar uses projected podCertificate and clusterTrustBundle
   # volumes which cannot be fulfilled until podcertcontroller is actively signing,
   # otherwise rollout of csi-hostpath-socat times out.
-  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
-    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-      setup_csi
-    else
-      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
-    fi
+  #
+  # setup_csi is a no-op unless --setup-csi asked for a driver, and it is the
+  # one that decides which drivers need Kind, so there is no Kind gate here.
+  setup_csi
+
+  if use_bundled_postgres; then
+    apply_postgres
+  else
+    # Say so explicitly: a DSN aimed at a database that was never deployed
+    # otherwise surfaces only as an ate-api-server rollout timeout minutes
+    # later, with nothing pointing at the cause.
+    local external_db="ATE_API_POSTGRES_CONNECTION_STRING"
+    [[ -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" ]] \
+      && external_db="Cloud SQL instance $(resolve_cloudsql_instance)"
+    log_step "Skipping bundled PostgreSQL: external database configured (${external_db})"
   fi
 
   local manifests=""
   manifests="$(render_ate_system_manifests)"
   echo "${manifests}" | run_kubectl apply -f -
+
+  reconcile_cloudsql_proxy_sidecar
 
   # Applied on its own rather than through the overlay above, so
   # --experimental-use-sdsmint composes with every overlay instead of needing a
@@ -585,12 +966,14 @@ deploy_ate_system() {
   apply_atenet_egress
 
   log_step "Waiting for ATE system components to be ready..."
-  run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+  if use_bundled_postgres; then
+    run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+  fi
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status daemonset/atelet -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n ate-system --timeout="$(rollout_timeout)"
 
   # After the bundle, which carries its own copy of ate-otel-config.
   apply_otel_endpoint_override
@@ -628,30 +1011,67 @@ deploy_ate_apiserver() {
   apply_otel_endpoint_override
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
+  reconcile_cloudsql_proxy_sidecar
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
+}
+
+# Reconciles the Cloud SQL Auth Proxy sidecar and Workload Identity
+# annotation on ate-api-server. Runs after the deployment manifest is
+# applied. Desired state comes from resolve_cloudsql_instance: a set
+# ATE_API_POSTGRES_CLOUDSQL_INSTANCE wins, and an unset one adopts the
+# cluster's record — so the removal branch fires only on an EXPLICITLY empty
+# variable (ATE_API_POSTGRES_CLOUDSQL_INSTANCE=""), never because a redeploy
+# ran from a shell that simply didn't export it.
+reconcile_cloudsql_proxy_sidecar() {
+  local instance gsa
+  instance="$(resolve_cloudsql_instance)"
+  if [[ -n "${instance}" ]]; then
+    log_step "reconcile_cloudsql_proxy_sidecar (add)"
+    # Workload Identity: the proxy resolves the pod's ambient credentials via
+    # ADC, which requires the KSA to be linked to the GSA that is the Cloud
+    # SQL IAM database user.
+    gsa="$(resolve_cloudsql_gsa)"
+    if [[ -n "${gsa}" ]]; then
+      run_kubectl annotate serviceaccount ate-api-server -n ate-system \
+        "iam.gke.io/gcp-service-account=${gsa}" --overwrite
+    fi
+    run_kubectl patch deployment ate-api-server -n ate-system \
+      --patch-file manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml
+  elif run_kubectl get deployment ate-api-server -n ate-system \
+      -o jsonpath='{.spec.template.spec.initContainers[*].name}' 2>/dev/null \
+      | grep -qw cloud-sql-proxy; then
+    log_step "reconcile_cloudsql_proxy_sidecar (remove)"
+    # shellcheck disable=SC2016
+    run_kubectl patch deployment ate-api-server -n ate-system --type=strategic \
+      -p '{"spec":{"template":{"spec":{"initContainers":[{"name":"cloud-sql-proxy","$patch":"delete"}]}}}}'
+    run_kubectl annotate serviceaccount ate-api-server -n ate-system \
+      "iam.gke.io/gcp-service-account-" >/dev/null 2>&1 || true
+  fi
 }
 
 deploy_atelet() {
   log_step "deploy_atelet"
+  ensure_substrate_version
   ensure_crds
 
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
+  label_nodes_substrate_version
   apply_otel_config
   apply_otel_endpoint_override
 
   local manifest=""
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     # Use Kustomize to build and resolve the atelet DaemonSet patch
-    manifest=$(kubectl kustomize manifests/ate-install/kind/atelet --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
+    manifest=$(kubectl kustomize manifests/ate-install/kind/atelet --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version)
   else
     # Use base manifest for GKE
-    manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml)
+    manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml | substitute_version)
   fi
   echo "${manifest}" | run_kubectl apply -f -
-  run_kubectl rollout status daemonset/atelet -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n ate-system --timeout="$(rollout_timeout)"
 }
 
 deploy_atenet() {
@@ -690,7 +1110,7 @@ get_actor_state() {
 }
 
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
-# is allowed. Actors must be ACTOR_STATE_SUSPENDED before deletion.
+# accepts the actor: ACTOR_STATE_SUSPENDED, ACTOR_STATE_CRASHED, or ACTOR_STATE_DELETING.
 prepare_actor_for_delete() {
   local actor_name="$1"
   local atespace="$2"
@@ -704,7 +1124,7 @@ prepare_actor_for_delete() {
     fi
 
     case "${state}" in
-      ACTOR_STATE_SUSPENDED)
+      ACTOR_STATE_SUSPENDED | ACTOR_STATE_CRASHED | ACTOR_STATE_DELETING)
         return 0
         ;;
       ACTOR_STATE_PAUSED)
@@ -723,23 +1143,22 @@ prepare_actor_for_delete() {
     sleep 2
   done
 
-  echo "timed out waiting for actor ${actor_name} to reach ACTOR_STATE_SUSPENDED" >&2
+  echo "timed out waiting for actor ${actor_name} to become deletable" >&2
   return 1
 }
 
-# delete_demo_actors removes all actors for one or more (namespace, template)
-# pairs before the demo manifests are deleted. Arguments are alternating
-# namespace and template name, e.g.:
-#   delete_demo_actors ate-demo-counter counter
-#   delete_demo_actors ns-a tmpl-a ns-b tmpl-b
-delete_demo_actors() {
+# delete_demo_actors_substrate removes all actors created from a substrate
+# ActorTemplate resource before the demo manifests are deleted: those
+# reference their template via the actorTemplate {atespace, name} ref.
+# Arguments are alternating atespace and template name.
+delete_demo_actors_substrate() {
   if ! command -v jq &>/dev/null; then
     echo "jq is required to delete demo actors" >&2
     return 1
   fi
 
   if (($# == 0 || $# % 2 != 0)); then
-    echo "delete_demo_actors expects namespace/template pairs" >&2
+    echo "delete_demo_actors_substrate expects atespace/template pairs" >&2
     return 1
   fi
 
@@ -754,24 +1173,165 @@ delete_demo_actors() {
     return 0
   fi
 
-  local ns tmpl atespace actor_name
+  local template_atespace tmpl atespace actor_name
   while (($# > 0)); do
-    ns="$1"
+    template_atespace="$1"
     tmpl="$2"
     shift 2
 
-    log_step "Deleting actors for ${ns}/${tmpl}"
+    log_step "Deleting actors for ${template_atespace}/${tmpl}"
     while IFS=$'\t' read -r atespace actor_name; do
       [[ -z "${actor_name}" ]] && continue
       log_step "  preparing actor ${atespace}/${actor_name} for delete"
       prepare_actor_for_delete "${actor_name}" "${atespace}"
       run_kubectl_ate delete actor "${actor_name}" -a "${atespace}"
     done < <(
-      jq -r --arg ns "${ns}" --arg tmpl "${tmpl}" \
-        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.metadata.atespace)\t\(.metadata.name)"' \
+      jq -r --arg as "${template_atespace}" --arg tmpl "${tmpl}" \
+        '.actors[]? | select(.actorTemplate.atespace == $as and .actorTemplate.name == $tmpl) | "\(.metadata.atespace)\t\(.metadata.name)"' \
         <<<"${actors_json}"
     )
   done
+}
+
+# wait_actortemplate_ready polls a substrate ActorTemplate resource until its
+# golden snapshot exists (the substrate counterpart of `kubectl wait
+# --for=condition=Ready actortemplate/...`). Fails fast when the template
+# reconciler reports an error.
+wait_actortemplate_ready() {
+  local atespace="$1"
+  local template="$2"
+  local timeout_secs="${3:-300}"
+  local deadline=$((SECONDS + timeout_secs))
+  local json snapshot error_message
+
+  while ((SECONDS < deadline)); do
+    if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
+      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
+      if [[ -n "${snapshot}" ]]; then
+        return 0
+      fi
+      error_message=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.errorMessage // empty' <<<"${json}")
+      if [[ -n "${error_message}" ]]; then
+        echo "actor template ${atespace}/${template} failed: ${error_message}" >&2
+        return 1
+      fi
+    fi
+    sleep 5
+  done
+
+  echo "timed out waiting for actor template ${atespace}/${template} golden snapshot" >&2
+  return 1
+}
+
+# The helpers below deploy a demo in the substrate-resource shape: a CRD
+# worker-pool manifest plus protojson ActorTemplates created through the ate
+# API. The pool's k8s namespace doubles as the atespace unless a demo says
+# otherwise; <render_fn> turns a manifest path into YAML on stdout.
+
+# render_demo_manifest substitutes ${BUCKET_NAME} and the version
+# placeholders in a manifest.
+render_demo_manifest() {
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "$1" | substitute_version
+}
+
+# ensure_atespace creates the atespace if it does not already exist. The
+# store enforces that a template's atespace exists at create time.
+ensure_atespace() {
+  local atespace="$1"
+  if ! run_kubectl_ate create atespace "${atespace}" >/dev/null 2>&1 \
+      && ! run_kubectl_ate get atespace "${atespace}" >/dev/null 2>&1; then
+    echo "error: failed to create atespace ${atespace}" >&2
+    exit 1
+  fi
+}
+
+# create_demo_actor_template renders a protojson ActorTemplate manifest,
+# creates it through the ate API, and blocks on its golden snapshot.
+# Templates are immutable, so an existing one is kept in place.
+create_demo_actor_template() {
+  local render_fn="$1"
+  local template_manifest="$2"
+  local atespace="$3"
+  local template="$4"
+  local timeout_secs="${5:-300}"
+
+  # ko resolve replaces ko:// image references with pushed digests;
+  # manifests without them pass through unchanged.
+  if ! "${render_fn}" "${template_manifest}" \
+      | run_ko resolve -f - \
+      | run_kubectl_ate create actor-template -f -; then
+    if run_kubectl_ate get actor-template "${template}" -a "${atespace}" >/dev/null 2>&1; then
+      log_step "actor template ${atespace}/${template} already exists; keeping it (delete the demo to replace it)"
+    else
+      echo "error: failed to create actor template ${atespace}/${template}" >&2
+      exit 1
+    fi
+  fi
+
+  # The substrate counterpart of `kubectl wait --for=condition=Ready
+  # actortemplate/...`, which does not exist for substrate resources.
+  log_step "Waiting for the ${atespace}/${template} golden snapshot..."
+  if ! wait_actortemplate_ready "${atespace}" "${template}" "${timeout_secs}"; then
+    exit 1
+  fi
+}
+
+# deploy_substrate_demo deploys the common substrate demo shape: one worker
+# pool plus ActorTemplates given as alternating manifest / name pairs after
+# the golden-snapshot timeout (micro-VM goldens pay a cloud-hypervisor cold
+# boot, so those demos pass a larger budget).
+deploy_substrate_demo() {
+  local render_fn="$1"
+  local pool_manifest="$2"
+  local atespace="$3" # also the pool's k8s namespace
+  local pool="$4"
+  local golden_timeout="$5"
+  shift 5
+
+  ensure_crds
+  "${render_fn}" "${pool_manifest}" | run_ko apply -f -
+
+  log_step "Waiting for the ${pool} worker pool rollout..."
+  wait_for_pool_rollout_fatal "${pool}" "${atespace}"
+
+  ensure_atespace "${atespace}"
+
+  local template_manifest template
+  while (($# > 0)); do
+    template_manifest="$1"
+    template="$2"
+    shift 2
+    create_demo_actor_template "${render_fn}" "${template_manifest}" "${atespace}" "${template}" "${golden_timeout}"
+  done
+}
+
+# delete_demo_actor_template deletes a template's actors, then the template
+# itself, which server-side also removes its golden actor and snapshot.
+delete_demo_actor_template() {
+  local atespace="$1"
+  local template="$2"
+  delete_demo_actors_substrate "${atespace}" "${template}"
+  run_kubectl_ate delete actor-template "${template}" -a "${atespace}" 2>/dev/null \
+    || log_step "actor template ${atespace}/${template} not deleted (may not exist)"
+}
+
+# delete_substrate_demo tears down what deploy_substrate_demo deployed:
+# actors, templates, the atespace, then the pool manifest. Arguments after
+# the atespace are the template names in that atespace.
+delete_substrate_demo() {
+  local render_fn="$1"
+  local pool_manifest="$2"
+  local atespace="$3"
+  shift 3
+
+  local template
+  for template in "$@"; do
+    delete_demo_actor_template "${atespace}" "${template}"
+  done
+  run_kubectl_ate delete atespace "${atespace}" 2>/dev/null \
+    || log_step "atespace ${atespace} not deleted (may not exist or is not empty)"
+
+  "${render_fn}" "${pool_manifest}" | run_kubectl delete --ignore-not-found -f -
 }
 
 delete_ate_system() {
@@ -782,10 +1342,13 @@ delete_ate_system() {
   else
     run_kubectl delete --ignore-not-found -f manifests/ate-install
   fi
+
+  run_kubectl delete --ignore-not-found -n ate-system daemonset -l app=atelet
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/components/agentgateway/configmap.yaml
-  run_kubectl delete --ignore-not-found -f manifests/ate-install/postgres.yaml
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/postgres/postgres.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
+  run_kubectl label nodes -l ate.dev/substrate-version ate.dev/substrate-version-
 }
 
 delete_atenet() {
@@ -861,7 +1424,10 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
-SETUP_CSI="${SETUP_CSI:-false}"
+# Valid values for SETUP_CSI: nfs, hostpath, both, none. Defaults to none: a
+# CSI driver is an opt-in extra, and NFS needs kernel modules a plain
+# workstation will not have loaded.
+SETUP_CSI="${SETUP_CSI:-none}"
 BENCHMARK_WORKER_COUNT=1
 BENCHMARK_SANDBOX_CLASS=gvisor
 # Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).
@@ -938,8 +1504,13 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ATE_OTLP_ENDPOINT="${prescan_args[$((i + 1))]}"
       ;;
     --otlp-endpoint=*) ATE_OTLP_ENDPOINT="${prescan_args[i]#*=}" ;;
+    --setup-csi=*) SETUP_CSI="${prescan_args[i]#*=}" ;;
     --setup-csi)
-      SETUP_CSI=true
+      if (( i + 1 < ${#prescan_args[@]} )) && [[ "${prescan_args[$((i + 1))]}" != --* ]]; then
+        SETUP_CSI="${prescan_args[$((i + 1))]}"
+      else
+        SETUP_CSI="nfs"
+      fi
       ;;
   esac
 done
@@ -955,17 +1526,21 @@ podcert_workers_per_signer >/dev/null
 rollout_timeout >/dev/null
 
 while [[ "$#" -gt 0 ]]; do
-  # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
-  # handled this argument and can continue. Otherwise, fallthrough to check
-  # the other arguments.
+  # Handlers signal an unclaimed argument via ate_demo_flag_unhandled, not exit
+  # status: an `if`-condition call would suppress errexit in the whole call tree.
+  ATE_DEMO_FLAG_HANDLED=false
   for demo_name in "${ATE_DEMOS[@]}"; do
-    if declare -F "${demo_name}_cmdline" >/dev/null 2>&1; then
-      if "${demo_name}_cmdline" "$1"; then
-        shift
-        continue 2
-      fi
+    declare -F "${demo_name}_cmdline" >/dev/null 2>&1 || continue
+    ATE_DEMO_FLAG_HANDLED=true
+    "${demo_name}_cmdline" "$1"
+    if [[ "${ATE_DEMO_FLAG_HANDLED}" == "true" ]]; then
+      break
     fi
   done
+  if [[ "${ATE_DEMO_FLAG_HANDLED}" == "true" ]]; then
+    shift
+    continue
+  fi
 
   case $1 in
     --atenet-router=*) ATE_ATENET_ROUTER="${1#*=}" ;;
@@ -1002,13 +1577,20 @@ while [[ "$#" -gt 0 ]]; do
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;
+    --setup-csi=*)
+      SETUP_CSI="${1#*=}"
+      ensure_crds
+      setup_csi
+      ;;
     --setup-csi)
-      if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-        ensure_crds
-        setup_csi
+      if [[ "$#" -gt 1 && "$2" != --* ]]; then
+        shift
+        SETUP_CSI="$1"
       else
-        echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+        SETUP_CSI="nfs"
       fi
+      ensure_crds
+      setup_csi
       ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
@@ -1037,7 +1619,7 @@ while [[ "$#" -gt 0 ]]; do
     --create-actor-id-ca-certs-secret) create_actor_id_ca_certs_secret ;;
     --create-egress-mitm-ca-pool-secret) create_egress_mitm_ca_pool_secret ;;
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
-    --create-api-server-env-vars) create_api_server_env_vars ;;
+    --create-api-server-env-vars) ensure_env_vars_safe_standalone; create_api_server_env_vars ;;
     --create-api-authentication-config) create_api_authentication_config ;;
 
     *)

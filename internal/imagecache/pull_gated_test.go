@@ -22,6 +22,7 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -303,8 +304,9 @@ func TestPullReverifyFailsCleanlyOnYankedLayer(t *testing.T) {
 	}
 }
 
-// The one behavior change visible without GC: an interrupted pull leaves a
-// valid partial record — resumable progress — rather than nothing.
+// A mid-flight pull holds a valid partial record — resumable progress —
+// rather than nothing, and a caller that stops waiting (cancellation) does
+// not interrupt the pull itself, which runs on a detached context.
 func TestInterruptedPullLeavesResumableRecord(t *testing.T) {
 	reg := newGatedRegistry(t)
 	free, gatedLayer, _ := gatedTestLayers(t)
@@ -328,12 +330,12 @@ func TestInterruptedPullLeavesResumableRecord(t *testing.T) {
 	})
 
 	cancel()
-	if err := <-done; err == nil {
-		t.Fatal("EnsureImage succeeded despite cancellation")
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("EnsureImage with a cancelled caller = %v, want context.Canceled", err)
 	}
-	release()
 
-	// The pre-written record survives the failure, referencing both layers.
+	// The caller is gone but the pull is still in flight, blocked on the
+	// gate. The pre-written record already references both layers.
 	var recs []string
 	entries, err := os.ReadDir(store.manifestsDir())
 	if err != nil {
@@ -367,7 +369,10 @@ func TestInterruptedPullLeavesResumableRecord(t *testing.T) {
 		t.Errorf("gated layer present after interrupted pull: %v", err)
 	}
 
-	// A retry completes the image and yields a full cache hit.
+	// A retry joins the still-running flight and completes the image once
+	// the gate opens (which also drains the detached pull before the test's
+	// temp dirs are removed).
+	release()
 	img, err := store.EnsureImage(context.Background(), ref)
 	if err != nil {
 		t.Fatalf("EnsureImage retry: %v", err)
@@ -375,5 +380,22 @@ func TestInterruptedPullLeavesResumableRecord(t *testing.T) {
 	cached, err := store.cachedImage(img.Digest)
 	if err != nil || cached == nil {
 		t.Fatalf("no complete cachedImage after retry: %v, %v", cached, err)
+	}
+}
+
+// A detached pull is not unbounded: pulls no longer end with the caller
+// that started them, so the store's own pull timeout is what reclaims a
+// wedged pull's flight slot.
+func TestDetachedPullBoundedByPullTimeout(t *testing.T) {
+	reg := newGatedRegistry(t)
+	free, gatedLayer, _ := gatedTestLayers(t)
+	ref := reg.host + "/test/wedged:latest"
+	pushImage(t, ref, v1.Config{}, free, gatedLayer)
+
+	store := newTestStore(t, WithPullTimeout(200*time.Millisecond))
+	reg.gate(t, gatedLayer) // released only at test cleanup: the pull is wedged
+
+	if _, err := store.EnsureImage(context.Background(), ref); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("EnsureImage on a wedged pull = %v, want context.DeadlineExceeded", err)
 	}
 }

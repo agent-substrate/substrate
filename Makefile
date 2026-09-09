@@ -22,9 +22,14 @@ export KO_DOCKER_REPO := gcr.io/$(PROJECT_ID)/ate-images
 GO := go
 KO := hack/run-tool.sh ko
 
+# Flags every ko image build gets, e.g. `make build-images KO_FLAGS=--push=false`.
+# Empty by default, so ko runs on its own defaults and whatever .ko.yaml configures.
+KO_FLAGS ?=
+
 # Binaries
 BINDIR := bin/
 ATECTL := $(BINDIR)/kubectl-ate
+ATESETUP := $(BINDIR)/ate-setup
 
 # Version stamping. Override on the make command line to pin
 # (e.g. `make VERSION=v0.5.0 build`).
@@ -32,24 +37,52 @@ VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo d
 VERSION_PKG := github.com/agent-substrate/substrate/internal/version
 LDFLAGS := -X=$(VERSION_PKG).Version=$(VERSION)
 
+# Every image the installer can deploy, defined once. These two sets together
+# have to cover images.Components in cmd/ate-setup/internal/images: a package
+# missing here has no image for a build from source, and one missing there has
+# none for an install from a release.
+CONTROL_PLANE_IMAGES := ./cmd/ateapi \
+                        ./cmd/atecontroller \
+                        ./cmd/atelet \
+                        ./cmd/atenet \
+                        ./cmd/podcertcontroller
+WORKER_IMAGES        := ./cmd/ateom-gvisor \
+                        ./cmd/ateom-microvm
+DEMO_IMAGES          := ./demos/counter \
+                        ./demos/egress \
+                        ./demos/multi-template/fspersist \
+                        ./demos/sandbox
+ALL_IMAGES           := $(CONTROL_PLANE_IMAGES) $(WORKER_IMAGES)
+
+# Developer builds may leave components out, e.g. the microvm image, the one
+# image built from a debian base rather than distroless static:
+#   make build-images SKIP_IMAGES=./cmd/ateom-microvm
+# Overriding IMAGES or DEMOS on the command line builds exactly that set.
+SKIP_IMAGES ?=
+IMAGES      := $(filter-out $(SKIP_IMAGES),$(ALL_IMAGES))
+DEMOS       := $(filter-out $(SKIP_IMAGES),$(DEMO_IMAGES))
+
 .PHONY: all
 all: build
 
 .PHONY: build
-build: build-images build-atectl
+build: build-images build-atectl build-ate-setup
 
 .PHONY: build-images
 build-images:
-	$(KO) build \
+	$(KO) build $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
-	    ./cmd/ateapi \
-	    ./cmd/atelet \
-	    ./cmd/podcertcontroller \
-	    ./cmd/atenet
+	    $(IMAGES)
 
 .PHONY: build-atectl
 build-atectl:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate
+
+# The cluster installer, a Go port of hack/install-ate.sh. Both work today; see
+# cmd/ate-setup/commands.md for the flag-by-flag mapping between them.
+.PHONY: build-ate-setup
+build-ate-setup:
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATESETUP) ./cmd/ate-setup
 
 .PHONY: build-atenet
 build-atenet:
@@ -57,7 +90,9 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build --ldflags="$(LDFLAGS)" ./demos/counter ./demos/egress
+	$(KO) build $(KO_FLAGS) \
+	    --ldflags="$(LDFLAGS)" \
+	    $(DEMOS)
 
 .PHONY: test
 test:

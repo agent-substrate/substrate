@@ -157,7 +157,7 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
 
-	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/egressprobe/egressprobe.yaml.tmpl"))
+	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/testserver/egressprobe.yaml.tmpl"))
 	if err != nil {
 		t.Fatalf("reading egressprobe manifest template: %v", err)
 	}
@@ -171,7 +171,7 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 
 	waitForProbeReady(t, ctx, ns)
 
-	config, err := ateclient.LoadConfig(e2e.KubeConfig, e2e.KubeContext)
+	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
 	if err != nil {
 		t.Fatalf("loading kubeconfig: %v", err)
 	}

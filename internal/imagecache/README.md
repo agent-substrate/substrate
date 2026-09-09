@@ -19,8 +19,9 @@ What it buys, concretely:
 
 - Actor start/resume composes the rootfs with **one overlay mount
   (milliseconds)** instead of a full image extraction (tens of seconds for
-  GB-scale images). `Restore timing breakdown` logs show `oci_unpack`
-  dropping from ~15–20 s to single-digit milliseconds on warm nodes.
+  GB-scale images). `Restore timing breakdown` logs show
+  `ate.actor.restore.duration.oci_unpack` dropping from ~15–20 s to
+  single-digit milliseconds on warm nodes.
 - Layers shared between images are **downloaded and unpacked once per
   node**, not once per image; actors sharing layers also share page cache.
 - The cache is **on disk and survives atelet restarts and node reboots**

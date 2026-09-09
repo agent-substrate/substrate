@@ -220,7 +220,7 @@ func actorStateString(s ateapipb.ActorState) string {
 // The UI's badgeFor() treats "running" as green; "idle" falls through
 // to the neutral badge, which is the right visual treatment.
 func workerPhase(w *ateapipb.Worker) string {
-	if w.GetStatus().GetAssignment().GetActor().GetName() != "" {
+	if w.GetStatus().GetAllocated().GetActors() > 0 {
 		return "Running"
 	}
 	return "Idle"
@@ -372,18 +372,9 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 	}
 	pods := make([]podSummary, 0, len(resp.GetWorkers()))
 	for _, wk := range resp.GetWorkers() {
-		// Filter to the demo namespace when set — workers may live
-		// in their own pool namespace (worker_namespace) so we
-		// compare against actor_namespace too.
-		if tpl := wk.GetStatus().GetAssignment().GetActorTemplate(); tpl != nil {
-			if ns, wkns := namespace, tpl.GetNamespace(); ns != "" && wkns != "" && wkns != ns {
-				continue
-			}
-		}
-		ready := false
-		if wk.GetStatus().GetAssignment().GetActor().GetName() != "" {
-			ready = true
-		}
+		// No demo-namespace filter: a Worker listing does not name the Actors
+		// it holds, so there is no template namespace to compare against.
+		ready := wk.GetStatus().GetAllocated().GetActors() > 0
 		pods = append(pods, podSummary{
 			Name:      wk.GetWorkerPod(),
 			Node:      wk.GetWorkerPool(), // closest semantic analog
@@ -397,7 +388,7 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleActors returns actor-shaped JSON sourced from ateapi.ListActors.
-// ActorTemplates / WorkerPools (k8s CRDs) are no longer surfaced —
+// ActorTemplate / WorkerPool resources are no longer surfaced —
 // substrate-native Actors are the canonical demo entity.
 func handleActors(w http.ResponseWriter, r *http.Request) {
 	if ateClient == nil {
@@ -413,7 +404,9 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	actors := make([]actorSummary, 0, len(resp.GetActors()))
 	for _, a := range resp.GetActors() {
-		if namespace != "" && a.GetActorTemplateNamespace() != "" && a.GetActorTemplateNamespace() != namespace {
+		// The demo's templates live in the atespace named after the demo
+		// namespace, so the template ref's atespace filters foreign actors.
+		if namespace != "" && a.GetActorTemplate().GetAtespace() != "" && a.GetActorTemplate().GetAtespace() != namespace {
 			continue
 		}
 		// Carry the template name as the meta message so the UI's
@@ -422,7 +415,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 		// substrate Actors there's no equivalent, so the template
 		// name is the closest semantic match).
 		msg := ""
-		if t := a.GetActorTemplateName(); t != "" {
+		if t := a.GetActorTemplate().GetName(); t != "" {
 			msg = "template: " + t
 		}
 		actors = append(actors, actorSummary{

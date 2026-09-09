@@ -20,12 +20,15 @@ import (
 	"context"
 	"io"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
@@ -89,6 +92,73 @@ func newTestStore(t *testing.T, opts ...Option) *Store {
 		t.Fatalf("New: %v", err)
 	}
 	return s
+}
+
+// TestRetryBackoffFor pins the per-registry split: well-known communal
+// registries get the patient fleet-throttling backoff, everything else —
+// registries the deployment has its own quota with, including local ones —
+// retries fast (their pulls sit on the Run/Restore critical path).
+func TestRetryBackoffFor(t *testing.T) {
+	for registry, want := range map[string]remote.Backoff{
+		"gcr.io":                              dedicatedRegistryBackoff,
+		"us.gcr.io":                           dedicatedRegistryBackoff,
+		"us-docker.pkg.dev":                   dedicatedRegistryBackoff,
+		"123.dkr.ecr.us-east-1.amazonaws.com": dedicatedRegistryBackoff,
+		"harbor.example.com":                  dedicatedRegistryBackoff,
+		"127.0.0.1:5000":                      dedicatedRegistryBackoff,
+		"registry.k8s.io":                     sharedRegistryBackoff,
+		"docker.io":                           sharedRegistryBackoff,
+		"index.docker.io":                     sharedRegistryBackoff,
+		"quay.io":                             sharedRegistryBackoff,
+		"ghcr.io":                             sharedRegistryBackoff,
+	} {
+		if got := retryBackoffFor(registry); got != want {
+			t.Errorf("retryBackoffFor(%q) = %+v, want %+v", registry, got, want)
+		}
+	}
+}
+
+// TestEnsureImage_RetriesRateLimit proves a pull survives transient 429s.
+// go-containerregistry's retry transport, configured with the per-registry
+// backoff picked by retryBackoffFor, covers every request including the /v2/
+// auth ping — the first request a throttling registry rejects (as
+// registry.k8s.io does per source IP).
+func TestEnsureImage_RetriesRateLimit(t *testing.T) {
+	origBackoff := dedicatedRegistryBackoff
+	dedicatedRegistryBackoff = remote.Backoff{Duration: time.Millisecond, Factor: 2.0, Jitter: 0.1, Steps: 4}
+	t.Cleanup(func() { dedicatedRegistryBackoff = origBackoff })
+
+	// throttle > 0 makes the registry reject the next request with a 429;
+	// it stays at zero until the test image is pushed.
+	var throttle, rejections atomic.Int32
+	inner := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if throttle.Add(-1) >= 0 {
+			rejections.Add(1)
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parsing registry URL: %v", err)
+	}
+
+	ref := u.Host + "/test/pause:1"
+	pushImage(t, ref, v1.Config{}, layerFromEntries(t, []tarEntry{
+		{name: "pause", typeflag: tar.TypeReg, body: "pause"},
+	}))
+	throttle.Store(2)
+
+	s := newTestStore(t)
+	if _, err := s.EnsureImage(context.Background(), ref); err != nil {
+		t.Fatalf("EnsureImage through a throttling registry: %v", err)
+	}
+	if got := rejections.Load(); got != 2 {
+		t.Errorf("registry rejected %d requests, want 2 (the throttling was not exercised)", got)
+	}
 }
 
 func TestEnsureImage_TagPullAndDigestHit(t *testing.T) {

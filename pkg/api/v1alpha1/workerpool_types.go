@@ -77,18 +77,16 @@ type WorkerPoolPodTemplate struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass == 'gvisor' || !has(self.template) || !has(self.template.resources) || !((has(self.template.resources.limits) && 'nvidia.com/gpu' in self.template.resources.limits) || (has(self.template.resources.requests) && 'nvidia.com/gpu' in self.template.resources.requests))",message="nvidia.com/gpu is only supported when sandboxClass is 'gvisor'"
-// +kubebuilder:validation:XValidation:rule="!has(self.template) || !has(self.template.resources) || !has(self.template.resources.requests) || !('nvidia.com/gpu' in self.template.resources.requests) || (has(self.template.resources.limits) && 'nvidia.com/gpu' in self.template.resources.limits)",message="nvidia.com/gpu must be set in limits: Kubernetes does not admit a request for an extended resource without a matching limit"
 type WorkerPoolSpec struct {
 	// Replicas is the number of worker pods to run.
 	// +required
 	// +kubebuilder:validation:Minimum=0
 	Replicas int32 `json:"replicas"`
 
-	// AteomImage is the ateom container image to deploy as workers.
+	// WorkerImage is the ateom container image to deploy as workers.
 	// +kubebuilder:validation:MinLength=1
 	// +required
-	AteomImage string `json:"ateomImage"`
+	WorkerImage string `json:"workerImage"`
 
 	// Template holds optional metadata, scheduling, and resource settings for worker workloads.
 	//
@@ -96,9 +94,10 @@ type WorkerPoolSpec struct {
 	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
 
 	// SandboxClass selects the sandbox runtime family for this pool, which drives
-	// the worker pod shape (KVM/vhost device mounts and node placement) and which
-	// SandboxConfigs are eligible. The concrete binary is still selected by
-	// AteomImage. Defaults to gvisor.
+	// the worker pod shape (KVM/vhost device mounts and node placement). The
+	// concrete binary is still selected by WorkerImage. Defaults to gvisor.
+	// The sandbox binaries themselves come from the SandboxConfig each
+	// ActorTemplate names (required).
 	//
 	// See Also: TODOs in ActorTemplate SandboxClass
 	//
@@ -106,14 +105,6 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
-
-	// SandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
-	// sandbox binaries. It overrides the cluster-wide default SandboxConfig for
-	// this pool's SandboxClass. The referenced config's SandboxClass must match
-	// this pool's SandboxClass. If empty, the default SandboxConfig for the
-	// SandboxClass is used.
-	// +optional
-	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
 }
 
 type WorkerPoolStatus struct {

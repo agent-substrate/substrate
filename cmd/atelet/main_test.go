@@ -56,6 +56,20 @@ import (
 
 const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
+const (
+	snapshotOwnerUID = "3d7f1b62-8a04-4c19-b5e6-2f9c7a1d0e38"
+	goldenActorUID   = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
+
+	// Bucket-relative paths, as the object store keys them.
+	testSnapshotPath   = "bucket/root/atespaces/ate-demo/actors/" + snapshotOwnerUID + "/snapshots/counter-1-snap"
+	pausedSnapshotPath = "bucket/root/atespaces/ate-demo/actors/" + snapshotOwnerUID + "/snapshots/snap-1"
+	goldenSnapshotPath = "bucket/golden-root/atespaces/ate-golden/actors/" + goldenActorUID + "/snapshots/golden-1"
+
+	testSnapshotURI   = "gs://" + testSnapshotPath
+	pausedSnapshotURI = "gs://" + pausedSnapshotPath
+	goldenSnapshotURI = "gs://" + goldenSnapshotPath
+)
+
 // TestPortFlagDefault verifies the default value of the --port flag.
 func TestPortFlagDefault(t *testing.T) {
 	f := pflag.Lookup("port")
@@ -69,18 +83,18 @@ func TestPortFlagDefault(t *testing.T) {
 
 func TestSnapshotManifestActorMetadata(t *testing.T) {
 	rec := sandboxAssetsRecord{
-		Atespace:               "team-a",
-		ActorName:              "actor-1",
-		ActorUID:               "actor-uid",
-		ActorTemplateNamespace: "templates",
-		ActorTemplateName:      "agent",
-		Scope:                  ateattr.SnapshotScopeFull,
+		Atespace:              "team-a",
+		ActorName:             "actor-1",
+		ActorUID:              "actor-uid",
+		ActorTemplateAtespace: "templates",
+		ActorTemplateName:     "agent",
+		Scope:                 ateattr.SnapshotScopeFull,
 	}
 	got, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`, `"scope":"full"`} {
+	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateAtespace":"templates"`, `"actorTemplateName":"agent"`, `"scope":"full"`} {
 		if !bytes.Contains(got, []byte(want)) {
 			t.Errorf("manifest %s missing %s", got, want)
 		}
@@ -389,29 +403,29 @@ func TestCopyFile_CloseError(t *testing.T) {
 // break one field per case.
 func validRunRequest() *ateletpb.RunRequest {
 	return &ateletpb.RunRequest{
-		Atespace:               "ate-demo",
-		ActorName:              "counter-1",
-		ActorTemplateNamespace: "ate-demo",
-		ActorTemplateName:      "counter",
-		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
-		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
-		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
+		Atespace:              "ate-demo",
+		ActorName:             "counter-1",
+		ActorTemplateAtespace: "ate-demo",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		ActorUid:              "123e4567-e89b-12d3-a456-426614174000",
+		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 	}
 }
 
 func validCheckpointRequest() *ateletpb.CheckpointRequest {
 	return &ateletpb.CheckpointRequest{
-		Atespace:               "ate-demo",
-		ActorName:              "counter-1",
-		ActorTemplateNamespace: "ate-demo",
-		ActorTemplateName:      "counter",
-		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
-		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
-		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
-		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+		Atespace:              "ate-demo",
+		ActorName:             "counter-1",
+		ActorTemplateAtespace: "ate-demo",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		ActorUid:              "123e4567-e89b-12d3-a456-426614174000",
+		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
+				SnapshotUri: testSnapshotURI,
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -420,17 +434,17 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 
 func validRestoreRequest() *ateletpb.RestoreRequest {
 	return &ateletpb.RestoreRequest{
-		Atespace:               "ate-demo",
-		ActorName:              "counter-1",
-		ActorTemplateNamespace: "ate-demo",
-		ActorTemplateName:      "counter",
-		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
-		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
-		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
-		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+		Atespace:              "ate-demo",
+		ActorName:             "counter-1",
+		ActorTemplateAtespace: "ate-demo",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		ActorUid:              "123e4567-e89b-12d3-a456-426614174000",
+		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
+				SnapshotUri: testSnapshotURI,
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -448,8 +462,8 @@ func TestValidateRunRequest(t *testing.T) {
 		{"invalid atespace", func(r *ateletpb.RunRequest) { r.Atespace = "../escape" }, true},
 		{"invalid actor name", func(r *ateletpb.RunRequest) { r.ActorName = "../escape" }, true},
 		{"invalid actor uid", func(r *ateletpb.RunRequest) { r.ActorUid = "../escape" }, true},
-		{"invalid actor template namespace", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace = "Not_Valid" }, true},
-		{"invalid actor template name", func(r *ateletpb.RunRequest) { r.ActorTemplateName = "Not_Valid" }, true},
+		{"any actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateAtespace, r.ActorTemplateName = "Not_Valid", "Not_Valid" }, false},
+		{"empty actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateAtespace, r.ActorTemplateName = "", "" }, false},
 		{"invalid container name", func(r *ateletpb.RunRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}, true},
@@ -488,8 +502,10 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		{"invalid atespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorName = "../escape" }), true},
 		{"invalid actor uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorUid = "../escape" }), true},
-		{"invalid actor template namespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
-		{"invalid actor template name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateName = "Not_Valid" }), true},
+		{"any actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.ActorTemplateAtespace, r.ActorTemplateName = "Not_Valid", "Not_Valid"
+		}), false},
+		{"empty actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateAtespace, r.ActorTemplateName = "", "" }), false},
 		{"invalid container name", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}), true},
@@ -546,8 +562,10 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid atespace", makeReq(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorName = "../escape" }), true},
 		{"invalid actor uid", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorUid = "../escape" }), true},
-		{"invalid actor template namespace", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
-		{"invalid actor template name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateName = "Not_Valid" }), true},
+		{"any actor template identity accepted", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.ActorTemplateAtespace, r.ActorTemplateName = "Not_Valid", "Not_Valid"
+		}), false},
+		{"empty actor template identity accepted", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateAtespace, r.ActorTemplateName = "", "" }), false},
 		{"invalid container name", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}), true},
@@ -572,7 +590,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
 		{"data-on-golden with golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+			r.GoldenSnapshotUri = goldenSnapshotURI
 		}), false},
 		{"data-on-golden without golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
@@ -586,12 +604,12 @@ func TestValidateRestoreRequest(t *testing.T) {
 		// can carry it.
 		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+			r.GoldenSnapshotUri = goldenSnapshotURI
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "local-snap-1"}}
 		}), false},
 		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+			r.GoldenSnapshotUri = goldenSnapshotURI
 		}), true},
 	}
 	for _, tc := range tests {
@@ -823,35 +841,18 @@ func TestRPCBoundariesReject(t *testing.T) {
 		wantInvalidArgument(t, "Restore", err)
 	})
 	t.Run("Terminate", func(t *testing.T) {
-		const okTargetAteomUID = "123e4567-e89b-12d3-a456-426614174001"
 		t.Run("invalid ateom UID", func(t *testing.T) {
 			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
 				TargetAteomUid: badUID, Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
-		})
-		t.Run("missing template namespace", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateName: "template",
-				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
-		})
-		t.Run("missing template name", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateNamespace: "default",
-				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
 			})
 			wantInvalidArgument(t, "Terminate", err)
 		})
 		t.Run("missing target ateom UID", func(t *testing.T) {
 			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
 				Spec: okSpec,
 			})
 			wantInvalidArgument(t, "Terminate", err)
@@ -1176,17 +1177,17 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 	}
 
 	store := mapObjectStorage{objects: map[string][]byte{
-		"bucket/root/snapshots/ate-demo/counter-1-snap/durable-dir.tar.zstd":    zstdBytes(t, "actor durable data"),
-		"bucket/golden-root/snapshots/ate-golden/golden-1/config.json.zstd":     zstdBytes(t, "golden config"),
-		"bucket/golden-root/snapshots/ate-golden/golden-1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
-		"bucket/golden-root/snapshots/ate-golden/golden-1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
+		testSnapshotPath + "/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
+		goldenSnapshotPath + "/config.json.zstd":     zstdBytes(t, "golden config"),
+		goldenSnapshotPath + "/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
+		goldenSnapshotPath + "/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
 	}}
 	s := &AteomHerder{gcsClient: store}
 
 	dstDir := t.TempDir()
 	err := s.downloadCombinedCheckpoint(context.Background(),
-		"gs://bucket/root/snapshots/ate-demo/counter-1-snap",
-		"gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+		testSnapshotURI,
+		goldenSnapshotURI,
 		dstDir,
 		[]string{"durable-dir.tar"},
 		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
@@ -1636,17 +1637,17 @@ func validUploadPausedCheckpointRequest() *ateletpb.UploadPausedCheckpointReques
 		Atespace:               "ate-demo",
 		ActorName:              "counter-1",
 		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
-		ActorTemplateNamespace: "ate-demo",
+		ActorTemplateAtespace:  "ate-demo",
 		ActorTemplateName:      "counter",
 		LocalSnapshotName:      "pause-snap-1",
-		DestinationSnapshotUri: "gs://bucket/root/snapshots/ate-demo/snap-1",
+		DestinationSnapshotUri: pausedSnapshotURI,
 		DesiredScope:           ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 	}
 }
 
 func TestUploadLocalCheckpointDir(t *testing.T) {
 	ctx := context.Background()
-	uri, err := resources.ParseSnapshotURI("gs://bucket/root/snapshots/ate-demo/snap-1")
+	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
 	if err != nil {
 		t.Fatalf("ParseSnapshotURI: %v", err)
 	}
@@ -1661,7 +1662,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 	remoteManifest := func(t *testing.T, store *recordingObjectStorage) sandboxAssetsRecord {
 		t.Helper()
-		b, ok := store.objects["bucket/root/snapshots/ate-demo/snap-1/manifest.json"]
+		b, ok := store.objects[pausedSnapshotPath+"/manifest.json"]
 		if !ok {
 			t.Fatal("no manifest uploaded")
 		}
@@ -1684,10 +1685,10 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
-			"bucket/root/snapshots/ate-demo/snap-1/config.json.zstd",
-			"bucket/root/snapshots/ate-demo/snap-1/durable-dir.tar.zstd",
-			"bucket/root/snapshots/ate-demo/snap-1/manifest.json",
-			"bucket/root/snapshots/ate-demo/snap-1/memory-ranges.zstd",
+			pausedSnapshotPath + "/config.json.zstd",
+			pausedSnapshotPath + "/durable-dir.tar.zstd",
+			pausedSnapshotPath + "/manifest.json",
+			pausedSnapshotPath + "/memory-ranges.zstd",
 		}
 		if got := store.keys(); !slices.Equal(got, want) {
 			t.Errorf("uploaded objects = %v, want %v", got, want)
@@ -1711,8 +1712,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
-			"bucket/root/snapshots/ate-demo/snap-1/durable-dir.tar.zstd",
-			"bucket/root/snapshots/ate-demo/snap-1/manifest.json",
+			pausedSnapshotPath + "/durable-dir.tar.zstd",
+			pausedSnapshotPath + "/manifest.json",
 		}
 		if got := store.keys(); !slices.Equal(got, want) {
 			t.Errorf("uploaded objects = %v, want %v", got, want)
@@ -1726,7 +1727,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
-	t.Run("gvisor full capture cannot become data yet", func(t *testing.T) {
+	t.Run("gvisor full capture without durable tar has no data", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
@@ -1739,8 +1740,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
-		if got := status.Code(err); got != codes.Unimplemented {
-			t.Fatalf("status.Code = %v (err %v), want Unimplemented", got, err)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 		}
 	})
 
@@ -1822,7 +1823,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 	t.Run("gone locally but already uploaded succeeds", func(t *testing.T) {
 		store := &recordingObjectStorage{objects: map[string][]byte{
-			"bucket/root/snapshots/ate-demo/snap-1/manifest.json": []byte(`{"sandboxClass":"microvm"}`),
+			pausedSnapshotPath + "/manifest.json": []byte(`{"sandboxClass":"microvm"}`),
 		}}
 		s := &AteomHerder{gcsClient: store}
 
@@ -1877,7 +1878,10 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		{"golden atespace rejected", func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = resources.GoldenActorAtespace }, true},
 		{"invalid actor name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorName = "UPPER" }, true},
 		{"invalid actor uid", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "" }, true},
-		{"invalid template namespace", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateNamespace = "no/slashes" }, true},
+		{"any actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateAtespace = "no/slashes" }, false},
+		{"empty actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.ActorTemplateAtespace, r.ActorTemplateName = "", ""
+		}, false},
 		{"invalid snapshot name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "../escape" }, true},
 		{"invalid snapshot uri", func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }, true},
 		{"unspecified scope", func(r *ateletpb.UploadPausedCheckpointRequest) {

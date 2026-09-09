@@ -120,7 +120,8 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 // the egress tunnel, so these tests pin its answers against a loopback server,
 // where there is no tunnel to blame.
 
-// echoServer is the in-process stand-in for internal/e2e/fixtures/grpcecho.
+// echoServer is the in-process stand-in for the egress e2e gRPC origin
+// (internal/e2e/fixtures/testserver, its grpc subcommand).
 type echoServer struct {
 	grpcechopb.UnimplementedEchoServer
 }

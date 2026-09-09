@@ -20,7 +20,7 @@
 #     LOCUST_NO_GLUTTON_USER=1 prevents tests/glutton.py from declaring the
 #     stub User on this worker so GluttonUser spawns are owned exclusively
 #     by the boomer container.
-#   * boomer-glutton: Go re-implementation of GluttonUser and DurdirUser. Connects to the
+#   * boomer-worker: Go re-implementation of GluttonUser and DurdirUser. Connects to the
 #     master at localhost:5557 via the locust worker ZMQ protocol; exposes
 #     its own per-worker diagnostics at /metrics on :8001 (aggregate stats
 #     flow through the master via boomer.RecordSuccess).
@@ -114,12 +114,12 @@ spec:
       #       cpu: "500m"
       #       memory: "512Mi"
 
-      - name: boomer-glutton
-        # Same image as the master/worker — the boomer-glutton Go binary is
-        # baked in at /app/boomer-glutton by benchmarking/locust/Dockerfile.
+      - name: boomer-worker
+        # Same image as the master/worker — the boomer-worker Go binary is
+        # baked in at /app/boomer-worker by benchmarking/locust/Dockerfile.
         image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
         imagePullPolicy: Always
-        command: ["/app/boomer-glutton"]
+        command: ["/app/boomer-worker"]
         args:
         - "--prometheus-addr=:8001"
         # Fetch runtime config (trace probability, wait-time bounds) from

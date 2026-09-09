@@ -31,7 +31,7 @@ SKIP_BUILD=0
 OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
-WAIT_TIMEOUT=""
+WAIT_TIMEOUT_SECS=""
 
 usage() {
   echo "Usage: $0 [options]"
@@ -46,8 +46,8 @@ usage() {
   echo "                          instrumented actor container sends telemetry."
   echo "  --actor-memory SIZE     Forwarded to workloads/deploy.sh. Memory limit for the"
   echo "                          benchmark ActorTemplates (default: 256Mi, the microvm minimum)."
-  echo "  --wait-timeout DURATION Forwarded to workloads/deploy.sh. The timeout for waiting"
-  echo "                          for the ateom workers to be ready (default: 300s)"
+  echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
+  echo "                          waiting for the ateom workers to be ready (default: 300)"
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -74,8 +74,8 @@ while [[ "$#" -gt 0 ]]; do
     --otlp-endpoint=*) OTLP_ENDPOINT="${1#*=}" ;;
     --actor-memory) shift; ACTOR_MEMORY="$1" ;;
     --actor-memory=*) ACTOR_MEMORY="${1#*=}" ;;
-    --wait-timeout) shift; WAIT_TIMEOUT="$1" ;;
-    --wait-timeout=*) WAIT_TIMEOUT="${1#*=}" ;;
+    --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
+    --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -95,8 +95,8 @@ case "${SANDBOX_CLASS}" in
     ;;
 esac
 
-if [[ -n "${WAIT_TIMEOUT}" ]] && ! [[ "${WAIT_TIMEOUT}" =~ ^([0-9]+(h|m|s))+$ ]]; then
-  echo "Error: --wait-timeout must be a Go duration like 300s, 10m, or 1h30m, got '${WAIT_TIMEOUT}'" >&2
+if [[ -n "${WAIT_TIMEOUT_SECS}" ]] && ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
+  echo "Error: --wait-timeout must be a whole number of seconds like 300, got '${WAIT_TIMEOUT_SECS}'" >&2
   exit 1
 fi
 
@@ -112,8 +112,8 @@ if [[ "${action}" == "deploy" ]]; then
   if [[ -n "${ACTOR_MEMORY}" ]]; then
     workload_args+=(--actor-memory "${ACTOR_MEMORY}")
   fi
-  if [[ -n "${WAIT_TIMEOUT}" ]]; then
-    workload_args+=(--wait-timeout "${WAIT_TIMEOUT}")
+  if [[ -n "${WAIT_TIMEOUT_SECS}" ]]; then
+    workload_args+=(--wait-timeout "${WAIT_TIMEOUT_SECS}")
   fi
   "${BENCHMARKING_DIR}/workloads/deploy.sh" "${workload_args[@]}"
 

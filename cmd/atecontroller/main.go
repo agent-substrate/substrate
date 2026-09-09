@@ -193,15 +193,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.ActorTemplateReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		AteClient: ateapiClient,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ActorTemplate")
-		os.Exit(1)
-	}
-
 	if err = (&controllers.EgressMITMTrustReconciler{
 		Client: mgr.GetClient(),
 	}).SetupWithManager(mgr); err != nil {

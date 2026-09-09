@@ -53,16 +53,22 @@ const (
 	liveBundleSelector   = "podcert.ate.dev/canarying=live"
 )
 
-// Client wraps the gRPC ControlClient and DebugClient and ensures the port-forward connection is closed when done.
+// Client wraps the gRPC ControlClient and ensures the port-forward connection is closed when done.
 type Client struct {
 	ateapipb.ControlClient
-	ateapipb.DebugClient
 	conn           *grpc.ClientConn
 	cancel         func()
 	tracerProvider *sdktrace.TracerProvider
 }
 
 // Close closes the underlying gRPC connection and stops the port-forwarder.
+
+// roundRobinServiceConfig spreads RPCs over every address the resolver returns.
+// ateapi is a headless Service, so that is one address per replica, and gRPC's
+// default of pick_first would send an entire client's traffic to whichever one
+// it connected to first. internal/ateapiauth dials with the same policy.
+const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
+
 func (c *Client) Close() {
 	if c.tracerProvider != nil {
 		// Best practice to ensure clean provider shutdown, even though we skip exporters for clients.
@@ -103,7 +109,18 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenF
 }
 
 func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
-	clientset, err := NewK8sClientset(kubeconfigPath, k8sContext)
+	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
+	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
+	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
+	// clusters), client-go will print out a warning every time it initializes.
+	config.WarningHandlerWithContext = &rest.NoWarnings{}
+
+	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
@@ -118,6 +135,7 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	opts = append(opts, grpc.WithDefaultServiceConfig(roundRobinServiceConfig))
 	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
 	if err != nil {
 		return nil, err
@@ -134,14 +152,13 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 	}
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
-		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel:        func() {},
 	}, nil
 }
 
-// LoadConfig loads a Kubernetes client configuration from the specified kubeconfig path and context.
-func LoadConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
+// LoadKubeConfig loads a Kubernetes client configuration from the specified kubeconfig path and context.
+func LoadKubeConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	loadingRules.ExplicitPath = kubeconfigPath
 	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: k8sContext}
@@ -149,10 +166,16 @@ func LoadConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 }
 
 func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool) (*Client, error) {
-	config, err := LoadConfig(kubeconfigPath, k8sContext)
+	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
+
+	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
+	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
+	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
+	// clusters), client-go will print out a warning every time it initializes.
+	config.WarningHandlerWithContext = &rest.NoWarnings{}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
@@ -195,7 +218,6 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
-		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel:        stopForward,
 	}, nil
@@ -344,18 +366,9 @@ func newTraceInterceptor() grpc.UnaryClientInterceptor {
 	}
 }
 
-// NewK8sClientset creates a new Kubernetes Clientset using the provided kubeconfig path and context.
-func NewK8sClientset(kubeconfigPath, k8sContext string) (*kubernetes.Clientset, error) {
-	config, err := LoadConfig(kubeconfigPath, k8sContext)
-	if err != nil {
-		return nil, err
-	}
-	return kubernetes.NewForConfig(config)
-}
-
 // NewMetricsClientset creates a new Kubernetes Metrics Clientset using the provided kubeconfig path and context.
 func NewMetricsClientset(kubeconfigPath, k8sContext string) (*metricsv1beta1.Clientset, error) {
-	config, err := LoadConfig(kubeconfigPath, k8sContext)
+	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, err
 	}

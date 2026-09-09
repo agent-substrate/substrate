@@ -38,10 +38,10 @@ const (
 )
 
 var testAttribution = resources.ActorAttribution{
-	Ref:               resources.ActorRef{Atespace: testAtespace, Name: testActorName},
-	UID:               testActorUID,
-	TemplateNamespace: testTemplateNS,
-	TemplateName:      testTemplateName,
+	Ref:              resources.ActorRef{Atespace: testAtespace, Name: testActorName},
+	UID:              testActorUID,
+	TemplateAtespace: testTemplateNS,
+	TemplateName:     testTemplateName,
 }
 
 // The registry owns the spellings (pinned by ateattr.TestKeySpellings), so the
@@ -51,7 +51,7 @@ var (
 	actorNameLabel     = string(ateattr.ActorNameKey)
 	actorUIDLabel      = string(ateattr.ActorUIDKey)
 	containerNameLabel = string(ateattr.ActorContainerNameKey)
-	templateNSLabel    = string(ateattr.TemplateNamespaceKey)
+	templateNSLabel    = string(ateattr.TemplateAtespaceKey)
 	templateNameLabel  = string(ateattr.TemplateNameKey)
 )
 
@@ -449,4 +449,15 @@ func mustSpanID(t *testing.T, s string) trace.SpanID {
 		t.Fatalf("SpanIDFromHex(%q): %v", s, err)
 	}
 	return id
+}
+
+// TestLabelsKey pins the one place the label group's spelling is chosen: the
+// GCE spelling is the key Cloud Logging promotes into LogEntry.labels.
+func TestLabelsKey(t *testing.T) {
+	if got := LabelsKey(false); got != "labels" {
+		t.Errorf("LabelsKey(false) = %q, want labels", got)
+	}
+	if got := LabelsKey(true); got != "logging.googleapis.com/labels" {
+		t.Errorf("LabelsKey(true) = %q, want logging.googleapis.com/labels", got)
+	}
 }

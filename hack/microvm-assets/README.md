@@ -15,8 +15,8 @@ set. The asset set is five files:
 
 These helpers assemble the asset set for your node arch, stage it into the cluster's rustfs
 S3 bucket, and the demo manifest's `SandboxConfig` points at it. When `/dev/kvm` is
-available, `hack/create-kind-cluster.sh` mounts it into the node and labels the node
-`ate.dev/sandboxClass=microvm`.
+available, `hack/create-kind-cluster.sh` mounts it into the node; atelet then advertises
+it as a device, which is what places micro-VM workers there.
 
 > [!TIP]
 > `hack/run-microvm-demo.sh` automates the full bring-up below (assets, control plane,
@@ -34,7 +34,7 @@ available, `hack/create-kind-cluster.sh` mounts it into the node and labels the 
 
 2. **Bring up the cluster + control plane:**
    ```sh
-   hack/create-kind-cluster.sh        # mounts /dev/kvm, labels node ate.dev/sandboxClass=microvm
+   hack/create-kind-cluster.sh        # mounts /dev/kvm into the nodes
    hack/install-ate-kind.sh           # control plane + rustfs (bucket: ate-snapshots)
    ```
 
@@ -45,7 +45,7 @@ available, `hack/create-kind-cluster.sh` mounts it into the node and labels the 
 
 4. **Apply the demo + drive it:**
    ```sh
-   BUCKET_NAME=ate-snapshots envsubst < demos/counter/counter-microvm.yaml.tmpl | kubectl apply -f -
+   BUCKET_NAME=ate-snapshots SUBSTRATE_VERSION="$(git describe --tags --always --dirty)" envsubst < demos/counter/counter-microvm.yaml.tmpl | kubectl apply -f -   # the pool pins workers to nodes labeled with this version
    ```
    Create an actor from `counter-microvm`, hit the in-RAM counter to increment it, suspend
    (checkpoint), resume on a different worker pod, and confirm the count continues — proving the

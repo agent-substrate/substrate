@@ -191,7 +191,7 @@ func LocalSnapshotDir(actorUID, snapshotName string) string {
 	return filepath.Join(LocalCheckpointsDir(actorUID), snapshotName)
 }
 
-// DurableDirTarFile is the snapshot file holding the tar of a micro-VM
+// DurableDirTarFile is the snapshot file holding the tar of an
 // actor's durable-dir volumes (entries are <volumeName>/... relative to
 // DurableDirVolumeMountsDir). Written by ateom-microvm at checkpoint; a DATA
 // snapshot consists of this file alone, so atelet uses the name to carve the

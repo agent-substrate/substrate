@@ -30,26 +30,10 @@ const (
 	DirectionEgress Direction = "egress"
 )
 
-const (
-	// directionAttribute is set from a dataplane expression, not a client
-	// header, by dataplanes without Envoy filter chains.
-	directionAttribute = "ate.extproc.direction"
-	// EgressFilterChainName is the Envoy filter chain that terminates actor
-	// egress CONNECTs, and so the one that selects the egress handler. It must
-	// stay in sync with the filter chain name in
-	// manifests/ate-install/atenet-egress.yaml.
-	EgressFilterChainName = "egress"
-	// FilterChainNameAttribute is the CEL attribute carrying the name of the
-	// filter chain that accepted the request. The egress Envoy asks for it via
-	// request_attributes on its ext_proc filter.
-	//
-	// Do not "improve" this to xds.listener_name: Envoy 1.34 cannot parse that
-	// one, and rather than failing config load it logs "error parsing cel
-	// expression" at trace level and sends an empty attributes map. An absent
-	// attribute means ingress here, so every egress CONNECT would silently take
-	// the ingress path and 404 on the actor DNS name parse.
-	FilterChainNameAttribute = "xds.filter_chain_name"
-)
+// EgressFilterChainName is the Envoy filter chain that terminates actor egress
+// CONNECTs, and so the one that selects the egress handler. It must stay in sync
+// with the filter chain name in manifests/ate-install/atenet-egress.yaml.
+const EgressFilterChainName = "egress"
 
 // directionOf reports which direction's handler an ext_proc RequestHeaders
 // callback belongs to.

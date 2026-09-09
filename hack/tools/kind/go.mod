@@ -1,6 +1,6 @@
 module github.com/agent-substrate/substrate/hack/tools/kind
 
-go 1.26.1
+go 1.27.0
 
 tool sigs.k8s.io/kind
 

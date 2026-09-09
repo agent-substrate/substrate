@@ -28,8 +28,10 @@ package kata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +40,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -49,31 +52,10 @@ const (
 	typeVirtioFS   = "virtiofs"
 	virtioFSDriver = "virtio-fs"
 	// guestSharedDir is where the agent mounts the kataShared tag in the guest;
-	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs, durable
-	// volumes at <guestSharedDir>/durable/<volumeName>, CSI volumes at
-	// <guestSharedDir>/csi/<volumeName>, and system-info volumes at
-	// <guestSharedDir>/system-info/<volumeName>.
-	guestSharedDir = "/run/kata-containers/shared/containers/"
+	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs, and the
+	// volume shares at the subdirectories ocispec.ShapeMicroVM points binds at.
+	guestSharedDir = ocispec.GuestSharedDir + "/"
 )
-
-// GuestDurableVolumeDir is the in-guest path holding one durable volume's
-// contents, i.e. the bind source for that volume's container mount points.
-func GuestDurableVolumeDir(volumeName string) string {
-	return guestSharedDir + "durable/" + volumeName
-}
-
-// GuestCSIVolumeDir is the in-guest path holding one CSI volume's
-// contents, i.e. the bind source for that volume's container mount points.
-func GuestCSIVolumeDir(volumeName string) string {
-	return guestSharedDir + "csi/" + volumeName
-}
-
-// GuestSystemInfoVolumeDir is the in-guest path holding one system-info
-// volume's contents, i.e. the read-only bind source for that volume's
-// container mount points.
-func GuestSystemInfoVolumeDir(volumeName string) string {
-	return guestSharedDir + "system-info/" + volumeName
-}
 
 // SharedDir is the host directory virtiofsd serves into the guest as the RO base.
 // Its layout (<cid>/rootfs) is what find-paths re-opens by path on restore.
@@ -103,13 +85,13 @@ func GuestSharedRootfs(containerID string) string { return guestSharedDir + cont
 // GuestSharedVolumeDir is the in-guest path one image volume's contents appear
 // at, beside the container's rootfs in the same kataShared tree.
 func GuestSharedVolumeDir(containerID, volumeName string) string {
-	return filepath.Join(guestSharedDir, containerID, "volumes", volumeName)
+	return filepath.Join(guestSharedDir, containerID, ocispec.ShareVolumes, volumeName)
 }
 
 // SharedVolumeDir is the host path under virtiofsd's served tree that
 // GuestSharedVolumeDir resolves to.
 func SharedVolumeDir(id, containerID, volumeName string) string {
-	return filepath.Join(SharedDir(id), containerID, "volumes", volumeName)
+	return filepath.Join(SharedDir(id), containerID, ocispec.ShareVolumes, volumeName)
 }
 
 // VirtiofsdOptions configures StartVirtiofsd.
@@ -267,8 +249,28 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	// mounts /proc,/sys,/dev over them, and find-paths re-opens the tree by path on
 	// restore, so the layout must match on every node. Created in the MERGED tree, so
 	// they land in the upper (and ride the snapshot tar) rather than dirtying the image.
+	if err := ensureOCIMountpoints(dst); err != nil {
+		return fmt.Errorf("creating OCI mountpoints under %q: %w", dst, err)
+	}
+	return nil
+}
+
+// ensureOCIMountpoints creates the /proc, /sys and /dev mountpoints in a container
+// rootfs. Neither layer of that rootfs is trusted — the lower is the actor's image
+// and the upper is restored from the snapshot the guest wrote — so it goes through
+// os.Root: a plain MkdirAll would follow a symlink planted at one of those names and
+// create the directory wherever it points on the worker pod, as root. An entry that
+// already exists (including a symlink that stays inside the rootfs) is left alone.
+func ensureOCIMountpoints(rootfs string) error {
+	root, err := os.OpenRoot(rootfs)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for _, d := range []string{"proc", "sys", "dev"} {
-		_ = os.MkdirAll(filepath.Join(dst, d), 0o755)
+		if err := root.Mkdir(d, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
 	}
 	return nil
 }
@@ -354,9 +356,9 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	}
 	// Ensure the standard OCI mountpoints exist even for minimal images: the container
 	// mounts /proc,/sys,/dev over them, and find-paths re-opens the lower by path on
-	// restore, so the layout must match on every node. (Bind still writable; ignore EEXIST.)
-	for _, d := range []string{"proc", "sys", "dev"} {
-		_ = os.MkdirAll(filepath.Join(dst, d), 0o755)
+	// restore, so the layout must match on every node. (Bind still writable.)
+	if err := ensureOCIMountpoints(dst); err != nil {
+		return fmt.Errorf("creating OCI mountpoints under %q: %w", dst, err)
 	}
 	// Remount read-only: the lower is immutable, so all writes go to the overlay upper
 	// and it stays byte-identical across reconstructions (required by find-paths migration).
@@ -398,9 +400,8 @@ func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSand
 func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec) error {
 	pbSpec := SpecToAgentPB(spec)
 	pbSpec.Root = &agentpb.Root{Path: GuestSharedRootfs(cid), Readonly: false}
-	// Per-container cgroup: the shaped spec carries the actor-wide
-	// /ateomchv/<actorName> (spec.go), which collides across an actor's
-	// containers — use the per-id path.
+	// Per-container cgroup under the shared /ateomchv parent, so the guest
+	// kernel accounts an actor's containers hierarchically (see agentstats).
 	if pbSpec.Linux != nil {
 		pbSpec.Linux.CgroupsPath = "/ateomchv/" + cid
 	}

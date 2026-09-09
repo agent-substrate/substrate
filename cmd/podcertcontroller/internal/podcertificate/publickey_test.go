@@ -60,7 +60,7 @@ func TestPublicKeyFallsBackToPKIXPublicKey(t *testing.T) {
 
 	got, err := PublicKey(&certsv1beta1.PodCertificateRequest{
 		Spec: certsv1beta1.PodCertificateRequestSpec{
-			PKIXPublicKey: pkix,
+			PKIXPublicKey: pkix, //nolint:staticcheck // SA1019: exercising the deprecated-field fallback in PublicKey.
 		},
 	})
 	if err != nil {

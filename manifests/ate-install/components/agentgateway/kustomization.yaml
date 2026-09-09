@@ -38,29 +38,11 @@ patches:
       name: atenet-router
       namespace: ate-system
     patch: |-
-      - op: test
-        path: /spec/template/spec/containers/0/args/4
-        value: --port-xds=18000
-      - op: remove
-        path: /spec/template/spec/containers/0/args/4
-      - op: test
-        path: /spec/template/spec/containers/0/args/8
-        value: --envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem
-      - op: remove
-        path: /spec/template/spec/containers/0/args/8
-      - op: test
-        path: /spec/template/spec/containers/0/ports/0/name
-        value: xds
-      - op: remove
-        path: /spec/template/spec/containers/0/ports/0
-      - op: add
-        path: /spec/template/spec/containers/0/args/-
-        value: --atenet-router=agentgateway
       - op: replace
-        path: /spec/template/spec/containers/1
+        path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v0.0.0-alpha.a6c0e366
+          image: cr.agentgateway.dev/agentgateway:v1.5.0
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -87,6 +69,22 @@ patches:
             mountPath: /run/servicedns.podcert.ate.dev
           - name: podidentity
             mountPath: /run/podidentity.podcert.ate.dev
+          - name: servicedns-ca
+            mountPath: /run/servicedns-ca
+      - op: remove
+        path: /spec/template/spec/containers/1
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: servicedns-ca
+          projected:
+            sources:
+            - clusterTrustBundle:
+                signerName: servicedns.podcert.ate.dev/identity
+                labelSelector:
+                  matchLabels:
+                    podcert.ate.dev/canarying: live
+                path: trust-bundle.pem
   - target:
       group: apps
       version: v1
@@ -117,7 +115,7 @@ patches:
         path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v1.4.1
+          image: cr.agentgateway.dev/agentgateway:v1.5.0
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -149,9 +147,26 @@ patches:
           - name: actor-id-ca-certs
             mountPath: /run/actor-id-ca-certs
             readOnly: true
-      - op: add
-        path: /spec/template/spec/containers/1/args/-
-        value: --atenet-router=agentgateway
+          - name: podidentity
+            mountPath: /run/podidentity.podcert.ate.dev
+            readOnly: true
+          - name: servicedns-ca
+            mountPath: /run/servicedns-ca
+            readOnly: true
       - op: replace
         path: /spec/template/spec/volumes/0/configMap/name
-        value: atenet-egress-agentgateway-config
+        value: atenet-egress-agentgateway-substrate-config
+      - op: remove
+        path: /spec/template/spec/containers/1
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: servicedns-ca
+          projected:
+            sources:
+            - clusterTrustBundle:
+                signerName: servicedns.podcert.ate.dev/identity
+                labelSelector:
+                  matchLabels:
+                    podcert.ate.dev/canarying: live
+                path: trust-bundle.pem

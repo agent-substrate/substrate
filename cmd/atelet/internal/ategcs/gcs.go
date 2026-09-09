@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/option"
 )
 
@@ -38,10 +40,35 @@ type gcsClient struct {
 	pool     []*storage.Client
 }
 
-// NewGCSClient wraps client. opts must be the options client was built with;
-// the pool of extra connections is built from them.
-func NewGCSClient(client *storage.Client, opts ...option.ClientOption) ObjectStorage {
-	return &gcsClient{client: client, opts: opts}
+// NewGCSClient returns a GCS-backed ObjectStorage. It builds its own
+// storage.Client from opts (and more from the same opts for the part-upload
+// pool, see uploadClient) rather than accepting one, because it installs a
+// RetryAlways policy (see setRetry) that is only safe for this package's own
+// operations and must not leak onto a client shared with other code.
+func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStorage, error) {
+	client, err := storage.NewClient(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	setRetry(client)
+	return &gcsClient{client: client, opts: opts}, nil
+}
+
+// setRetry makes every operation on c retry transient errors (408, 429, 5xx)
+// with backoff. The client's default RetryIdempotent policy never retries an
+// object write without a precondition, so a single 429 — routine while GCS
+// scales a cold bucket's key ranges up to a suspend burst — failed the whole
+// snapshot. RetryAlways is safe for this client because every write targets a
+// unique name (snapshot UUID directories, runID-suffixed part names) or is
+// idempotent (compose and copy from fixed sources, delete).
+func setRetry(c *storage.Client) {
+	c.SetRetry(
+		storage.WithPolicy(storage.RetryAlways),
+		// Suspend is latency-sensitive, so bound the worst case: at most 5
+		// attempts, under 5s of backoff sleep in total (250ms+500ms+1s+2s).
+		storage.WithBackoff(gax.Backoff{Initial: 250 * time.Millisecond, Max: 2 * time.Second, Multiplier: 2}),
+		storage.WithMaxAttempts(5),
+	)
 }
 
 // supportsStreamingPut is the streamingPutter marker: the GCS client's PutObject

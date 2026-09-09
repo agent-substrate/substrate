@@ -290,7 +290,11 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
 
-	k8sClient, err := ateclient.NewK8sClientset(kubeconfig, k8sContext)
+	config, err := ateclient.LoadKubeConfig(kubeconfig, k8sContext)
+	if err != nil {
+		return fmt.Errorf("while loading kubeconfig: %w", err)
+	}
+	k8sClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		apiClient.Close()
 		return fmt.Errorf("failed to create kubernetes client: %w", err)

@@ -15,9 +15,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,6 +31,10 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
@@ -59,12 +66,12 @@ func (f *fakeStatsAteom) GetActiveWorkloadStats(ctx context.Context, req *ateomp
 func executingResponse(templateNS, templateName string, class ateompb.SandboxClass, source ateompb.StatsSource, current, workingSet uint64) *ateompb.GetActiveWorkloadStatsResponse {
 	return &ateompb.GetActiveWorkloadStatsResponse{
 		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: &ateompb.WorkloadStatsSample{
-			ActorTemplateNamespace: templateNS,
-			ActorTemplateName:      templateName,
-			SandboxClass:           class,
-			Source:                 source,
-			MemoryCurrentBytes:     current,
-			MemoryWorkingSetBytes:  workingSet,
+			ActorTemplateAtespace: templateNS,
+			ActorTemplateName:     templateName,
+			SandboxClass:          class,
+			Source:                source,
+			MemoryCurrentBytes:    current,
+			MemoryWorkingSetBytes: workingSet,
 		}},
 	}
 }
@@ -281,12 +288,12 @@ func gaugePointCount(t *testing.T, reader *sdkmetric.ManualReader, name string) 
 func cpuResponse(actorUID string, cpuUsec uint64) *ateompb.GetActiveWorkloadStatsResponse {
 	return &ateompb.GetActiveWorkloadStatsResponse{
 		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: &ateompb.WorkloadStatsSample{
-			ActorUid:               actorUID,
-			ActorTemplateNamespace: "ns-a",
-			ActorTemplateName:      "tmpl-a",
-			SandboxClass:           ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
-			Source:                 ateompb.StatsSource_STATS_SOURCE_CGROUP,
-			CpuUsageUsec:           cpuUsec,
+			ActorUid:              actorUID,
+			ActorTemplateAtespace: "ns-a",
+			ActorTemplateName:     "tmpl-a",
+			SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+			CpuUsageUsec:          cpuUsec,
 		}},
 	}
 }
@@ -355,5 +362,138 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(templateAggregate{}, templateKey{}, workerPoolRef{})); diff != "" {
 		t.Errorf("collect() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestStatsPollerPeriodicEvents pins the events channel: one event per
+// executing sample per sweep, none for idle or mid-boot ateoms, identity
+// taken from the echo, pool labels from the sweep's own resolution.
+func TestStatsPollerPeriodicEvents(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-2": {resp: noSampleResponse(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	var buf syncBuffer
+	p.eventEmitter = newBufferEmitter(&buf, false)
+	p.workerPools = func(context.Context) map[string]workerPoolRef {
+		return map[string]workerPoolRef{"uid-1": {namespace: "pool-ns", name: "pool-a"}}
+	}
+
+	p.collect(context.Background())
+
+	lines := bytes.Count(bytes.TrimSpace(buf.Bytes()), []byte("\n")) + 1
+	if buf.Len() == 0 {
+		t.Fatal("no periodic event emitted for the executing ateom")
+	}
+	if lines != 1 {
+		t.Fatalf("emitted %d events, want 1 (idle ateoms emit nothing): %q", lines, buf.String())
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := rec["kind"]; got != "periodic" {
+		t.Errorf("kind = %v, want periodic", got)
+	}
+	labels, _ := rec["labels"].(map[string]any)
+	if got := labels["ate.workerpool.name"]; got != "pool-a" {
+		t.Errorf("labels[ate.workerpool.name] = %v, want pool-a", got)
+	}
+}
+
+func TestAddSat(t *testing.T) {
+	tests := []struct {
+		name string
+		agg  int64
+		v    uint64
+		want int64
+	}{
+		{name: "normal add", agg: 100, v: 50, want: 150},
+		{name: "zero add", agg: 100, v: 0, want: 100},
+		// A wire value above MaxInt64 -- a corrupt or hostile guest reading --
+		// must pin at the ceiling, not wrap the aggregate negative.
+		{name: "value above MaxInt64 saturates", agg: 0, v: math.MaxUint64, want: math.MaxInt64},
+		// The addition itself can also overflow once inputs are clamped.
+		{name: "sum overflow saturates", agg: math.MaxInt64 - 10, v: 100, want: math.MaxInt64},
+		{name: "exactly at ceiling", agg: math.MaxInt64 - 5, v: 5, want: math.MaxInt64},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := addSat(tc.agg, tc.v); got != tc.want {
+				t.Errorf("addSat(%d, %d) = %d, want %d", tc.agg, tc.v, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestStatsPollerCollectSaturatesCorruptSamples pins the end-to-end behavior:
+// one guest reporting absurd counters must not flip a template's aggregates
+// negative -- a negative gauge misreads as "no memory", and a negative CPU
+// delta is a spec-violating counter Add. Everything pins at MaxInt64 instead.
+func TestStatsPollerCollectSaturatesCorruptSamples(t *testing.T) {
+	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, math.MaxUint64, math.MaxUint64)},
+		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+
+	got := p.collect(context.Background())[key]
+	if got == nil {
+		t.Fatal("collect() returned no aggregate for the template")
+	}
+	if got.memoryCurrentBytes != math.MaxInt64 || got.memoryWorkingSetBytes != math.MaxInt64 {
+		t.Errorf("memory aggregates = %d/%d, want both pinned at MaxInt64",
+			got.memoryCurrentBytes, got.memoryWorkingSetBytes)
+	}
+	if got.memoryCurrentBytes < 0 || got.memoryWorkingSetBytes < 0 || got.cpuDeltaUsec < 0 {
+		t.Errorf("aggregate went negative: %+v", got)
+	}
+}
+
+// TestStatsPollerCPUDeltaSaturatesCorruptCounter: a baseline followed by an
+// absurd counter value is a huge "increase"; it must clamp, not go negative.
+func TestStatsPollerCPUDeltaSaturatesCorruptCounter(t *testing.T) {
+	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	fake := &fakeStatsAteom{resp: cpuResponse("uid-a", 1000)}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-1": fake})
+
+	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 0 {
+		t.Fatalf("first sweep delta = %d, want 0", got)
+	}
+
+	fake.resp = cpuResponse("uid-a", math.MaxUint64)
+	got := p.collect(context.Background())[key].cpuDeltaUsec
+	if got != math.MaxInt64 {
+		t.Errorf("corrupt-counter sweep delta = %d, want pinned at MaxInt64", got)
+	}
+}
+
+// TestNodeWorkerPools pins the resolver's ingestion rules: a labeled worker
+// maps by pod UID, an empty label value names no pool and never enters the
+// map (the presence-only selector matches it anyway), and unlabeled pods are
+// not workers at all. The fake clientset honors label selectors but not the
+// spec.nodeName field selector, so node scoping is not assertable here.
+func TestNodeWorkerPools(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-a", Namespace: "pool-ns", UID: "uid-a",
+			Labels: map[string]string{workerPoolLabel: "pool-a"},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-empty", Namespace: "pool-ns", UID: "uid-empty",
+			Labels: map[string]string{workerPoolLabel: ""},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "bystander", Namespace: "other-ns", UID: "uid-bystander",
+		}},
+	)
+
+	got := nodeWorkerPools(client, "node-1")(context.Background())
+
+	want := map[string]workerPoolRef{"uid-a": {namespace: "pool-ns", name: "pool-a"}}
+	if diff := cmp.Diff(want, got, cmp.AllowUnexported(workerPoolRef{})); diff != "" {
+		t.Errorf("nodeWorkerPools mismatch (-want +got):\n%s", diff)
 	}
 }

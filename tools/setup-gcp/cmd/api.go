@@ -32,6 +32,7 @@ func enableRequiredAPIs(ctx context.Context, cfg *Config) error {
 	defer suClient.Close()
 
 	services := []string{
+		"artifactregistry.googleapis.com",
 		"cloudresourcemanager.googleapis.com",
 		"container.googleapis.com",
 		"networkconnectivity.googleapis.com",

@@ -73,15 +73,23 @@ const (
 	labelsKeyGCE   = "logging.googleapis.com/labels"
 )
 
+// LabelsKey returns the label group's spelling for this environment. Every
+// emitter of the actor-identity label group (container logs, lifecycle
+// events, usage events) must pick its key here, so they all promote into
+// Cloud Logging the same way -- and so going vendor-neutral later means
+// changing one function.
+func LabelsKey(isOnGCE bool) string {
+	if isOnGCE {
+		return labelsKeyGCE
+	}
+	return labelsKeyPlain
+}
+
 // NewActorLogger creates a new ActorLogger wrapping the provided destination writer.
 func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
-	labelsKey := labelsKeyPlain
-	if isOnGCE {
-		labelsKey = labelsKeyGCE
-	}
 	return &ActorLogger{
 		writer:    w,
-		labelsKey: labelsKey,
+		labelsKey: LabelsKey(isOnGCE),
 	}
 }
 

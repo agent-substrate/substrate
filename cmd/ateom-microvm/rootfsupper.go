@@ -50,8 +50,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/tarutil"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
 // rootfsUpperTarFile is the snapshot file holding the tar of the actor's

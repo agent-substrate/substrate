@@ -48,7 +48,7 @@ workdir="$(mktemp -d "/tmp/update-licenses.XXXXXX")"
 # shellcheck disable=SC2064 # evaluate $workdir immediately
 trap "rm -rf ${workdir}" EXIT
 export GOWORK="${workdir}/go.work"
-go work init . ./third_party/k8s.io/apimachinery
+go work init .
 
 for target in "${targets[@]}"; do
   IFS="/" read -r target_os target_arch <<< "${target}"

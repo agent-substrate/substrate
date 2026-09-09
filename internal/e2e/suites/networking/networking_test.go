@@ -66,7 +66,7 @@ func egressFixture() e2e.Fixture {
 
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
-	actorName, actor := createAndResumeActor(t, ctx, "direct", e2e.CounterFixture())
+	actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -82,24 +82,63 @@ func TestActorDirectAccess(t *testing.T) {
 	})
 }
 
+// egressHTTPTarget returns a copy of the origin TestActorEgress dials:
+// testserver's http subcommand, published on port 80, listening on 8080.
+func egressHTTPTarget() e2e.ServerPod {
+	return e2e.ServerPod{
+		Name:       "egresshttp",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       80,
+		TargetPort: 8080,
+	}
+}
+
 // TestActorEgress exercises the full egress path. The Actor's outbound TCP
 // connection is transparently redirected by nftables into atunnel, wrapped in
 // mTLS with the Actor's own actor-identity certificate plus an HTTP CONNECT to
 // atenet-egress, authorized there against that certificate, and only then
-// dialed out. A masqueraded (pre-gateway) egress would also return 200, so this
-// asserts the gateway is deployed and that it did not reject the Actor.
+// dialed out.
+//
+// The origin is deployed by the test, and a masqueraded, pre-gateway egress
+// would reach it just as well; the access-log assertion is what proves the
+// traffic went through the gateway.
 func TestActorEgress(t *testing.T) {
 	ctx := context.Background()
+
+	// Deploy the origin first so a fixture failure costs no Actor resume.
+	origin := egressHTTPTarget()
+	target := e2e.DeployServerPod(t, ctx, origin)
+
 	actorName, _ := createAndResumeActor(t, ctx, "egress", egressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, "http://example.com/")
+	url := fmt.Sprintf("http://%s/healthz", target.Address())
+
+	// Bound the access-log scan to lines this test produced: captured before
+	// the fetch, with slack for clock skew against the gateway's node.
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
 	if status != http.StatusOK {
-		t.Fatalf("Actor egress fetch returned HTTP %d, want 200; body: %s", status, body)
+		t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
 	}
-	t.Logf("Actor egress fetch succeeded; body: %s", body)
+	t.Logf("Actor egress fetch of %s succeeded; body: %s", url, body)
+
+	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(origin.Port))
+
+	// The Actor resolves the name itself -- DNS leaves over the UDP masquerade,
+	// not the tunnel, and atunnel forwards the resolved address, never the
+	// name -- so dialing by name covers a leg the by-address fetch above skips.
+	t.Run("by DNS name", func(t *testing.T) {
+		url := fmt.Sprintf("http://%s.%s.svc.cluster.local/healthz", origin.Name, target.Namespace)
+		status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
+		if status != http.StatusOK {
+			t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+		}
+		t.Logf("Actor egress fetch of %s succeeded; body: %s", url, body)
+	})
 }
 
 // TestActorEgressHTTPS covers the same path as TestActorEgress with a TLS
@@ -128,15 +167,12 @@ func TestActorEgressHTTPS(t *testing.T) {
 }
 
 // httpTarget is the origin TestActorEgressNonStandardPort dials: a plain HTTP
-// server on a port that is neither 80 nor 443.
-//
-// It runs the egressprobe binary rather than one of its own. egressprobe's main
-// only parses flags and serves /healthz, and the credential bundles it reads
-// are read lazily inside /handshake, which this target never calls -- so it
-// starts with nothing mounted and needs no fixture of its own.
+// server on a port that is neither 80 nor 443. testserver's http subcommand
+// serves nothing but /healthz, which is all this target is dialed for.
 var httpTarget = e2e.ServerPod{
 	Name:       "httptarget",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe",
+	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	Args:       []string{"http"},
 	Port:       8080,
 }
 
@@ -313,6 +349,20 @@ func accessLogField(line, key string) (string, bool) {
 
 func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture) (string, *ateapipb.Actor) {
 	t.Helper()
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
+	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith)
+}
+
+// createAndResumeSubstrateActor is createAndResumeActor for a substrate
+// ActorTemplate fixture, referenced by atespace/name instead of the CRD pair.
+func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, *ateapipb.Actor) {
+	t.Helper()
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
+	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith)
+}
+
+func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string) (string, *ateapipb.Actor) {
+	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 	actorRef := &ateapipb.ObjectRef{Atespace: networkingAtespace, Name: actorName}
@@ -321,12 +371,9 @@ func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, temp
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: networkingAtespace}},
 	})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName},
-		ActorTemplateNamespace: template.Namespace,
-		ActorTemplateName:      template.Name,
-	}}); err != nil {
-		t.Fatalf("CreateActor from %s/%s: %v (deploy the fixture with %s)", template.Namespace, template.Name, err, template.DeployWith)
+	actor.Metadata = &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: actor}); err != nil {
+		t.Fatalf("CreateActor from %s: %v (deploy the fixture with %s)", source, err, deployWith)
 	}
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})

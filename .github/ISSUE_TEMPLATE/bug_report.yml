@@ -1,0 +1,121 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Bug Report
+description: File a bug report to help improve Agent Substrate
+title: "[Bug]: "
+labels: ["kind/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue!
+        Please make sure you have searched existing issues to verify this is not a duplicate.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of what the bug is.
+      placeholder: Tell us what you observed vs what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: A clear description of the expected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can the issue be reproduced? Provide commands, scripts, or manifests (e.g., ActorTemplate).
+      placeholder: |
+        1. Deploy Substrate with `hack/install-ate-kind.sh ...`
+        2. Apply manifest `kubectl apply -f ...`
+        3. Run command `...`
+        4. See error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Sandbox Runtime
+      description: Which sandbox runtime / isolation technology is being used?
+      options:
+        - gVisor (runsc)
+        - microVM (kata / cloud-hypervisor)
+        - Both / Runtime Agnostic
+        - Other (specify in Additional Context)
+    validations:
+      required: true
+
+  - type: input
+    id: substrate-version
+    attributes:
+      label: Agent Substrate Version / Commit SHA
+      description: What version or git commit SHA of Agent Substrate are you running?
+      placeholder: e.g., 85d404a8 or v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: k8s-version
+    attributes:
+      label: Kubernetes Version & Environment
+      description: What Kubernetes version and environment are you using? (e.g. kind v0.24.0, GKE 1.35)
+      placeholder: e.g., kind v0.24.0 / k8s v1.31.0
+    validations:
+      required: false
+
+  - type: input
+    id: os-arch
+    attributes:
+      label: Host OS & Architecture
+      description: What OS and architecture are you running on? (e.g. Linux x86_64, macOS arm64)
+      placeholder: e.g., Linux 6.6 (x86_64), macOS 14.5 (arm64)
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs and Diagnostic Output
+      description: Please provide relevant logs from atelet, ateom, ate apiserver, or kubectl describe.
+      render: shell
+      placeholder: |
+        # Paste relevant logs or command output here
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other context, configuration files, or screenshots about the problem.
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      description: "Please confirm the following:"
+      options:
+        - label: I have searched existing issues and verified that this is not a duplicate.
+          required: true
+        - label: I have verified that this issue occurs on the latest commit on `main`.
+          required: false

@@ -57,7 +57,7 @@ const (
 	actorCertificateLifetime = time.Hour
 
 	// Where the probe pod finds the credential the suite mints for it. Kept in
-	// step with egressprobe.yaml.tmpl.
+	// step with testserver/egressprobe.yaml.tmpl.
 	unknownActorCredentialSecret = "egressprobe-unknown-actor"
 	unknownActorCredentialPath   = "/run/actor-identity-unknown/credential-bundle.pem"
 

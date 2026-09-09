@@ -21,7 +21,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -42,9 +41,7 @@ func TestGracefulWorkerTermination(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
-
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -52,9 +49,8 @@ func TestGracefulWorkerTermination(t *testing.T) {
 	actorID := "graceful-term-" + nsObj.Name
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
-			ActorTemplateNamespace: nsObj.Name,
-			ActorTemplateName:      at.Name,
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
+			ActorTemplate: e2e.TemplateRef(at),
 		},
 	}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
@@ -153,9 +149,7 @@ func TestGracefulWorkerTerminationTimeout(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
-
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -163,9 +157,8 @@ func TestGracefulWorkerTerminationTimeout(t *testing.T) {
 	actorID := "graceful-term-timeout-" + nsObj.Name
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
-			ActorTemplateNamespace: nsObj.Name,
-			ActorTemplateName:      at.Name,
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
+			ActorTemplate: e2e.TemplateRef(at),
 		},
 	}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
@@ -240,9 +233,7 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
-
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -250,9 +241,8 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	actorID := "graceful-term-suspend-" + nsObj.Name
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
-			ActorTemplateNamespace: nsObj.Name,
-			ActorTemplateName:      at.Name,
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
+			ActorTemplate: e2e.TemplateRef(at),
 		},
 	}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)

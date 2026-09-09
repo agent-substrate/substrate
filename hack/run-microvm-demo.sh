@@ -22,8 +22,8 @@
 #   1. hack/install-ate.sh --deploy-ate-system  (control plane)
 #   2. hack/install-microvm-deps.sh --install   (asset build/stage + cluster-wide
 #                                                microvm SandboxConfig)
-#   3. Apply the counter-microvm demo manifest (namespace + WorkerPool +
-#      ActorTemplate).
+#   3. Deploy the counter-microvm demo (worker pool manifest, atespace, and
+#      ActorTemplate through the ate API).
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set.
@@ -92,36 +92,37 @@ log "Installing micro-VM dependencies..."
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install
 
 # --- 3. apply the demo ------------------------------------------------------
-# Use ./hack/run-tool.sh ko so ko honors KO_DOCKER_REPO (the committed .ko.yaml base
-# is used as-is — no override). Only ko apply/create/delete/run accept args after
-# `--`; thread --context there (mirrors the run_ko helper in hack/install-ate.sh).
-log "Applying the counter-microvm demo manifest..."
-sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-    demos/counter/counter-microvm.yaml.tmpl \
-  | ./hack/run-tool.sh ko apply -f - ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
-
-# --- 4. next steps ----------------------------------------------------------
 KCTX_FLAG=""
 if [[ -n "${KUBECTL_CONTEXT}" ]]; then
   KCTX_FLAG=" --context=${KUBECTL_CONTEXT}"
 fi
+
+# The demo handler applies the worker pool, creates the atespace and the
+# ActorTemplate through the ate API, and waits for the golden snapshot;
+# dispatch through install-ate.sh like step 1.
+log "Deploying the counter-microvm demo (--deploy-demo-counter-microvm)..."
+if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-demo-counter-microvm
+else
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-demo-counter-microvm
+fi
+
 log "Demo applied. Next steps:"
 cat <<EOF
 
-  1. Wait for the ActorTemplate golden snapshot to be Ready:
-       kubectl${KCTX_FLAG} wait --for=condition=Ready \\
-         actortemplate/counter-microvm -n ate-demo-counter-microvm --timeout=600s
+  1. Inspect the actor template (its golden snapshot is already Ready):
+       kubectl ate${KCTX_FLAG} get actor-templates -a ate-demo-counter-microvm
 
-  2. Create an atespace and an actor (kubectl-ate; install with: go install ./cmd/kubectl-ate):
-       kubectl ate${KCTX_FLAG} create atespace demo
-       kubectl ate${KCTX_FLAG} create actor my-counter-1 -a demo \\
-         --template ate-demo-counter-microvm/counter-microvm
+  2. Create an actor in the template's atespace (kubectl-ate; install with: go install ./cmd/kubectl-ate):
+       kubectl ate${KCTX_FLAG} create actor my-counter-1 -a ate-demo-counter-microvm \\
+         --template counter-microvm
 
   3. Port-forward the atenet-router and curl the in-RAM counter:
        kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
-       curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" \\
+       curl -X POST \\
+         -H "Host: my-counter-1.ate-demo-counter-microvm.actors.resources.substrate.ate.dev" \\
          http://localhost:8000
 
-     Increment, suspend (kubectl ate suspend actor my-counter-1 -a demo), resume on another
-     worker, and confirm the count continues — the guest memory snapshot round-tripped.
+     Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-microvm),
+     resume on another worker, and confirm the count continues — the guest memory snapshot round-tripped.
 EOF

@@ -47,10 +47,12 @@ $ hack/install-ate-kind.sh --deploy-demo-egress-microvm # egress-microvm
 ```
 
 A handful of knobs override the class defaults, mostly for a cluster that
-installs the fixtures elsewhere: `E2E_TEMPLATE_NAMESPACE` / `E2E_TEMPLATE_NAME`
-point the counter fixture somewhere else, and `E2E_TEMPLATE_READY_TIMEOUT`
-replaces the golden-snapshot budget (90s on gVisor, 10m on micro-VM, where the
-golden is a cloud-hypervisor cold boot plus a checkpoint).
+installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
+`E2E_SUBSTRATE_TEMPLATE_NAME` / `E2E_SUBSTRATE_POOL_NAMESPACE` /
+`E2E_SUBSTRATE_POOL_NAME` point the counter fixture somewhere else, and
+`E2E_TEMPLATE_READY_TIMEOUT` replaces the golden-snapshot budget (90s on
+gVisor, 10m on micro-VM, where the golden is a cloud-hypervisor cold boot plus
+a checkpoint).
 
 ## After a failure
 

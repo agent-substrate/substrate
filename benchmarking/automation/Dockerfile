@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gettext-base \
         git \
         gnupg \
+        jq \
         make \
         python3 \
         python3-pip \

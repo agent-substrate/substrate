@@ -42,6 +42,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/atunnel"
@@ -71,8 +72,10 @@ var (
 	otlpRelaySocket = flag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	atunnelListenAddress        = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
-	atunnelConnectListenAddress = flag.String("atunnel-connect-listen-address", "0.0.0.0:444", "Address for actor ingress mTLS CONNECT")
+	// Every listen address here is an unspecified wildcard, which Go binds as a
+	// dual-stack socket.
+	atunnelListenAddress        = flag.String("atunnel-listen-address", ":443", "Address for actor ingress HTTPS")
+	atunnelConnectListenAddress = flag.String("atunnel-connect-listen-address", ":8443", "Address for actor ingress mTLS CONNECT")
 	workerCredentialBundle      = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
 	podIdentityTrustBundle      = flag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
 	atunnelClientIdentity       = flag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
@@ -282,6 +285,22 @@ func do(ctx context.Context) error {
 		// Only now stop the server, which blocks until any in-flight RPC (notably a
 		// concurrent CheckpointWorkload) has completed, then unblocks svr.Serve below.
 		svr.GracefulStop()
+	}()
+
+	// Report what this worker can supply. Nothing else tells the control plane,
+	// which places no Actor here until it lands, so a worker that cannot report
+	// is one that will sit idle forever. Report retries every failure it can
+	// outlast, including the window before the Worker record exists; anything
+	// that reaches here is a misconfiguration no restart-in-place will fix.
+	go func() {
+		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
+			SocketPath:           ateompath.CredentialBrokerSocket,
+			CredentialBundlePath: *workerCredentialBundle,
+			TrustBundlePath:      *podIdentityTrustBundle,
+		})
+		if err != nil && ctx.Err() == nil {
+			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
+		}
 	}()
 
 	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)

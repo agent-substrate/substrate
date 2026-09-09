@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -126,7 +127,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 8<<30)),
 				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 0)},
 			wantPod:     "w-big",
 		},
 		{
@@ -135,7 +136,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(4000, 1<<30)),
 				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 4<<30)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", MemoryBytes: 2 << 30},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(0, 2<<30)},
 			wantPod:     "w-big",
 		},
 		{
@@ -143,14 +144,25 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 0)},
 		},
 		{
-			name: "zero worker capacity is treated as unconstrained",
+			// A Worker reports everything it has, so one that has reported no
+			// compute has none: an Actor that asks for some is not placed here.
+			name: "a worker that reported no compute takes no actor that needs some",
 			fleet: fleet{
 				worker("w-unknown", "gvisor", "node-a", tierTwo),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000, MemoryBytes: 2 << 30},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 2<<30)},
+		},
+		{
+			// An Actor that declares nothing still fits: it asks for no
+			// dimension, so there is none the Worker must supply.
+			name: "a worker that reported no compute still takes an actor that needs none",
+			fleet: fleet{
+				worker("w-unknown", "gvisor", "node-a", tierTwo),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
 			wantPod:     "w-unknown",
 		},
 		{
@@ -165,6 +177,50 @@ func TestSchedule(t *testing.T) {
 			name:        "empty fleet",
 			fleet:       fleet{},
 			constraints: Constraints{SandboxClass: "gvisor"},
+		},
+		{
+			// A worker that has not said it can hold more admits one, so this is
+			// the behavior every worker has until an ateom reports otherwise.
+			name: "unset actor capacity admits one actor",
+			fleet: fleet{
+				worker("w-busy", "gvisor", "node-a", tierTwo, assigned("demo", "other")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+		},
+		{
+			name: "a worker below its actor ceiling still has room",
+			fleet: fleet{
+				worker("w-two", "gvisor", "node-a", tierTwo, withMaxActors(2), assigned("demo", "other")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-two",
+		},
+		{
+			name: "a worker at its actor ceiling is full however small the actor",
+			fleet: fleet{
+				worker("w-two", "gvisor", "node-a", tierTwo, withMaxActors(2),
+					assigned("demo", "a"), assigned("demo", "b")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+		},
+		{
+			// Placement is against what is left, not against the whole capacity:
+			// the resident actor already took half of it.
+			name: "capacity already allocated is not offered twice",
+			fleet: fleet{
+				worker("w-half", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "other", resources.CPUMemory(3000, 4<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 0)},
+		},
+		{
+			name: "what the residents left over is still placeable",
+			fleet: fleet{
+				worker("w-half", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "other", resources.CPUMemory(3000, 4<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 4<<30)},
+			wantPod:     "w-half",
 		},
 	}
 
@@ -287,9 +343,8 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		SandboxClass: class,
 		NodeName:     node,
 		Labels:       lbls,
-		Status: &ateapipb.WorkerStatus{
-			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-		},
+		// A stored Worker always carries a ceiling; CreateWorker reifies one.
+		Status: &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -304,17 +359,61 @@ func withState(state ateapipb.WorkerState) func(*ateapipb.Worker) {
 }
 
 func assigned(atespace, name string) func(*ateapipb.Worker) {
+	return assignedFor(atespace, name, nil)
+}
+
+// assignedFor books an actor that took resources from the worker, so a test can
+// place against what is left rather than against the whole capacity. Only the
+// allocation total, which is all placement reads: the assignments themselves are
+// their own records and never on the worker.
+func assignedFor(atespace, name string, took *ateapipb.Resources) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		w.Status.Assignment = &ateapipb.ActorAssignment{
-			Actor:    &ateapipb.ObjectRef{Atespace: atespace, Name: name},
-			ActorUid: atespace + "/" + name,
+		if w.Status == nil {
+			w.Status = &ateapipb.WorkerStatus{}
 		}
+		allocated, err := resources.AddToAllocated(w.Status.Allocated,
+			&ateapipb.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
+		if err != nil {
+			panic(err)
+		}
+		w.Status.Allocated = allocated
+	}
+}
+
+func withMaxActors(n int32) func(*ateapipb.Worker) {
+	return func(w *ateapipb.Worker) {
+		if w.Status == nil {
+			w.Status = &ateapipb.WorkerStatus{}
+		}
+		if w.Status.Capacity == nil {
+			w.Status.Capacity = &ateapipb.WorkerResources{}
+		}
+		w.Status.Capacity.Actors = n
 	}
 }
 
 func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		w.Capacity = &ateapipb.WorkerCapacity{CpuMilli: cpuMilli, MemoryBytes: memBytes}
+		if w.Status.Capacity == nil {
+			w.Status.Capacity = &ateapipb.WorkerResources{}
+		}
+		w.Status.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
+	}
+}
+
+// The two questions are separate because a caller re-validating a worker that
+// already holds the actor must not be told the placement is illegal just
+// because the actor it is asking about filled the worker up.
+func TestAppliesIgnoresRoom(t *testing.T) {
+	full := worker("w-full", "gvisor", "node-a", nil, withMaxActors(1), assigned("demo", "resident"))
+	constraints := Constraints{SandboxClass: "gvisor"}
+	s := New(fleet{full})
+
+	if !s.Applies(full, constraints) {
+		t.Error("Applies() = false for a full but otherwise legal worker, want true")
+	}
+	if s.HasRoom(full, constraints) {
+		t.Error("HasRoom() = true for a worker at its actor ceiling, want false")
 	}
 }
 
