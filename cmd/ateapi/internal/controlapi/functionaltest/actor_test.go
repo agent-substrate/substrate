@@ -1583,15 +1583,15 @@ type partialFailVolumePlugin struct {
 	deleted []string
 }
 
-func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	if strings.HasSuffix(name, "fail-vol2") {
-		return "", nil, fmt.Errorf("simulated volume creation failure")
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	if strings.HasSuffix(req.Name, "fail-vol2") {
+		return volume.CreateVolumeResponse{}, fmt.Errorf("simulated volume creation failure")
 	}
-	return "storage-" + name, parameters, nil
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1719,20 +1719,20 @@ type retrySuccessVolumePlugin struct {
 	deleted  []string
 }
 
-func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if strings.HasSuffix(name, "retry-vol2") {
+	if strings.HasSuffix(req.Name, "retry-vol2") {
 		r.attempts++
 		if r.attempts == 1 {
-			return "", nil, fmt.Errorf("simulated temporary volume creation failure")
+			return volume.CreateVolumeResponse{}, fmt.Errorf("simulated temporary volume creation failure")
 		}
 	}
-	return "storage-" + name, parameters, nil
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1869,19 +1869,19 @@ type attachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.attachAttempts++
 	if a.attachAttempts <= a.failUntil {
-		return fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
+		return volume.AttachVolumeResponse{}, fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
 	}
-	a.attachedNodes = append(a.attachedNodes, node)
-	return nil
+	a.attachedNodes = append(a.attachedNodes, req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (a *attachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2114,19 +2114,19 @@ func newMultiVolAttachPlugin(failVol string, failUntil int) *multiVolAttachPlugi
 	}
 }
 
-func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.attachAttempts[volumeID]++
-	if strings.Contains(volumeID, m.failVol) && m.attachAttempts[volumeID] <= m.failUntil {
-		return fmt.Errorf("simulated volume attach failure for %s on attempt %d", volumeID, m.attachAttempts[volumeID])
+	m.attachAttempts[req.VolumeID]++
+	if strings.Contains(req.VolumeID, m.failVol) && m.attachAttempts[req.VolumeID] <= m.failUntil {
+		return volume.AttachVolumeResponse{}, fmt.Errorf("simulated volume attach failure for %s on attempt %d", req.VolumeID, m.attachAttempts[req.VolumeID])
 	}
-	m.attachedNodes[volumeID] = append(m.attachedNodes[volumeID], node)
-	return nil
+	m.attachedNodes[req.VolumeID] = append(m.attachedNodes[req.VolumeID], req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (m *multiVolAttachPlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2285,15 +2285,15 @@ type detachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.attachedNodes = append(d.attachedNodes, node)
-	return nil
+	d.attachedNodes = append(d.attachedNodes, req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (d *detachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
