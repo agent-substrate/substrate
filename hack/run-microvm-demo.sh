@@ -120,7 +120,7 @@ cat <<EOF
   3. Port-forward the atenet-router and curl the in-RAM counter:
        kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
        curl -X POST \\
-         -H "Ate-Target-Actor: ate-demo-counter-microvm/my-counter-1" \
+         -H "ate-target-actor: ate-demo-counter-microvm/my-counter-1" \
          http://localhost:8000
 
      Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-microvm),

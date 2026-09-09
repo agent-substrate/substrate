@@ -30,7 +30,7 @@ just don't steer the search.*
 ## What it measures
 
 Every request exercises the **full production routing path** — created and
-warmed sandboxed actors, identity-header routing, the ext_proc routing
+warmed sandboxed actors, actor-reference header routing, the ext_proc routing
 decision, and the mTLS hop to the worker:
 
 ```mermaid
@@ -54,7 +54,7 @@ flowchart LR
         atunnel["atunnel :443"] --> glutton["glutton actor<br/>POST /ping :80"]
     end
 
-   svc -->|"HTTP :80<br/>Ate-Target-Actor"| envoy
+   svc -->|"HTTP :80<br/>ate-target-actor"| envoy
     extproc -->|ResumeActor| ateapi
     envoy -->|"mTLS :443"| atunnel
 ```
@@ -174,7 +174,7 @@ Start with `capacity.json`, drill into `stats.jsonl`:
 
 The fleet size is the entry's top-level `workerCount` (required): the
 benchmark warms one actor per worker, so it is also the number of glutton
-actors receiving rotated identity-header traffic. Everything else lives in the
+actors receiving rotated actor-reference header traffic. Everything else lives in the
 `nighthawk-ingress:` block:
 
 | Knob | Default | Meaning |

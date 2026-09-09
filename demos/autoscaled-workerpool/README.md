@@ -134,7 +134,7 @@ for that loop iteration and the demo's Atespace in the routing header:
 ```sh
 for attempt in {1..10}; do
   for i in {001..015}; do
-  curl -s -H "Ate-Target-Actor: ate-demo-autoscaled-workerpool/c$i" http://localhost:8000 >/dev/null
+  curl -s -H "ate-target-actor: ate-demo-autoscaled-workerpool/c$i" http://localhost:8000 >/dev/null
   done
   sleep 2
 done

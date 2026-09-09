@@ -85,7 +85,7 @@ the routing header from `--name` and `--atespace`:
 req.Header.Set(atenet.TargetActorHeader, actorRef.String())
 ```
 
-Any replacement HTTP client must send an equivalent `Ate-Target-Actor` header;
+Any replacement HTTP client must send an equivalent `ate-target-actor` header;
 the URL and `Host` header do not select the Actor.
 
 Once in the `sandbox>` prompt, you can run commands:

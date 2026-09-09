@@ -34,7 +34,7 @@ func ParseTargetActor(value string) (resources.ActorRef, error) {
 	atespace, actorName, ok := strings.Cut(value, "/")
 	if !ok || strings.Contains(actorName, "/") ||
 		!resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(actorName) {
-		return resources.ActorRef{}, fmt.Errorf("invalid actor target %q", value)
+		return resources.ActorRef{}, fmt.Errorf("invalid actor reference %q", value)
 	}
 	return resources.ActorRef{Atespace: atespace, Name: actorName}, nil
 }

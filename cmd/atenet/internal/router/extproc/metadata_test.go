@@ -16,8 +16,10 @@ package extproc
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -144,12 +146,11 @@ func TestRequestMetadataAttribute(t *testing.T) {
 
 func TestRequestMetadataHeaderIsCaseInsensitive(t *testing.T) {
 	md := NewRequestMetadata([]*corev3.HeaderValue{
-		{Key: "Ate-Target-Actor", Value: "team-a/actor-1"},
+		{Key: strings.ToUpper(atenet.TargetActorHeader), Value: "team-a/actor-1"},
 	}, nil)
 
 	for name, want := range map[string]string{
-		"ate-target-actor": "team-a/actor-1",
-		"Ate-Target-Actor": "team-a/actor-1",
+		atenet.TargetActorHeader: "team-a/actor-1",
 	} {
 		if got := md.Header(name); got != want {
 			t.Errorf("Header(%q) = %q, want %q", name, got, want)

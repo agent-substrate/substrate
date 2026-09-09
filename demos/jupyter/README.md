@@ -53,7 +53,7 @@ kubectl ate create actor jupyter-notebook -a ate-demo-jupyter --template jupyter
 
 ### 2. Access Jupyter via the Proxy!
 
-Substrate routes HTTP traffic using `Ate-Target-Actor: <atespace>/<actor>`.
+Substrate routes HTTP traffic using `ate-target-actor: <atespace>/<actor>`.
 A browser cannot add that header to an address-bar navigation or WebSocket
 upgrade, so this demo puts a lightweight NGINX reverse proxy (`jupyter-proxy`)
 between the browser and the Substrate router. Its configuration injects the
@@ -63,13 +63,13 @@ metadata, and preserves Jupyter's WebSocket upgrade:
 ```nginx
 proxy_pass http://atenet-router.ate-system.svc.cluster.local;
 proxy_set_header Host $http_host;
-proxy_set_header Ate-Target-Actor ate-demo-jupyter/jupyter-notebook;
+proxy_set_header ate-target-actor ate-demo-jupyter/jupyter-notebook;
 proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection "upgrade";
 ```
 
 The complete configuration is in `jupyter.yaml.tmpl`. If you create the Actor
-under another name or Atespace, update the `Ate-Target-Actor` value before
+under another name or Atespace, update the `ate-target-actor` value before
 deploying the proxy. Do not derive it from an untrusted browser-supplied header.
 
 1. **Port-forward the lightweight proxy to your local machine:**

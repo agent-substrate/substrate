@@ -158,5 +158,5 @@ for etcd.
 ## Networking
 
 - **Actor routing header**: a higher-order system sends traffic to the
-  Substrate router with `Ate-Target-Actor: <atespace>/<actor>`. The router
+  Substrate router with `ate-target-actor: <atespace>/<actor>`. The router
   uses this header to locate and resume the Actor.

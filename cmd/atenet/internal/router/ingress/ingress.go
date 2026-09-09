@@ -121,7 +121,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		return extproc.Result{Resume: string(resumeOutcome)}, mapResumeError(actorRef, err)
 	}
 
-	// Actor template coordinates, used as low-cardinality route-latency metric
+	// ActorTemplate reference, used as low-cardinality route-latency metric
 	// attributes.
 	res := extproc.Result{
 		TemplateAtespace: actor.GetActorTemplate().GetAtespace(),

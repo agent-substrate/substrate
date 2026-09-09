@@ -63,7 +63,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 Parking is **on by default** (`--parked-request-budget=5s`,
 `--parked-request-max=1024`), so the cluster you just deployed already parks.
-Every curl request below selects its Actor with `Ate-Target-Actor`; changing
+Every curl request below selects its Actor with `ate-target-actor`; changing
 the URL or `Host` does not select another Actor.
 
 ### A. Watch a 503 become a served request
@@ -71,8 +71,8 @@ the URL or `Host` does not select another Actor.
 Fill both workers by requesting two actors, leaving them `RUNNING`:
 
 ```bash
-curl -s -H "Ate-Target-Actor: ate-demo-parking/p1" http://localhost:8000
-curl -s -H "Ate-Target-Actor: ate-demo-parking/p2" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-parking/p1" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-parking/p2" http://localhost:8000
 
 kubectl ate get workers   # both workers are now bound to p1 and p2
 kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
@@ -83,7 +83,7 @@ the `curl` hangs while the router retries the resume:
 
 ```bash
 curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
-  -H "Ate-Target-Actor: ate-demo-parking/p3" http://localhost:8000
+  -H "ate-target-actor: ate-demo-parking/p3" http://localhost:8000
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1

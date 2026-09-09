@@ -699,7 +699,7 @@ message Atespace {
   ResourceMetadata metadata = 1;
 }
 
-// ObjectRef references a Substrate resource by its (atespace, name) identity.
+// ObjectRef references a Substrate resource by its atespace and name.
 message ObjectRef {
   // The atespace of the referenced resource. This field should be empty if the
   // target resource is global-scoped, but references to objects in the same

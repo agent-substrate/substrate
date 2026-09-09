@@ -343,7 +343,7 @@ Handles actor-aware routing and automatic re-animation.
 
   * **Ingress Routing**: `atenet-router` runs Envoy with an `ext_proc` external
     processor. A higher-order system connects to the router and supplies the
-    Actor target in `Ate-Target-Actor` as `<atespace>/<actor>`.
+    Actor target in `ate-target-actor` as `<atespace>/<actor>`.
     The ext_proc calls the Control Plane to resume the Actor and resolve its
     current worker assignment. `Host` remains application authority and does
     not select the Actor.
@@ -382,7 +382,7 @@ sequenceDiagram
     participant A as Actor
     participant Store as snapshot storage
 
-    Client->>Gateway: HTTP request (Ate-Target-Actor)
+    Client->>Gateway: HTTP request (ate-target-actor)
     Gateway->>API: ResumeActor(atespace, actor name)
     API->>Atelet: Restore
     Store-->>Atelet: download snapshot
@@ -509,7 +509,7 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     versions.
 
   * **Request Authorization**: The system currently performs **Identity-Aware
-    Routing** by extracting and validating the `Ate-Target-Actor` header at
+    Routing** by extracting and validating the `ate-target-actor` header at
     the gateway. This ensures requests are only
     routed to recognized, registered actors.
     Pluggable, granular authorization policies are planned for future

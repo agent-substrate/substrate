@@ -18,7 +18,7 @@ The video shows the three-agent rotation end-to-end: queued → running → comp
 
 This demo uses the ateapi control plane to manage Actors and does not send
 workload HTTP traffic through `atenet-router`, so it does not use
-the `Ate-Target-Actor` routing header.
+the `ate-target-actor` routing header.
 
 ## Audience
 

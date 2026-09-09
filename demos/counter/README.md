@@ -83,7 +83,7 @@ ordinary application metadata.
 1. Send an HTTP POST request to increment the counter:
 ```bash
 curl -X POST \
-  -H "Ate-Target-Actor: ate-demo-counter/my-counter-1" \
+  -H "ate-target-actor: ate-demo-counter/my-counter-1" \
   http://localhost:8000
 ```
 
@@ -122,7 +122,7 @@ proxy behavior wouldn't do:
 
 ```bash
 curl -p -x http://localhost:8001 \
-  --proxy-header "Ate-Target-Actor: ate-demo-counter/my-counter-1" \
+  --proxy-header "ate-target-actor: ate-demo-counter/my-counter-1" \
   http://my-counter-1:9090/
 ```
 

@@ -144,7 +144,7 @@ Container environment variables support literal `value` entries only. Values are
 ### Workload Connectivity
 
 A higher-order system reaches an actor through the **Substrate Router** by
-setting `Ate-Target-Actor` to `<atespace>/<actor>`. Substrate does not provide
+setting `ate-target-actor` to `<atespace>/<actor>`. Substrate does not provide
 DNS discovery for actors. This value selects the Actor; `Host` and HTTP/2
 `:authority` remain application metadata. Normal HTTP requirements still apply:
 clients must send a valid `Host` or `:authority`, usually derived automatically
@@ -163,7 +163,7 @@ authority. With curl, use `--proxy-header` instead of `-H`:
 
 ```bash
 curl --proxytunnel --proxy http://localhost:8001 \
-  --proxy-header "Ate-Target-Actor: my-atespace/my-actor" \
+  --proxy-header "ate-target-actor: my-atespace/my-actor" \
   http://actor-upstream:9090/
 ```
 

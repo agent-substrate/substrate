@@ -140,12 +140,12 @@ kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE
 # 3. Drive the Actor's egress through the ingress gateway.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
 curl -s -X POST http://localhost:8000/ \
-  -H 'Ate-Target-Actor: ate-demo-egress/egress-demo' \
+  -H 'ate-target-actor: ate-demo-egress/egress-demo' \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```
 
-The `Ate-Target-Actor` header selects the Actor receiving this ingress request. The
+The `ate-target-actor` header selects the Actor receiving this ingress request. The
 URL in the JSON body selects that Actor's egress destination and is unrelated
 to Actor routing.
 

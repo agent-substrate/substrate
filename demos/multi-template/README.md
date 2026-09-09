@@ -68,11 +68,11 @@ created.
 
 ```bash
 # counter binary
-curl -s -H "Ate-Target-Actor: ate-demo-multi-template-counter/c1" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-multi-template-counter/c1" http://localhost:8000
 # -> hello from: <ip> | preserved memory count: 1
 
 # fspersist binary
-curl -s -H "Ate-Target-Actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000
 # -> pod: <ip>
 #    --- history ---
 #    pod=<ip> | count=0 | time=<timestamp>
@@ -90,7 +90,7 @@ preserves that state across the snapshot/restore cycle:
 
 ```bash
 kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
-curl -s -H "Ate-Target-Actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000  # history persists; count keeps climbing
+curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000  # history persists; count keeps climbing
 ```
 
 ## How to Uninstall

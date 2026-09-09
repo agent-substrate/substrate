@@ -1966,7 +1966,7 @@ func (x *Atespace) GetMetadata() *ResourceMetadata {
 	return nil
 }
 
-// ObjectRef references a Substrate resource by its (atespace, name) identity.
+// ObjectRef references a Substrate resource by its atespace and name.
 type ObjectRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The atespace of the referenced resource. This field should be empty if the

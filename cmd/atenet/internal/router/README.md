@@ -103,7 +103,7 @@ reserved.
 ### keep it trustworthy
 
 An attribute is only as trustworthy as its source. The actor target carries
-client-selected routing coordinates, while the CONNECT authority carries
+the client-selected actor reference, while the CONNECT authority carries
 only the requested target port across tunnel re-entry. Security-sensitive
 attributes, such as actor identity, must come from dataplane-authenticated
 state rather than a client header.

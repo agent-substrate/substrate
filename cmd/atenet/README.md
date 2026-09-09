@@ -30,7 +30,7 @@ likely be split in the future for better scalability.)
   a separate process on the worker pod, not part of Envoy -- so the port to
   reach on the actor itself (its default port, or an arbitrary one for
   CONNECT) still travels as a real header, `atunnel.TargetPortHeader`.
-  `Ate-Target-Actor: <atespace>/<actor>` identifies the Actor independently of
+  `ate-target-actor: <atespace>/<actor>` identifies the Actor independently of
   `:authority`/`Host`.
 * Termination: the router drains gracefully on SIGTERM (readiness flip →
   endpoint propagation → Envoy admin-API drain → ext_proc drain), and the

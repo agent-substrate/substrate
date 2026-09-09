@@ -173,7 +173,7 @@ func TestServeHTTP(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
 			req.Host = tt.host
 			if tt.mixedCase {
-				req.Header.Set("Ate-Target-Actor", tt.atespace+"/"+tt.actorName)
+				req.Header.Set("ate-target-actor", tt.atespace+"/"+tt.actorName)
 			} else {
 				req.Header.Set(atenet.TargetActorHeader, tt.atespace+"/"+tt.actorName)
 			}

@@ -66,7 +66,7 @@ def test_traffic_template_shape():
     }
 
 
-def test_identity_rotation_covers_all_actors():
+def test_actor_reference_rotation_covers_all_actors():
     actor_names = [f"sb-{i}" for i in range(5)]
     spec = build(actor_names=actor_names)
     plugin = spec["nighthawk_traffic_template"]["request_source_plugin_config"]

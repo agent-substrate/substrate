@@ -114,7 +114,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
 curl -X POST \
-   -H "Ate-Target-Actor: ate-demo-counter/my-counter-1" \
+   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
    -i http://localhost:8000/
 ```
 

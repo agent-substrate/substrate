@@ -72,7 +72,7 @@ func TestClientDialContext(t *testing.T) {
 	}
 	for name := range gotRequest.Header {
 		if strings.HasPrefix(strings.ToLower(name), "x-ate-") {
-			t.Errorf("legacy identity header %q was sent", name)
+			t.Errorf("legacy actor-reference header %q was sent", name)
 		}
 	}
 	if got := gotRequest.Header.Get("Authorization"); got != "" {

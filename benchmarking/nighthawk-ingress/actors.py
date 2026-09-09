@@ -39,7 +39,7 @@ TOKEN_FILE = "/run/ateapi-token/token"
 # nh-<idx>.
 ATESPACE = "ingress-benchmark"
 
-# The glutton template's (atespace, name) identity; see
+# The glutton template reference; see
 # benchmarking/workloads/manifests/glutton-template.yaml.tmpl.
 TEMPLATE_ATESPACE = "benchmark-workloads"
 TEMPLATE_NAME = "glutton"
@@ -125,7 +125,7 @@ def _warm_actor(
             resp = session.post(
                 f"{router_url.rstrip('/')}/ping",
                 headers={
-                    "Ate-Target-Actor": f"{atespace}/{name}",
+                    "ate-target-actor": f"{atespace}/{name}",
                 },
                 data=b"",
                 timeout=10,

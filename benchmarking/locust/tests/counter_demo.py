@@ -135,7 +135,7 @@ class CounterUser(User):
         start_time = time.time()
         with tracer.start_as_current_span("RunCounter") as span:
             headers = {
-                "Ate-Target-Actor": f"{ATESPACE}/{self.actor_name}",
+                "ate-target-actor": f"{ATESPACE}/{self.actor_name}",
             }
             inject(headers)
             try:

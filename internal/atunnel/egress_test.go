@@ -296,7 +296,7 @@ func TestEgressEndToEnd(t *testing.T) {
 	}
 	for name := range req.Header {
 		if strings.HasPrefix(strings.ToLower(name), "x-ate-") {
-			t.Errorf("legacy identity header %q was sent", name)
+			t.Errorf("legacy actor-reference header %q was sent", name)
 		}
 	}
 

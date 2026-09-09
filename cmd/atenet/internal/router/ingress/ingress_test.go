@@ -69,7 +69,7 @@ func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
 	}
 	h := New(clientMock, ParkedRequestConfig{}, nil)
 	md := extproc.NewRequestMetadata([]*corev3.HeaderValue{
-		{Key: "Ate-Target-Actor", Value: "team-a/actor-1"},
+		{Key: "ate-target-actor", Value: "team-a/actor-1"},
 	}, nil)
 
 	if _, err := h.HandleRequestHeaders(context.Background(), md); err != nil {
