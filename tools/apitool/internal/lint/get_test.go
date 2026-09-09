@@ -62,3 +62,27 @@ func TestGetRequestSingleObjectRef_IgnoresCreateUpdate(t *testing.T) {
 		t.Errorf("Check() = %+v, want no findings for a Create method", findings)
 	}
 }
+
+// TestGetRequestSingleObjectRef_SubResource confirms a sub-resource's Get
+// request identifies the parent, not the (fixed-name) sub-resource itself.
+func TestGetRequestSingleObjectRef_SubResource(t *testing.T) {
+	tests := []struct {
+		name        string
+		reqFields   []model.Field
+		wantFinding bool
+	}{
+		{"named after the parent", []model.Field{{Name: "actor", TypeKind: "message", TypeFullName: "ateapi.ObjectRef"}}, false},
+		{"named after the sub-resource instead", []model.Field{{Name: "egress_policy", TypeKind: "message", TypeFullName: "ateapi.ObjectRef"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			findings, err := lint.GetRequestSingleObjectRef.Check(subResourceMethodAPI("Get", tt.reqFields))
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if got := len(findings) > 0; got != tt.wantFinding {
+				t.Errorf("Check() findings = %+v, want a finding: %v", findings, tt.wantFinding)
+			}
+		})
+	}
+}

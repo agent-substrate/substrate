@@ -68,3 +68,34 @@ func TestUpdateRequestShape_IgnoresGetDelete(t *testing.T) {
 		t.Errorf("Check() = %+v, want no findings for a Delete method", findings)
 	}
 }
+
+// TestUpdateRequestShape_SubResource confirms a sub-resource's Update
+// request must also embed an ObjectRef identifying the parent, named after
+// the parent resource.
+func TestUpdateRequestShape_SubResource(t *testing.T) {
+	resourceField := model.Field{Name: "egress_policy", TypeKind: "message", TypeFullName: "test.EgressPolicy"}
+	parentField := model.Field{Name: "actor", TypeKind: "message", TypeFullName: "ateapi.ObjectRef"}
+	misnamedParentField := model.Field{Name: "parent", TypeKind: "message", TypeFullName: "ateapi.ObjectRef"}
+
+	tests := []struct {
+		name        string
+		reqFields   []model.Field
+		wantFinding bool
+	}{
+		{"resource plus parent field", []model.Field{resourceField, parentField}, false},
+		{"missing the parent field", []model.Field{resourceField}, true},
+		{"parent field, wrong name", []model.Field{resourceField, misnamedParentField}, true},
+		{"two parent fields", []model.Field{resourceField, parentField, parentField}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			findings, err := lint.UpdateRequestShape.Check(subResourceMethodAPI("Update", tt.reqFields))
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if got := len(findings) > 0; got != tt.wantFinding {
+				t.Errorf("Check() findings = %+v, want a finding: %v", findings, tt.wantFinding)
+			}
+		})
+	}
+}
