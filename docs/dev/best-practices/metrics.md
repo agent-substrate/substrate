@@ -47,7 +47,7 @@ Every metric PR has these parts. Reviewers check for each one.
 |---|---|---|---|
 | How many times something happened, and its rate | Counter | `Int64Counter` | `ate.imagecache.requests` (`internal/imagecache/metrics.go`) |
 | How long or how big each occurrence was, as a distribution | Histogram | `Float64Histogram` (seconds), `Int64Histogram` (bytes) | `ate.actor.restore.duration` (`cmd/atelet/metrics.go`), `atelet.snapshot.size` (`cmd/atelet/main.go`) |
-| How many things exist right now, where the sum across labels is meaningful | UpDownCounter | `Int64UpDownCounter` (you own the increments), `Int64ObservableUpDownCounter` (you can enumerate them on demand) | `atenet.router.parking.active` (`cmd/atenet/internal/router/ingress/metrics.go`), `ate.workerpool.workers` (`cmd/ateapi/internal/controlapi/metrics.go`) |
+| How many things exist right now, where the sum across labels is meaningful | UpDownCounter | `Int64ObservableUpDownCounter` (you can enumerate them at collection time), `Int64UpDownCounter` (you own the increments; rare) | `ate.workerpool.workers` (`cmd/ateapi/internal/controlapi/metrics.go`) |
 | A level that is not summable across labels | Gauge | `Int64ObservableGauge` / `Float64ObservableGauge` | `ate.actor.stats.memory.working_set` (`cmd/atelet/statspoller.go`) |
 
 Rules of thumb:
@@ -55,7 +55,7 @@ Rules of thumb:
 * **Prefer the observable form for "how many exist".** An observable callback
   reads the truth (a cache, a map) at collection time, so a missed decrement
   cannot drift the value. Use a synchronous UpDownCounter only when there is no
-  state to enumerate, as the parking lot does.
+  state to enumerate at collection time.
 * **Do not use a gauge for something that is a sum.** Worker counts are an
   UpDownCounter because idle plus assigned is the pool and the pools sum to the
   fleet. Memory working set is a gauge because summing it across templates is
@@ -79,7 +79,14 @@ Rules of thumb:
 * Name the thing measured, not the aggregation. `duration`, `size`, `requests`,
   `workers`. The exporter adds `_seconds`, `_bytes`, `_total`, `_bucket` from
   the unit and the instrument kind; do not put them in the name.
-* Follow the upstream pattern when one exists: `*.operation.name`,
+* Use the upstream semantic-convention metric when one exists, with its name
+  (`rpc.server.call.duration` comes from `otelgrpc` as is). When upstream has
+  the shape but not the concept, mirror the shape under an `ate.*` name:
+  `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers` follow
+  `k8s.deployment.desired_pods` and `k8s.deployment.available_pods`, two
+  instruments rather than one labeled by state, because desired plus ready is
+  not a sum.
+* Follow the upstream attribute pattern when one exists: `*.operation.name`,
   `*.duration`, `error.type`. Reuse an upstream attribute verbatim rather than
   aliasing it into `ate.*` (`error.type` and `file.name` are used as is).
 * A label key that belongs to a subsystem is rooted at the subsystem
@@ -154,6 +161,13 @@ group or filter by multiplies the series count for nothing. Three or four
 labels is typical; the restore histogram, with the most, has eight, and several
 are conditional.
 
+The SDK enforces a hard limit: 2000 distinct attribute sets per instrument per
+process. Past that, every new combination is folded into one series carrying
+only `otel.metric.overflow=true`, silently. Multiply the value counts of your
+labels and keep the product well under that; the limit is per process, so a
+per-template label on atelet is bounded by the templates one node hosts, not
+the cluster.
+
 ## Reporting failures
 
 One instrument carries success and failure. Success is the absence of the
@@ -173,8 +187,9 @@ failure key. Which key depends on where the error is classified:
 Separate a caller that gave up from a failure: `context.Canceled` and
 `context.DeadlineExceeded` are their own outcomes (`cancelled`, `timeout`) on
 the outcome label, not `error`. And record them: a cancelled pull still ran.
-Use `context.WithoutCancel(ctx)` on the `Record` or `Add` call for that case,
-so the SDK does not drop the measurement along with the request.
+Pass the request context to `Add` and `Record` as it is, cancelled or not. The
+SDK never checks `ctx.Err()`, so nothing is dropped; the only thing it reads
+from the context is the span, so an exemplar can point at the sampled trace.
 
 ## Writing the Go
 
@@ -222,7 +237,7 @@ func (i *Instruments) recordRequest(ctx context.Context, kind, outcome string, e
 	if outcome == ateattr.SnapshotCacheOutcomeError {
 		attrs = append(attrs, ateattr.ErrorTypeKey.String(errorType(err)))
 	}
-	i.requests.Add(context.WithoutCancel(ctx), 1, metric.WithAttributes(attrs...))
+	i.requests.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 ```
 
@@ -399,10 +414,12 @@ permitted value as a member. Put a new group beside `registry.ate.imagecache`:
 
 The `annotations.substrate` block is substrate's own and Weaver passes it
 through: `emitted_by` names the binaries, `code_anchor` the file that creates
-the instrument, `cuj` the question an operator answers with it, and `buckets`
-the histogram boundaries. Fill all applicable fields, including `buckets` for a
-histogram; a reader of the registry should not
-need the code.
+the instrument, `cuj` the question an operator answers with it,
+`golden_signals` which of the four golden signals it serves (`latency`,
+`traffic`, `errors`, `saturation`; list every one that applies, so a dashboard
+author can find the saturation instruments without reading each brief), and
+`buckets` the histogram boundaries. Fill all applicable fields, including
+`buckets` for a histogram; a reader of the registry should not need the code.
 
 Attributes that already exist (`ate.template.name`, `ate.snapshot.kind`,
 `error.type`, `ate.failure.reason`) are referenced with `ref:`, not redefined.
@@ -446,7 +463,7 @@ three instruments, not one:
 |---|---|---|
 | Is it helping? | `ate.snapshotcache.requests` counter, by outcome | `ate.snapshotcache.outcome`, `ate.snapshot.kind`, `error.type` on error |
 | What does a miss cost? | `ate.snapshotcache.fill.duration` histogram, seconds, `snapshotPhaseBuckets` | `ate.snapshot.kind`, `ate.template.atespace`, `ate.template.name`, failure pair on failure |
-| How much does it hold? | `ate.snapshotcache.size` observable gauge, bytes, plus an `ate.snapshotcache.evictions` counter | `ate.snapshot.kind`; evictions also carry an `ate.snapshotcache.eviction.reason` enum (`capacity`, `ttl`, `explicit`) |
+| How much does it hold? | `ate.snapshotcache.size` observable UpDownCounter, bytes (bytes per kind sum to the node's cache size, so not a gauge), plus an `ate.snapshotcache.evictions` counter | `ate.snapshot.kind`; evictions also carry an `ate.snapshotcache.eviction.reason` enum (`capacity`, `ttl`, `explicit`) |
 
 What is deliberately **not** a label: the snapshot name or digest (one per
 actor, unbounded), the object-storage URL (a path), the actor. The per-actor
@@ -461,13 +478,13 @@ Steps, in order:
    `SnapshotKindKey`, `TemplateAtespaceKey`, `TemplateNameKey`, `ErrorTypeKey`,
    `FailureAttributes`.
 2. `cmd/atelet/snapshotcache/metrics.go`: the `Instruments` struct, constructor
-   against a `metric.Meter`, nil-safe `record*` methods, the gauge callback
+   against a `metric.Meter`, nil-safe `record*` methods, the size callback
    reading the cache's index under its existing lock.
 3. `cmd/atelet/main.go`: build the instruments with `otel.Meter("atelet")` and
    pass them into the cache.
 4. `cmd/atelet/snapshotcache/metrics_test.go`: `ManualReader`; a miss-then-hit
    test, a failure test asserting `error.type` only on `error`, an eviction
-   test per reason, a gauge test after an insert and an evict.
+   test per reason, a size test after an insert and an evict.
 5. `docs/metrics/registry/metrics.yaml`: the `registry.ate.snapshotcache`
    attribute group and the four metric entries; `hack/verify/metrics.sh`.
 6. `docs/metrics/substrate.yaml`: the existing `image cache cost and eviction`
