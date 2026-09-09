@@ -47,8 +47,7 @@ const (
 )
 
 // injectedTrustFile is where ateapi's auto-injected egress trust volume
-// lands. Nothing in probe.yaml.tmpl declares it; that absence is what the
-// injection e2e asserts on.
+// lands. probe.yaml.tmpl must not declare a mount there.
 const injectedTrustFile = "/run/substrate/certs/egress-mitm.ate.dev.pem"
 
 // procStatus is where the kernel reports this process's capability sets. Asking

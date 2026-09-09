@@ -352,17 +352,16 @@ atenet_egress_manifest() {
   fi
 }
 
-# patch_ate_api_server_manifest adds --inject-egress-trust-bundle under
-# --experimental-use-sdsmint, guarded like ensure_egress_mitm_ca_pool_secret.
-# Spliced into the args because kustomize strips comment markers.
+# patch_ate_api_server_manifest adds --inject-egress-trust-bundle to the
+# rendered ate-api-server args under --experimental-use-sdsmint. Spliced by
+# awk rather than marked in the manifest: kustomize strips comments.
 patch_ate_api_server_manifest() {
   if [[ "$(atenet_router)" == "agentgateway" || "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
     cat
     return
   fi
-  # index() rather than a regex class: the runner's awk is mawk, whose
-  # POSIX-class support is unreliable, and a non-matching pattern degrades
-  # to a silent passthrough.
+  # index() rather than a regex class: the CI runner's awk is mawk, whose
+  # POSIX-class support is unreliable, and a miss would be a silent passthrough.
   awk '{
     print
     i = index($0, "- --egress-gateway-address=")
@@ -373,9 +372,8 @@ patch_ate_api_server_manifest() {
 }
 
 # wait_for_ate_api_server_drain waits for replaced ate-api-server pods to
-# exit. rollout status returns once they are marked deleted, but
-# --drain-delay keeps them serving new RPCs after SIGTERM — work sequenced
-# right after could still get specs built under the previous flags.
+# exit. rollout status returns once they are marked deleted, but they keep
+# serving RPCs under the old flags for --drain-delay after SIGTERM.
 wait_for_ate_api_server_drain() {
   for _ in $(seq 1 30); do
     run_kubectl -n ate-system get pods -l app=ate-api-server \

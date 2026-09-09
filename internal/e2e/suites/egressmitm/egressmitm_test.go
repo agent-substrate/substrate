@@ -134,16 +134,9 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 }
 
-// TestActorEgressTrustAutoInjection deploys the probe WITHOUT WithTrustBundle,
-// so anything it reads arrived through ateapi's injection: the injected file
-// must match the published bundle (as cert sets — sanitization shuffles), and
-// TLS through the MITM gateway must complete with only those anchors.
-//
-// Needs --inject-egress-trust-bundle on ateapi as well as the sdsmint
-// gateway. Locally:
-//
-//	hack/install-ate-kind.sh --deploy-ate-system --experimental-use-sdsmint
-//	E2E_EGRESS_MITM=1 hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
+// TestActorEgressTrustAutoInjection deploys the probe without WithTrustBundle,
+// so the only anchors it can read arrived through ateapi's injection. Setup is
+// as for TestActorEgressMITMTrust.
 func TestActorEgressTrustAutoInjection(t *testing.T) {
 	if os.Getenv("E2E_EGRESS_MITM") == "" {
 		t.Skip("needs the sdsmint (MITM) egress gateway and injection: deploy with hack/install-ate-kind.sh --deploy-ate-system --experimental-use-sdsmint, then set E2E_EGRESS_MITM=1")
@@ -155,8 +148,8 @@ func TestActorEgressTrustAutoInjection(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	// Without WithTrustBundle, DeployProbe does not wait for the bundle, but
-	// under injection even this fixture's golden boot fails closed without it.
+	// DeployProbe waits for the bundle only under WithTrustBundle, but the
+	// injected golden boot needs it too.
 	e2e.EnsureEgressTrustBundle(t, ctx, clients)
 
 	ns, _ := e2e.DeployProbe(t, env["BUCKET_NAME"], "inject")
@@ -239,8 +232,7 @@ type readFileResponse struct {
 }
 
 // probeReadFile reads a file inside the actor via the probe, with the same
-// router-warmup retry as probeFetch. Probe-level read failures are results,
-// returned for the caller to assert on.
+// retry and error semantics as probeFetch.
 func probeReadFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ns, id, filePath string) readFileResponse {
 	t.Helper()
 	path := "/readfile?path=" + url.QueryEscape(filePath)

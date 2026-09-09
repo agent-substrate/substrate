@@ -24,18 +24,13 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// Spelled as literals rather than imported: these names are the contract
-// with atelet's allowlist and workload readers, so constant drift must fail
-// here.
+// Literals rather than shared constants, so a rename in ateapi fails here.
 const (
 	injectedTrustVolume    = "trust.ate.dev"
 	injectedTrustBundle    = "egress-mitm.ate.dev"
 	injectedTrustMountPath = "/run/substrate/certs"
 )
 
-// TestActorLifecycle_InjectsEgressTrustVolume asserts the injected volume on
-// every wire spec across resume, pause, resume-from-paused, and suspend,
-// pinning that each RPC flow builds its spec through the injection wrapper.
 func TestActorLifecycle_InjectsEgressTrustVolume(t *testing.T) {
 	ns := namespaceForTest("ns-egress-trust")
 	tc := setupTestWithEgressTrustInjection(t, ns)
@@ -82,8 +77,7 @@ func TestActorLifecycle_InjectsEgressTrustVolume(t *testing.T) {
 	if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
-	// The type assertion is what proves this is the suspend checkpoint and
-	// not a stale read of the pause one.
+	// The type check tells the suspend checkpoint from a stale read of the pause one.
 	suspend := lockedCheckpoint(tc)
 	if got := suspend.GetType(); got != ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL {
 		t.Errorf("suspend checkpoint type = %v, want CHECKPOINT_TYPE_EXTERNAL", got)

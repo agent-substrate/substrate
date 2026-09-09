@@ -169,8 +169,6 @@ func TestInjectEgressTrustVolume(t *testing.T) {
 			},
 		},
 		{
-			// Guards the prefix boundary: a sibling sharing the reserved
-			// path as a string prefix is not below it.
 			name: "a sibling path sharing the prefix does not opt out",
 			spec: &ateletpb.WorkloadSpec{
 				Containers: []*ateletpb.Container{
@@ -196,9 +194,6 @@ func TestInjectEgressTrustVolume(t *testing.T) {
 			},
 		},
 		{
-			// An image volume above the path opts out where a durableDir
-			// does not: the micro-VM runtime binds image volumes after
-			// systemInfo, which would shadow the injected mount.
 			name: "an image volume mounted above the reserved path opts the container out",
 			spec: &ateletpb.WorkloadSpec{
 				Containers: []*ateletpb.Container{
@@ -256,8 +251,6 @@ func TestInjectEgressTrustVolumeRejectsReservedName(t *testing.T) {
 	}
 }
 
-// TestWorkloadSpecInjectsEgressTrustVolume pins that the ActorWorkflow
-// wrapper applies injection if and only if the deployment enables it.
 func TestWorkloadSpecInjectsEgressTrustVolume(t *testing.T) {
 	template := &ateapipb.ActorTemplate{
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},

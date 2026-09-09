@@ -106,9 +106,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 	return setupTestFull(t, ns, nil, false)
 }
 
-// setupTestWithEgressTrustInjection is setupTest with the service running
-// --inject-egress-trust-bundle, for pinning the injected volume in the wire
-// spec of each atelet RPC.
+// setupTestWithEgressTrustInjection is setupTest with --inject-egress-trust-bundle on.
 func setupTestWithEgressTrustInjection(t *testing.T, ns string) *testContext {
 	t.Helper()
 	return setupTestFull(t, ns, nil, true)

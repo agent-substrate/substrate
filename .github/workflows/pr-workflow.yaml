@@ -120,21 +120,16 @@ jobs:
         E2E_SANDBOX_CLASS: microvm
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Deploy MITM egress (sdsmint)
-      # Swap the passthrough egress gateway for the sdsmint variant (minting
-      # per-SNI leaves from the egress-mitm-ca-pool, created here if missing)
-      # and redeploy ate-api-server with --inject-egress-trust-bundle. The
-      # system deploy rather than --deploy-ate-apiserver: only it renders
-      # through the kind overlay that points ate-api-server at rustfs.
-      # Cluster-wide, so it must come AFTER the standard lanes: intercepted
-      # egress breaks their passthrough assumptions, and every actor started
-      # from here on needs the bundle.
+      # Swap the passthrough egress gateway for the sdsmint variant and redeploy
+      # ate-api-server with --inject-egress-trust-bundle. --deploy-ate-system
+      # rather than --deploy-ate-apiserver: only the former renders the kind
+      # overlay that points ate-api-server at rustfs. Cluster-wide, so it must
+      # come AFTER the standard lanes, whose passthrough assumptions it breaks.
       run: hack/install-ate-kind.sh --deploy-ate-system --experimental-use-sdsmint
     - name: Recreate counter demos under injection
-      # The pre-flip counter goldens no longer match the injected spec, and
-      # gVisor refuses mismatched restores (see docs/api-guide.md). The deploy
-      # keeps an existing template, so tear both demos down first. Demo-only
-      # steps on purpose: redeploying the control plane here would drop the
-      # sdsmint switch and the flag with it.
+      # Goldens captured before the flag flip no longer match the injected
+      # spec, and gVisor refuses mismatched restores (see docs/api-guide.md).
+      # The deploy keeps an existing template, so tear the demos down first.
       run: |
         hack/install-ate-kind.sh --delete-demo-counter --delete-demo-counter-microvm
         hack/install-ate-kind.sh --deploy-demo-counter --deploy-demo-counter-microvm

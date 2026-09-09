@@ -24,16 +24,12 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// The auto-injected egress trust volume: under --inject-egress-trust-bundle
-// every actor trusts the egress gateway's MITM CA with nothing declared in
-// its template.
+// The volume every actor receives under --inject-egress-trust-bundle.
 const (
-	// The '.' makes template collisions impossible: template volume names
-	// must be DNS labels, and ate.dev names belong to the platform.
+	// Template volume names are DNS labels, so the '.' rules out a collision.
 	egressTrustVolumeName = "trust.ate.dev"
 
-	// Must stay on atelet's allowlist (cmd/atelet/trustbundle.go), which
-	// resolves it at every Run/Restore and fails actor start without it.
+	// Must stay on atelet's trust bundle allowlist (cmd/atelet/trustbundle.go).
 	egressTrustBundleName = "egress-mitm.ate.dev"
 
 	egressTrustMountPath  = "/run/substrate/certs"
@@ -86,9 +82,9 @@ func injectEgressTrustVolume(ctx context.Context, actor *ateapipb.Actor, spec *a
 	return nil
 }
 
-// ownsEgressTrustPath returns the template mount that opts ctr out: at or
-// below the reserved path, or an image volume above it — micro-VM bind
-// ordering would shadow one mount with the other either way.
+// ownsEgressTrustPath returns the template mount that opts ctr out: one at or
+// below the reserved path, or an image volume above it, which the micro-VM
+// runtime binds after systemInfo and so would shadow the injected mount.
 func ownsEgressTrustPath(spec *ateletpb.WorkloadSpec, ctr *ateletpb.Container) (string, bool) {
 	for _, m := range ctr.GetVolumeMounts() {
 		mp := m.GetMountPath()
