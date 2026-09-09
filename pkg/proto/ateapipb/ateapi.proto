@@ -330,6 +330,27 @@ message ExternalVolume {
   // +k8s:eachKey=+k8s:maxLength=128
   // +k8s:eachVal=+k8s:maxLength=256
   map<string, string> volume_context = 5;
+
+  // publish_context contains metadata returned by the CSI driver when the
+  // volume was attached to a node, which the node plugin needs to complete the
+  // mount (e.g. the device path for AWS EBS). It is empty for drivers that do
+  // not implement attachment, and is only meaningful for
+  // publish_context_node. Keys and values are the driver's own, so they are
+  // only bounded, not validated.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
+  map<string, string> publish_context = 6;
+
+  // publish_context_node is the node the volume was attached to when
+  // publish_context was captured. Attachment metadata is node-specific, so a
+  // publish_context recorded for a different node must not be reused.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=253
+  string publish_context_node = 7;
 }
 
 message Actor {

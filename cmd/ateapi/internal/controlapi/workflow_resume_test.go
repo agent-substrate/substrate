@@ -28,10 +28,13 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 // TestSchedulerRecordable guards the retry-dedup rule: the assignment loop
@@ -1173,5 +1176,87 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 	if !src.SnapshotURI.IsZero() || !src.GoldenSnapshotURI.IsZero() {
 		t.Errorf("expected empty snapshot source, got %+v", src)
+	}
+}
+
+type volumeUpdateStore struct {
+	store.Interface
+}
+
+func (s *volumeUpdateStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	return s.Interface.UpdateActor(ctx, actorRef, precondition, mutate)
+}
+
+// publishContextVolumePlugin hands back a fixed publish context, standing in
+// for a driver whose node plugin needs attachment metadata.
+type publishContextVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	publishContext map[string]string
+}
+
+func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{PublishContext: p.publishContext}, nil
+}
+
+func TestEnsureVolumesAttached_PersistsPublishContext(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				{VolumeName: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+				{VolumeName: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			},
+		},
+	})
+	actor, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+
+	st := &volumeUpdateStore{Interface: persistence}
+	w := &ActorWorkflow{
+		store: st,
+		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
+			"mock": &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}},
+		}},
+	}
+	worker := &ateapipb.Worker{NodeName: "node-1"}
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{Name: "mounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+			{Name: "unmounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+		},
+		Containers: []*ateapipb.Container{
+			{Name: "main", Image: "img", VolumeMounts: []*ateapipb.VolumeMount{{Name: "mounted", MountPath: "/data"}}},
+		},
+	}
+
+	want := []*ateapipb.ExternalVolume{
+		{
+			VolumeName:         "mounted",
+			StorageVolumeId:    "storage-mounted",
+			VolumeType:         "mock",
+			Status:             ateapipb.ExternalVolume_STATUS_CREATED,
+			PublishContext:     map[string]string{"devicePath": "/dev/xvdba"},
+			PublishContextNode: "node-1",
+		},
+		{
+			VolumeName:      "unmounted",
+			StorageVolumeId: "storage-unmounted",
+			VolumeType:      "mock",
+			Status:          ateapipb.ExternalVolume_STATUS_CREATED,
+		},
+	}
+	got, err := w.ensureVolumesAttached(ctx, actorRef, actor, worker, tmpl)
+	if err != nil {
+		t.Fatalf("ensureVolumesAttached: %v", err)
+	}
+
+	if diff := cmp.Diff(want, got.GetStatus().GetActorVolumes(), protocmp.Transform()); diff != "" {
+		t.Errorf("actor volumes mismatch (-want +got):\n%s", diff)
 	}
 }

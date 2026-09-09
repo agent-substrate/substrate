@@ -3134,6 +3134,81 @@ func Validate_ExternalVolume(
 		errs = append(errs, fn(fldPath.Child("volume_context"), obj.VolumeContext, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ExternalVolume.PublishContext
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj map[string]string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 128)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.EachMapVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalVolume) map[string]string {
+				return oldObj.PublishContext
+			})
+		errs = append(errs, fn(fldPath.Child("publish_context"), obj.PublishContext, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ExternalVolume.PublishContextNode
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalVolume) *string {
+				return &oldObj.PublishContextNode
+			})
+		errs = append(errs, fn(fldPath.Child("publish_context_node"), &obj.PublishContextNode, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
