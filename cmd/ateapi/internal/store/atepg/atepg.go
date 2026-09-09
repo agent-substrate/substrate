@@ -617,6 +617,30 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 // --- Actors ---
 
 func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	return createActor(ctx, p.pool, actor)
+}
+
+func (p *Persistence) CreateActorWithEgressPolicy(ctx context.Context, actor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	dbActor, err := createActor(ctx, tx, actor)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := createEgressPolicy(ctx, tx, resources.ActorRefFromActor(dbActor), policy); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return dbActor, nil
+}
+
+func createActor(ctx context.Context, q querier, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
@@ -632,7 +656,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
@@ -877,13 +901,17 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 // --- Actor egress policies ---
 
 func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+	return createEgressPolicy(ctx, p.pool, actorRef, policy)
+}
+
+func createEgressPolicy(ctx context.Context, q querier, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.EgressPolicy)
 	dbPolicy.Metadata = newCreateMetadata(actorRef.Atespace, "default")
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling egress policy: %w", err)
 	}
-	_, err = p.pool.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO actor_egress_policies (atespace, actor_name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`, actorRef.Atespace, actorRef.Name, dbPolicy.GetMetadata().GetUid(), dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {

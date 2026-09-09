@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -745,6 +746,18 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 				tc.mutate(req.EgressPolicy)
 			}
 			assertValidateErr(t, validateCreateActorEgressPolicyRequest(context.Background(), req), tc.want)
+			t.Run("actor template", func(t *testing.T) {
+				template := validActorTemplate(func(template *ateapipb.ActorTemplate) {
+					template.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: req.EgressPolicy.Rules}
+				})
+				var want field.ErrorList
+				for _, err := range tc.want {
+					copy := *err
+					copy.Field = strings.Replace(copy.Field, "egress_policy", "actor_template.default_egress_policy", 1)
+					want = append(want, &copy)
+				}
+				assertValidateErr(t, validateCreateActorTemplateRequest(context.Background(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: template}), want)
+			})
 		})
 	}
 }

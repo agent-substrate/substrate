@@ -145,7 +145,7 @@ func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.V
 	return csiPlugin, nil
 }
 
-// ServiceImpl implements store.Interface and provides the "middleware" layer
+// ServiceImpl implements serviceStore and provides the "middleware" layer
 // between the RPC and storage layers.  It enforces invariants and validation
 // rules, and may implement additional logic beyond the storage layer.
 //
@@ -158,7 +158,7 @@ type ServiceImpl struct {
 	storageClassLister storagev1listers.StorageClassLister
 }
 
-var _ store.Interface = (*ServiceImpl)(nil)
+var _ serviceStore = (*ServiceImpl)(nil)
 
 // newServiceImpl creates an instance of the service's middleware
 // implementation layer.

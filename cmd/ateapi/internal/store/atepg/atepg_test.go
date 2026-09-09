@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -727,6 +728,70 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 	}
 	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)
+	}
+}
+
+func TestCreateActorWithEgressPolicy_Rollback(t *testing.T) {
+	p := setupPostgresPersistence(t)
+	ctx := t.Context()
+	createTestAtespace(t, p, "team-a")
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "fail-policy"},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	policy := &ateapipb.EgressPolicy{
+		Rules: []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}},
+	}
+	wantActor, wantPolicy := proto.CloneOf(actor), proto.CloneOf(policy)
+	ref := resources.ActorRefFromActor(actor)
+
+	// Fail the policy INSERT after the actor INSERT has succeeded.
+	if _, err := p.pool.Exec(ctx, `ALTER TABLE actor_egress_policies ADD CONSTRAINT fail_policy CHECK (actor_name <> 'fail-policy')`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := p.pool.Exec(context.Background(), `ALTER TABLE actor_egress_policies DROP CONSTRAINT IF EXISTS fail_policy`); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := p.CreateActorWithEgressPolicy(ctx, actor, policy); err == nil {
+		t.Fatal("expected policy insert failure")
+	}
+	if _, err := p.GetActor(ctx, ref); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("actor after rollback: %v, want ErrNotFound", err)
+	}
+	if _, err := p.GetEgressPolicy(ctx, ref); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("policy after rollback: %v, want ErrNotFound", err)
+	}
+	if _, err := p.pool.Exec(ctx, `ALTER TABLE actor_egress_policies DROP CONSTRAINT fail_policy`); err != nil {
+		t.Fatal(err)
+	}
+	created, err := p.CreateActorWithEgressPolicy(ctx, actor, policy)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	got, err := p.GetActor(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("stored actor mismatch (-created +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantActor, actor, protocmp.Transform()); diff != "" {
+		t.Errorf("actor input mutated (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantPolicy, policy, protocmp.Transform()); diff != "" {
+		t.Errorf("policy input mutated (-want +got):\n%s", diff)
+	}
+	if _, err := p.CreateActorWithEgressPolicy(ctx, actor, &ateapipb.EgressPolicy{}); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("duplicate create: %v, want ErrAlreadyExists", err)
+	}
+	storedPolicy, err := p.GetEgressPolicy(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(policy.Rules, storedPolicy.Rules, protocmp.Transform()); diff != "" {
+		t.Errorf("stored rules mismatch (-want +got):\n%s", diff)
 	}
 }
 
