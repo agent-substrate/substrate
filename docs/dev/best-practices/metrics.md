@@ -32,7 +32,9 @@ Every metric PR has these parts. Reviewers check for each one.
 1. The instrument is defined in Go against an injected `metric.Meter`, nil-safe,
    with a `metric.WithUnit` and a `metric.WithDescription`.
 2. Every label key is a constant in `internal/ateattr`, and every label value
-   comes from a bounded set defined there.
+   either comes from a bounded set defined there or names an operator-created
+   object (a template, a pool), as the [label rules](#labels-and-cardinality)
+   allow.
 3. A unit test collects the instrument through a `ManualReader` and asserts the
    name, the unit, the instrument kind, and the label set of each series.
 4. The instrument and any new attribute are in
@@ -54,8 +56,12 @@ Rules of thumb:
 
 * **Prefer the observable form for "how many exist".** An observable callback
   reads the truth (a cache, a map) at collection time, so a missed decrement
-  cannot drift the value. Use a synchronous UpDownCounter only when there is no
-  state to enumerate at collection time.
+  cannot drift the value, and a group that disappears from the source
+  disappears from the export. Use a synchronous UpDownCounter when the change
+  is in hand on the request path and a series that keeps its last value after
+  the final decrement is acceptable, as the router's parked-request count
+  does; use the observable form when you would otherwise be mirroring a data
+  structure you already own.
 * **UpDownCounter or gauge: ask who owns the total.** The test is not whether
   the value can be summed. Ask whether the labels split a total you own and
   account for, or only tag separate readings you sampled from elsewhere. Idle
@@ -81,8 +87,12 @@ Rules of thumb:
   binary, and the same measurement from a second component then needs a second
   name.
 * Name the thing measured, not the aggregation. `duration`, `size`, `requests`,
-  `workers`. The exporter adds `_seconds`, `_bytes`, `_total`, `_bucket` from
-  the unit and the instrument kind; do not put them in the name.
+  `workers`. The unit lives in the instrument's unit field and each exporter
+  renders it its own way: the Prometheus exporter on kind appends `_seconds`,
+  `_bytes` and `_total`, while Cloud Monitoring keeps the OpenTelemetry name
+  and appends only `_bucket`, `_count` and `_sum` (the shipped dashboards
+  query `atelet.snapshot.size_bucket`). Put no unit or aggregation in the
+  name, or one backend will show it twice.
 * Use the upstream semantic-convention metric when one exists, with its name
   (`rpc.server.call.duration` comes from `otelgrpc` as is). When upstream has
   the shape but not the concept, mirror the shape under an `ate.*` name:
@@ -276,22 +286,25 @@ inside an existing component adds nothing there.
 ### Observable instruments
 
 For a value you can enumerate at collection time, register a callback rather
-than tracking increments:
+than tracking increments. This is the size instrument from the
+[worked example](#worked-example-a-node-local-snapshot-cache):
 
 ```go
-// The cache owns its index and the counts per kind partition it, so this is
+const sizeMetric = "ate.snapshotcache.size"
+
+// The cache owns its index and the bytes per kind partition it, so this is
 // an UpDownCounter and not a gauge; observable, because the index is the
 // truth to read at collection time.
-entries, err := meter.Int64ObservableUpDownCounter(entriesMetric,
-	metric.WithUnit("{snapshot}"),
-	metric.WithDescription("Number of snapshots held in the node-local cache."))
+size, err := meter.Int64ObservableUpDownCounter(sizeMetric,
+	metric.WithUnit("By"),
+	metric.WithDescription("Bytes of snapshots held in the node-local cache, by snapshot kind."))
 ...
 _, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-	for kind, n := range cache.countByKind() {
-		o.ObserveInt64(entries, n, metric.WithAttributes(ateattr.SnapshotKindKey.String(kind)))
+	for kind, n := range cache.bytesByKind() {
+		o.ObserveInt64(size, n, metric.WithAttributes(ateattr.SnapshotKindKey.String(kind)))
 	}
 	return nil
-}, entries)
+}, size)
 ```
 
 Two habits from `RegisterWorkerCount` in ateapi: if the source is unavailable,
