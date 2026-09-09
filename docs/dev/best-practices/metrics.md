@@ -49,8 +49,8 @@ Every metric PR has these parts. Reviewers check for each one.
 |---|---|---|---|
 | How many times something happened, and its rate | Counter | `Int64Counter` | `ate.imagecache.requests` (`internal/imagecache/metrics.go`) |
 | How long or how big each occurrence was, as a distribution | Histogram | `Float64Histogram` (seconds), `Int64Histogram` (bytes) | `ate.actor.restore.duration` (`cmd/atelet/metrics.go`), `atelet.snapshot.size` (`cmd/atelet/main.go`) |
-| How many things exist right now, in a total you own and account for, split by labels | UpDownCounter | `Int64ObservableUpDownCounter` (you can enumerate them at collection time), `Int64UpDownCounter` (you own the increments; rare) | `ate.workerpool.workers` (`cmd/ateapi/internal/controlapi/metrics.go`) |
-| A reading you sample from somewhere else and only tag with labels, whether or not a dashboard sums it | Gauge | `Int64ObservableGauge` / `Float64ObservableGauge` | `ate.actor.stats.memory.working_set` (`cmd/atelet/statspoller.go`) |
+| How many things exist right now, in a tally you keep by adding and subtracting | UpDownCounter | `Int64ObservableUpDownCounter` (you can enumerate them at collection time), `Int64UpDownCounter` (you own the increments; rare) | `ate.workerpool.workers` (`cmd/ateapi/internal/controlapi/metrics.go`) |
+| A dial you read and write down, without adding or subtracting anything | Gauge | `Int64ObservableGauge` / `Float64ObservableGauge` | `ate.actor.stats.memory.working_set` (`cmd/atelet/statspoller.go`) |
 
 Rules of thumb:
 
