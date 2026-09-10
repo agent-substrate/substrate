@@ -714,6 +714,30 @@ func setupAteletOnNode(t *testing.T, tc *testContext, name, nodeName string) {
 	}
 }
 
+// deregisterWorker drops the Worker record for the named pod, as the syncer
+// would once it saw the pod go. The Worker is named after the pod UID, but the
+// caller only has the pod name, so it is found by the pod fields it carries.
+//
+// It reports errors instead of failing the test, so it is safe to call from a
+// FakeAteletServer hook, which runs on a server goroutine.
+func deregisterWorker(tc *testContext, ns string, pod string) error {
+	resp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		return fmt.Errorf("listing workers: %w", err)
+	}
+	for _, w := range resp.GetWorkers() {
+		if w.GetWorkerNamespace() != ns || w.GetWorkerPod() != pod {
+			continue
+		}
+		if _, err := tc.client.DeleteWorker(context.Background(), &ateapipb.DeleteWorkerRequest{
+			Worker: &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
+		}); err != nil {
+			return fmt.Errorf("deregistering worker %s: %w", w.GetMetadata().GetName(), err)
+		}
+	}
+	return nil
+}
+
 func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 	t.Helper()
 	err := tc.k8sClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{
@@ -723,22 +747,8 @@ func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 		t.Fatalf("failed to delete worker pod %s: %v", name, err)
 	}
 
-	// Deregister the Worker, as the syncer would once it saw the pod go. The
-	// Worker is named after the pod UID, but the caller only has the pod name,
-	// so it is found by the pod fields it carries.
-	resp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
-	if err != nil {
-		t.Fatalf("failed to list workers: %v", err)
-	}
-	for _, w := range resp.GetWorkers() {
-		if w.GetWorkerNamespace() != ns || w.GetWorkerPod() != name {
-			continue
-		}
-		if _, err := tc.client.DeleteWorker(context.Background(), &ateapipb.DeleteWorkerRequest{
-			Worker: &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
-		}); err != nil {
-			t.Fatalf("failed to deregister worker %s: %v", w.GetMetadata().GetName(), err)
-		}
+	if err := deregisterWorker(tc, ns, name); err != nil {
+		t.Fatal(err)
 	}
 
 	err = wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {

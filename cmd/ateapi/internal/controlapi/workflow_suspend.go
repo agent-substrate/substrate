@@ -344,9 +344,13 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records the in-progress snapshot as the actor's
 // external snapshot, and commits SUSPENDED with the assignment cleared in a
-// single update. It re-reads the actor first so an out-of-band transition
-// (e.g. the syncer crashing the actor after its worker died) is not
-// overwritten: with no assignment left there is nothing to finalize.
+// single update.
+//
+// The actor must still be SUSPENDING: a worker deletion racing the checkpoint
+// crashes it out of band, and finalizing over that would publish an external
+// snapshot on a CRASHED actor. The re-read below is for a fresh version, so it
+// hands the version guard the crashed record itself; the requirement rides
+// down into the commit instead.
 func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
@@ -356,14 +360,13 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// that stalls and then fails still reports where the time went; steps not
 	// reached (or skipped) log zero.
 	start := time.Now()
-	var dGetActor, dReleaseWorker, dRefetchActor, dReleaseSnapshot, dUpdateActor time.Duration
+	var dGetActor, dReleaseWorker, dReleaseSnapshot, dUpdateActor time.Duration
 	defer func() {
 		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
 			slog.Any("actor", actorRef),
 			slog.Duration("total", time.Since(start)),
 			slog.Duration("get_actor", dGetActor),
 			slog.Duration("release_worker", dReleaseWorker),
-			slog.Duration("refetch_actor", dRefetchActor),
 			slog.Duration("release_snapshot", dReleaseSnapshot),
 			slog.Duration("update_actor", dUpdateActor))
 	}()
@@ -374,20 +377,12 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if err != nil {
 		return nil, err
 	}
-
-	// 1. Free the worker (if it hasn't been freed yet)
+	// 1. Free the worker (if it hasn't been freed yet). Releasing touches only
+	// the assignment, never the Actor row, so latestActor stays current.
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
 		t = time.Now()
 		_, _, err := releaseWorker(ctx, w.store, latestActor)
 		dReleaseWorker = time.Since(t)
-		if err != nil {
-			return nil, err
-		}
-
-		// Re-fetch the actor now that the worker is freed.
-		t = time.Now()
-		latestActor, err = w.store.GetActor(ctx, actorRef)
-		dRefetchActor = time.Since(t)
 		if err != nil {
 			return nil, err
 		}
@@ -422,19 +417,28 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 
 	// 4. Commit the actor.
 	t = time.Now()
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-		if snapshotName != "" {
-			// The recorded URI is under the actor's own prefix, so the actor now
-			// owns its external snapshot rather than borrowing the tag's it may
-			// have been created from.
-			toUpdate.Status.ExternalSnapshot = proto.CloneOf(externalSnapshot)
-			toUpdate.Status.InProgressSnapshotName = ""
-		}
-		toUpdate.Status.WorkerAssignment = nil
-		toUpdate.Status.LocalSnapshotInfo = nil
-		return nil
-	})
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor),
+		func(toUpdate *ateapipb.Actor) error {
+			// Inside the mutation, not against latestActor: UpdateActor passes the
+			// record the write would land on, and abandons the write when this
+			// returns an error.
+			if got := toUpdate.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+				return status.Errorf(codes.FailedPrecondition,
+					"FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)",
+					actorRef, got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
+			}
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+			if snapshotName != "" {
+				// The recorded URI is under the actor's own prefix, so the actor now
+				// owns its external snapshot rather than borrowing the tag's it may
+				// have been created from.
+				toUpdate.Status.ExternalSnapshot = proto.CloneOf(externalSnapshot)
+				toUpdate.Status.InProgressSnapshotName = ""
+			}
+			toUpdate.Status.WorkerAssignment = nil
+			toUpdate.Status.LocalSnapshotInfo = nil
+			return nil
+		})
 	dUpdateActor = time.Since(t)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {

@@ -398,6 +398,60 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 	}
 }
 
+// TestEnsureSuspendedFinalized_PreservesConcurrentCrash verifies a worker
+// deletion that crashes the actor mid-checkpoint is not finalized over. The
+// step re-reads the actor for a fresh version, so it would arm its own
+// precondition from the crashed record, and committing would publish an
+// external snapshot on a CRASHED actor.
+//
+// Only the actor record is asserted on. The step collects the snapshot it
+// replaces before the commit it turns out not to reach, so the replaced
+// objects are gone by the time this returns; putting the collection after the
+// commit is a separate change.
+func TestEnsureSuspendedFinalized_PreservesConcurrentCrash(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+
+	const snapshotName = "2026-01-01t00-00-00z-new"
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	})
+
+	previous := mustActorSnapshotURI(t, template, actor, "old")
+	fresh := mustActorSnapshotURI(t, template, actor, snapshotName)
+	objects.PutSnapshot(t, previous, "manifest.json")
+	objects.PutSnapshot(t, fresh, "manifest.json")
+
+	// The state releaseBoundActor leaves behind: crashed, assignment cleared,
+	// with the in-progress checkpoint kept for debugging.
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		s.InProgressSnapshotName = snapshotName
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
+	})
+
+	_, err := w.ensureSuspendedFinalized(ctx, actorRef, template)
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("ensureSuspendedFinalized error = %v (code %v), want FailedPrecondition", err, got)
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED preserved", stored.GetStatus().GetState())
+	}
+	if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != previous.String() {
+		t.Errorf("external snapshot = %q, want the one the actor last suspended to, %q", got, previous)
+	}
+}
+
 // errObjectStore stands in for object storage being unreachable.
 var errObjectStore = errors.New("object storage is unavailable")
 

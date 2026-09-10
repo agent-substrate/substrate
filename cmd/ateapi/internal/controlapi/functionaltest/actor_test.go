@@ -2128,6 +2128,52 @@ func TestResumeActor_ErrorStillStampsRefSpanIdentity(t *testing.T) {
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, "missing")
 }
 
+// TestResumeActor_WorkerDeletedDuringRestore verifies a worker going away
+// mid-restore leaves the actor CRASHED rather than RUNNING. Finalizing the
+// resume over the crash would record a worker assignment that no longer
+// exists, and the actor would never be rescheduled: a resume of a RUNNING
+// actor short-circuits, so every routed request would fail on an empty
+// worker IP.
+func TestResumeActor_WorkerDeletedDuringRestore(t *testing.T) {
+	ns := namespaceForTest("ns-resume-worker-gone")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// The pod's node reboots while the guest is being restored onto it, and the
+	// worker is deregistered before the workflow gets to commit RUNNING.
+	var deregisterErr error
+	tc.fakeAtelet.OnRestore = func() { deregisterErr = deregisterWorker(tc, ns, "worker-1") }
+
+	_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if deregisterErr != nil {
+		t.Fatalf("deregistering the worker mid-restore: %v", deregisterErr)
+	}
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "FinalizeRunning prerequisite not met")
+
+	got, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if assignment := got.GetStatus().GetWorkerAssignment(); assignment != nil {
+		t.Errorf("worker assignment = %v, want none: the worker it named is gone", assignment)
+	}
+}
+
 // TestSuspendActor tests the full workflow of suspending a running actor.
 // Workflow:
 // 1. Creates a mock ActorTemplate.
@@ -3046,6 +3092,68 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	}
 	if getResp.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("expected worker_assignment to be cleared, got %v", getResp.GetStatus().GetWorkerAssignment())
+	}
+}
+
+// TestSuspendActor_WorkerDeletedDuringCheckpoint verifies a worker going away
+// mid-checkpoint leaves the actor CRASHED, still recording the snapshot it
+// last suspended to, rather than SUSPENDED on a checkpoint whose node is gone.
+func TestSuspendActor_WorkerDeletedDuringCheckpoint(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-worker-gone")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// A first clean round trip, to give the actor an external snapshot the
+	// interrupted suspend below would otherwise replace and collect.
+	resume := func() {
+		t.Helper()
+		if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+			t.Fatalf("ResumeActor failed: %v", err)
+		}
+	}
+	resume()
+	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	lastGoodSnapshot := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if lastGoodSnapshot == "" {
+		t.Fatalf("first suspend wrote no external snapshot: %v", suspended)
+	}
+	resume()
+
+	// The pod's node reboots while the guest is being checkpointed onto it, and
+	// the worker is deregistered before the workflow gets to commit SUSPENDED.
+	var deregisterErr error
+	tc.fakeAtelet.OnCheckpoint = func() { deregisterErr = deregisterWorker(tc, ns, "worker-1") }
+
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if deregisterErr != nil {
+		t.Fatalf("deregistering the worker mid-checkpoint: %v", deregisterErr)
+	}
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "FinalizeSuspended prerequisite not met")
+
+	got, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if uri := got.GetStatus().GetExternalSnapshot().GetSnapshotUri(); uri != lastGoodSnapshot {
+		t.Errorf("external snapshot = %q, want the last one the actor suspended to, %q", uri, lastGoodSnapshot)
 	}
 }
 

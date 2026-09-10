@@ -117,11 +117,17 @@ type FakeAteletServer struct {
 
 	CheckpointCalled  bool
 	CheckpointRequest *ateletpb.CheckpointRequest
+	// OnCheckpoint runs while the checkpoint is in flight, which is where a
+	// test drives whatever it wants racing the suspend workflow. It runs
+	// without Lock held, so a hook may call back into the control plane.
+	OnCheckpoint func()
 
 	RestoreCalled  bool
 	RestoreRequest *ateletpb.RestoreRequest
 	FailRestore    error
 	RestoreDelay   time.Duration
+	// OnRestore is the resume-side counterpart of OnCheckpoint.
+	OnRestore func()
 
 	UploadCalled  bool
 	UploadRequest *ateletpb.UploadPausedCheckpointRequest
@@ -164,11 +170,13 @@ func (f *FakeAteletServer) Reset() {
 
 	f.CheckpointCalled = false
 	f.CheckpointRequest = nil
+	f.OnCheckpoint = nil
 
 	f.RestoreCalled = false
 	f.RestoreRequest = nil
 	f.FailRestore = nil
 	f.RestoreDelay = 0
+	f.OnRestore = nil
 
 	f.UploadCalled = false
 	f.UploadRequest = nil
@@ -207,28 +215,36 @@ func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*
 
 func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	f.Lock.Lock()
-	defer f.Lock.Unlock()
-
 	f.CheckpointCalled = true
 	f.CheckpointRequest = proto.Clone(req).(*ateletpb.CheckpointRequest)
+	err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri())
+	onCheckpoint := f.OnCheckpoint
+	f.Lock.Unlock()
 
-	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
+	if err != nil {
 		return nil, err
+	}
+	if onCheckpoint != nil {
+		onCheckpoint()
 	}
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
 func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
 	f.Lock.Lock()
-	defer f.Lock.Unlock()
-
 	f.RestoreCalled = true
 	f.RestoreRequest = proto.Clone(req).(*ateletpb.RestoreRequest)
-	if f.RestoreDelay > 0 {
-		time.Sleep(f.RestoreDelay)
+	delay, failRestore, onRestore := f.RestoreDelay, f.FailRestore, f.OnRestore
+	f.Lock.Unlock()
+
+	if onRestore != nil {
+		onRestore()
 	}
-	if f.FailRestore != nil {
-		return nil, f.FailRestore
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	if failRestore != nil {
+		return nil, failRestore
 	}
 	return &ateletpb.RestoreResponse{}, nil
 }

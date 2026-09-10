@@ -123,6 +123,47 @@ func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
 	}
 }
 
+// TestFinalizeRunning_PreservesConcurrentCrash verifies a worker deletion that
+// crashes the actor mid-restore is not overwritten with RUNNING. The step
+// re-reads the actor for a fresh version, so it would arm its own precondition
+// from the crashed record and commit straight over it; the result would be a
+// RUNNING actor with no worker, unroutable and never rescheduled because a
+// resume of a RUNNING actor short-circuits.
+func TestFinalizeRunning_PreservesConcurrentCrash(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
+		Status: &ateapipb.ActorStatus{
+			// The state releaseBoundActor leaves behind: crashed, with the
+			// assignment cleared.
+			State:                   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			CurrentActorTemplateUid: "tmpl-uid-1",
+		},
+	})
+	w := &ActorWorkflow{store: persistence}
+
+	_, err := w.finalizeRunning(ctx, actorRef, &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl-1", Uid: "tmpl-uid-2"},
+	})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("finalizeRunning error = %v (code %v), want FailedPrecondition", err, got)
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED preserved", stored.GetStatus().GetState())
+	}
+	if uid := stored.GetStatus().GetCurrentActorTemplateUid(); uid != "tmpl-uid-1" {
+		t.Errorf("CurrentActorTemplateUid = %q, want the crashed record's %q", uid, "tmpl-uid-1")
+	}
+}
+
 // bindErrorStore fails every claim, standing in for a worker that moved or
 // vanished between the pick and the write.
 type bindErrorStore struct {

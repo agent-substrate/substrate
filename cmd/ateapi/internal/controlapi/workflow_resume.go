@@ -789,6 +789,13 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
 // recording the template the sprint booted with.
+//
+// The actor must still be RESUMING: a worker deletion racing the restore
+// crashes it and clears its assignment, and committing RUNNING over that would
+// leave a running actor with no worker — unroutable, and never rescheduled
+// because a resume of a RUNNING actor short-circuits. The fresh read the step
+// needs for its version is also what makes the version guard blind to that
+// crash, so the requirement rides down into the update.
 func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
@@ -798,13 +805,22 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil, err
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
-		// Recorded at sprint start so the next resume can detect a repointed
-		// template by UID; the snapshot it restores was taken under this one.
-		toUpdate.Status.CurrentActorTemplateUid = actorTemplate.GetMetadata().GetUid()
-		return nil
-	})
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor),
+		func(toUpdate *ateapipb.Actor) error {
+			// Inside the mutation, not against latestActor: UpdateActor passes the
+			// record the write would land on, and abandons the write when this
+			// returns an error.
+			if got := toUpdate.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+				return status.Errorf(codes.FailedPrecondition,
+					"FinalizeRunning prerequisite not met for Actor: %s (got: %v, want %s)",
+					actorRef, got, ateapipb.ActorState_ACTOR_STATE_RESUMING)
+			}
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+			// Recorded at sprint start so the next resume can detect a repointed
+			// template by UID; the snapshot it restores was taken under this one.
+			toUpdate.Status.CurrentActorTemplateUid = actorTemplate.GetMetadata().GetUid()
+			return nil
+		})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
