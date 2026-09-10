@@ -227,7 +227,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
-			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+			ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
 				SnapshotUri: testSnapshotURI,
 			},
 		},
