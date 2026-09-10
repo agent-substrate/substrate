@@ -1148,11 +1148,11 @@ type EgressRule struct {
 	// +k8s:optional
 	// +k8s:unionMember
 	Hostnames *HostnameRule `protobuf:"bytes,1,opt,name=hostnames,proto3" json:"hostnames,omitempty"`
-	// Matches when the original destination IP belongs to any configured block.
+	// Matches when the original destination IP belongs to any configured prefix.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	IpBlocks *IPBlockRule `protobuf:"bytes,2,opt,name=ip_blocks,json=ipBlocks,proto3" json:"ip_blocks,omitempty"`
+	Cidrs *CIDRRule `protobuf:"bytes,2,opt,name=cidrs,proto3" json:"cidrs,omitempty"`
 	// Matches every destination.
 	//
 	// +k8s:optional
@@ -1199,9 +1199,9 @@ func (x *EgressRule) GetHostnames() *HostnameRule {
 	return nil
 }
 
-func (x *EgressRule) GetIpBlocks() *IPBlockRule {
+func (x *EgressRule) GetCidrs() *CIDRRule {
 	if x != nil {
-		return x.IpBlocks
+		return x.Cidrs
 	}
 	return nil
 }
@@ -1291,8 +1291,8 @@ func (x *HostnameRule) GetEffects() *EgressRuleEffects {
 	return nil
 }
 
-// IPBlockRule matches requests by original destination IP address.
-type IPBlockRule struct {
+// CIDRRule matches requests by original destination IP address.
+type CIDRRule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Canonical IPv4 or IPv6 CIDR prefixes. IPv4 uses dotted-decimal notation,
 	// such as "192.0.2.0/24". IPv6 uses lowercase compressed notation, such as
@@ -1308,20 +1308,20 @@ type IPBlockRule struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *IPBlockRule) Reset() {
-	*x = IPBlockRule{}
+func (x *CIDRRule) Reset() {
+	*x = CIDRRule{}
 	mi := &file_ateapi_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *IPBlockRule) String() string {
+func (x *CIDRRule) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*IPBlockRule) ProtoMessage() {}
+func (*CIDRRule) ProtoMessage() {}
 
-func (x *IPBlockRule) ProtoReflect() protoreflect.Message {
+func (x *CIDRRule) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1333,12 +1333,12 @@ func (x *IPBlockRule) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use IPBlockRule.ProtoReflect.Descriptor instead.
-func (*IPBlockRule) Descriptor() ([]byte, []int) {
+// Deprecated: Use CIDRRule.ProtoReflect.Descriptor instead.
+func (*CIDRRule) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *IPBlockRule) GetCidrs() []string {
+func (x *CIDRRule) GetCidrs() []string {
 	if x != nil {
 		return x.Cidrs
 	}
@@ -6905,16 +6905,16 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06status\x18\a \x01(\v2\x13.ateapi.ActorStatusR\x06status\"n\n" +
 	"\fEgressPolicy\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12(\n" +
-	"\x05rules\x18\x02 \x03(\v2\x12.ateapi.EgressRuleR\x05rules\"\x9c\x01\n" +
+	"\x05rules\x18\x02 \x03(\v2\x12.ateapi.EgressRuleR\x05rules\"\x92\x01\n" +
 	"\n" +
 	"EgressRule\x122\n" +
-	"\thostnames\x18\x01 \x01(\v2\x14.ateapi.HostnameRuleR\thostnames\x120\n" +
-	"\tip_blocks\x18\x02 \x01(\v2\x13.ateapi.IPBlockRuleR\bipBlocks\x12(\n" +
+	"\thostnames\x18\x01 \x01(\v2\x14.ateapi.HostnameRuleR\thostnames\x12&\n" +
+	"\x05cidrs\x18\x02 \x01(\v2\x10.ateapi.CIDRRuleR\x05cidrs\x12(\n" +
 	"\x03all\x18\x03 \x01(\v2\x16.google.protobuf.EmptyR\x03all\"_\n" +
 	"\fHostnameRule\x12\x1a\n" +
 	"\bpatterns\x18\x01 \x03(\tR\bpatterns\x123\n" +
-	"\aeffects\x18\x02 \x01(\v2\x19.ateapi.EgressRuleEffectsR\aeffects\"#\n" +
-	"\vIPBlockRule\x12\x14\n" +
+	"\aeffects\x18\x02 \x01(\v2\x19.ateapi.EgressRuleEffectsR\aeffects\" \n" +
+	"\bCIDRRule\x12\x14\n" +
 	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\"j\n" +
 	"\x11EgressRuleEffects\x12U\n" +
 	"\x15inject_static_headers\x18\x01 \x03(\v2!.ateapi.CredentialHeaderInjectionR\x13injectStaticHeaders\"r\n" +
@@ -7319,7 +7319,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*EgressPolicy)(nil),                       // 15: ateapi.EgressPolicy
 	(*EgressRule)(nil),                         // 16: ateapi.EgressRule
 	(*HostnameRule)(nil),                       // 17: ateapi.HostnameRule
-	(*IPBlockRule)(nil),                        // 18: ateapi.IPBlockRule
+	(*CIDRRule)(nil),                           // 18: ateapi.CIDRRule
 	(*EgressRuleEffects)(nil),                  // 19: ateapi.EgressRuleEffects
 	(*CredentialHeaderInjection)(nil),          // 20: ateapi.CredentialHeaderInjection
 	(*ActorStatus)(nil),                        // 21: ateapi.ActorStatus
@@ -7428,7 +7428,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	12,  // 12: ateapi.EgressPolicy.metadata:type_name -> ateapi.ResourceMetadata
 	16,  // 13: ateapi.EgressPolicy.rules:type_name -> ateapi.EgressRule
 	17,  // 14: ateapi.EgressRule.hostnames:type_name -> ateapi.HostnameRule
-	18,  // 15: ateapi.EgressRule.ip_blocks:type_name -> ateapi.IPBlockRule
+	18,  // 15: ateapi.EgressRule.cidrs:type_name -> ateapi.CIDRRule
 	109, // 16: ateapi.EgressRule.all:type_name -> google.protobuf.Empty
 	19,  // 17: ateapi.HostnameRule.effects:type_name -> ateapi.EgressRuleEffects
 	20,  // 18: ateapi.EgressRuleEffects.inject_static_headers:type_name -> ateapi.CredentialHeaderInjection

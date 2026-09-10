@@ -1067,6 +1067,56 @@ func Validate_Atespace(
 	return errs
 }
 
+// Validate_CIDRRule validates an instance of CIDRRule according
+// to declarative validation rules in the API schema.
+func Validate_CIDRRule(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.CIDRRule) (errs field.ErrorList) {
+
+	{ // field ateapipb.CIDRRule.Cidrs
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_CIDRRule_Cidrs(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.CIDRRule) []string {
+				return oldObj.Cidrs
+			})
+		errs = append(errs, fn(fldPath.Child("cidrs"), obj.Cidrs, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_Capabilities validates an instance of Capabilities according
 // to declarative validation rules in the API schema.
 func Validate_Capabilities(
@@ -2605,7 +2655,7 @@ func Validate_EgressPolicy(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_EgressRule_ = validate.NewUnionMembership(validate.NewUnionMember("hostnames"), validate.NewUnionMember("ip_blocks"), validate.NewUnionMember("all"))
+var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_EgressRule_ = validate.NewUnionMembership(validate.NewUnionMember("hostnames"), validate.NewUnionMember("cidrs"), validate.NewUnionMember("all"))
 
 // Validate_EgressRule validates an instance of EgressRule according
 // to declarative validation rules in the API schema.
@@ -2624,7 +2674,7 @@ func Validate_EgressRule(
 			if obj == nil {
 				return false
 			}
-			return obj.IpBlocks != nil
+			return obj.Cidrs != nil
 		},
 		func(obj *ateapipb.EgressRule) bool {
 			if obj == nil {
@@ -2665,10 +2715,10 @@ func Validate_EgressRule(
 		errs = append(errs, fn(fldPath.Child("hostnames"), obj.Hostnames, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.EgressRule.IpBlocks
+	{ // field ateapipb.EgressRule.Cidrs
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.IPBlockRule,
+			obj, oldObj *ateapipb.CIDRRule,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2685,14 +2735,14 @@ func Validate_EgressRule(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_IPBlockRule(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_CIDRRule(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.EgressRule) *ateapipb.IPBlockRule {
-				return oldObj.IpBlocks
+			func(oldObj *ateapipb.EgressRule) *ateapipb.CIDRRule {
+				return oldObj.Cidrs
 			})
-		errs = append(errs, fn(fldPath.Child("ip_blocks"), obj.IpBlocks, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("cidrs"), obj.Cidrs, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.EgressRule.All
@@ -3748,56 +3798,6 @@ func Validate_HostnameRule(
 				return oldObj.Effects
 			})
 		errs = append(errs, fn(fldPath.Child("effects"), obj.Effects, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_IPBlockRule validates an instance of IPBlockRule according
-// to declarative validation rules in the API schema.
-func Validate_IPBlockRule(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.IPBlockRule) (errs field.ErrorList) {
-
-	{ // field ateapipb.IPBlockRule.Cidrs
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj []string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_IPBlockRule_Cidrs(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			// lists with set semantics require unique values
-			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.IPBlockRule) []string {
-				return oldObj.Cidrs
-			})
-		errs = append(errs, fn(fldPath.Child("cidrs"), obj.Cidrs, oldVal, oldObj != nil)...)
 	}
 
 	return errs

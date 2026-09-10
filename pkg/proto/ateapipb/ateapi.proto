@@ -415,11 +415,11 @@ message EgressRule {
   // +k8s:unionMember
   HostnameRule hostnames = 1;
 
-  // Matches when the original destination IP belongs to any configured block.
+  // Matches when the original destination IP belongs to any configured prefix.
   //
   // +k8s:optional
   // +k8s:unionMember
-  IPBlockRule ip_blocks = 2;
+  CIDRRule cidrs = 2;
 
   // Matches every destination.
   //
@@ -460,8 +460,8 @@ message HostnameRule {
   EgressRuleEffects effects = 2;
 }
 
-// IPBlockRule matches requests by original destination IP address.
-message IPBlockRule {
+// CIDRRule matches requests by original destination IP address.
+message CIDRRule {
   // Canonical IPv4 or IPv6 CIDR prefixes. IPv4 uses dotted-decimal notation,
   // such as "192.0.2.0/24". IPv6 uses lowercase compressed notation, such as
   // "2001:db8::/32". Bits after the prefix length must be zero. The rule

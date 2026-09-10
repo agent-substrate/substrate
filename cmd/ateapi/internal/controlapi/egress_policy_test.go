@@ -569,18 +569,18 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "canonical IPv4 CIDR",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"192.0.2.0/24"}}}
+			p.Rules[0] = &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"192.0.2.0/24"}}}
 		},
 	}, {
 		name: "canonical IPv6 CIDR",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"2001:db8::/32"}}}
+			p.Rules[0] = &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"2001:db8::/32"}}}
 		},
 	}, {
 		name: "mixed IPv4 and IPv6 CIDRs",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0] = &ateapipb.EgressRule{
-				IpBlocks: &ateapipb.IPBlockRule{
+				Cidrs: &ateapipb.CIDRRule{
 					Cidrs: []string{"192.0.2.0/24", "2001:db8::/32"},
 				},
 			}
@@ -593,7 +593,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
 			}
 			p.Rules[0] = &ateapipb.EgressRule{
-				IpBlocks: &ateapipb.IPBlockRule{
+				Cidrs: &ateapipb.CIDRRule{
 					Cidrs: cidrs,
 				},
 			}
@@ -606,45 +606,45 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
 			}
 			p.Rules[0] = &ateapipb.EgressRule{
-				IpBlocks: &ateapipb.IPBlockRule{
+				Cidrs: &ateapipb.CIDRRule{
 					Cidrs: cidrs,
 				},
 			}
 		},
 		want: field.ErrorList{
-			field.TooMany(rule.Child("ip_blocks", "cidrs"), 257, 256).WithOrigin("maxItems"),
+			field.TooMany(rule.Child("cidrs", "cidrs"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "missing CIDR",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{""}}}
+			p.Rules[0] = &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{""}}}
 		},
 		want: field.ErrorList{
-			field.Invalid(rule.Child("ip_blocks", "cidrs").Index(0), "", "must be a canonical IPv4 or IPv6 prefix"),
+			field.Invalid(rule.Child("cidrs", "cidrs").Index(0), "", "must be a canonical IPv4 or IPv6 prefix"),
 		},
 	}, {
 		name: "empty CIDR list",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{}}
+			p.Rules[0] = &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{}}
 		},
 		want: field.ErrorList{
-			field.Required(rule.Child("ip_blocks", "cidrs"), ""),
+			field.Required(rule.Child("cidrs", "cidrs"), ""),
 		},
 	}, {
 		name: "noncanonical CIDR",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"192.0.2.1/24"}}}
+			p.Rules[0] = &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"192.0.2.1/24"}}}
 		},
 		want: field.ErrorList{
-			field.Invalid(rule.Child("ip_blocks", "cidrs").Index(0), "192.0.2.1/24", "must be a canonical IPv4 or IPv6 prefix"),
+			field.Invalid(rule.Child("cidrs", "cidrs").Index(0), "192.0.2.1/24", "must be a canonical IPv4 or IPv6 prefix"),
 		},
 	}, {
 		name: "duplicate CIDR",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"192.0.2.0/24", "192.0.2.0/24"}}}
+			p.Rules[0] = &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"192.0.2.0/24", "192.0.2.0/24"}}}
 		},
 		want: field.ErrorList{
-			field.Duplicate(rule.Child("ip_blocks", "cidrs").Index(1), "192.0.2.0/24"),
+			field.Duplicate(rule.Child("cidrs", "cidrs").Index(1), "192.0.2.0/24"),
 		},
 	}, {
 		name: "missing static header",
