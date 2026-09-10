@@ -45,6 +45,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/childreap"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
@@ -92,9 +93,11 @@ var (
 // ingress to.
 const actorHTTPUpstream = "http://" + ateomnet.ActorVethIP + ":80"
 
-// Workers get a conservative shutdown period. This needs to be significantly less than the K8s
-// termination grace period for the ateom.
-const workloadGracePeriod = 1 * time.Minute
+// workloadGracePeriod is the whole budget for draining the worker on shutdown.
+// It needs to stay significantly less than the K8s termination grace period
+// for the ateom, so the escalation to SIGKILL happens here rather than as a
+// kubelet SIGKILL of ateom itself.
+const workloadGracePeriod = 30 * time.Minute
 
 // resumeTimeout is the conservative ceiling for unpausing a paused sandbox.
 const resumeTimeout = 30 * time.Second
@@ -491,15 +494,18 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	// a SIGTERM.
 	s.cancelActiveRestoreOrRunRPC()
 
+	// One deadline covers the whole drain. Waiting for the lock and waiting out
+	// SIGTERM below both run against it, so the two phases split a single grace
+	// period rather than each getting one: an RPC that burns most of the budget
+	// leaves the containers only the remainder, and the total stays bounded by
+	// workloadGracePeriod however the time falls between them.
+	deadline := time.Now().Add(workloadGracePeriod)
+
 	// Attempt to acquire the lock used to serialize ateom RPCs. This will wait for any
 	// pending RPCs to finish (suspend, resume, etc...). After the RPCs finish there
 	// should be no active session. The run / resume was cancelled and the
 	// checkpoint / restore will stop the workload and clear the active session.
-	//
-	// In the worst case, these RPCs take almost the entire grace period and then
-	// fail. We will then proceed to send SIGTERM to the containers and wait for
-	// them to exit, potentially waiting for 2x the total grace period.
-	lockCtx, lockCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	lockCtx, lockCancel := context.WithDeadline(ctx, deadline)
 	defer lockCancel()
 
 	if !s.lock.LockContext(lockCtx) {
@@ -520,7 +526,7 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		wg.Add(1)
 		go func(containerName string) {
 			defer wg.Done()
-			if err := s.killContainer(ctx, session, containerName); err != nil {
+			if err := killContainer(ctx, session.rcmd, containerName, deadline); err != nil {
 				slog.WarnContext(ctx, "Failed to kill container during shutdown", slog.String("container", containerName), slog.Any("err", err))
 			}
 		}(name)
@@ -530,23 +536,39 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	slog.InfoContext(ctx, "Shutting down")
 }
 
-// killContainer stops a container by sending SIGTERM, waiting for the grace period,
-// and escalating to SIGKILL if necessary.
-func (s *AteomService) killContainer(ctx context.Context, session *workloadSession, name string) error {
+// containerKillTimeout bounds the post-SIGKILL wait, so a completely broken
+// gVisor cannot hold shutdown open indefinitely. It is deliberately not drawn
+// from the grace period: by this point the container has already had its
+// allowance and the deadline has passed. A var so tests can shorten it.
+var containerKillTimeout = 5 * time.Second
+
+// containerRuntime is the slice of *runsc that graceful shutdown needs. Narrowed
+// to an interface so killContainer's SIGTERM-then-SIGKILL escalation can be
+// exercised without executing runsc.
+type containerRuntime interface {
+	cmdKill(ctx context.Context, containerName, signal string) error
+	cmdWait(ctx context.Context, containerName string) error
+}
+
+// killContainer stops a container by sending SIGTERM, waiting until deadline, and
+// escalating to SIGKILL if necessary. deadline is the shared drain deadline, so a
+// caller that has already spent most of the grace period elsewhere leaves the
+// container only what is left of it.
+func killContainer(ctx context.Context, rcmd containerRuntime, name string, deadline time.Time) error {
 	// Propagate SIGTERM to the application container so it can save state and close connections.
 	// If the actor installed no SIGTERM handler it terminates immediately.
 	slog.InfoContext(ctx, "Sending SIGTERM to container", slog.String("container", name))
-	if err := session.rcmd.cmdKill(ctx, name, "SIGTERM"); err != nil {
+	if err := rcmd.cmdKill(ctx, name, "SIGTERM"); err != nil {
 		slog.ErrorContext(ctx, "Failed to propagate SIGTERM to container", slog.String("container", name), slog.Any("err", err))
 		return fmt.Errorf("failed to propagate SIGTERM to container %q: %w", name, err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- session.rcmd.cmdWait(ctx, name)
+		done <- rcmd.cmdWait(ctx, name)
 	}()
 
-	sigTermCtx, sigTermCtxCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	sigTermCtx, sigTermCtxCancel := context.WithDeadline(ctx, deadline)
 	defer sigTermCtxCancel()
 
 	err := waitContainerStop(sigTermCtx, done)
@@ -567,15 +589,13 @@ func (s *AteomService) killContainer(ctx context.Context, session *workloadSessi
 		return ctx.Err()
 	}
 
-	// sigTermCtx timed out. Send SIGKILL.
+	// sigTermCtx hit the drain deadline. Send SIGKILL.
 	slog.WarnContext(ctx, "Grace period expired; killing container", slog.String("container", name))
-	if err := session.rcmd.cmdKill(ctx, name, "SIGKILL"); err != nil {
+	if err := rcmd.cmdKill(ctx, name, "SIGKILL"); err != nil {
 		slog.WarnContext(ctx, "Failed to send SIGKILL to container (it might have already exited)", slog.String("container", name), slog.Any("err", err))
 	}
 
-	// Block until the killed container actually exits, but set a short timeout (e.g. 5 seconds)
-	// to avoid blocking indefinitely if gVisor is completely broken.
-	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	killCtx, cancel := context.WithTimeout(ctx, containerKillTimeout)
 	defer cancel()
 
 	err = waitContainerStop(killCtx, done)
@@ -637,7 +657,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for "pause" container.
+	//   * All OCI bundles are set up, including for the pause container.
 
 	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
 	if err != nil {
@@ -687,14 +707,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// upper — because mounting is ateom's job (atelet runs with no
 	// capabilities); runsc's gofer resolves the mount in this pod's mount
 	// namespace.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ocispec.PauseContainer)); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
-	containersToDelete = append(containersToDelete, "pause")
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+	if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
-	if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+	if err := rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer); err != nil {
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
 
@@ -773,7 +793,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if !hasDurableVolumes(req.GetSpec().GetContainers()) {
 			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
 		}
-		if err := rcmd.cmdPause(ctx, "pause"); err != nil {
+		if err := rcmd.cmdPause(ctx, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while pausing pause container: %w", err)
 		}
 		tarErr := tarDurableVolumes(ctx, ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointPath)
@@ -782,7 +802,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// fail the resume instantly and leave the sandbox paused forever.
 		resumeCtx, cancelResume := context.WithTimeout(context.WithoutCancel(ctx), resumeTimeout)
 		defer cancelResume()
-		if err := rcmd.cmdResume(resumeCtx, "pause"); err != nil {
+		if err := rcmd.cmdResume(resumeCtx, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while resuming pause container: %w", err)
 		}
 		if tarErr != nil {
@@ -791,7 +811,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		// Checkpoint pause container (root of the sandbox)
 		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
-		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
+		if err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath); err != nil {
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
 		if hasDurableVolumes(req.GetSpec().GetContainers()) {
@@ -860,15 +880,15 @@ func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Contai
 		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
 		_ = r.cmdWait(ctx, ctr.GetName())
 	}
-	_ = r.cmdKill(ctx, "pause", "SIGKILL")
-	_ = r.cmdWait(ctx, "pause")
+	_ = r.cmdKill(ctx, ocispec.PauseContainer, "SIGKILL")
+	_ = r.cmdWait(ctx, ocispec.PauseContainer)
 }
 
 func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
 	// Check state of all containers to mimic containerd.
 	//
 	// Without this, `runsc delete` occasionally throws an error.
-	if err := r.cmdState(ctx, "pause"); err != nil {
+	if err := r.cmdState(ctx, ocispec.PauseContainer); err != nil {
 		return fmt.Errorf("while checking state of pause container: %w", err)
 	}
 	for _, ctr := range containers {
@@ -883,7 +903,7 @@ func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Con
 		}
 	}
 
-	if err := r.cmdDelete(ctx, "pause"); err != nil {
+	if err := r.cmdDelete(ctx, ocispec.PauseContainer); err != nil {
 		return fmt.Errorf("while deleting pause container: %w", err)
 	}
 
@@ -915,7 +935,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for "pause" container.
+	//   * All OCI bundles are set up, including for the pause container.
 	//   * Checkpoint downloaded and placed on disk
 
 	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
@@ -967,27 +987,27 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ocispec.PauseContainer)); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// Create and start pause container (cold boot with durable-dir volumes restored)
-		containersToDelete = append(containersToDelete, "pause")
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+		if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
-		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+		if err := rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
 		// Create and restore pause container
-		containersToDelete = append(containersToDelete, "pause")
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+		if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
-		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
+		if err := rcmd.cmdRestore(ctx, os.Stdout, ocispec.PauseContainer, checkpointDir); err != nil {
 			return nil, fmt.Errorf("while restoring pause container: %w", err)
 		}
 	default:

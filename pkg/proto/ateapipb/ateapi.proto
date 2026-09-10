@@ -645,11 +645,11 @@ message TagStatus {
   // seeded from a tag under the same template.
   string actor_template_uid = 2;
 
-  // in_progress_snapshot_uri is where CreateTag is copying the tag's own
-  // snapshot to. It is minted before a single object is written and cleared
-  // once snapshot is set, so a tag left with it set names exactly the objects
-  // its unfinished create stranded, and deleting the tag collects them.
-  string in_progress_snapshot_uri = 3;
+  // storage_location is the base object-storage URI for this tag's snapshot.
+  // Set by the server from the source actor's template when the tag is created
+  // and immutable thereafter. The full snapshot URI is available in
+  // snapshot.snapshot_uri once tag creation completes.
+  string storage_location = 3;
 
   // source_actor_uid is the UID of the Actor this tag's snapshot was copied
   // from.
@@ -699,7 +699,7 @@ message Atespace {
   ResourceMetadata metadata = 1;
 }
 
-// ObjectRef references a Substrate resource by its (atespace, name) identity.
+// ObjectRef references a Substrate resource by its atespace and name.
 message ObjectRef {
   // The atespace of the referenced resource. This field should be empty if the
   // target resource is global-scoped, but references to objects in the same
@@ -859,8 +859,8 @@ message SnapshotsConfig {
   // this version are stored under. Required.
   //
   // +k8s:required
-  // +k8s:maxLength=1024 # bound only; object-storage URI formats vary
-  // TODO: validate that this is a well-formed object-storage URI
+  // +k8s:maxLength=1024
+  // +k8s:customValidation # Validate URI
   string storage_location = 4;
 }
 

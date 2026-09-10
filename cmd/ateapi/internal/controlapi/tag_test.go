@@ -814,7 +814,7 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 func newPendingTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag {
 	t.Helper()
 	tag := newTestTag(t, name, actor)
-	tag.Status.InProgressSnapshotUri = tag.GetStatus().GetSnapshot().GetSnapshotUri()
+	tag.Status.StorageLocation = testStorageLocation
 	tag.Status.Snapshot = nil
 	return tag
 }
@@ -944,19 +944,16 @@ func TestUpdateTag_ConcurrentUpdate(t *testing.T) {
 // finish the job.
 func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	ctx := context.Background()
-	persistence, cleanup := storetest.SetupTestStore(t)
-	t.Cleanup(cleanup)
-
-	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
-	tag := storetest.MustCreateTag(t, ctx, persistence, newTestTag(t, "v1", actor))
-	tagRef := resources.TagRefFromTag(tag)
-
-	objects := objectstoretest.New()
-	uri, err := resources.ParseSnapshotURI(tag.GetStatus().GetSnapshot().GetSnapshotUri())
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
 	if err != nil {
-		t.Fatalf("ParseSnapshotURI: %v", err)
+		t.Fatalf("TagActorSnapshot: %v", err)
 	}
-	objects.PutSnapshot(t, uri, "manifest.json", "memory.zst")
+	tagRef := resources.TagRefFromTag(tag)
+	uri := mustReservedTagSnapshotURI(t, tag)
 	svc := &RPCService{impl: newServiceImpl(persistence, nil), objectStore: objects}
 
 	// A delete that cannot reach object storage must not drop the row: it is
@@ -998,14 +995,29 @@ func TestDeleteTag_ReleasesPendingSnapshot(t *testing.T) {
 	tagRef := resources.TagRefFromTag(tag)
 
 	objects := objectstoretest.New()
-	uri, err := resources.ParseSnapshotURI(tag.GetStatus().GetInProgressSnapshotUri())
+	uri, err := resources.NewTagSnapshotURI(tag.GetStatus().GetStorageLocation(), tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetUid())
 	if err != nil {
-		t.Fatalf("ParseSnapshotURI: %v", err)
+		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
 	// What a copy that died halfway through left behind.
 	objects.PutSnapshot(t, uri, "manifest.json")
 	svc := &RPCService{impl: newServiceImpl(persistence, nil), objectStore: objects}
 
+	// Cleanup must work without the source actor or its template.
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+	})
+	if _, err := persistence.DeleteActor(ctx, resources.ActorRefFromActor(actor)); err != nil {
+		t.Fatalf("DeleteActor: %v", err)
+	}
+	objects.OnDelete = func(string, string) error { return errObjectStore }
+	if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); !errors.Is(err, errObjectStore) {
+		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+		t.Fatalf("GetTag after failed cleanup: %v", err)
+	}
+	objects.OnDelete = nil
 	if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
 		t.Fatalf("DeleteTag: %v", err)
 	}

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -152,8 +153,12 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got == "" || got == snapshotURI {
 		t.Fatalf("Tag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
 	}
-	if got := tagToUpdate.GetStatus().GetInProgressSnapshotUri(); got != "" {
-		t.Fatalf("Tag %s in-progress snapshot uri = %q, want it cleared", tagRef.GetName(), got)
+	wantTagURI, err := resources.NewTagSnapshotURI(tagToUpdate.GetStatus().GetStorageLocation(), tagToUpdate.GetMetadata().GetAtespace(), tagToUpdate.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
+	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got != wantTagURI.String() {
+		t.Errorf("tag snapshot URI = %q, want UID-based URI %q", got, wantTagURI)
 	}
 	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
 	if err != nil {
@@ -423,10 +428,6 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 }
 
 func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
-	if e2e.IsMicroVM() {
-		t.Skip("Skipping TestDeleteActorAnyStateWithExternalVolume for microVM environment")
-	}
-
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
@@ -1286,7 +1287,7 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	reqHttp.Host = resources.ActorDNSName(actorRef)
+	reqHttp.Header.Set(atenet.TargetActorHeader, actorRef.String())
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	resp, err := httpClient.Do(reqHttp)

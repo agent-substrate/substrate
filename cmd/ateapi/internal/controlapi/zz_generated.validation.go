@@ -5845,6 +5845,10 @@ func Validate_SnapshotsConfig(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_SnapshotsConfig_StorageLocation(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {
 				errs = append(errs, e...)
 			}
@@ -6266,7 +6270,7 @@ func Validate_TagStatus(
 	}
 
 	// field ateapipb.TagStatus.ActorTemplateUid has no validation
-	// field ateapipb.TagStatus.InProgressSnapshotUri has no validation
+	// field ateapipb.TagStatus.StorageLocation has no validation
 	// field ateapipb.TagStatus.SourceActorUid has no validation
 	return errs
 }

@@ -115,12 +115,12 @@ cat <<EOF
 
   2. Create an actor in the template's atespace (kubectl-ate; install with: go install ./cmd/kubectl-ate):
        kubectl ate${KCTX_FLAG} create actor my-counter-1 -a ate-demo-counter-microvm \\
-         --template-ref counter-microvm
+         --template counter-microvm
 
   3. Port-forward the atenet-router and curl the in-RAM counter:
        kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
        curl -X POST \\
-         -H "Host: my-counter-1.ate-demo-counter-microvm.actors.resources.substrate.ate.dev" \\
+         -H "ate-target-actor: ate-demo-counter-microvm/my-counter-1" \
          http://localhost:8000
 
      Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-microvm),

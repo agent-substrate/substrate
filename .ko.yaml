@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaultBaseImage: gcr.io/distroless/static-debian13
+defaultBaseImage: gcr.io/distroless/static-debian13:latest@sha256:f2ea2709ac8db56323cbd7d014277f32cb572d9ea124b0076f7aafe5980678fe
 
 defaultPlatforms:
   - linux/amd64
   - linux/arm64
 
 baseImageOverrides:
-  github.com/agent-substrate/substrate/demos/sandbox: alpine
+  github.com/agent-substrate/substrate/demos/sandbox: alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
   # ateom-microvm needs glibc (for the fetched cloud-hypervisor binary) and mount/umount
-  # (to bind the image into the virtiofsd shared dir) — both in debian:stable-slim but
+  # (to bind the image into the virtiofsd shared dir) — both in debian:13-slim but
   # not in the distroless static default.
-  github.com/agent-substrate/substrate/cmd/ateom-microvm: debian:stable-slim
+  github.com/agent-substrate/substrate/cmd/ateom-microvm: debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132

@@ -31,7 +31,7 @@ func TestBuildCreateActorRequest(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "template ref",
+			name:        "bare template name defaults to the actor's atespace",
 			templateRef: "counter",
 			want: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
@@ -39,16 +39,35 @@ func TestBuildCreateActorRequest(t *testing.T) {
 			},
 		},
 		{
-			name:        "template ref with tag",
+			name:        "bare tag name defaults to the actor's atespace",
 			templateRef: "counter",
-			tag:         "demo/before-upgrade",
+			tag:         "before-upgrade",
 			want: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
 				SourceTag:     &ateapipb.ObjectRef{Atespace: "demo", Name: "before-upgrade"},
 			},
 		},
-		{name: "malformed tag", templateRef: "counter", tag: "before-upgrade", wantErr: true},
+		{
+			name:        "qualified tag in a different atespace",
+			templateRef: "counter",
+			tag:         "other-atespace/before-upgrade",
+			want: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "other-atespace", Name: "before-upgrade"},
+			},
+		},
+		{
+			name:        "qualified template in a different atespace",
+			templateRef: "shared-templates/counter",
+			want: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "shared-templates", Name: "counter"},
+			},
+		},
+		{name: "malformed template ref", templateRef: "a/b/c", wantErr: true},
+		{name: "malformed tag", templateRef: "counter", tag: "a/b/c", wantErr: true},
 	}
 
 	for _, test := range tests {

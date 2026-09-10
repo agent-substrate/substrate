@@ -27,10 +27,9 @@ demo-jupyter_cmdline() {
     --deploy-demo-jupyter) demo-jupyter_deploy ;;
     --delete-demo-jupyter) demo-jupyter_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-jupyter_deploy() {

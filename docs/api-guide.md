@@ -141,10 +141,38 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
-### Workload Connectivity (Uniform DNS)
-Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and name:
+### Workload Connectivity
 
-**Format:** `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`
+A higher-order system reaches an actor through the **Substrate Router** by
+setting `ate-target-actor` to `<atespace>/<actor>`. This value selects the Actor;
+`Host` and HTTP/2 `:authority` remain application metadata. Normal HTTP requirements still apply:
+clients must send a valid `Host` or `:authority`, usually derived automatically
+from the request URL, and reverse proxies should preserve it when the application
+depends on the original authority.
+
+Clients that construct HTTP requests should add the routing header directly.
+For example, curl uses `-H`, Go uses `request.Header.Set`, and Python clients use
+their request `headers` mapping. WebSocket clients add the same header to the
+opening HTTP upgrade request. gRPC clients send it as outgoing metadata using
+the lowercase name `ate-target-actor`.
+
+For an HTTP `CONNECT` tunnel to a non-default Actor port, put the routing
+header on the outer `CONNECT` request and keep the target port in its
+authority. With curl, use `--proxy-header` instead of `-H`:
+
+```bash
+curl --proxytunnel --proxy http://localhost:8001 \
+  --proxy-header "ate-target-actor: my-atespace/my-actor" \
+  http://actor-upstream:9090/
+```
+
+Browser navigation cannot add custom request headers. Browser-based and other
+fixed clients must therefore connect through a user-controlled reverse proxy or
+policy enforcement point that overwrites the routing header before forwarding
+to `atenet-router`. The [Jupyter demo](../demos/jupyter/README.md) shows this
+pattern with NGINX. The proxy must derive the value from trusted configuration
+or authenticated request context rather than forwarding values supplied by an
+untrusted caller.
 
 ### SystemInfo Volumes
 
@@ -153,7 +181,7 @@ To deliver identity information, including credentials, to a running actor, you 
 Available information sources:
 
 #### actorMetadata
-The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity and DNS name), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
 
 ```yaml
 spec:
@@ -327,16 +355,16 @@ snapshotsConfig:
 
 ```
 <location>/atespaces/<atespace>/actors/<actor uid>/snapshots/<snapshot name>
-<location>/atespaces/<atespace>/tags/<snapshot name>
+<location>/atespaces/<atespace>/tags/<tag uid>
 ```
 
-The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<snapshot name>`.
+The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<tag uid>`.
 
-An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. The actor level is keyed on the UID rather than the name, so an actor recreated under a name that was used before never inherits its predecessor's objects.
+An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an actor or tag under the same name never inherits its predecessor's objects. A pending tag records its base location in `status.storageLocation`; together with its atespace and UID, this identifies any partial copy to collect if creation fails.
 
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot` and a `Tag` in `status.snapshot`, each an `ExternalSnapshot` carrying `snapshotUri` and `contentScope`. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input.
+An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot` and a `Tag` in `status.snapshot`, each an `ExternalSnapshot` carrying `snapshotUri` and `contentScope`. The URI is recorded when the snapshot is written. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input. Parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 

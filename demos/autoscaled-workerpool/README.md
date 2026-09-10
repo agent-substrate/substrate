@@ -107,7 +107,7 @@ kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-aut
 
 ## How to Use
 
-We can trigger autoscaling by spawning multiple actors and sending traffic to assign workers in the pool. The actors go in the demo's atespace (`ate-demo-autoscaled-workerpool`) — `--template-ref` names the template, resolved in the actor's atespace:
+We can trigger autoscaling by spawning multiple actors and sending traffic to assign workers in the pool. The actors go in the demo's atespace (`ate-demo-autoscaled-workerpool`) — `--template` names the template, resolved in the actor's atespace:
 
 ### 1. Spawn load actors
 
@@ -117,7 +117,7 @@ go install ./cmd/kubectl-ate
 
 # Create 15 actors to generate load
 for i in {001..015}; do
-  kubectl ate create actor c$i -a ate-demo-autoscaled-workerpool --template-ref counter
+  kubectl ate create actor c$i -a ate-demo-autoscaled-workerpool --template counter
 done
 ```
 
@@ -127,12 +127,14 @@ done
 kubectl port-forward -n ate-system svc/atenet-router 8000:80 &
 ```
 
-In a separate terminal, send requests in a retry loop across all hosts to activate the actors and keep them active while the pool scales up:
+In a separate terminal, send requests in a retry loop to activate the actors
+and keep them active while the pool scales up. Each request sets the Actor name
+for that loop iteration and the demo's Atespace in the routing header:
 
 ```sh
 for attempt in {1..10}; do
   for i in {001..015}; do
-    curl -s -H "Host: c$i.ate-demo-autoscaled-workerpool.actors.resources.substrate.ate.dev" http://localhost:8000 >/dev/null
+  curl -s -H "ate-target-actor: ate-demo-autoscaled-workerpool/c$i" http://localhost:8000 >/dev/null
   done
   sleep 2
 done

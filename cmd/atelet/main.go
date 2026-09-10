@@ -35,6 +35,7 @@ import (
 	"sync"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -118,7 +119,13 @@ func main() {
 		return
 	}
 	ctx := context.Background()
-	serverboot.InitLogger()
+	// One synchronized writer in front of stdout, shared by the runtime
+	// logger and the usage-event drain (see startStatsPoller): uncoordinated
+	// writers stay tear-free only while every record fits a pipe's
+	// atomic-write size -- an accident of field sizes, not a contract. Same
+	// pattern as the ateoms' actor-log forwarders.
+	logSink := actorlog.NewSyncedWriter(os.Stdout)
+	serverboot.InitLoggerWithWriter(logSink)
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
@@ -257,7 +264,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient)
+			startStatsPoller(ctx, interval, statsInst, k8sClient, logSink)
 		}
 	}
 
@@ -294,6 +301,7 @@ func main() {
 		csiDriverConfigLister,
 		clusterTrustBundleLister,
 	)
+
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
 	// on-demand fetch in ensureSandboxAssets still covers correctness.

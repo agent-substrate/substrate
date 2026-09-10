@@ -39,7 +39,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 3. **Guide 3 — HTTP-only actors, identity carried by the certificate.** The Actor only dials plain
    HTTP. atunnel presents the actor's own certificate — minted per actor by ateapi off the
    actor-identity CA, carrying an `ActorIdentity` X.509 extension — and sends a bare `CONNECT`
-   with no identity headers at all.
+  with no actor routing header at all.
 4. **Identity authentication.** The gateway requires a client certificate signed by the
   actor-identity CA, so a non-actor client is refused at the handshake. It authorizes the
   certificate against the ATE API and rejects it unless the certified **UID** matches a real,
@@ -132,18 +132,22 @@ kubectl -n egress-target create deployment whoami --image=traefik/whoami
 kubectl -n egress-target expose deployment whoami --port=80
 TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterIP}')
 
-# 2. Create and resume an Actor in the demo's atespace: --template-ref
+# 2. Create and resume an Actor in the demo's atespace: --template
 #    resolves the template by name within the actor's own atespace.
-kubectl ate create actor egress-demo -a ate-demo-egress --template-ref egress
+kubectl ate create actor egress-demo -a ate-demo-egress --template egress
 kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
 
 # 3. Drive the Actor's egress through the ingress gateway.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
 curl -s -X POST http://localhost:8000/ \
-  -H 'Host: egress-demo.ate-demo-egress.actors.resources.substrate.ate.dev' \
+  -H 'ate-target-actor: ate-demo-egress/egress-demo' \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```
+
+The `ate-target-actor` header selects the Actor receiving this ingress request. The
+URL in the JSON body selects that Actor's egress destination and is unrelated
+to Actor routing.
 
 ### What to observe
 

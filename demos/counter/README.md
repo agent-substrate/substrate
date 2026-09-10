@@ -51,14 +51,14 @@ kubectl ate get actor-template counter -a ate-demo-counter -o yaml
 
 ### 2. Create a Counter Actor
 
-Create the counter actor with a chosen ID (e.g., `my-counter-1`) using `--template-ref` (the template's name, resolved in the actor's atespace — so the actor lives in the demo's atespace, which the deploy step already created):
+Create the counter actor with a chosen ID (e.g., `my-counter-1`) using `--template` (the template's name, resolved in the actor's atespace — so the actor lives in the demo's atespace, which the deploy step already created):
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
 # Create the actor from the counter template.
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template-ref counter
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 ```
 
 ### 3. Port-Forward Services
@@ -77,10 +77,14 @@ kubectl port-forward -n ate-system svc/atenet-router 8001:8081
 ## How to Use
 
 When you send an HTTP request through the router, Substrate automatically detects the session, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
+The two `-H` options below are the routing key; the request URL and `Host` are
+ordinary application metadata.
 
 1. Send an HTTP POST request to increment the counter:
 ```bash
-curl -X POST -H "Host: my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -X POST \
+  -H "ate-target-actor: ate-demo-counter/my-counter-1" \
+  http://localhost:8000
 ```
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
@@ -117,7 +121,9 @@ through it to the named port.
 proxy behavior wouldn't do:
 
 ```bash
-curl -p -x http://localhost:8001 http://my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev:9090/
+curl -p -x http://localhost:8001 \
+  --proxy-header "ate-target-actor: ate-demo-counter/my-counter-1" \
+  http://my-counter-1:9090/
 ```
 
 This reaches the same actor's second listener and resumes it exactly like any
@@ -164,7 +170,7 @@ deploy directly instead:
 ./hack/install-ate.sh --deploy-demo-counter-microvm
 ```
 
-Then create an actor (`--template-ref counter-microvm`, in the
+Then create an actor (`--template counter-microvm`, in the
 `ate-demo-counter-microvm` atespace), increment the counter, suspend
 it, resume it (even on a different worker), and confirm the count continues —
 the actor's counter lives in guest RAM, so a continuing count proves the

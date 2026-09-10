@@ -53,24 +53,38 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 	if err != nil {
 		t.Fatalf("recording the actor's external snapshot: %v", err)
 	}
-	// The tag owns its own copy, under the tag prefix rather than the actor's.
-	tagSnapshotURI, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, tagName)
-	if err != nil {
-		t.Fatalf("NewTagSnapshotURI: %v", err)
-	}
 	tag := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
-			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI.String(), ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope()},
-			SourceActorUid: actor.GetMetadata().GetUid(),
+			Snapshot:        &ateapipb.ExternalSnapshot{ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope()},
+			StorageLocation: testStorageLocation,
+			SourceActorUid:  actor.GetMetadata().GetUid(),
 		},
 	}
 	for _, opt := range opts {
 		opt(tag)
 	}
-	return storetest.MustCreateTag(t, ctx, tc.persistence, tag)
+	snapshot := tag.Status.Snapshot
+	tag.Status.Snapshot = nil
+	tag = storetest.MustCreateTag(t, ctx, tc.persistence, tag)
+	if snapshot == nil {
+		return tag
+	}
+	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, tag.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
+	snapshot.SnapshotUri = uri.String()
+	tag, err = tc.persistence.UpdateTag(ctx, resources.TagRefFromTag(tag), store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+		toUpdate.Status.Snapshot = snapshot
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("finalizing tag: %v", err)
+	}
+	return tag
 }
 
 // TestCreateTag_ReusedTagName tests that a tag does not move

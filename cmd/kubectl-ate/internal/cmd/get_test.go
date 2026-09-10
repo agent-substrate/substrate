@@ -38,7 +38,8 @@ func TestGetCommandArgs(t *testing.T) {
 		{name: "atespaces get", command: getAtespacesCmd, args: []string{"team-a"}},
 		{name: "atespaces get multiple", command: getAtespacesCmd, args: []string{"team-a", "team-b"}},
 		{name: "workers list", command: getWorkersCmd},
-		{name: "workers reject argument", command: getWorkersCmd, args: []string{"worker-1"}, wantErr: true},
+		{name: "workers get", command: getWorkersCmd, args: []string{"worker-1"}},
+		{name: "workers get multiple", command: getWorkersCmd, args: []string{"worker-1", "worker-2"}},
 		{name: "top workers list", command: topWorkersCmd},
 		{name: "top workers reject argument", command: topWorkersCmd, args: []string{"worker-1"}, wantErr: true},
 	}
@@ -56,18 +57,11 @@ func TestGetCommandArgs(t *testing.T) {
 	}
 }
 
-func TestParseActorSnapshotFlags(t *testing.T) {
+func TestParseTagScope(t *testing.T) {
 	if got, err := parseTagScope("published"); err != nil || got != ateapipb.TagScope_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("parseTagScope(published) = (%v, %v)", got, err)
 	}
 	if _, err := parseTagScope("global"); err == nil {
 		t.Fatal("parseTagScope(global) succeeded")
-	}
-	ref, err := parseNamespacedName("team-a/before-upgrade")
-	if err != nil || ref.GetAtespace() != "team-a" || ref.GetName() != "before-upgrade" {
-		t.Fatalf("parseNamespacedName = (%v, %v)", ref, err)
-	}
-	if _, err := parseNamespacedName("before-upgrade"); err == nil {
-		t.Fatal("parseNamespacedName without atespace succeeded")
 	}
 }

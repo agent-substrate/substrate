@@ -299,20 +299,12 @@ func (s *RPCService) releaseTagSnapshot(ctx context.Context, tag *ateapipb.Tag) 
 		return nil
 	}
 	atespace, name := tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName()
-	for _, snapshotURI := range []string{
-		tag.GetStatus().GetSnapshot().GetSnapshotUri(),
-		tag.GetStatus().GetInProgressSnapshotUri(),
-	} {
-		if snapshotURI == "" {
-			continue
-		}
-		uri, err := resources.ParseSnapshotURI(snapshotURI)
-		if err != nil {
-			return fmt.Errorf("while parsing the external snapshot %q of tag %s/%s: %w", snapshotURI, atespace, name, err)
-		}
-		if err := objectstore.DeletePrefix(ctx, s.objectStore, uri.Prefix()); err != nil {
-			return fmt.Errorf("while releasing the external snapshot %q of tag %s/%s: %w", snapshotURI, atespace, name, err)
-		}
+	uri, err := resources.NewTagSnapshotURI(tag.GetStatus().GetStorageLocation(), atespace, tag.GetMetadata().GetUid())
+	if err != nil {
+		return fmt.Errorf("while resolving the external snapshot of tag %s/%s: %w", atespace, name, err)
+	}
+	if err := objectstore.DeletePrefix(ctx, s.objectStore, uri.Prefix()); err != nil {
+		return fmt.Errorf("while releasing the external snapshot %q of tag %s/%s: %w", uri, atespace, name, err)
 	}
 	return nil
 }
