@@ -382,6 +382,16 @@ enum SnapshotScope {
   SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
+// ExternalRestoreConfiguration is an external snapshot a restore reads.
+// Split from the checkpoint-side ExternalCheckpointConfiguration (a write
+// destination) so read-side attributes of a restore source have a home.
+message ExternalRestoreConfiguration {
+  // The object storage URI of the snapshot to read. Object names are
+  // appended to it, so it addresses the snapshot as a whole rather than any
+  // one object.
+  string snapshot_uri = 1;
+}
+
 message CheckpointRequest {
   string target_ateom_uid = 1;
 
@@ -456,7 +466,7 @@ message RestoreRequest {
   // The checkpoint configuration, depending on the type.
   oneof config {
     LocalCheckpointConfiguration local_config = 9;
-    ExternalCheckpointConfiguration external_config = 10;
+    ExternalRestoreConfiguration external_config = 10;
   }
 
   // What content to restore from the checkpoint.
@@ -483,6 +493,10 @@ message RestoreRequest {
   // The sandbox binaries and pause image to restore with, resolved from the
   // ActorTemplate's SandboxConfig. Required.
   SandboxAssets sandbox_assets = 16;
+
+  // The base guest state (memory + rootfs delta) combined with `config`'s
+  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN.
+  ExternalRestoreConfiguration base_config = 17;
 }
 
 message RestoreResponse {
