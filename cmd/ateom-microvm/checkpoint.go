@@ -154,7 +154,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return err
 		})
 	}
-	if durable {
+	// Skipped when atelet has taken the durable-dir tar over to stream it
+	// straight into object storage; the directory is left in place for it, and
+	// terminateWorkload below is what makes a later archive just as coherent as
+	// one taken here.
+	if durable && !req.GetSkipDurableDirTar() {
 		g.Go(func() error {
 			t := time.Now()
 			if err := tarDurableVolumes(gctx, ateompath.DurableDirVolumeMountsDir(actorUID), checkpointDir); err != nil {
