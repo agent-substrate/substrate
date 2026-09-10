@@ -24,6 +24,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -583,5 +584,42 @@ func TestResumeBackoffHasNoCap(t *testing.T) {
 	}
 	if b.Steps < 1<<20 {
 		t.Errorf("resume backoff Steps must be high so the budget bounds the wait; got %d", b.Steps)
+	}
+}
+
+// The singleflight flight detaches from the caller's cancellation but must
+// keep the caller's trace identity, or the ateapi call starts a fresh root
+// trace and the server-side resume spans fragment away from the request that
+// triggered them.
+func TestActorResumer_FlightKeepsCallerTraceContext(t *testing.T) {
+	testActorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-trace"}
+
+	want := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a},
+		SpanID:     trace.SpanID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+		TraceFlags: trace.FlagsSampled,
+	})
+
+	var got trace.SpanContext
+	mock := &resumerMockClient{
+		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			got = trace.SpanContextFromContext(ctx)
+			return &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"}}},
+			}, nil
+		},
+	}
+
+	resumer := NewActorResumer(mock)
+	ctx := trace.ContextWithSpanContext(context.Background(), want)
+	if _, _, err := resumer.ResumeActor(ctx, testActorRef); err != nil {
+		t.Fatalf("ResumeActor: %v", err)
+	}
+
+	if got.TraceID() != want.TraceID() {
+		t.Errorf("flight RPC trace ID = %s, want the caller's %s", got.TraceID(), want.TraceID())
+	}
+	if !got.IsSampled() {
+		t.Error("flight RPC lost the caller's sampled flag")
 	}
 }

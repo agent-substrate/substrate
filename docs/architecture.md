@@ -136,8 +136,9 @@ There are a few different personas that interact with the system:
   3) **Agent developers**: These are the people who deploy agents into a substrate
      for users or higher-level systems to consume. They might have to be aware
      that they are using Kubernetes (some concepts are represented as CRDs,
-     such as ActorTemplates), or they might be using a higher level API which
-     itself uses Agent Substrate under the hood.
+     such as WorkerPools), or they might be using a higher level API which
+     itself uses Agent Substrate under the hood. ActorTemplates are managed
+     through the substrate API (`kubectl-ate`), not through Kubernetes.
 
   4) **Agent users**: These are the people who interact with agents running in the
      substrate.  They might be end-users of an application that is built on top
@@ -207,20 +208,22 @@ worker.
 Agent Substrate categorizes resources into two groups based on their
 persistence requirements and the frequency of state transitions.
 
-### System Configuration (Declarative/CRD-based)
+### System Configuration (Declarative)
 
-These resources define the intended state of the system and are managed via
-Kubernetes CRD APIs. They are used for administrative operations and actor
-environment definitions.
+These resources define the intended state of the system. They are used for
+administrative operations and actor environment definitions.
 
-  * **WorkerPool**: Defines a pool of "warm" compute capacity. It manages a
-    fleet of standby worker pods initialized and ready to receive resumed actor
-    states. Optional `spec.template` fields configure worker pod node
-    selection, tolerations, priority class, and node affinity.
+  * **WorkerPool** (Kubernetes CRD): Defines a pool of "warm" compute
+    capacity. It manages a fleet of standby worker pods initialized and ready
+    to receive resumed actor states. Optional `spec.template` fields configure
+    worker pod node selection, tolerations, priority class, and node affinity.
 
-  * **ActorTemplate**: An immutable definition of an actor-version. It
-    encapsulates the container image, configuration, and environment required
-    to generate a "golden" snapshot.
+  * **ActorTemplate** (ate API resource): An immutable definition of an
+    actor-version. It encapsulates the container image, configuration, and
+    environment required to generate a "golden" snapshot. ActorTemplates are
+    created and managed through the substrate gRPC API (e.g. `kubectl ate
+    create actor-template`) and stored in the control-plane state store; they
+    are not Kubernetes objects.
 
 ### Dynamic Instance State (Database-based)
 
@@ -249,21 +252,22 @@ and Performance:
       lookups and atomic worker assignments that bypass the eventual
       consistency and variable latency of standard Kubernetes API servers.
 
-  3.  **Governance**: Using Kubernetes objects for the environment (WorkerPools
-      and Templates) allows platform teams to apply familiar RBAC, auditing,
-      and policy enforcement to the underlying infrastructure.
+  3.  **Governance**: Keeping infrastructure resources (WorkerPools,
+      SandboxConfigs) as Kubernetes objects allows platform teams to apply
+      familiar RBAC, auditing, and policy enforcement to the underlying
+      infrastructure, while workload definitions (ActorTemplates) are managed
+      through the substrate API instead, which authenticates callers itself
+      but does not yet implement authorization (see
+      [authentication.md](authentication.md)).
 
 ### Resource Model
 
-The CRDs and control-plane records described above, with their relationships and
-multiplicities (UML class diagram):
+The Kubernetes resources and control-plane records described above, with their
+relationships and multiplicities (UML class diagram):
 
 ```mermaid
 classDiagram
     namespace kube-apiserver {
-        class ActorTemplate {
-            <<CRD>>
-        }
         class WorkerPool {
             <<CRD>>
         }
@@ -275,6 +279,9 @@ classDiagram
     }
 
     namespace ate-api-server {
+        class ActorTemplate {
+            <<record>>
+        }
         class Actor {
             <<record>>
             status
@@ -287,10 +294,10 @@ classDiagram
         }
     }
 
-    ActorTemplate "1" --> "1" WorkerPool : workerPoolRef
+    ActorTemplate ..> WorkerPool : worker_selector (labels)
     WorkerPool ..> Deployment : reconciled by atecontroller
     Deployment "1" *-- "*" WorkerPod : manages
-    Actor ..> ActorTemplate : derived from
+    Actor "*" --> "1" ActorTemplate : actor_template
     Actor "0..1" --> "0..1" Worker : runs on
     Worker "1" --> "1" WorkerPod : maps to
 ```
@@ -324,11 +331,11 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class has a matching `ateom` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class has a matching `ateom` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `ActorTemplate` names in its sandbox config (naming one is currently required; per-class cluster defaults are planned) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
 
   * **gVisor** (`ateom-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
 
-  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay. `DurableDir` volumes are host-backed instead, served over a second (writable) virtio-fs share and shipped in snapshots as a tar, so a `Data`-scope snapshot can capture them without any guest memory. Each volume is a subdirectory of that one share, so an actor can have several at no extra cost in devices — which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
+  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and a `Full` snapshot ships the upper as its own tar. `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `Data`-scope snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices, which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
 
 ### Networking Stack (`atenet` DNS + `atunnel`)
 
@@ -434,7 +441,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   2. **Assignment**: The Control Plane claims a warm worker from the
      `WorkerPool`.
 
-  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden `ActorSnapshot` (for first-run) or the Actor's latest `ActorSnapshot` (for recurring runs) into the sandbox.
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden external snapshot (for first-run) or the Actor's own external snapshot (for recurring runs) into the sandbox.
 
   4. **State**: State transitions to `ACTOR_STATE_RUNNING`. The actor now has an
      active Worker IP.
@@ -453,20 +460,25 @@ Triggered by an explicit `SuspendActor` call.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
-  4. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, now pointing to
-     an immutable `ActorSnapshot` resource and references it for future resumptions.
+  4. **Release**: The external snapshot the Actor held before this suspend is
+     deleted from object storage. An Actor owns one snapshot at a time; one it
+     borrowed from a tag is left alone, since the tag owns it.
 
-Snapshots may be given tags owned and addressed by an Atespace. The same tag
-name may exist in different Atespaces. A tag is an immutable alias and retention
-pin: publishing it permits reuse from other Atespaces without changing its
-`atespace/name` address. Deleting the owning Atespace deletes all of its tags,
-including published tags, but leaves snapshot cleanup to garbage collection.
+  5. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
+     `status.externalSnapshot` names the external snapshot it resumes from.
+
+Snapshots may be given tags owned and addressed by an Atespace. The same tag 
+name may exist in different Atespaces. A tag is an immutable alias and retention pin:
+it holds its own copy of the external snapshot, made at creation, so it outlives the 
+Actor that took it, and publishing it permits reuse from other Atespaces without changing its
+`atespace/name` address. Deleting a tag deletes that copy; an Atespace with
+tags cannot be deleted until they are.
 
 ### Phase 4: Deletion
 
 By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING` or `ACTOR_STATE_PAUSED`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 
-After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected. The garbage collection process is not implemented yet.
+After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected.
 
 ## State Management & Persistence
 

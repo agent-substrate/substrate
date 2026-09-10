@@ -11,11 +11,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorAssignment.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorAssignment.actor_uid",
     "message": "field has no doc comment"
   },
@@ -26,67 +21,7 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorMetadataItem.path",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshot.metadata",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshot.status",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.actor_template_uid",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.content_scope",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.snapshot_uri",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.source_actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.source_actor_uid",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.source_actor_version",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotTag.scope",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotTag.snapshot",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotTagScope",
+    "subject": "ateapi.TagScope",
     "message": "enum has no doc comment"
   },
   {
@@ -136,11 +71,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Container.env",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Container.name",
     "message": "field has no doc comment"
   },
@@ -158,11 +88,6 @@
     "rule": "documented",
     "subject": "ateapi.Control.ListActorTemplates",
     "message": "method has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.CreateActorSnapshotTagRequest",
-    "message": "message has no doc comment"
   },
   {
     "rule": "documented",
@@ -191,12 +116,12 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorSnapshotTagRequest",
+    "subject": "ateapi.DeleteTagRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorSnapshotTagRequest.actor_snapshot_tag",
+    "subject": "ateapi.DeleteTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
@@ -256,22 +181,12 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorSnapshotRequest",
+    "subject": "ateapi.GetTagRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorSnapshotRequest.actor_snapshot",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.GetActorSnapshotTagRequest",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.GetActorSnapshotTagRequest.actor_snapshot_tag",
+    "subject": "ateapi.GetTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
@@ -326,37 +241,22 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsRequest",
+    "subject": "ateapi.ListTagsRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsRequest.atespace",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsRequest.page_size",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsRequest.page_token",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsResponse",
+    "subject": "ateapi.ListTagsResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsResponse.actor_snapshots",
+    "subject": "ateapi.ListTagsResponse.tags",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsResponse.next_page_token",
+    "subject": "ateapi.ListTagsResponse.next_page_token",
     "message": "field has no doc comment"
   },
   {
@@ -491,11 +391,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.TrustBundleDataSource.path",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.UpdateWorkerRequest",
     "message": "message has no doc comment"
   },
@@ -553,5 +448,15 @@
     "rule": "documented",
     "subject": "ateapi.WorkerStatus.state",
     "message": "field has no doc comment"
+  },
+  {
+    "rule": "list-method-shape",
+    "subject": "ateapi.Control.ListWorkerActorAssignments",
+    "message": "field \"worker\" is not part of the standard List request shape - only atespace, page_size, and page_token are allowed (sorting/filtering per AIP-132 is not supported)"
+  },
+  {
+    "rule": "list-method-shape",
+    "subject": "ateapi.Control.ListWorkerActorAssignments",
+    "message": "repeated field is named \"actor_assignments\", want \"worker_actor_assignments\" (the plural resource name, matching the method name)"
   }
 ]

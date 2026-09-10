@@ -83,8 +83,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `ATESPACE   NAME   TEMPLATE             STATE                 ATEOM POD         ATEOM IP   VERSION   AGE
-team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4    2         5m
+	expected := `ATESPACE   NAME   TEMPLATE             STATE                 WORKER POD        WORKER IP   VERSION   AGE
+team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4     2         5m
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -183,10 +183,10 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	}
 
 	// Sorted by atespace first, then template namespace, template name, name.
-	expected := `ATESPACE   NAME    TEMPLATE             STATE                   ATEOM POD   ATEOM IP   VERSION   AGE
-team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                 0         5m
-team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                 0         5h
-team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                 0         3d
+	expected := `ATESPACE   NAME    TEMPLATE             STATE                   WORKER POD   WORKER IP   VERSION   AGE
+team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                   0         5m
+team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                   0         5h
+team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                   0         3d
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -217,8 +217,8 @@ func TestPrintActorsTo_Table_TemplateRef(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   ATEOM POD   ATEOM IP   VERSION   AGE
-team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                 0         5m
+	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   WORKER POD   WORKER IP   VERSION   AGE
+team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                   0         5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -241,18 +241,7 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "gvisor",
-			Status: &ateapipb.WorkerStatus{
-				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplateRef: &ateapipb.ObjectRef{
-						Atespace: "default",
-						Name:     "template-1",
-					},
-					Actor: &ateapipb.ObjectRef{
-						Atespace: "space-1",
-						Name:     "id-1",
-					},
-				},
-			},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 	}
 
@@ -261,14 +250,17 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAMESPACE   POOL     CLASS    POD     STATUS     ASSIGNED ACTOR
-default     pool-1   gvisor   pod-1   ASSIGNED   default/template-1/space-1/id-1
+	expected := `NAMESPACE   POOL     CLASS    POD     STATUS
+default     pool-1   gvisor   pod-1   ASSIGNED(1/1)
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }
 
+// A worker assigned to an actor created from a substrate ActorTemplate
+// carries only ActorTemplateRef; the printer must not dereference the legacy
+// CRD ref (regression test for a nil-pointer panic).
 func TestPrintWorkersTo_Table_Free(t *testing.T) {
 	var buf bytes.Buffer
 	workers := []*ateapipb.Worker{
@@ -284,8 +276,8 @@ func TestPrintWorkersTo_Table_Free(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAMESPACE   POOL     CLASS   POD     STATUS   ASSIGNED ACTOR
-default     pool-1           pod-1   FREE     <none>
+	expected := `NAMESPACE   POOL     CLASS   POD     STATUS
+default     pool-1           pod-1   FREE
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -316,10 +308,10 @@ func TestPrintWorkersTo_Table_Sorted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `NAMESPACE   POOL     CLASS   POD     STATUS   ASSIGNED ACTOR
-default     pool-1           pod-a   FREE     <none>
-default     pool-1           pod-z   FREE     <none>
-other       pool-2           pod-1   FREE     <none>
+	expected := `NAMESPACE   POOL     CLASS   POD     STATUS
+default     pool-1           pod-a   FREE
+default     pool-1           pod-z   FREE
+other       pool-2           pod-1   FREE
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -353,7 +345,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "snap-1"},
+					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/snap-1"},
 				},
 			},
 		},
@@ -394,10 +386,10 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 
 	// Sorted by atespace, then name. The ERROR column only flags that an
 	// error message exists; the full text is available via json/yaml.
-	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN SNAPSHOT   ERROR   AGE
-ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    snap-1                    5m
-ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                              3d
-ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                     ERROR   5h
+	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN SNAPSHOT                                                                                  ERROR   AGE
+ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    gs://private/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/snap-1           5m
+ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                                                                                                             3d
+ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                                                                                                    ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -455,6 +447,71 @@ func TestPrintActorTemplatesTo_YAML(t *testing.T) {
 func TestPrintActorTemplatesTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
 	if err := PrintActorTemplatesTo(&buf, nil, "xml"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintTagsTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	tags := []*ateapipb.Tag{
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "v2",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
+			},
+			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
+			Status: &ateapipb.TagStatus{
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			},
+		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "v1",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
+			},
+			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			Status: &ateapipb.TagStatus{
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			},
+		},
+		{
+			// A tag whose create never finished: it names nothing an Actor can
+			// be created from yet, which the STATE column is there to say.
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "v3",
+				CreateTime: timestamppb.New(now.Add(-30 * time.Second)),
+			},
+			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			Status: &ateapipb.TagStatus{
+				StorageLocation: "gs://private",
+			},
+		},
+	}
+
+	if err := PrintTagsTo(&buf, tags, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Sorted by atespace, then name.
+	expected := `ATESPACE   NAME   SCOPE                 STATE     SNAPSHOT                                CONTENT SCOPE                 AGE
+team-a     v1     TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/tags/v1   SNAPSHOT_CONTENT_SCOPE_FULL   5h
+team-a     v2     TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/tags/v2   SNAPSHOT_CONTENT_SCOPE_FULL   5m
+team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                                  <none>                        30s
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintTagsTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintTagsTo(&buf, nil, "xml"); err == nil {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
@@ -564,24 +621,22 @@ func TestPrintWorkerTopTo_Table(t *testing.T) {
 	var buf bytes.Buffer
 	items := []*WorkerTopItem{
 		{
-			Pod:           "counter-worker-pool-7b9f8-x123",
-			Pool:          "counter",
-			Class:         "gvisor",
-			Status:        "ASSIGNED",
-			AssignedActor: "default/counter-template/ate-demo-counter/my-counter-1",
-			CPU:           "342m",
-			Memory:        "412Mi",
-			Namespace:     "ate-demo-counter",
+			Pod:       "counter-worker-pool-7b9f8-x123",
+			Pool:      "counter",
+			Class:     "gvisor",
+			Status:    "ASSIGNED",
+			CPU:       "342m",
+			Memory:    "412Mi",
+			Namespace: "ate-demo-counter",
 		},
 		{
-			Pod:           "counter-worker-pool-7b9f8-y456",
-			Pool:          "counter",
-			Class:         "microvm",
-			Status:        "FREE",
-			AssignedActor: "<none>",
-			CPU:           "2m",
-			Memory:        "64Mi",
-			Namespace:     "ate-demo-counter",
+			Pod:       "counter-worker-pool-7b9f8-y456",
+			Pool:      "counter",
+			Class:     "microvm",
+			Status:    "FREE",
+			CPU:       "2m",
+			Memory:    "64Mi",
+			Namespace: "ate-demo-counter",
 		},
 	}
 
@@ -590,9 +645,9 @@ func TestPrintWorkerTopTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAME                             POOL      CLASS     STATUS     ASSIGNED ACTOR                                           CPU(CORES)   MEMORY(bytes)
-counter-worker-pool-7b9f8-x123   counter   gvisor    ASSIGNED   default/counter-template/ate-demo-counter/my-counter-1   342m         412Mi
-counter-worker-pool-7b9f8-y456   counter   microvm   FREE       <none>                                                   2m           64Mi
+	expected := `NAME                             POOL      CLASS     STATUS     CPU(CORES)   MEMORY(bytes)
+counter-worker-pool-7b9f8-x123   counter   gvisor    ASSIGNED   342m         412Mi
+counter-worker-pool-7b9f8-y456   counter   microvm   FREE       2m           64Mi
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -603,12 +658,11 @@ func TestPrintWorkerTopTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
 	items := []*WorkerTopItem{
 		{
-			Pod:           "worker-1",
-			Pool:          "pool-1",
-			Status:        "ASSIGNED",
-			AssignedActor: "default/template-1/space-1/actor-1",
-			CPU:           "100m",
-			Memory:        "128Mi",
+			Pod:    "worker-1",
+			Pool:   "pool-1",
+			Status: "ASSIGNED",
+			CPU:    "100m",
+			Memory: "128Mi",
 		},
 	}
 
@@ -623,7 +677,6 @@ func TestPrintWorkerTopTo_JSON(t *testing.T) {
       "pod": "worker-1",
       "pool": "pool-1",
       "status": "ASSIGNED",
-      "assignedActor": "default/template-1/space-1/actor-1",
       "cpu": "100m",
       "memory": "128Mi"
     }
@@ -639,12 +692,11 @@ func TestPrintWorkerTopTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
 	items := []*WorkerTopItem{
 		{
-			Pod:           "worker-1",
-			Pool:          "pool-1",
-			Status:        "ASSIGNED",
-			AssignedActor: "default/template-1/space-1/actor-1",
-			CPU:           "100m",
-			Memory:        "128Mi",
+			Pod:    "worker-1",
+			Pool:   "pool-1",
+			Status: "ASSIGNED",
+			CPU:    "100m",
+			Memory: "128Mi",
 		},
 	}
 
@@ -654,8 +706,7 @@ func TestPrintWorkerTopTo_YAML(t *testing.T) {
 	output := buf.String()
 
 	expected := `workers:
-- assignedActor: default/template-1/space-1/actor-1
-  cpu: 100m
+- cpu: 100m
   memory: 128Mi
   pod: worker-1
   pool: pool-1

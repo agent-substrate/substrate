@@ -106,6 +106,16 @@ const (
 // including the /v2/ auth ping. The retryable status codes stay at the
 // library default, which already includes 429. Vars so tests can shrink the
 // waits.
+//
+// The backoff applies per request, so under a sustained throttle a
+// multi-layer pull can accumulate far more wall clock than one request's
+// worst case (~14s shared). The caller's ctx still bounds the total: every
+// request carries it (remote.WithContext in remoteOpts), a canceled ctx
+// fails the next attempt immediately and is never retried, so retrying
+// overshoots a deadline by at most one backoff sleep. Production pulls run
+// under the Run/Restore RPC ctx, which ateapi's resume path caps at its
+// server-wide max RPC deadline — a throttled shared-registry pull surfaces
+// as that RPC's deadline error, not a hang.
 var (
 	// dedicatedRegistryBackoff covers registries where the deployment has
 	// its own quota (Artifact Registry, ECR, Harbor, self-hosted, …): the
@@ -141,9 +151,13 @@ var (
 // the small stable set of communal hosts beats guessing at every private
 // registry vendor.
 var sharedRegistries = map[string]bool{
-	"registry.k8s.io":      true,
+	"registry.k8s.io": true,
+	// Pulls only ever present index.docker.io here: name.ParseReference
+	// normalizes docker.io (and bare refs like "ubuntu") to it before
+	// retryBackoffFor runs. The docker.io entry is kept so a lookup by the
+	// canonical name classifies the same way.
 	"docker.io":            true,
-	"index.docker.io":      true, // name.ParseReference normalizes docker.io to this
+	"index.docker.io":      true,
 	"registry-1.docker.io": true,
 	"quay.io":              true,
 	"ghcr.io":              true,

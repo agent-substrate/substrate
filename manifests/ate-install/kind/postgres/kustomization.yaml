@@ -16,7 +16,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - ../../postgres.yaml
+  - ../../postgres/postgres.yaml
 
 # The base sizes the database for a real install under activation load. On a
 # kind node -- 4 vCPU and a small disk on a GitHub runner -- that would crowd

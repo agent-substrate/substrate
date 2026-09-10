@@ -23,10 +23,9 @@ demo-parking_cmdline() {
     --deploy-demo-parking) demo-parking_deploy ;;
     --delete-demo-parking) demo-parking_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-parking_deploy() {

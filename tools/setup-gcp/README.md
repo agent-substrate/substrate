@@ -14,6 +14,7 @@ It uses a hierarchical command structure:
         *   `bucket` - Create GCS bucket.
         *   `iam` - Create IAM policy bindings and grant permissions.
         *   `dashboards` - Create Cloud Monitoring dashboards.
+        *   `cloudsql` - Create a Cloud SQL PostgreSQL instance for the ateapi store, with IAM database authentication (see [cloud-sql.md](cloud-sql.md)).
     *   `bootstrap` - Run all setup steps in order.
 
 ## Prerequisites
@@ -63,27 +64,64 @@ go run ./tools/setup-gcp enable apis [flags]
 
 ### 2. Create Cluster
 
-Creates a GKE cluster configured for Agent Substrate.
+Creates a GKE cluster configured for Agent Substrate (with Workload Identity,
+required Kubernetes beta APIs, and Managed OpenTelemetry enabled, and the
+Filestore CSI driver disabled).
 
 > [!WARNING]
 > Agent Substrate requires two Kubernetes beta APIs —
 > `certificates.k8s.io/v1beta1/podcertificaterequests` and
-> `certificates.k8s.io/v1beta1/clustertrustbundles` — and GKE only honors
-> `enableK8sBetaApis` **at cluster creation**. Enabling them later on an
-> existing cluster is not recoverable in place: the tool's reconcile path
-> issues the update, but the APIs do not become served — the cluster must be
-> **recreated** with them enabled. `create cluster` sets them for you; if you
-> bring your own cluster, create it with both APIs enabled from the start,
-> e.g.:
+> `certificates.k8s.io/v1beta1/clustertrustbundles` — which constrains the
+> supported GKE versions to exactly two configurations:
+>
+> * **GKE 1.36 with the beta APIs enabled at cluster creation.** GKE only
+>   honors `enableK8sBetaApis` **at creation time**. Enabling the APIs later
+>   on an existing cluster is not recoverable in place: the tool's reconcile
+>   path issues the update, but the APIs do not become served — the cluster
+>   must be **recreated** with them enabled.
+> * **GKE 1.37 or higher**, where the APIs are served by default and no beta
+>   enablement is needed.
+>
+> Versions below 1.36 are not supported. `create cluster` handles the
+> enablement for you; if you bring your own 1.36 cluster, create it with both
+> APIs enabled from the start, e.g.:
 >
 > ```bash
 > gcloud container clusters create "${CLUSTER_NAME}" ... \
 >   --enable-kubernetes-unstable-apis=certificates.k8s.io/v1beta1/podcertificaterequests,certificates.k8s.io/v1beta1/clustertrustbundles
 > ```
 >
-> The symptom of a cluster without them: the install hangs at "Waiting for
+> The symptom of a cluster without the APIs: the install hangs at "Waiting for
 > podcertificate ClusterTrustBundles to be ready" and `kubectl get
 > clustertrustbundles` reports the resource type is not served.
+
+> [!WARNING]
+> **Turn node auto-upgrade off on any node pool that runs workers, and do not
+> use spot or preemptible nodes for them.** When a worker pod is deleted,
+> `SIGTERM` is forwarded into the actor's containers and the control plane keeps
+> accepting a suspend for about 60 seconds. An actor suspended inside that
+> window keeps its state. One still awake when the window closes is moved to
+> `ACTOR_STATE_CRASHED` with its worker assignment cleared, and `CRASHED` is
+> terminal: `resume` and `suspend` are both refused, there is no recover verb,
+> and the snapshot the actor still holds cannot be used to start it. The only
+> way out is to delete the actor and create a new one, which loses its state.
+>
+> Auto-upgrade is the trigger to plan for, because GKE enables it by default and
+> it fires on Google's maintenance schedule rather than yours. `create cluster`
+> does not disable it, so do it yourself on every pool that runs workers:
+>
+> ```bash
+> gcloud container node-pools update "${NODE_POOL}" \
+>   --cluster "${CLUSTER_NAME}" --location "${CLUSTER_LOCATION}" \
+>   --no-enable-autoupgrade
+> ```
+>
+> This is a management setting, so it takes effect without recreating nodes and
+> is safe to apply to a serving cluster. Node auto-repair, preemption and OOM
+> kills reach the same path and cannot be configured away, so treat the setting
+> as removing the scheduled risk rather than all of it. Change versions through
+> the [rolling upgrade runbook](../../docs/upgrade.md), which has you suspend
+> every actor on a node at your own pace before the node moves.
 
 ```bash
 go run ./tools/setup-gcp create cluster [flags]
@@ -138,27 +176,27 @@ go run ./tools/setup-gcp create iam [flags]
 | `--bucket` | GCS bucket name. | `BUCKET_NAME` | None (Required for bucket bindings*) |
 | `--gke-nodes` | Grant GKE nodes permission to pull images. | - | `true` |
 | `--atelet` | Grant atelet project-level permissions. | - | `true` |
-| `--bucket-bindings` | Grant atelet access to the snapshot bucket. | - | `true` |
+| `--bucket-bindings` | Grant atelet and ate-api-server access to the snapshot bucket. | - | `true` |
 
 *\*Note: Required for bucket bindings unless the `BUCKET_NAME` environment variable is set.*
 
 #### What `create iam` actually grants
 
 On a fresh GCP project these bindings do not exist, and nothing else creates
-them — without them atelet cannot read or write snapshots (`403` from GCS on
-the first suspend/resume) and nodes cannot pull images. `bootstrap` and
-`create iam` apply them for you; the table below is the reference for auditing
-them, or for applying them by hand in projects where you cannot run the tool
-with project-level IAM permissions.
+them — without them atelet cannot read or write external snapshots (`403` from
+GCS on the first suspend/resume), ate-api cannot copy or collect them, and
+nodes cannot pull images. `bootstrap` and `create iam` apply them for you; the
+table below is the reference for auditing them, or for applying them by hand in
+projects where you cannot run the tool with project-level IAM permissions.
 
-atelet authenticates via [GKE Workload Identity
+atelet and ate-api authenticate via [GKE Workload Identity
 Federation](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity):
-its Kubernetes ServiceAccount (`ate-system/atelet`, created by
-`install-ate.sh`) is addressed directly as an IAM principal — no Google
-service account is created or impersonated. This only works on a cluster with
-Workload Identity enabled (`create cluster` enables the
-`PROJECT_ID.svc.id.goog` pool; a pre-existing cluster must have it enabled
-too, or atelet's GCS calls fail with `401`).
+their Kubernetes ServiceAccounts (`ate-system/atelet` and
+`ate-system/ate-api-server`, created by `install-ate.sh`) are addressed
+directly as IAM principals — no Google service account is created or
+impersonated. This only works on a cluster with Workload Identity enabled
+(`create cluster` enables the `PROJECT_ID.svc.id.goog` pool; a pre-existing
+cluster must have it enabled too, or their GCS calls fail with `401`).
 
 | Member | Role | Resource | Why |
 | :--- | :--- | :--- | :--- |
@@ -166,26 +204,32 @@ too, or atelet's GCS calls fail with `401`).
 | atelet WI principal¹ | `roles/artifactregistry.reader` | project² | Pull sandbox runtime assets |
 | atelet WI principal¹ | `roles/storage.objectAdmin` | snapshot bucket | Read/write snapshot objects |
 | atelet WI principal¹ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
+| ate-api-server WI principal¹ | `roles/storage.objectAdmin` | snapshot bucket | Copy external snapshots for tags, delete the ones nothing refers to |
+| ate-api-server WI principal¹ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
 | default compute SA³ | `roles/storage.objectViewer` | project² | Nodes pull images from GCS-backed registries |
 | default compute SA³ | `roles/artifactregistry.reader` | project² | Nodes pull images from Artifact Registry |
 
-¹ `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/ate-system/sa/atelet` — note it is keyed to the **project number**, not the ID.
+¹ `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/ate-system/sa/SERVICE_ACCOUNT` — note it is keyed to the **project number**, not the ID.
 ² Project-level today; scoping these down is tracked in the TODOs in `cmd/iam.go`.
 ³ `PROJECT_NUMBER-compute@developer.gserviceaccount.com` (least-privileged node SA is #76).
 
 Manual equivalent:
 
 ```bash
-ATELET="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa/atelet"
+WI="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa"
+ATELET="${WI}/atelet"
+ATE_API="${WI}/ate-api-server"
 
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="${ATELET}" --role=roles/storage.objectAdmin
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="${ATELET}" --role=roles/artifactregistry.reader
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-  --member="${ATELET}" --role=roles/storage.objectAdmin
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-  --member="${ATELET}" --role=roles/storage.bucketViewer
+for MEMBER in "${ATELET}" "${ATE_API}"; do
+  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+    --member="${MEMBER}" --role=roles/storage.objectAdmin
+  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+    --member="${MEMBER}" --role=roles/storage.bucketViewer
+done
 ```
 
 ### 5. Create Dashboards

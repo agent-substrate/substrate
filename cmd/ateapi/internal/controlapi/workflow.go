@@ -22,6 +22,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -72,37 +73,41 @@ type ActorWorkflow struct {
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
-	workerPoolLister     listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
 	storageClassLister   storagev1listers.StorageClassLister
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
+	objectStore          objectstore.Store
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
+//
+// objectStore may be nil, which leaves external snapshots in place instead of
+// copying and releasing them. Only tests that never reach those steps pass nil;
+// ate-api always builds one.
 func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
+	objectStore objectstore.Store,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
 		dialer:               dialer,
-		workerPoolLister:     workerPoolLister,
 		sandboxConfigLister:  sandboxConfigLister,
 		storageClassLister:   storageClassLister,
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
+		objectStore:          objectStore,
 	}
 }
 
@@ -114,8 +119,16 @@ type actorWorkflowStore interface {
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
-	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
-	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
+	BindActorToWorker(ctx context.Context, workerName string, assignment *ateapipb.ActorAssignment, admit func(*ateapipb.Worker) error) error
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
+	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error)
+	FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error)
+	// Read from the records rather than the Worker's status: only the service
+	// layer attaches assignments on read, and this workflow holds the store.
+	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
+	CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error)
+	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
+	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
@@ -138,21 +151,38 @@ func NewWorkerWorkflow(store workerWorkflowStore) *WorkerWorkflow {
 // WorkerWorkflow and nothing more.
 type workerWorkflowStore interface {
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
+	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error)
+	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 }
 
-func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
-	leaseKey := "lease:actor:" + actorRef.Atespace + ":" + actorRef.Name
+// leaseHolder takes the distributed leases that serialize the operations on one
+// resource.
+type leaseHolder interface {
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
+}
 
-	lease, err := w.store.AcquireLease(ctx, leaseKey)
+// acquireLease takes the lease named by key and returns the context to run
+// under: it is cancelled if the lease is lost. subject names what the lease
+// covers, for the message a caller that loses the race gets.
+func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) (context.Context, *store.Lease, error) {
+	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
-			return nil, nil, status.Error(grpcCodes.Aborted, "another operation is in progress for this actor")
+			return nil, nil, status.Errorf(grpcCodes.Aborted, "another operation is in progress for this %s", subject)
 		}
 		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}
 
 	return lease.Context(), lease, nil
+}
+
+func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
+	return acquireLease(ctx, w.store, "lease:actor:"+actorRef.Atespace+":"+actorRef.Name, "actor")
+}
+
+func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {
+	return acquireLease(ctx, holder, "lease:tag:"+tagRef.Atespace+":"+tagRef.Name, "Tag")
 }

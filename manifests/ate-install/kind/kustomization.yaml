@@ -39,6 +39,10 @@ resources:
 # patch rather than a key in ate-otel-config.yaml because that ConfigMap is
 # shared by every component via envFrom -- putting always_on there would pin the
 # router and the control plane to 100% too, undoing their per-component ratios.
+#
+# The storage settings point ate-api at the same rustfs the ./atelet overlay
+# points atelet at: both ends of an external snapshot's life have to agree on
+# where it lives.
 patches:
   - patch: |-
       apiVersion: apps/v1
@@ -54,3 +58,17 @@ patches:
               env:
               - name: OTEL_TRACES_SAMPLER
                 value: parentbased_always_on
+              - name: ATE_STORAGE_BACKEND
+                value: s3
+              - name: AWS_REGION
+                value: us-east-1
+              - name: AWS_ENDPOINT_URL
+                value: http://rustfs.ate-system.svc:9000
+              - name: AWS_S3_USE_PATH_STYLE
+                value: "true"
+              # TODO: use a secret / identity management
+              - name: AWS_ACCESS_KEY_ID
+                value: rustfsadmin
+              - name: AWS_SECRET_ACCESS_KEY
+                value: rustfsadmin
+

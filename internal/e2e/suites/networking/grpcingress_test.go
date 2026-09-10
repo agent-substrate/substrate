@@ -297,7 +297,7 @@ func waitForGRPCRouteReady(t *testing.T, ctx context.Context, client grpcechopb.
 // negotiates with the router.
 func routerAddress(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	config, err := ateclient.LoadConfig(e2e.KubeConfig, e2e.KubeContext)
+	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
 	if err != nil {
 		t.Fatalf("loading kubeconfig: %v", err)
 	}

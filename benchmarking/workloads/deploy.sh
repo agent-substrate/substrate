@@ -44,7 +44,7 @@ fi
 
 WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
-# Actor memory limit (ActorTemplate spec.resources.limits.memory). The default
+# Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
 # so benchmark actors do not inherit the 2 GiB kata default and drag its page
 # cache into every memory snapshot. Raise it for RAM-consuming suites.
@@ -115,11 +115,11 @@ run_kubectl_ate() {
 }
 
 substitute() {
-  # SandboxConfig names are pinned per class (rather than defaulted) so a stale
-  # config from a dirty teardown fails loudly instead of silently binding this
-  # pool. gvisor-default is applied by hack/install-ate.sh; microvm is applied
-  # by hack/install-microvm-deps.sh. The protojson templates take the sandbox
-  # class as its proto enum spelling.
+  # SandboxConfig names are pinned per class in the ActorTemplates (rather
+  # than defaulted) so a stale config from a dirty teardown fails loudly
+  # instead of silently binding these workloads. gvisor-default is applied by
+  # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
+  # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
   local sandbox_config_name sandbox_class_enum
   case "${SANDBOX_CLASS}" in
@@ -149,7 +149,7 @@ wait_actortemplate_ready() {
 
   while ((SECONDS < deadline)); do
     if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
-      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.name // empty' <<<"${json}")
+      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
       if [[ -n "${snapshot}" ]]; then
         return 0
       fi

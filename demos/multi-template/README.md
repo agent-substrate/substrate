@@ -39,7 +39,7 @@ This command will:
 
 ### 2. Create one actor per template
 
-Each actor goes in its template's atespace — `--template-ref` names the template,
+Each actor goes in its template's atespace — `--template` names the template,
 resolved in the actor's atespace — and their DNS names embed that atespace:
 
 ```bash
@@ -47,8 +47,8 @@ resolved in the actor's atespace — and their DNS names embed that atespace:
 go install ./cmd/kubectl-ate
 
 # Create two actors from different templates, one per atespace.
-kubectl ate create actor c1 -a ate-demo-multi-template-counter --template-ref counter
-kubectl ate create actor f1 -a ate-demo-multi-template-fspersist --template-ref fspersist
+kubectl ate create actor c1 -a ate-demo-multi-template-counter --template counter
+kubectl ate create actor f1 -a ate-demo-multi-template-fspersist --template fspersist
 ```
 
 ### 3. Port-forward the atenet router

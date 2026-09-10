@@ -110,8 +110,8 @@ kubectl ate get workers -l <label-selector>
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
 | `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
-| `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
-| `ATEOM IP` | The pod IP of that worker. Empty while suspended. |
+| `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
+| `WORKER IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
 | `AGE` | Time elapsed since the actor was created. |
 
@@ -143,7 +143,7 @@ kubectl ate get atespace <atespace>
 kubectl ate delete atespace <atespace>
 ```
 
-> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors and snapshot tags first (cascade delete is not yet supported).
+> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors and tags first (cascade delete is not yet supported).
 
 #### `kubectl ate get atespace` output columns
 
@@ -193,10 +193,8 @@ Manage the execution state of your workloads.
 *(Note: Actors are identified by a user-provided name, which must be a valid DNS-1123 label)*
 
 ```bash
-# Create a new actor deriving from an ActorTemplate. The template name is
-# resolved in the actor's atespace. -a/--atespace is required and the
-# atespace must already exist (kubectl ate create atespace <atespace>).
-kubectl ate create actor my-actor --template-ref=<template-name> -a <atespace>
+# Create a new actor from an ActorTemplate.
+kubectl ate create actor my-actor --template=<template-name> -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor -a <atespace>
@@ -214,22 +212,24 @@ kubectl ate delete actor my-actor -a <atespace> --any-state
 ### Actor Snapshots
 
 Suspending an actor creates a durable snapshot. Tags give snapshots stable,
-Atespace-owned names; published tags may be used from other Atespaces.
+Atespace-owned names; published tags may be used from other Atespaces. A tag is
+created from a suspended actor and gets its own copy of that actor's snapshot,
+so suspending or deleting the actor afterwards cannot collect it.
 
 ```bash
-# List snapshots, or resolve one canonical snapshot or tag.
-kubectl ate get snapshots -a <atespace>
-kubectl ate get snapshot <snapshot-name> -a <atespace>
-kubectl ate get snapshot <tag-name> -a <atespace> --tag
+# List an Atespace's tags, all Atespaces' tags, or resolve tags by name.
+kubectl ate get tags -a <atespace>
+kubectl ate get tags -A
+kubectl ate get tag <tag-name> [<tag-name> ...] -a <atespace>
 
-# Tag a snapshot, then publish or unpublish the tag.
-kubectl ate create snapshot-tag <tag-name> -a <atespace> --snapshot <snapshot-name>
-kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope published
-kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope atespace
+# Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
+kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
+kubectl ate update tag <tag-name> -a <atespace> --scope published
+kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 
-# Create an actor from a tag and remove the tag when it is no longer needed.
-kubectl ate create actor <actor-name> -a <atespace> --template-ref <template-name> --snapshot-tag <tag-atespace/tag-name>
-kubectl ate delete snapshot-tag <tag-name> -a <atespace>
+# Create an actor from a tag.
+kubectl ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
+kubectl ate delete tag <tag-name> -a <atespace>
 ```
 
 ### Logs

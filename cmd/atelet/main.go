@@ -29,13 +29,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"sync"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -53,6 +53,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/internal/volumepath"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -118,7 +119,13 @@ func main() {
 		return
 	}
 	ctx := context.Background()
-	serverboot.InitLogger()
+	// One synchronized writer in front of stdout, shared by the runtime
+	// logger and the usage-event drain (see startStatsPoller): uncoordinated
+	// writers stay tear-free only while every record fits a pipe's
+	// atomic-write size -- an accident of field sizes, not a contract. Same
+	// pattern as the ateoms' actor-log forwarders.
+	logSink := actorlog.NewSyncedWriter(os.Stdout)
+	serverboot.InitLoggerWithWriter(logSink)
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
@@ -257,7 +264,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient)
+			startStatsPoller(ctx, interval, statsInst, k8sClient, logSink)
 		}
 	}
 
@@ -294,6 +301,7 @@ func main() {
 		csiDriverConfigLister,
 		clusterTrustBundleLister,
 	)
+
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
 	// on-demand fetch in ensureSandboxAssets still covers correctness.
@@ -363,6 +371,9 @@ func main() {
 	brokerServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(brokerTLS)))
 	ateletpb.RegisterCredentialBrokerServer(brokerServer, &credentialBroker{
 		actorIdentityClient: ateapipb.NewActorIdentityClient(ateapiConn),
+	})
+	ateletpb.RegisterWorkerCapacityServer(brokerServer, &workerCapacityService{
+		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
 	})
 	go func() {
 		if err := brokerServer.Serve(brokerLis); err != nil {
@@ -1682,17 +1693,11 @@ func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resour
 
 // writeSystemInfoFile writes one projected file at relPath under rootPath via
 // write-to-temp-and-rename, creating parent directories as needed. relPath is
-// validated defensively even though ActorTemplate validation already rejects
-// non-clean paths: atelet is the last line before the value hits the host
-// filesystem.
+// re-checked against the rule ateapi applied at template creation: atelet is
+// the last line before the value hits the host filesystem.
 func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
-	if relPath == "" || strings.HasPrefix(relPath, "/") {
-		return fmt.Errorf("invalid system-info path %q: must be a non-empty relative path", relPath)
-	}
-	for _, seg := range strings.Split(relPath, "/") {
-		if seg == ".." || seg == "." || seg == "" {
-			return fmt.Errorf("invalid system-info path %q: must not contain empty, '.', or '..' segments", relPath)
-		}
+	if err := volumepath.ValidateProjected(relPath); err != nil {
+		return fmt.Errorf("invalid system-info path %q: %w", relPath, err)
 	}
 	dst := filepath.Join(rootPath, filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {

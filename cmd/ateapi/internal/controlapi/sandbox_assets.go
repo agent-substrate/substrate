@@ -20,76 +20,62 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"k8s.io/apimachinery/pkg/labels"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
+
+// resolveTemplateSandboxConfig resolves the SandboxConfig the ActorTemplate
+// names via sandbox_config.config_name and checks that its class matches the
+// template's sandbox_class.
+func resolveTemplateSandboxConfig(
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
+	templateSandbox *ateapipb.SandboxConfig,
+) (*atev1alpha1.SandboxConfig, error) {
+	name := templateSandbox.GetConfigName()
+	sc, err := sandboxConfigLister.Get(name)
+	if k8serrors.IsNotFound(err) {
+		return nil, status.Errorf(codes.FailedPrecondition, "SandboxConfig %q not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
+	}
+	if class := sandboxClassString(templateSandbox.GetSandboxClass()); string(sc.Spec.SandboxClass) != class {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"SandboxConfig %q has class %q but sandbox_config.sandbox_class is %q", name, sc.Spec.SandboxClass, class)
+	}
+	return sc, nil
+}
 
 // resolveSandboxAssets determines the sandbox binaries and pause image an actor
 // should boot with and projects them onto the ateletpb.SandboxAssets atelet
-// fetches. It takes the SandboxClass (default gvisor) of a given worker pool,
-// then picks the SandboxConfig named by the pool — or, if none is named, the
-// cluster default SandboxConfig for that class.
+// fetches: the SandboxConfig the ActorTemplate names via
+// sandbox_config.config_name (required; enforced by CreateActorTemplate),
+// checked against the template's sandbox_class.
 func resolveSandboxAssets(
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
-	poolNamespace, poolName string,
+	templateSandbox *ateapipb.SandboxConfig,
 ) (*ateletpb.SandboxAssets, error) {
-	wp, err := workerPoolLister.WorkerPools(poolNamespace).Get(poolName)
+	if sandboxClassString(templateSandbox.GetSandboxClass()) == "" {
+		return nil, fmt.Errorf("ActorTemplate names unrecognized sandbox_class %v", templateSandbox.GetSandboxClass())
+	}
+	if templateSandbox.GetConfigName() == "" {
+		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.config_name")
+	}
+
+	sc, err := resolveTemplateSandboxConfig(sandboxConfigLister, templateSandbox)
 	if err != nil {
-		return nil, fmt.Errorf("while getting WorkerPool %s/%s: %w", poolNamespace, poolName, err)
+		return nil, err
 	}
-
-	class := wp.Spec.SandboxClass
-	if class == "" {
-		class = atev1alpha1.SandboxClassGvisor
-	}
-
-	var sc *atev1alpha1.SandboxConfig
-	if name := wp.Spec.SandboxConfigName; name != "" {
-		sc, err = sandboxConfigLister.Get(name)
-		if err != nil {
-			return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
-		}
-		if sc.Spec.SandboxClass != class {
-			return nil, fmt.Errorf("SandboxConfig %q has class %q but WorkerPool %s/%s is class %q",
-				name, sc.Spec.SandboxClass, poolNamespace, poolName, class)
-		}
-	} else {
-		sc, err = defaultSandboxConfig(sandboxConfigLister, class)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return sandboxAssetsProto(class, sc), nil
-}
-
-// defaultSandboxConfig returns the single SandboxConfig marked Default for the
-// given class, erroring if there are zero or more than one.
-func defaultSandboxConfig(lister listersv1alpha1.SandboxConfigLister, class atev1alpha1.SandboxClass) (*atev1alpha1.SandboxConfig, error) {
-	all, err := lister.List(labels.Everything())
-	if err != nil {
-		return nil, fmt.Errorf("while listing SandboxConfigs: %w", err)
-	}
-	var match *atev1alpha1.SandboxConfig
-	for _, sc := range all {
-		if sc.Spec.SandboxClass == class && sc.Spec.Default {
-			if match != nil {
-				return nil, fmt.Errorf("multiple default SandboxConfigs for class %q (%q and %q)", class, match.Name, sc.Name)
-			}
-			match = sc
-		}
-	}
-	if match == nil {
-		return nil, fmt.Errorf("no default SandboxConfig for class %q; set one with spec.default=true or name one via WorkerPool.spec.sandboxConfigName", class)
-	}
-	return match, nil
+	return sandboxAssetsProto(sc), nil
 }
 
 // sandboxAssetsProto converts a resolved SandboxConfig into the proto atelet
 // consumes.
-func sandboxAssetsProto(class atev1alpha1.SandboxClass, sc *atev1alpha1.SandboxConfig) *ateletpb.SandboxAssets {
+func sandboxAssetsProto(sc *atev1alpha1.SandboxConfig) *ateletpb.SandboxAssets {
 	out := &ateletpb.SandboxAssets{
-		SandboxClass: string(class),
+		SandboxClass: string(sc.Spec.SandboxClass),
 		PauseImage:   sc.Spec.PauseImage,
 		Assets:       make(map[string]*ateletpb.ArchAssets, len(sc.Spec.Assets)),
 	}

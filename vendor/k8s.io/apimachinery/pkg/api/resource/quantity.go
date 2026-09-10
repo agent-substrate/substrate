@@ -36,33 +36,27 @@ import (
 //
 // The serialization format is:
 //
-// ```
-// <quantity>        ::= <signedNumber><suffix>
+//	<quantity>        ::= <signedNumber><suffix>
+//	    (Note that <suffix> may be empty, from the "" case in <decimalSI>.)
+//	<digit>           ::= 0 | 1 | ... | 9
+//	<digits>          ::= <digit> | <digit><digits>
+//	<number>          ::= <digits> | <digits>.<digits> | <digits>. | .<digits>
+//	<sign>            ::= "+" | "-"
+//	<signedNumber>    ::= <number> | <sign><number>
+//	<suffix>          ::= <binarySI> | <decimalExponent> | <decimalSI>
+//	<binarySI>        ::= Ki | Mi | Gi | Ti | Pi | Ei
+//	    (International System of units; See: http://physics.nist.gov/cuu/Units/binary.html)
+//	<decimalSI>       ::= n | u | m | "" | k | M | G | T | P | E
+//	    (Note that 1024 = 1Ki but 1000 = 1k; I didn't choose the capitalization.)
+//	<decimalExponent> ::= "e" <signedNumber> | "E" <signedNumber>
 //
-//	(Note that <suffix> may be empty, from the "" case in <decimalSI>.)
-//
-// <digit>           ::= 0 | 1 | ... | 9
-// <digits>          ::= <digit> | <digit><digits>
-// <number>          ::= <digits> | <digits>.<digits> | <digits>. | .<digits>
-// <sign>            ::= "+" | "-"
-// <signedNumber>    ::= <number> | <sign><number>
-// <suffix>          ::= <binarySI> | <decimalExponent> | <decimalSI>
-// <binarySI>        ::= Ki | Mi | Gi | Ti | Pi | Ei
-//
-//	(International System of units; See: http://physics.nist.gov/cuu/Units/binary.html)
-//
-// <decimalSI>       ::= m | "" | k | M | G | T | P | E
-//
-//	(Note that 1024 = 1Ki but 1000 = 1k; I didn't choose the capitalization.)
-//
-// <decimalExponent> ::= "e" <signedNumber> | "E" <signedNumber>
-// ```
-//
-// No matter which of the three exponent forms is used, no quantity may represent
-// a number greater than 2^63-1 in magnitude, nor may it have more than 3 decimal
-// places. Numbers larger or more precise will be capped or rounded up.
-// (E.g.: 0.1m will rounded up to 1m.)
-// This may be extended in the future if we require larger or smaller quantities.
+// A decimal quantity is not capped at 2^63-1 in magnitude, and no quantity is
+// limited to three decimal places: "18446744073709551616" keeps its value, and
+// "1.2345" keeps its precision (String reports it as "1234500u"). Parsing does
+// cap a binarySI quantity, silently, at 2^63-1: "8Ei" parses as 2^63-1.
+// Parsing also preserves a value only down to nano, rounding a finer non-zero
+// value away from zero, so "0.9n" becomes "1n". The int64 accessors round and
+// may overflow on top of that: see Value, MilliValue and ScaledValue.
 //
 // When a Quantity is parsed from a string, it will remember the type of suffix
 // it had, and will use the same type again when it is serialized.
@@ -71,16 +65,16 @@ import (
 // This means that Exponent/suffix will be adjusted up or down (with a
 // corresponding increase or decrease in Mantissa) such that:
 //
-// - No precision is lost
-// - No fractional digits will be emitted
-// - The exponent (or suffix) is as large as possible.
+//   - No precision is lost
+//   - No fractional digits will be emitted
+//   - The exponent (or suffix) is as large as possible.
 //
 // The sign will be omitted unless the number is negative.
 //
 // Examples:
 //
-// - 1.5 will be serialized as "1500m"
-// - 1.5Gi will be serialized as "1536Mi"
+//   - 1.5 will be serialized as "1500m"
+//   - 1.5Gi will be serialized as "1536Mi"
 //
 // Note that the quantity will NEVER be internally represented by a
 // floating point number. That is the whole point of this exercise.
@@ -451,12 +445,31 @@ func (q *Quantity) CanonicalizeBytes(out []byte) (result, suffix []byte) {
 	switch format {
 	case DecimalExponent, DecimalSI:
 		number, exponent := q.AsCanonicalBytes(out)
-		suffix, _ := quantitySuffixer.constructBytes(10, exponent, format)
+		suffix, ok := quantitySuffixer.constructBytes(10, exponent, format)
+		if !ok {
+			// DecimalSI only defines suffixes up to "E" (10^18). For a larger
+			// exponent there is no suffix, so fall back to decimal exponent
+			// notation ("e") instead of dropping the exponent, which would
+			// silently corrupt the value (e.g. "1000E" serializing to "1").
+			suffix, _ = quantitySuffixer.constructBytes(10, exponent, DecimalExponent)
+		}
 		return number, suffix
 	default:
 		// format must be BinarySI
 		number, exponent := rounded.AsCanonicalBase1024Bytes(out)
-		suffix, _ := quantitySuffixer.constructBytes(2, exponent*10, format)
+		suffix, ok := quantitySuffixer.constructBytes(2, exponent*10, format)
+		if !ok {
+			// BinarySI only defines suffixes up to "Ei" (2^60). For a larger
+			// exponent there is no suffix, so fall back to decimal exponent
+			// notation ("e") instead of dropping the suffix, which would
+			// silently corrupt the value (e.g. 2^70 serializing to "1").
+			// The base-1024 mantissa/exponent cannot be reused for "e"
+			// notation, so recompute the canonical mantissa and exponent in
+			// base 10.
+			number, exponent := rounded.AsCanonicalBytes(out)
+			suffix, _ := quantitySuffixer.constructBytes(10, exponent, DecimalExponent)
+			return number, suffix
+		}
 		return number, suffix
 	}
 }
@@ -620,6 +633,14 @@ func (q *Quantity) Sub(y Quantity) {
 	if q.IsZero() {
 		q.Format = y.Format
 	}
+	if q.d.Dec == nil && y.d.Dec == nil && q.i.value == 0 && y.i.value == mostNegative {
+		// 0 - y is exactly -y. Negating a copy of y keeps y's own scale and avoids
+		// aligning it against a scale-0 zero in the inf.Dec fallback, which builds
+		// 10^scale and overflows inf.Dec at the most negative scale.
+		q.i = y.i
+		q.Neg()
+		return
+	}
 	if q.d.Dec == nil && y.d.Dec == nil && q.i.Sub(y.i) {
 		return
 	}
@@ -658,8 +679,13 @@ func (q *Quantity) CmpInt64(y int64) int {
 func (q *Quantity) Neg() {
 	q.s = ""
 	if q.d.Dec == nil {
-		q.i.value = -q.i.value
-		return
+		// -mostNegative overflows int64 and switches to inf.Dec, unless its scale
+		// can't be represented there, in which case it keeps the wrapped result.
+		if q.i.value != mostNegative || !q.i.scale.canInfScale() {
+			q.i.value = -q.i.value
+			return
+		}
+		q.ToDec()
 	}
 	q.d.Dec.Neg(q.d.Dec)
 }
@@ -810,21 +836,28 @@ func NewScaledQuantity(value int64, scale Scale) *Quantity {
 	}
 }
 
-// Value returns the unscaled value of q rounded up to the nearest integer away from 0.
+// Value returns the unscaled value of q rounded up to the nearest integer away
+// from 0. This silently overflows an int64 for a quantity larger than MaxInt64;
+// an overflowed result is undefined and must not be used. To avoid overflow,
+// compare q against a bound with Quantity.Cmp before converting.
 func (q *Quantity) Value() int64 {
 	return q.ScaledValue(0)
 }
 
-// MilliValue returns the value of ceil(q * 1000); this could overflow an int64;
-// if that's a concern, call Value() first to verify the number is small enough.
+// MilliValue returns the value of ceil(q * 1000). This silently overflows an
+// int64 for a large enough q; an overflowed result is undefined and must not be
+// used. To avoid overflow for a non-negative q, compare q against
+// MaxMilliQuantity() with Quantity.Cmp before converting.
 func (q *Quantity) MilliValue() int64 {
 	return q.ScaledValue(Milli)
 }
 
 // ScaledValue returns the value of ceil(q / 10^scale).
 // For example, NewQuantity(1, DecimalSI).ScaledValue(Milli) returns 1000.
-// This could overflow an int64.
-// To detect overflow, call Value() first and verify the expected magnitude.
+// This silently overflows an int64 for a large enough q; an overflowed result is
+// undefined and must not be used. To avoid overflow for a non-negative q at the
+// milli scale, compare q against MaxMilliQuantity() with Quantity.Cmp before
+// converting.
 func (q *Quantity) ScaledValue(scale Scale) int64 {
 	if q.d.Dec == nil {
 		i, _ := q.i.AsScaledInt64(scale)

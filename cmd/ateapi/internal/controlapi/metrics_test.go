@@ -74,7 +74,7 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 func worker(namespace, pool, class string, assigned bool) *ateapipb.Worker {
 	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class, Status: &ateapipb.WorkerStatus{}}
 	if assigned {
-		w.Status.Assignment = &ateapipb.ActorAssignment{}
+		w.Status.Allocated = &ateapipb.WorkerResources{Actors: 1}
 	}
 	return w
 }

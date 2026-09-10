@@ -164,7 +164,7 @@ func TestRefreshingPool(t *testing.T) {
 		t.Fatalf("Unexpected error marshaling pool 1: %v", err)
 	}
 
-	ca2, err := GenerateCA("1", KeyTypeED25519, 365*24*time.Hour)
+	ca2, err := GenerateCA("2", KeyTypeED25519, 365*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Unexpected error generating CA 2: %v", err)
 	}

@@ -29,7 +29,7 @@ ROOT="$(git rev-parse --show-toplevel)"; cd "${ROOT}"
 
 CTX="${KUBECTL_CONTEXT:-kind-kind}"
 K="kubectl --context ${CTX}"
-# The actor lives in the demo's atespace: --template-ref resolves the
+# The actor lives in the demo's atespace: --template resolves the
 # template by name within the actor's own atespace.
 ATESPACE="${ATESPACE:-ate-demo-egress}"
 ACTOR="${ACTOR:-egress-demo}"
@@ -41,7 +41,7 @@ ${K} -n ate-system rollout status deployment/atenet-egress --timeout=120s
 echo "== create atespace + actor =="
 kubectl-ate --context "${CTX}" create atespace "${ATESPACE}" 2>/dev/null || true
 kubectl-ate --context "${CTX}" create actor "${ACTOR}" \
-  --atespace "${ATESPACE}" --template-ref egress 2>/dev/null || true
+  --atespace "${ATESPACE}" --template egress 2>/dev/null || true
 # The router resumes the actor on demand; give the control plane a beat to
 # register it before driving traffic.
 sleep 10

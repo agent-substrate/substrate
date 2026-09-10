@@ -21,9 +21,25 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
+// useBundledPostgres reports whether ateapi uses the in-cluster database
+// (when no external DSN is configured). Gates applying the bundled StatefulSet
+// and waiting on its rollout in DeployAteSystem.
+func (e *Env) useBundledPostgres() bool {
+	return e.Cfg.PostgresConnectionString == ""
+}
+
+// applyBundledPostgres applies the bundled PostgreSQL StatefulSet, or logs that
+// it was skipped in favor of an external database.
+func (e *Env) applyBundledPostgres(ctx context.Context) error {
+	if !e.useBundledPostgres() {
+		log.Step("Skipping bundled PostgreSQL: external database configured (ATE_API_POSTGRES_CONNECTION_STRING)")
+		return nil
+	}
+	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("postgres", "postgres.yaml"))
+}
+
 // DeployPostgres deploys the experimental single-replica PostgreSQL
-// StatefulSet on its own. Full-system installs get it from the rendered
-// bundle instead.
+// StatefulSet on its own.
 func (e *Env) DeployPostgres(ctx context.Context) error {
 	log.Step("deploy_postgres")
 
@@ -50,7 +66,7 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 		return err
 	}
 
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("postgres.yaml")); err != nil {
+	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("postgres", "postgres.yaml")); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, NamespaceAteSystem, "postgres", e.Cfg.RolloutTimeout)

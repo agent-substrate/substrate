@@ -47,10 +47,9 @@ demo-counter_cmdline() {
         demos/counter/counter-microvm.yaml.tmpl ate-demo-counter-microvm counter-microvm
       ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 # demo-counter_render substitutes the demo's placeholders in a manifest:

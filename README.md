@@ -24,9 +24,9 @@ Agent Substrate leverages Kubernetes for the infrastructure provisioning and wor
 
 This demo highlights the core developer experience and "Agentic Infrastructure" capabilities of Substrate:
 
-1.  **Instant Actor Teleport:** High-performance suspend and resume of actors onto any available worker in the pool with sub-second activation.
+1.  **Actor Teleport:** High-performance suspend and resume of actors onto any available worker in the pool with sub-second activation.
 2.  **State Persistence:** Persistent working memory (volatile RAM) and filesystem state preserved perfectly across hibernation cycles via full-state snapshots.
-3.  **Agent Swarm Multiplexing:** Demonstrates 30x+ oversubscription by "juggling" a large registry of stateful actors onto a small pool of shared physical pods.
+3.  **Agent Multiplexing:** Demonstrates 30x+ oversubscription by "juggling" a large registry of stateful actors onto a small pool of shared physical pods.
 
 To reproduce this demo in your own cluster, please refer to the detailed walkthrough in the **[Counter Demo](demos/counter/README.md)**.
 
@@ -36,14 +36,15 @@ For more videos and walkthroughs, visit our YouTube channel: **[agent-substrate]
 
 Agent Substrate is designed to be **framework and agent harness agnostic**. Because it manages standard OCI containers at the kernel level (via gVisor), it can host agents built on any stack.
 
-*   **Agent Development Kit (ADK):** Native support for ADK-compatible actor identity and persistent working memory.
-*   **LangChain:** Ideal execution environment for long-running, stateful LangChain agents and sandboxed tool-calling.
-*   **Claude Code & CodeX:** Support for high-density, stateful coding environments that preserve terminal and filesystem state across sessions.
-*   **Model Context Protocol (MCP):** Deploy secure, sandboxed MCP servers as Substrate Actors to provide durable tools for any LLM.
+*   **Agent Development Kit (ADK):** Support for ADK agents with session state preservation across invocations as actor state. Ideal for all types of agents and stateful tool or subagent calls.
+*   **LangChain:** Ideal execution environment for LangChain agents and tool calls.
+*   **Claude Code, CodeX, and Antigravity:** Support for high-density, stateful coding environments that preserve system state and filesystem state across sessions.
+*   **Model Context Protocol (MCP):** Support for deploying secure, sandboxed MCP servers as Substrate Actors to provide durable tools for any model.
 
 ## Ecosystem & Examples
 
 *   **[Agent Executor](https://github.com/google/ax):** A distributed agent runtime that demonstrates building a secure, hyper-scalable agent harness on Agent Substrate (see the [announcement blog](https://cloud.google.com/blog/products/ai-machine-learning/agent-executor-googles-distributed-agent-runtime) and [integration guide](https://github.com/google/ax/blob/main/manifests/README.md)).
+*   **[kagent](https://github.com/kagent-dev/kagent):** A CNCF Sandbox project and Kubernetes-native framework for building, deploying, and managing AI agents that uses Agent Substrate to run sandboxed, stateful agent workloads (see the [announcement blog](https://kagent.dev/blog/the-future-of-kagent)).
 
 ## Status and compatibility
 
@@ -102,9 +103,9 @@ hack/install-ate-kind.sh --deploy-demo-counter
 # install kubectl-ate
 go install ./cmd/kubectl-ate
 
-# create a counter actor in the demo's atespace (--template-ref names the
+# create a counter actor in the demo's atespace (--template names the
 # actor template, resolved in the actor's atespace)
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template-ref counter
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
 # port-forward the network router to bind to local port `8000`
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
@@ -174,6 +175,9 @@ go run ./tools/setup-gcp create cluster
 go run ./tools/setup-gcp create bucket
 ```
 
+To run the PostgreSQL store backend on Cloud SQL — with IAM database
+authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
+
 Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
 ```bash
 # Re-deploy only ate-apiserver of the ATE system
@@ -205,10 +209,10 @@ If you need to delete the local `kind` cluster and its registry (if it was creat
 
 We provide several sample applications demonstrating Agent Substrate's capabilities:
 
-1. **[Counter Demo](demos/counter/README.md)**: A stateful Go HTTP server demonstrating state preservation across suspends/resumes, and dynamic CRD routing.
+1. **[Counter Demo](demos/counter/README.md)**: A stateful Go HTTP server demonstrating state preservation across suspends/resumes, and on-demand actor resumption and routing via the Substrate router.
 2. **[Sandbox Demo (Antigravity)](demos/sandbox/README.md)**: A secure, sandboxed execution environment (running Alpine Linux) that allows arbitrary shell execution while preserving filesystem state across sessions.
 3. **[Claude Code Multiplex](demos/claude-code-multiplex/README.md)**: Demonstrates oversubscribing physical hardware by multiplexing multiple Claude Code agents onto a limited pool of workers.
-4. **[Multi-Template](demos/multi-template/README.md)**: Two `ActorTemplate`s running different binaries share one `WorkerPool`, across three namespaces.
+4. **[Multi-Template](demos/multi-template/README.md)**: Two `ActorTemplate`s running different binaries share one `WorkerPool`, even though the templates live in different atespaces.
 5. **[Request Parking](demos/parking/README.md)**: An oversubscribed pool where the router holds inbound requests until a worker frees up, instead of returning `503`.
 6. **[Autoscaled WorkerPool](demos/autoscaled-workerpool/README.md)**: Scales a `WorkerPool` on its assigned-worker count with an HPA fed by prometheus-adapter.
 

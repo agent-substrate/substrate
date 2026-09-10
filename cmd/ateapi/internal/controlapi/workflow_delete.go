@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -86,6 +87,10 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
 	}
 
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor, actorTemplate); err != nil {
+		errs = append(errs, fmt.Errorf("while releasing external snapshots: %w", err))
+	}
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -127,8 +132,14 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			}
 			return fmt.Errorf("while checking worker assignment: %w", err)
 		}
-		wass := worker.GetStatus().GetAssignment()
-		if wass == nil || wass.GetActorUid() != actor.GetMetadata().GetUid() {
+		// Ask whether the worker still HOSTS this actor, not whether its one
+		// assignment happens to be this actor: a worker hosting several is the
+		// ordinary case, and the others are none of this delete's business.
+		hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
+		if err != nil {
+			return err
+		}
+		if !hosted {
 			slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping atelet terminate request",
 				slog.String("worker", workerName),
 				slog.Any("actor", actorRef))
@@ -213,13 +224,54 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.
+// releaseAssignmentWithoutBacklink releases an assignment the Actor does not
+// reference, found by Actor UID. Absent is the ordinary case and not an error:
+// most Actors reaching here really were released already.
+func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, actor *ateapipb.Actor) error {
+	actorUID := actor.GetMetadata().GetUid()
+	workerName, err := w.store.FindWorkerHostingActor(ctx, actorUID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			markSkipped(ctx, "worker already released")
+			return nil
+		}
+		return fmt.Errorf("while looking for a worker still hosting actor %s: %w", actorUID, err)
+	}
+
+	// Read only to learn whether the Worker is still there; the release itself
+	// is guarded by the assignment key.
+	if _, err := w.store.GetWorker(ctx, workerName); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			markSkipped(ctx, "worker already released")
+			return nil
+		}
+		return fmt.Errorf("while getting worker %s to release: %w", workerName, err)
+	}
+
+	slog.InfoContext(ctx, "Releasing an assignment the Actor does not reference",
+		slog.String("worker", workerName), slog.String("actor_uid", actorUID))
+	_, err = w.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("while releasing worker %s: %w", workerName, err)
+	}
+	return nil
+}
+
 func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (updated *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "ReleaseWorker")
 	defer func() { err = done(err) }()
 
 	if actor.GetStatus().GetWorkerAssignment() == nil {
-		markSkipped(ctx, "worker already released")
-		return actor, nil
+		// An Actor with no backlink may still be bound. The assignment commits
+		// before the Actor is updated to point at it, so a crash in between
+		// leaves a row nothing on the Actor names. Releasing by Actor UID is
+		// what recovers it; skipping would leave its share of the Worker's
+		// capacity booked until the Worker itself went away. The resume path
+		// recovers the same window through workerHoldingStaleClaim.
+		return actor, w.releaseAssignmentWithoutBacklink(ctx, actor)
 	}
 
 	latestActor, err := w.store.GetActor(ctx, actorRef)
@@ -228,7 +280,8 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	}
 
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		if _, err := releaseWorker(ctx, w.store, latestActor); err != nil {
+		_, _, err := releaseWorker(ctx, w.store, latestActor)
+		if err != nil {
 			return nil, err
 		}
 
@@ -311,6 +364,70 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 		return status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
 	}
 	return nil
+}
+
+// ensureExternalSnapshotsReleased collects everything the actor wrote to
+// object storage, by deleting its own prefix. It runs before the actor is
+// removed, so a failed attempt is still rediscoverable on the retry.
+//
+// A snapshot borrowed from a tag lives under the tag's prefix, so it survives:
+// the tag owns it and outlives the actor.
+func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
+	defer func() { err = done(err) }()
+
+	if w.objectStore == nil {
+		markSkipped(ctx, "no object store configured")
+		return nil
+	}
+
+	prefix, err := actorSnapshotStoragePrefix(ctx, actor, actorTemplate)
+	if err != nil {
+		return err
+	}
+	if prefix.IsZero() {
+		markSkipped(ctx, "the actor owns no external snapshot")
+		return nil
+	}
+	return objectstore.DeletePrefix(ctx, w.objectStore, prefix)
+}
+
+// actorSnapshotStoragePrefix returns the prefix holding every object the actor wrote:
+// the snapshot it last took, the one a suspend was in the middle of taking, and
+// anything a crashed suspend stranded. A zero prefix means the actor never
+// wrote anything.
+func actorSnapshotStoragePrefix(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (resources.StoragePrefix, error) {
+	owner := actorSnapshotOwner(actor)
+	if snapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); snapshotURI != "" {
+		uri, err := resources.ParseSnapshotURI(snapshotURI)
+		if err != nil {
+			return resources.StoragePrefix{}, fmt.Errorf("while parsing the external snapshot %q: %w", snapshotURI, err)
+		}
+		// The recorded URI names the actor's prefix, so no template lookup is
+		// needed. A URI the actor does not own is a tag's, borrowed until the
+		// actor's first suspend completes, which means it has written nothing of
+		// its own yet.
+		if uri.OwnedBy(owner) {
+			return uri.OwnerPrefix(), nil
+		}
+	}
+	// Nothing of the actor's own is recorded. Unless a suspend died partway,
+	// nothing was ever written under its prefix: the in-progress name is
+	// recorded before atelet uploads the first object.
+	name := actor.GetStatus().GetInProgressSnapshotName()
+	if name == "" {
+		return resources.StoragePrefix{}, nil
+	}
+	// The template's storage location is the only place the actor's prefix can
+	// be derived from now. Without it the actor would be stuck DELETING forever.
+	// TODO: prevent this from leaking objects in the external storage.
+	if actorTemplate == nil {
+		slog.WarnContext(ctx, "Leaking an in-progress external snapshot, the actor's template no longer resolves",
+			slog.String("actor", actor.GetMetadata().GetName()),
+			slog.String("in_progress_snapshot_name", name))
+		return resources.StoragePrefix{}, nil
+	}
+	return owner.Prefix(actorTemplate.GetSnapshotsConfig().GetStorageLocation())
 }
 
 // finalizeDeleted removes the actor from the store and returns the deleted

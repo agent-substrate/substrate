@@ -13,8 +13,8 @@
 # limitations under the License.
 
 # Single source of truth for the OTLP exporter settings shared by every control
-# plane component (ate-api-server, ate-controller, atelet, atenet-router), which
-# consume it via `envFrom`. ate-controller additionally propagates these values
+# plane component (ate-api-server, ate-controller, atelet, atenet-router,
+# atenet-egress), which consume it via `envFrom`. ate-controller additionally propagates these values
 # to the ateom worker pods it creates, which have no other way to receive them,
 # and atenet-router's --otlp-collector-address defaults to the endpoint below,
 # so Envoy's own spans follow it too.

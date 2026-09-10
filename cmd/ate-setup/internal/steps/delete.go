@@ -52,7 +52,7 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 
 	for _, path := range [][]string{
 		{"components", "agentgateway", "configmap.yaml"},
-		{"postgres.yaml"},
+		{"postgres", "postgres.yaml"},
 		{"generated"},
 	} {
 		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest(path...)); err != nil {

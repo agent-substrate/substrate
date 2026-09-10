@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 )
 
 func TestKillArgs(t *testing.T) {
@@ -70,13 +71,13 @@ func TestPauseArgs(t *testing.T) {
 		actorUID: "test-actor-123",
 	}
 
-	got := r.pauseArgs("pause")
+	got := r.pauseArgs(ocispec.PauseContainer)
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		"-root", ateompath.RunSCStateDir("test-actor-123"),
 		"pause",
-		"pause",
+		ocispec.PauseContainer,
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -90,13 +91,13 @@ func TestResumeArgs(t *testing.T) {
 		actorUID: "test-actor-123",
 	}
 
-	got := r.resumeArgs("pause")
+	got := r.resumeArgs(ocispec.PauseContainer)
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		"-root", ateompath.RunSCStateDir("test-actor-123"),
 		"resume",
-		"pause",
+		ocispec.PauseContainer,
 	}
 
 	if !reflect.DeepEqual(got, want) {

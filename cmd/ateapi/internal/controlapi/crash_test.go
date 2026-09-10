@@ -17,6 +17,8 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"maps"
 	"strings"
 	"testing"
 
@@ -66,23 +68,23 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 		WorkerPodUid:    "uid",
 		Status:          &ateapipb.WorkerStatus{},
 	}
-	if actorRef != (resources.ActorRef{}) {
-		actor, err := st.GetActor(ctx, actorRef)
-		if err != nil {
-			worker.Status.Assignment = &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorUid: "synthetic-" + actorRef.Name,
-			}
-		} else {
-			worker.Status.Assignment = &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
-				ActorUid: actor.GetMetadata().GetUid(),
-			}
-		}
-	}
 	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
+	if actorRef == (resources.ActorRef{}) {
+		return
+	}
+	assignment := &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorUid: "synthetic-" + actorRef.Name,
+	}
+	if actor, err := st.GetActor(ctx, actorRef); err == nil {
+		assignment = &ateapipb.ActorAssignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
+			ActorUid: actor.GetMetadata().GetUid(),
+		}
+	}
+	seedAssignment(t, st, "uid", assignment)
 }
 
 // seedUnboundActor stores a running actor whose worker-binding fields were
@@ -150,12 +152,8 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "uid")
-				if gerr != nil {
-					t.Fatalf("GetWorker() = %v, want nil", gerr)
-				}
-				if worker.GetStatus().GetAssignment() != nil {
-					t.Errorf("worker assignment = %v, want nil", worker.GetStatus().GetAssignment())
+				if got := firstAssignment(t, st, "uid"); got != nil {
+					t.Errorf("worker assignment = %v, want none", got)
 				}
 			},
 		},
@@ -170,14 +168,14 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "uid")
-				if gerr != nil {
-					t.Fatalf("GetWorker() = %v, want nil", gerr)
+				assigned := firstAssignment(t, st, "uid")
+				if assigned == nil {
+					t.Fatal("worker assignment = nil, want the other actor's, untouched")
 				}
-				if got := worker.GetStatus().GetAssignment().GetActor().GetName(); got != "actor-2" {
+				if got := assigned.GetActor().GetName(); got != "actor-2" {
 					t.Errorf("worker assigned actor name = %q, want %q", got, "actor-2")
 				}
-				if got := worker.GetStatus().GetAssignment().GetActorUid(); got != "synthetic-actor-2" {
+				if got := assigned.GetActorUid(); got != "synthetic-actor-2" {
 					t.Errorf("worker assigned actor uid = %q, want %q", got, "synthetic-actor-2")
 				}
 			},
@@ -193,30 +191,29 @@ func TestCrashActor(t *testing.T) {
 					WorkerPool:      "pool",
 					WorkerPod:       "pod",
 					WorkerPodUid:    "uid",
-					Status: &ateapipb.WorkerStatus{
-						Assignment: &ateapipb.ActorAssignment{
-							Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-							ActorUid: "stale-incarnation-uid",
-						},
-					},
+					Status:          &ateapipb.WorkerStatus{},
 				}
 				if _, err := st.CreateWorker(ctx, worker); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
+				seedAssignment(t, st, "uid", &ateapipb.ActorAssignment{
+					Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+					ActorUid: "stale-incarnation-uid",
+				})
 			},
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err != nil {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "uid")
-				if gerr != nil {
-					t.Fatalf("GetWorker() = %v, want nil", gerr)
+				assigned := firstAssignment(t, st, "uid")
+				if assigned == nil {
+					t.Fatal("worker assignment = nil, want the stale incarnation's, untouched")
 				}
-				if got := worker.GetStatus().GetAssignment().GetActor().GetName(); got != actorRef.Name {
+				if got := assigned.GetActor().GetName(); got != actorRef.Name {
 					t.Errorf("worker assigned actor name = %q, want %q", got, actorRef.Name)
 				}
-				if got := worker.GetStatus().GetAssignment().GetActorUid(); got != "stale-incarnation-uid" {
+				if got := assigned.GetActorUid(); got != "stale-incarnation-uid" {
 					t.Errorf("worker assigned actor uid = %q, want %q", got, "stale-incarnation-uid")
 				}
 			},
@@ -236,11 +233,7 @@ func TestCrashActor(t *testing.T) {
 				// Without a binding the worker cannot be looked up, so its
 				// assignment must be left untouched even though it names
 				// the crashed actor.
-				worker, gerr := st.GetWorker(ctx, "uid")
-				if gerr != nil {
-					t.Fatalf("GetWorker() = %v, want nil", gerr)
-				}
-				if worker.GetStatus().GetAssignment() == nil {
+				if firstAssignment(t, st, "uid") == nil {
 					t.Error("worker assignment = nil, want untouched")
 				}
 			},
@@ -426,11 +419,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    "pod-uid-1",
 		SandboxClass:    "gvisor",
-		Status: &ateapipb.WorkerStatus{
-			Assignment: &ateapipb.ActorAssignment{
-				Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-			},
-		},
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
@@ -531,14 +520,14 @@ func assertNoCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader) 
 	}
 }
 
-// failingUpdateWorkerStore wraps a store and fails every UpdateWorker call,
-// simulating a transient state-store error while releasing a worker.
-type failingUpdateWorkerStore struct {
+// failingReleaseStore wraps a store and fails every release, simulating a
+// transient state-store error while releasing a worker.
+type failingReleaseStore struct {
 	store.Interface
 	err error
 }
 
-func (f failingUpdateWorkerStore) UpdateWorker(context.Context, string, store.Precondition, func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+func (f failingReleaseStore) ReleaseActorFromWorker(context.Context, string, string) (*ateapipb.Worker, error) {
 	return nil, f.err
 }
 
@@ -557,7 +546,7 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	seedWorker(t, ctx, st, actorRef)
 
 	releaseErr := errors.New("state store unavailable")
-	err := crashActor(ctx, failingUpdateWorkerStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
+	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
 
 	if err == nil {
 		t.Fatal("crashActor() = nil, want error")
@@ -581,11 +570,99 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 
 	// The worker must still be assigned to the actor (the failed release did not
 	// persist): it is not leaked, and a retry will reclaim it.
-	worker, werr := st.GetWorker(ctx, "uid")
-	if werr != nil {
-		t.Fatalf("GetWorker() = %v, want nil", werr)
-	}
-	if worker.GetStatus().GetAssignment() == nil {
+	if firstAssignment(t, st, "uid") == nil {
 		t.Error("worker assignment = nil, want still assigned (release failed, must remain retriable)")
+	}
+}
+
+// crashRecords captures the "Actor crashed" records a crash emits, so a test can
+// assert the identity that ate.actor.crashes is barred from carrying. crashActor
+// logs through the slog default, so this swaps it and the caller cannot be parallel.
+func crashRecords(t *testing.T) *[]map[string]string {
+	t.Helper()
+
+	var records []map[string]string
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
+		if r.Message != "Actor crashed" {
+			return
+		}
+		fields := map[string]string{}
+		r.Attrs(func(a slog.Attr) bool {
+			fields[a.Key] = a.Value.String()
+			return true
+		})
+		records = append(records, fields)
+	})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &records
+}
+
+type slogHandlerFunc func(slog.Record)
+
+func (f slogHandlerFunc) Enabled(context.Context, slog.Level) bool { return true }
+func (f slogHandlerFunc) Handle(_ context.Context, r slog.Record) error {
+	f(r)
+	return nil
+}
+func (f slogHandlerFunc) WithAttrs([]slog.Attr) slog.Handler { return f }
+func (f slogHandlerFunc) WithGroup(string) slog.Handler      { return f }
+
+// The crash record is the only signal carrying actor identity, so it must fire
+// exactly when the counter does. A crash counted but not logged is unattributable;
+// one logged but not counted double-counts on a retry.
+func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	if err := RegisterActorCrashes(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")); err != nil {
+		t.Fatalf("RegisterActorCrashes: %v", err)
+	}
+	records := crashRecords(t)
+
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
+	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	})
+
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
+		t.Fatalf("crashActor: %v", err)
+	}
+	if len(*records) != 1 {
+		t.Fatalf("got %d crash records, want 1", len(*records))
+	}
+
+	got := (*records)[0]
+	stored, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	want := map[string]string{
+		string(ateattr.AtespaceKey):           actorRef.Atespace,
+		string(ateattr.ActorNameKey):          actorRef.Name,
+		string(ateattr.ActorUIDKey):           stored.GetMetadata().GetUid(),
+		string(ateattr.TemplateAtespaceKey):   "demo-ns",
+		string(ateattr.TemplateNameKey):       "counter-template",
+		string(ateattr.ActorOperationNameKey): ateattr.OperationResume,
+		string(ateattr.FailureReasonKey):      ateattr.ReasonWorkerPodGone,
+		string(ateattr.FailureDomainKey):      ateattr.FailureDomainInfrastructure,
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("crash record = %v, want %v", got, want)
+	}
+	if got[string(ateattr.ActorUIDKey)] == "" {
+		t.Error("crash record carries no ate.actor.uid; it cannot survive a name reuse")
+	}
+
+	// Re-crashing an already-crashed actor must move neither signal.
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
+		t.Fatalf("second crashActor: %v", err)
+	}
+	if len(*records) != 1 {
+		t.Errorf("got %d crash records after re-crashing, want 1", len(*records))
 	}
 }

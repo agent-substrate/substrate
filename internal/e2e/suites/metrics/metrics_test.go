@@ -238,6 +238,16 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 						crashErrs = append(crashErrs, fmt.Sprintf("ate_failure_reason %q is invalid (must be a registered ateerrors reason enum like CORRUPTED_ASSIGNMENT, WORKER_POD_GONE, WORKER_REASSIGNED, UNKNOWN)", reasonVal))
 					}
 
+					// The pair travels together, and the domain must agree with the
+					// reason: a consumer splitting infrastructure from workload faults
+					// reads the domain and never matches on the names of the reasons.
+					domainVal := extractLabelValue(line, "ate_failure_domain")
+					if domainVal == "" {
+						crashErrs = append(crashErrs, "ate_failure_domain label is missing or empty")
+					} else if want := ateattr.FailureDomain(reasonVal); domainVal != want {
+						crashErrs = append(crashErrs, fmt.Sprintf("ate_failure_domain %q disagrees with ate_failure_reason %q, which classifies as %q", domainVal, reasonVal, want))
+					}
+
 					if tmplAtespaceVal == "" {
 						crashErrs = append(crashErrs, "ate_template_atespace label is missing or empty")
 					}

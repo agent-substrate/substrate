@@ -29,9 +29,9 @@
 # arm64 the v1.14.0 binary is built from source, so its bytes vary per
 # toolchain and cannot be pinned in the manifest).
 #
-# WorkerPools must reference the SandboxConfig explicitly via
-# sandboxConfigName: microvm. This avoids a dirty teardown silently binding
-# new pools to a stale config.
+# ActorTemplates must reference the SandboxConfig explicitly via
+# sandboxConfig.configName: microvm. This avoids a dirty teardown silently
+# binding new templates to a stale config.
 #
 # On --delete: removes the SandboxConfig from the cluster. Bucket contents
 # are left alone (they're inert until a SandboxConfig points at them, and
@@ -195,4 +195,4 @@ sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
     "${MANIFEST_TEMPLATE}" \
   | run_kubectl apply -f -
 
-log "Done. WorkerPools must reference this SandboxConfig by name (sandboxConfigName: microvm)."
+log "Done. ActorTemplates must reference this SandboxConfig by name (sandboxConfig.configName: microvm)."

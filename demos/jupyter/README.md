@@ -44,11 +44,11 @@ go install ./cmd/kubectl-ate
 ```
 
 The deploy created the `jupyter` actor template in the `ate-demo-jupyter`
-atespace. Create your `jupyter` actor there — `--template-ref` names the
+atespace. Create your `jupyter` actor there — `--template` names the
 template, resolved in the actor's atespace:
 
 ```bash
-kubectl ate create actor jupyter-notebook -a ate-demo-jupyter --template-ref jupyter
+kubectl ate create actor jupyter-notebook -a ate-demo-jupyter --template jupyter
 ```
 
 ### 2. Access Jupyter via the Proxy!

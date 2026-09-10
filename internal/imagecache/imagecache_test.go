@@ -119,9 +119,10 @@ func TestRetryBackoffFor(t *testing.T) {
 }
 
 // TestEnsureImage_RetriesRateLimit proves a pull survives transient 429s.
-// go-containerregistry's retry transport, configured with pullRetryBackoff,
-// covers every request including the /v2/ auth ping — the first request a
-// throttling registry rejects (as registry.k8s.io does per source IP).
+// go-containerregistry's retry transport, configured with the per-registry
+// backoff picked by retryBackoffFor, covers every request including the /v2/
+// auth ping — the first request a throttling registry rejects (as
+// registry.k8s.io does per source IP).
 func TestEnsureImage_RetriesRateLimit(t *testing.T) {
 	origBackoff := dedicatedRegistryBackoff
 	dedicatedRegistryBackoff = remote.Backoff{Duration: time.Millisecond, Factor: 2.0, Jitter: 0.1, Steps: 4}

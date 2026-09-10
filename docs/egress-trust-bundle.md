@@ -53,8 +53,8 @@ spec:
 
 `trustBundle.path` is relative to the root of the volume, so the file's absolute path is
 `mountPath` + `path`. It must be a clean relative Unix path: no leading or
-trailing `/`, no `//`, `:`, `.`, or `..` segments. A `systemInfo` volume takes
-at most 8 data sources and their paths must not collide.
+trailing `/`, no `//`, `.`, or `..` segments, and at most 16 segments. A
+`systemInfo` volume takes at most 8 data sources and their paths must not repeat.
 
 The projected PEM contains `CERTIFICATE` blocks only, deduplicated and
 deliberately shuffled — order carries no meaning, so do not write anything that
