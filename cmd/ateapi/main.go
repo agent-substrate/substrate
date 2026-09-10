@@ -156,6 +156,13 @@ func main() {
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
+	// Apply local writes directly to the cache on commit to eliminate outbox
+	// polling delay; later watch events are deduplicated by version.
+	if publisher, ok := persistence.(interface {
+		PublishEventsLocally(func(store.WorkerEvent))
+	}); ok {
+		publisher.PublishEventsLocally(workerCache.ApplyLocal)
+	}
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()

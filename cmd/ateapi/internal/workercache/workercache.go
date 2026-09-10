@@ -210,6 +210,16 @@ func (c *Cache) resync(ctx context.Context) *store.WorkerWatch {
 	return watch
 }
 
+// ApplyLocal eagerly updates the cache on commit, ahead of the watch.
+// Version fencing deduplicates later watch events. Deletes are ignored
+// to prevent out-of-order watch replays from resurrecting workers.
+func (c *Cache) ApplyLocal(event store.WorkerEvent) {
+	if event.Type == store.WorkerEventDeleted {
+		return
+	}
+	c.applyEvent(event)
+}
+
 func (c *Cache) applyEvent(event store.WorkerEvent) {
 	key := workerKey(event.Worker)
 	c.mu.Lock()

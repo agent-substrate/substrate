@@ -101,6 +101,11 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing transaction: %w", err)
 	}
+	if worker != nil && p.localEvents != nil && eventType != store.WorkerEventDeleted {
+		// Cloned because the returned worker also goes back to the API
+		// caller, while the sink (the worker cache) retains its copy.
+		p.localEvents(store.WorkerEvent{Type: eventType, Worker: proto.Clone(worker).(*ateapipb.Worker)})
+	}
 	return worker, nil
 }
 

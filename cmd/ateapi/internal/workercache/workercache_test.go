@@ -470,3 +470,59 @@ func eventually(t *testing.T, condition func() bool, timeout time.Duration) {
 		t.Fatal("condition not met within timeout")
 	}
 }
+
+// ApplyLocal is the store's commit-time fast path: events land in the cache
+// synchronously, ahead of the watch, and the watch's later duplicate (or any
+// older event still in the journal) must be a no-op.
+func TestCache_ApplyLocal_ImmediateAndFenced(t *testing.T) {
+	w := makeWorker("ns", "pod1", 1)
+	fs := newFakeStore(w)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Local publish is synchronous: visible with no watch delivery involved.
+	updated := makeWorker("ns", "pod1", 2)
+	updated.Status.Allocated = &ateapipb.WorkerResources{Actors: 1}
+	c.ApplyLocal(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	got, err := c.Worker(workerName("ns", "pod1"))
+	if err != nil {
+		t.Fatalf("Worker: %v", err)
+	}
+	if got.GetMetadata().GetVersion() != 2 {
+		t.Fatalf("version after ApplyLocal = %d, want 2 (local event must apply synchronously)", got.GetMetadata().GetVersion())
+	}
+
+	// The watch replaying the same (or an older) journal event must not
+	// regress the cache.
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	eventually(t, func() bool {
+		w, err := c.Worker(workerName("ns", "pod1"))
+		return err == nil && w.GetMetadata().GetVersion() == 2 && w.GetStatus().GetAllocated().GetActors() == 1
+	}, 2*time.Second)
+
+	// An older local event must be fenced too.
+	c.ApplyLocal(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
+	if w, _ := c.Worker(workerName("ns", "pod1")); w.GetMetadata().GetVersion() != 2 {
+		t.Fatalf("older ApplyLocal regressed the cache to version %d", w.GetMetadata().GetVersion())
+	}
+}
+
+// Deletes must not be applied locally: cache absence is not versioned, so an
+// out-of-order local delete could be resurrected by an older watch event.
+// Deletes ride the journal only.
+func TestCache_ApplyLocal_IgnoresDeletes(t *testing.T) {
+	w := makeWorker("ns", "pod1", 3)
+	fs := newFakeStore(w)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	c.ApplyLocal(store.WorkerEvent{Type: store.WorkerEventDeleted, Worker: w})
+	if _, err := c.Worker(workerName("ns", "pod1")); err != nil {
+		t.Fatal("ApplyLocal applied a delete; deletes must only arrive via the watch")
+	}
+}

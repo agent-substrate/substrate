@@ -1017,3 +1017,67 @@ func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
 		t.Fatal("watch stayed open past a corrupt payload (silent skip)")
 	}
 }
+
+// TestPublishEventsLocally pins the local fast-path contract: create and
+// update events reach the registered sink synchronously at commit time,
+// carrying the committed (version-bumped) state, while deletes are withheld
+// (cache absence is not versioned; deletes ride the journal only).
+func TestPublishEventsLocally(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN, "public")
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	var events []store.WorkerEvent
+	p.PublishEventsLocally(func(ev store.WorkerEvent) { events = append(events, ev) })
+
+	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "local-publish-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != store.WorkerEventCreated {
+		t.Fatalf("after create: events = %+v, want one WorkerEventCreated delivered synchronously", events)
+	}
+	if got, want := events[0].Worker.GetMetadata().GetVersion(), created.GetMetadata().GetVersion(); got != want {
+		t.Errorf("created event version = %d, want committed version %d", got, want)
+	}
+
+	updated, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Ip = "10.0.0.9"
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+	if len(events) != 2 || events[1].Type != store.WorkerEventUpdated {
+		t.Fatalf("after update: events = %+v, want a second WorkerEventUpdated", events)
+	}
+	if got, want := events[1].Worker.GetMetadata().GetVersion(), updated.GetMetadata().GetVersion(); got != want {
+		t.Errorf("updated event version = %d, want committed version %d", got, want)
+	}
+	if events[1].Worker.GetIp() != "10.0.0.9" {
+		t.Errorf("updated event carries Ip %q, want the committed mutation", events[1].Worker.GetIp())
+	}
+	// The sink's copy must be isolated from the caller's returned Worker.
+	if events[1].Worker == updated {
+		t.Error("locally published Worker aliases the caller's returned Worker; it must be a clone")
+	}
+
+	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker failed: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("after delete: %d events, want still 2 — deletes must not publish locally", len(events))
+	}
+}
