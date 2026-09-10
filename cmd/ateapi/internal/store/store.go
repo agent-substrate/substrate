@@ -156,8 +156,8 @@ type Interface interface {
 	DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
-	// metadata (uid, version, timestamps). The input is not mutated. Returns
-	// ErrAlreadyExists if the name is taken.
+	// metadata (uid, version, timestamps). The input may be mutated in place.
+	// Returns ErrAlreadyExists if the name is taken.
 	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
 
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
