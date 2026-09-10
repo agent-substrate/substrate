@@ -2592,9 +2592,12 @@ type Container struct {
 	// +k8s:required
 	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// image is the OCI image reference the container runs:
+	// [registry/]repository[:tag][@digest].
+	//
 	// +k8s:required
 	// +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
-	// TODO: validate that this is a well-formed image reference
+	// +k8s:customValidation # must be a well-formed image reference
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
 	// ignored and the process argv is command + args. Unlike Kubernetes,
@@ -3151,7 +3154,7 @@ type ImageVolumeSource struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=512
-	// +k8s:customValidation # must be pinned by digest; no contains tag exists
+	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

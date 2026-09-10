@@ -313,7 +313,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{{
-				Name: "main", Image: "main@sha256:abc", VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
+				Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
 			Volumes: []*ateapipb.Volume{{
 				Name: "data",
@@ -1865,7 +1865,7 @@ func TestResumeActorPassesLiteralEnv(t *testing.T) {
 	createTemplateWithContainers(t, tc, ns, []*ateapipb.Container{
 		{
 			Name:    "main",
-			Image:   "main@sha256:abc",
+			Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 			Command: []string{"/main"},
 			Env: []*ateapipb.EnvVar{
 				{

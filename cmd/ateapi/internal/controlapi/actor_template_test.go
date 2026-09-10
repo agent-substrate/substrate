@@ -714,7 +714,38 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Image = strings.Repeat("x", 513)
 		},
-		want: field.ErrorList{field.TooLong(field.NewPath("containers").Index(0).Child("image"), nil, 512).WithOrigin("maxLength")},
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, ""),
+			field.TooLong(field.NewPath("containers").Index(0).Child("image"), nil, 512).WithOrigin("maxLength"),
+		},
+	}, {
+		name: "valid image: bare repository",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Image = "ubuntu"
+		},
+	}, {
+		name: "valid image: pinned by digest",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Image = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		},
+	}, {
+		name: "invalid image: uppercase repository",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Image = "example.com/App:v1"
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, "")},
+	}, {
+		name: "invalid image: malformed digest",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Image = "example.com/app@sha256:abc"
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, "")},
+	}, {
+		name: "invalid image: empty tag",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Image = "example.com/app:"
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, "")},
 	}, {
 		name:   "container missing name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers[0].Name = "" },
@@ -943,14 +974,14 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Volumes = []*ateapipb.Volume{{
 				Name:       "scratch",
 				DurableDir: &ateapipb.DurableDirVolumeSource{},
-				Image:      &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"},
+				Image:      &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
 			}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "one of").WithOrigin("union")},
 	}, {
 		name: "valid image volume",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}}
 		},
 	}, {
 		name: "image volume missing reference",
@@ -962,6 +993,18 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "image volume reference not pinned by digest",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app:v1"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("image", "reference"), nil, "")},
+	}, {
+		name: "image volume reference with malformed digest",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("image", "reference"), nil, "")},
+	}, {
+		name: "image volume reference not a reference at all",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "@"}}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("image", "reference"), nil, "")},
 	}, {

@@ -897,9 +897,12 @@ message Container {
   // +k8s:format=k8s-short-name
   string name = 1;
 
+  // image is the OCI image reference the container runs:
+  // [registry/]repository[:tag][@digest].
+  //
   // +k8s:required
   // +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
-  // TODO: validate that this is a well-formed image reference
+  // +k8s:customValidation # must be a well-formed image reference
   string image = 2;
 
   // Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
@@ -1079,7 +1082,7 @@ message ImageVolumeSource {
   //
   // +k8s:required
   // +k8s:maxLength=512
-  // +k8s:customValidation # must be pinned by digest; no contains tag exists
+  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string reference = 1;
 }
 

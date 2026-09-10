@@ -343,7 +343,7 @@ func createTemplate(t *testing.T, tc *testContext, ns string) *ateapipb.ActorTem
 	return createTemplateWithContainers(t, tc, ns, []*ateapipb.Container{
 		{
 			Name:    "main",
-			Image:   "main@sha256:abc",
+			Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 			Command: []string{"/main"},
 		},
 	})
@@ -369,7 +369,7 @@ func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes
 	return createTemplateWithContainersAndVolumes(t, tc, ns, []*ateapipb.Container{
 		{
 			Name:         "main",
-			Image:        "main@sha256:abc",
+			Image:        "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 			Command:      []string{"/main"},
 			VolumeMounts: mounts,
 		},
@@ -529,7 +529,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{
-				{Name: "main", Image: "main@sha256:abc", Command: []string{"/main"}},
+				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},
 			},
 			WorkerSelector: selector,
 		},

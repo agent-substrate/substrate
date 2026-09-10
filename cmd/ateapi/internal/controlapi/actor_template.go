@@ -21,6 +21,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/distribution/reference"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volumepath"
@@ -269,11 +271,31 @@ func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ oper
 	return errs
 }
 
-// ValidateCustom_ImageVolumeSource_Reference requires image references to
-// be pinned by digest, because changing the image content under a fixed
-// reference invalidates snapshots.
+// ValidateCustom_Container_Image checks that the image is a well-formed
+// OCI image reference, using the same grammar the container runtimes parse
+// with. Unlike image volumes, a tag reference is allowed.
+func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == "" {
+		return nil // required is enforced by tags
+	}
+	if _, err := reference.ParseNormalizedNamed(*value); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
+	}
+	return nil
+}
+
+// ValidateCustom_ImageVolumeSource_Reference requires a well-formed image
+// reference pinned by digest, because changing the image content under a
+// fixed reference invalidates snapshots.
 func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if !strings.Contains(*value, "@") {
+	if *value == "" {
+		return nil // required is enforced by tags
+	}
+	ref, err := reference.ParseNormalizedNamed(*value)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
+	}
+	if _, ok := ref.(reference.Digested); !ok {
 		return field.ErrorList{field.Invalid(fldPath, *value, "must be pinned by digest (changing the image invalidates snapshots)")}
 	}
 	return nil
