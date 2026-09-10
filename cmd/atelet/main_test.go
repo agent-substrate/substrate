@@ -33,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/atelet"
@@ -290,6 +291,126 @@ func TestWriteSystemInfoVolume_TrustBundle(t *testing.T) {
 			t.Errorf("writeSystemInfoVolume = %v, want not-found resolution error", err)
 		}
 	})
+}
+
+func TestSnapshotManifestRejectsNonLocalFile(t *testing.T) {
+	manifest, err := json.Marshal(sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    testPauseImage,
+		SnapshotFiles: []string{"../outside"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = unmarshalSandboxRecord(manifest)
+	if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
+		t.Fatalf("unmarshalSandboxRecord() error = %v, want ReasonInvalidSandboxAsset", err)
+	}
+}
+
+func TestCheckpointResponseRejectsNonLocalFile(t *testing.T) {
+	_, err := checkpointSnapshotFiles(&ateompb.CheckpointWorkloadResponse{
+		SnapshotFiles: []string{"../outside"},
+	}, true)
+	if err == nil {
+		t.Fatal("checkpointSnapshotFiles() accepted a path outside the checkpoint directory")
+	}
+}
+
+func TestCheckpointSnapshotFilesAllowsOptionalEmptyResult(t *testing.T) {
+	files, err := checkpointSnapshotFiles(&ateompb.CheckpointWorkloadResponse{}, false)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("checkpointSnapshotFiles() = %v, %v; want empty result", files, err)
+	}
+}
+
+func TestUploadSnapshotRejectsSymlinkOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	checkpointDir := filepath.Join(parent, "checkpoint-state")
+	if err := os.Mkdir(checkpointDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(checkpointDir, "checkpoint.img")); err != nil {
+		t.Fatal(err)
+	}
+	uri, err := resources.ParseSnapshotURI(testSnapshotURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &recordingObjectStorage{}
+	err = (&AteomHerder{gcsClient: store}).uploadSnapshot(context.Background(), uri, checkpointDir,
+		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}}, "test", "test")
+	if err == nil {
+		t.Fatal("uploadSnapshot() followed a symlink outside the checkpoint directory")
+	}
+	if got := store.keys(); len(got) != 0 {
+		t.Fatalf("uploaded objects = %v, want none", got)
+	}
+}
+
+func TestDownloadExternalCheckpointRejectsSymlinkOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	restoreDir := filepath.Join(parent, "restore-state")
+	if err := os.Mkdir(restoreDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside")
+	if err := os.WriteFile(outside, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(restoreDir, "checkpoint.img")); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &recordingObjectStorage{}
+	payload := filepath.Join(parent, "payload")
+	if err := os.WriteFile(payload, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ategcs.SendLocalFileToGCSWithZstd(context.Background(), store, testSnapshotURI+"/checkpoint.img.zstd", payload); err != nil {
+		t.Fatal(err)
+	}
+	err := (&AteomHerder{gcsClient: store}).downloadExternalCheckpoint(
+		context.Background(), testSnapshotURI, restoreDir, []string{"checkpoint.img"})
+	if err == nil {
+		t.Fatal("downloadExternalCheckpoint() followed a symlink outside the restore directory")
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "keep me" {
+		t.Fatalf("outside file = %q, %v; want unchanged", got, err)
+	}
+}
+
+func TestCopyLocalCheckpointRejectsSymlinkOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	snapshotName := "pause-1"
+	snapshotDir := filepath.Join(parent, "local-checkpoint", snapshotName)
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(snapshotDir, "checkpoint.img")); err != nil {
+		t.Fatal(err)
+	}
+	restoreDir := filepath.Join(parent, "restore-state")
+	if err := os.Mkdir(restoreDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	err := (&AteomHerder{}).copyLocalCheckpoint(context.Background(), snapshotName,
+		filepath.Join(parent, "local-checkpoint"), restoreDir, []string{"checkpoint.img"})
+	if err == nil {
+		t.Fatal("copyLocalCheckpoint() followed a symlink outside the local checkpoint directory")
+	}
+	if _, err := os.Stat(filepath.Join(restoreDir, "checkpoint.img")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore file exists after rejected copy: %v", err)
+	}
 }
 
 func TestWriteFileAtomic(t *testing.T) {
