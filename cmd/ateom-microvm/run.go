@@ -411,7 +411,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Networking (host side): per-activation veth into the interior netns. The
 	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+	if _, err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
 		InteriorNetNS:      s.interiorNetNS,
 		HostVethHWAddr:     hostVethHWAddr,
 		SweepInteriorLinks: true,
@@ -1061,6 +1061,10 @@ func tailString(s string, n int) string {
 // agent: configure eth0 (IP/MAC/MTU), install the connected + default routes, and
 // pin the gateway's ARP entry to its fixed MAC (so a restored guest's frozen
 // neighbor entry stays valid).
+//
+// TODO(#246): the guest is configured IPv4-only, so a micro-VM actor sees no
+// IPv6 even on a dual-stack pod where the host veth has one. gVisor reads the
+// interior netns and picks the address up; this path has to be told.
 func (s *AteomService) configureGuestNetwork(ctx context.Context, ac *kata.AgentClient, mtu uint64) error {
 	if err := ac.UpdateInterface(ctx, &agentpb.Interface{
 		Device: ateomnet.ActorVethName,

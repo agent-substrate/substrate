@@ -43,14 +43,36 @@ const (
 	ActorVethIP       = "169.254.17.2"
 	ActorNftTableName = "ateom_actor"
 
-	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
-	ActorVethSubnet = "169.254.17.0/30"
+	// podPrimaryIfaceName is the worker pod's own interface, the one the CNI
+	// gave it. It is not ActorVethName despite the identical value: that one
+	// names the actor's end of the veth, which lives in the interior netns.
+	podPrimaryIfaceName = "eth0"
+
+	// The IPv6 counterparts of the point-to-point pair above, chosen to echo the
+	// v4 addresses digit for digit. A fixed ULA rather than an RFC 4193 random
+	// prefix so the pair stays as readable in a packet dump as 169.254.17.x, and
+	// not fe80::/10 because a link-local source would need a scope id everywhere
+	// it is used. It must not overlap the cluster's pod CIDR; kind's dual-stack
+	// default is fd00:10:244::/56.
+	HostVethIPv6CIDR     = "fd00:169:254::1/126"
+	ActorVethIPv6CIDR    = "fd00:169:254::2/126"
+	ActorVethIPv6Gateway = "fd00:169:254::1"
+	ActorVethIPv6IP      = "fd00:169:254::2"
+
+	// ActorVethSubnet is the point-to-point /30 the actor veth lives on, and
+	// ActorVethIPv6Subnet is its /126 counterpart.
+	ActorVethSubnet     = "169.254.17.0/30"
+	ActorVethIPv6Subnet = "fd00:169:254::/126"
 )
 
 var (
 	HostVethAddr  = MustParseAddr(HostVethCIDR)
 	ActorVethAddr = MustParseAddr(ActorVethCIDR)
 	ActorVethGwIP = MustParseIP(ActorVethGateway)
+
+	HostVethIPv6Addr  = mustParseNoDADAddr(HostVethIPv6CIDR)
+	ActorVethIPv6Addr = mustParseNoDADAddr(ActorVethIPv6CIDR)
+	ActorVethIPv6GwIP = MustParseIPv6(ActorVethIPv6Gateway)
 )
 
 // MustParseAddr parses a CIDR string into a netlink.Addr, panicking on error.
@@ -62,6 +84,18 @@ func MustParseAddr(cidr string) *netlink.Addr {
 	return a
 }
 
+// mustParseNoDADAddr parses a CIDR into an address flagged IFA_F_NODAD.
+//
+// Per-address flag rather than the interface-wide accept_dad sysctl because the
+// ateom container is unprivileged, so containerd mounts /proc/sys read-only.
+// DAD is pointless on a point-to-point veth nobody else can reach, and it would
+// otherwise hold the address tentative for ~1s on every resume.
+func mustParseNoDADAddr(cidr string) *netlink.Addr {
+	a := MustParseAddr(cidr)
+	a.Flags = unix.IFA_F_NODAD
+	return a
+}
+
 // MustParseIP parses an IPv4 string into a net.IP, panicking on error.
 func MustParseIP(s string) net.IP {
 	ip := net.ParseIP(s).To4()
@@ -69,6 +103,57 @@ func MustParseIP(s string) net.IP {
 		panic(fmt.Sprintf("parsing constant IPv4 %q", s))
 	}
 	return ip
+}
+
+// MustParseIPv6 parses an IPv6 string into a net.IP, panicking on error. An
+// IPv4 string is an error: net.IP holds it as a 16-byte v4-mapped address, so
+// it would pass a length check and then compare against no IPv6 header.
+func MustParseIPv6(s string) net.IP {
+	ip := net.ParseIP(s)
+	if ip == nil || ip.To4() != nil {
+		panic(fmt.Sprintf("parsing constant IPv6 %q", s))
+	}
+	return ip.To16()
+}
+
+// linkIPv6Enabled reports whether IPv6 addresses can be assigned to the named
+// link in the current netns. It answers a kernel capability question, not a
+// cluster one: IPv4-only GKE leaves disable_ipv6=1 and netlink then rejects
+// every IPv6 address with EPERM, but IPv4-only kind leaves it at 0 because the
+// node kernel has IPv6 compiled in. A kernel built without IPv6 has no sysctl
+// at all. Pair it with linkHasGlobalIPv6 to decide whether the actor gets IPv6;
+// on its own it says yes on clusters that have no IPv6 anywhere.
+func linkIPv6Enabled(name string) bool {
+	b, err := os.ReadFile("/proc/sys/net/ipv6/conf/" + name + "/disable_ipv6")
+	if err != nil {
+		return false
+	}
+	return len(b) > 0 && b[0] == '0'
+}
+
+// linkHasGlobalIPv6 reports whether link carries a global IPv6 address. Called
+// on the worker pod's own interface, that is what decides the families the
+// actor can egress on.
+//
+// It answers whether the pod has an address to egress from, not whether that
+// address routes anywhere: IsGlobalUnicast is true for a ULA, and dual-stack
+// kind hands pods a ULA with no path off the host. Reachability is the
+// cluster's problem, not something this can decide from inside the netns.
+func linkHasGlobalIPv6(ctx context.Context, link netlink.Link) bool {
+	// netlink can report ErrDumpInterrupted alongside a valid partial answer.
+	// Trust a positive result either way: reporting false on a dual-stack pod
+	// silently strands the actor on IPv4, which is the costlier mistake.
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V6)
+	if err != nil {
+		slog.WarnContext(ctx, "listing IPv6 addresses of the worker pod interface",
+			"link", link.Attrs().Name, "err", err, "addressesRead", len(addrs))
+	}
+	for _, addr := range addrs {
+		if addr.IP.IsGlobalUnicast() {
+			return true
+		}
+	}
+	return false
 }
 
 // MustParseMAC parses a MAC address string into a net.HardwareAddr, panicking on error.
@@ -82,7 +167,9 @@ func MustParseMAC(s string) net.HardwareAddr {
 
 // ConfigureActorVeth configures the actor veth inside the interior netns.
 // It assumes it is already running inside the target network namespace.
-func ConfigureActorVeth(ctx context.Context) error {
+// ipv6 comes from SetupActorNetwork, which decides it in the worker pod netns;
+// this namespace cannot answer the question for itself.
+func ConfigureActorVeth(ctx context.Context, ipv6 bool) error {
 	// Run inside the gVisor interior netns. SetupActorNetwork has already created
 	// the veth peer here, under its final name, so this only has to address it.
 	// gVisor reads link names, addresses, and routes from this namespace when the
@@ -107,6 +194,12 @@ func ConfigureActorVeth(ctx context.Context) error {
 	if err := netlink.AddrReplace(actorLink, ActorVethAddr); err != nil {
 		return fmt.Errorf("while assigning actor veth address: %w", err)
 	}
+	if ipv6 {
+		if err := netlink.AddrReplace(actorLink, ActorVethIPv6Addr); err != nil {
+			return fmt.Errorf("while assigning actor veth ipv6 address: %w", err)
+		}
+	}
+
 	if err := netlink.LinkSetUp(actorLink); err != nil {
 		return fmt.Errorf("while bringing up actor veth: %w", err)
 	}
@@ -116,6 +209,15 @@ func ConfigureActorVeth(ctx context.Context) error {
 		Gw:        ActorVethGwIP,
 	}); err != nil {
 		return fmt.Errorf("while installing actor default route: %w", err)
+	}
+	if ipv6 {
+		if err := netlink.RouteReplace(&netlink.Route{
+			LinkIndex: actorLink.Attrs().Index,
+			Gw:        ActorVethIPv6GwIP,
+			Dst:       &net.IPNet{IP: net.ParseIP("::"), Mask: net.CIDRMask(0, 128)},
+		}); err != nil {
+			return fmt.Errorf("while installing actor default ipv6 route: %w", err)
+		}
 	}
 
 	return nil
@@ -173,7 +275,7 @@ func PodIPv4() (net.IP, error) {
 	// Resolve the worker pod IPv4 address from the pod namespace's real eth0.
 	// Because eth0 now stays in the pod namespace, this IP remains available for
 	// both normal worker connectivity and the temporary inbound DNAT rule.
-	eth0Link, err := netlink.LinkByName("eth0")
+	eth0Link, err := netlink.LinkByName(podPrimaryIfaceName)
 	if err != nil {
 		return nil, fmt.Errorf("while getting pod eth0: %w", err)
 	}
@@ -229,9 +331,6 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	// rules in an ateom-owned table makes cleanup simple and avoids mutating
 	// Kubernetes or CNI-managed chains directly.
 	//
-	// TODO: Add IPv6 veth addressing, forwarding, and nftables rules once actor
-	// networking supports dual-stack pods. The current actor network is IPv4-only.
-	//
 	// The rules do three things:
 	//
 	//   * prerouting: redirect new actor TCP connections to atunnel's local
@@ -247,8 +346,10 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	}
 
 	c := &nftables.Conn{}
+	// The inet family lets one table carry both address families once the
+	// actor veth is dual-stack.
 	table := &nftables.Table{
-		Family: nftables.TableFamilyIPv4,
+		Family: nftables.TableFamilyINet,
 		Name:   ActorNftTableName,
 	}
 	c.AddTable(table)
@@ -263,6 +364,9 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	if redirectRule := ActorEgressRedirectRule(table, prerouting, egressPort); redirectRule != nil {
 		c.AddRule(redirectRule)
 	}
+	if redirectRuleIPv6 := ActorIPv6EgressRedirectRule(table, prerouting, egressPort); redirectRuleIPv6 != nil {
+		c.AddRule(redirectRuleIPv6)
+	}
 
 	postrouting := c.AddChain(&nftables.Chain{
 		Name:     "postrouting",
@@ -274,7 +378,12 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	c.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: postrouting,
-		Exprs: append(IPSourceEqual(ActorVethIP), &expr.Masq{}),
+		Exprs: append(ipv4SourceEqual(ActorVethIP), &expr.Masq{}),
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: postrouting,
+		Exprs: append(ipv6SourceEqual(ActorVethIPv6IP), &expr.Masq{}),
 	})
 
 	acceptPolicy := nftables.ChainPolicyAccept
@@ -295,7 +404,7 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	})
 
 	if err := c.Flush(); err != nil {
-		return fmt.Errorf("while installing actor nftables rules: %w", err)
+		return fmt.Errorf("while installing actor nftables rules (inet nat needs Linux 5.2 or later): %w", err)
 	}
 	return nil
 }
@@ -305,10 +414,23 @@ func RemoveActorNftablesRules() error {
 	// Delete the whole ateom nftables table if it exists. The table is
 	// per-worker and currently per-active-actor because this worker path runs at
 	// most one actor at a time. Missing tables are treated as already clean.
+	//
+	// A table name is unique per family, so both families are swept: an ateom
+	// from before the inet move can have left an ip table in this netns.
+	// TODO(ypgao): Drop the ip sweep once no live pod can predate this change.
+	return errors.Join(
+		removeActorNftablesTable("inet", nftables.TableFamilyINet),
+		removeActorNftablesTable("ip", nftables.TableFamilyIPv4),
+	)
+}
+
+// removeActorNftablesTable deletes the actor table in one family. A missing
+// table is treated as already clean.
+func removeActorNftablesTable(name string, family nftables.TableFamily) error {
 	c := &nftables.Conn{}
-	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	tables, err := c.ListTablesOfFamily(family)
 	if err != nil {
-		return fmt.Errorf("while listing nftables tables: %w", err)
+		return fmt.Errorf("while listing %s nftables tables: %w", name, err)
 	}
 	for _, table := range tables {
 		if table.Name != ActorNftTableName {
@@ -316,19 +438,27 @@ func RemoveActorNftablesRules() error {
 		}
 		c.DelTable(table)
 		if err := c.Flush(); err != nil {
-			return fmt.Errorf("while deleting actor nftables table: %w", err)
+			return fmt.Errorf("while deleting the %s actor nftables table: %w", name, err)
 		}
 		return nil
 	}
 	return nil
 }
 
-func IPSourceEqual(ip string) []expr.Any {
-	return IPPayloadEqual(12, ip)
+func ipv4SourceEqual(ip string) []expr.Any {
+	return ipv4PayloadEqual(12, ip)
 }
 
-func IPPayloadEqual(offset uint32, ip string) []expr.Any {
+// ipv4PayloadEqual matches a 4-byte IPv4 network-header field, guarded by an
+// nfproto comparison so it is safe in the inet table.
+func ipv4PayloadEqual(offset uint32, ip string) []expr.Any {
 	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.NFPROTO_IPV4},
+		},
 		&expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseNetworkHeader,
@@ -339,6 +469,34 @@ func IPPayloadEqual(offset uint32, ip string) []expr.Any {
 			Op:       expr.CmpOpEq,
 			Register: 1,
 			Data:     net.ParseIP(ip).To4(),
+		},
+	}
+}
+
+func ipv6SourceEqual(ip string) []expr.Any {
+	return ipv6PayloadEqual(8, ip)
+}
+
+// ipv6PayloadEqual matches a 16-byte IPv6 network-header field. Offset 8 is the
+// source address, where the IPv4 source sits at 12.
+func ipv6PayloadEqual(offset uint32, ip string) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.NFPROTO_IPV6},
+		},
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseNetworkHeader,
+			Offset:       offset,
+			Len:          16,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     MustParseIPv6(ip),
 		},
 	}
 }
@@ -361,7 +519,24 @@ func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port 
 	if port == 0 {
 		return nil
 	}
-	exprs := append(IPSourceEqual(ActorVethIP), TCPProtocol()...)
+	exprs := append(ipv4SourceEqual(ActorVethIP), TCPProtocol()...)
+	exprs = append(exprs,
+		&expr.Immediate{
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(port),
+		},
+		&expr.Redir{RegisterProtoMin: 1},
+	)
+	return &nftables.Rule{Table: table, Chain: chain, Exprs: exprs}
+}
+
+// ActorIPv6EgressRedirectRule is ActorEgressRedirectRule for the actor's IPv6
+// source address.
+func ActorIPv6EgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
+	if port == 0 {
+		return nil
+	}
+	exprs := append(ipv6SourceEqual(ActorVethIPv6IP), TCPProtocol()...)
 	exprs = append(exprs,
 		&expr.Immediate{
 			Register: 1,
@@ -457,6 +632,19 @@ func DumpNetInfo(ctx context.Context, prefix string) error {
 	return nil
 }
 
+// ActorNetwork is what SetupActorNetwork configured, for a caller that cannot
+// read it back out of the interior netns. gVisor can: runsc adopts that
+// namespace's links, addresses and routes as the guest's own. A micro-VM cannot
+// -- its interior veth is cross-connected to a tap at L2, so the L3 state there
+// is inert and the guest has to be told over the kata-agent channel.
+//
+// The zero value is the IPv4-only configuration, which is also what an error
+// return leaves behind.
+type ActorNetwork struct {
+	// IPv6 reports whether the actor veth was given its IPv6 address.
+	IPv6 bool
+}
+
 type NetworkConfig struct {
 	// InteriorNetNS is the target network namespace for the actor's veth pair peer.
 	// Used by: Both gVisor and MicroVM.
@@ -482,7 +670,7 @@ type NetworkConfig struct {
 
 // SetupActorNetwork builds a fresh point-to-point network between the worker
 // pod netns and the interior netns.
-func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
+func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (_ ActorNetwork, retErr error) {
 	// Build a fresh point-to-point network between the worker pod netns and the
 	// gVisor interior netns. The worker side keeps the pod's real eth0 and creates
 	// ateom0 as the gateway; the pair's peer is born inside the actor netns as
@@ -497,7 +685,7 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	// Clean up stale state from a failed prior activation before creating the
 	// next actor-side network. The worker currently runs one actor at a time.
 	if err := CleanupActorNetwork(ctx, cfg.InteriorNetNS); err != nil {
-		return fmt.Errorf("failed to clean up stale actor network before setup: %w", err)
+		return ActorNetwork{}, fmt.Errorf("failed to clean up stale actor network before setup: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
@@ -523,7 +711,7 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 			}
 			return nil
 		}); err != nil {
-			return err
+			return ActorNetwork{}, err
 		}
 	}
 
@@ -547,41 +735,65 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	}
 
 	if err := netlink.LinkAdd(veth); err != nil {
-		return fmt.Errorf("while creating actor veth pair: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while creating actor veth pair: %w", err)
 	}
 
 	hostLink, err := netlink.LinkByName(HostVethName)
 	if err != nil {
-		return fmt.Errorf("while getting host veth: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while getting host veth: %w", err)
 	}
 	if err := netlink.AddrReplace(hostLink, HostVethAddr); err != nil {
-		return fmt.Errorf("while assigning host veth address: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while assigning host veth address: %w", err)
+	}
+	// Decided once, here in the worker pod netns, and carried into the interior
+	// netns below. Probing separately on each side would let them disagree: the
+	// interior netns is freshly created, so its sysctl is always the permissive
+	// kernel default whatever the pod's families are.
+	var podIPv6 bool
+	podLink, podLinkErr := netlink.LinkByName(podPrimaryIfaceName)
+	if podLinkErr != nil {
+		slog.WarnContext(ctx, "looking up the worker pod primary interface; actor networking will be IPv4-only",
+			"link", podPrimaryIfaceName, "err", podLinkErr)
+	} else {
+		podIPv6 = linkHasGlobalIPv6(ctx, podLink)
+	}
+	vethIPv6 := linkIPv6Enabled(HostVethName)
+	actorIPv6 := podIPv6 && vethIPv6
+	if actorIPv6 {
+		if err := netlink.AddrReplace(hostLink, HostVethIPv6Addr); err != nil {
+			return ActorNetwork{}, fmt.Errorf("while assigning host veth ipv6 address: %w", err)
+		}
+	} else {
+		slog.DebugContext(ctx, "actor networking is IPv4-only",
+			"link", HostVethName, "podHasGlobalIPv6", podIPv6, "vethIPv6Enabled", vethIPv6)
 	}
 	if err := netlink.LinkSetUp(hostLink); err != nil {
-		return fmt.Errorf("while bringing up host veth: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while bringing up host veth: %w", err)
 	}
 
-	if err := NetNSDo(ctx, cfg.InteriorNetNS, ConfigureActorVeth); err != nil {
-		return fmt.Errorf("while configuring actor veth in interior netns: %w", err)
+	if err := NetNSDo(ctx, cfg.InteriorNetNS, func(ctx context.Context) error {
+		return ConfigureActorVeth(ctx, actorIPv6)
+	}); err != nil {
+		return ActorNetwork{}, fmt.Errorf("while configuring actor veth in interior netns: %w", err)
 	}
 
 	if err := EnableIPv4Forwarding(); err != nil {
-		return err
+		return ActorNetwork{}, err
 	}
 	if err := InstallActorNftablesRules(cfg.EgressRedirectPort); err != nil {
-		return err
+		return ActorNetwork{}, err
 	}
 
 	if cfg.DumpNetInfo {
 		if err := DumpNetInfo(ctx, "Pod NetNS "); err != nil {
-			return fmt.Errorf("while dumping pod netns links: %w", err)
+			return ActorNetwork{}, fmt.Errorf("while dumping pod netns links: %w", err)
 		}
 		if err := NetNSDo(ctx, cfg.InteriorNetNS, func(ctx context.Context) error {
 			return DumpNetInfo(ctx, "Interior NetNS ")
 		}); err != nil {
-			return fmt.Errorf("while dumping interior netns links: %w", err)
+			return ActorNetwork{}, fmt.Errorf("while dumping interior netns links: %w", err)
 		}
 	}
 
-	return nil
+	return ActorNetwork{IPv6: actorIPv6}, nil
 }
