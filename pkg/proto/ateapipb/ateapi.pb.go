@@ -717,6 +717,8 @@ func (x *Selector) GetMatchLabels() map[string]string {
 }
 
 // ResourceMetadata holds the common fields carried by every Substrate resource.
+//
+// +k8s:customValidation # timestamps must be valid, and update_time must not precede create_time
 type ResourceMetadata struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// atespace is the namespace the resource belongs to. Empty for global-scoped
@@ -761,7 +763,6 @@ type ResourceMetadata struct {
 	//
 	// +k8s:optional
 	// +k8s:immutable
-	// TODO: validate that this is a valid timestamp
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	// update_time is the time the resource was last updated.
 	//
@@ -769,8 +770,6 @@ type ResourceMetadata struct {
 	//
 	// +k8s:optional
 	// +k8s:update=NoUnset
-	// TODO: validate that this is a valid timestamp
-	// TODO: validate that UpdateTime >= CreateTime
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

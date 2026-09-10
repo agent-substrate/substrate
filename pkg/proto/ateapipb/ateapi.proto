@@ -207,6 +207,8 @@ message Selector {
 }
 
 // ResourceMetadata holds the common fields carried by every Substrate resource.
+//
+// +k8s:customValidation # timestamps must be valid, and update_time must not precede create_time
 message ResourceMetadata {
   // atespace is the namespace the resource belongs to. Empty for global-scoped
   // resources. Caller-specified at creation and immutable thereafter.
@@ -254,7 +256,6 @@ message ResourceMetadata {
   //
   // +k8s:optional
   // +k8s:immutable
-  // TODO: validate that this is a valid timestamp
   google.protobuf.Timestamp create_time = 5;
 
   // update_time is the time the resource was last updated.
@@ -263,8 +264,6 @@ message ResourceMetadata {
   //
   // +k8s:optional
   // +k8s:update=NoUnset
-  // TODO: validate that this is a valid timestamp
-  // TODO: validate that UpdateTime >= CreateTime
   google.protobuf.Timestamp update_time = 6;
 }
 

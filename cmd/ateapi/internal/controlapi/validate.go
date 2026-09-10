@@ -77,6 +77,31 @@ func ateDeepEqual[T any](a, b T) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+// ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,
+// when set, must be a valid google.protobuf.Timestamp, and update_time must
+// not precede create_time. Both fields are scrubbed from input, so a
+// violation here is a server stamping bug surfaced by the final-object
+// validation pass, not a client error.
+func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, fldPath *field.Path, obj, _ *ateapipb.ResourceMetadata) field.ErrorList {
+	var errs field.ErrorList
+	createTimeValid := false
+	if ct := obj.GetCreateTime(); ct != nil {
+		if err := ct.CheckValid(); err != nil {
+			errs = append(errs, field.Invalid(fldPath.Child("create_time"), ct.String(), err.Error()))
+		} else {
+			createTimeValid = true
+		}
+	}
+	if ut := obj.GetUpdateTime(); ut != nil {
+		if err := ut.CheckValid(); err != nil {
+			errs = append(errs, field.Invalid(fldPath.Child("update_time"), ut.String(), err.Error()))
+		} else if createTimeValid && ut.AsTime().Before(obj.GetCreateTime().AsTime()) {
+			errs = append(errs, field.Invalid(fldPath.Child("update_time"), ut.String(), "must not precede create_time"))
+		}
+	}
+	return errs
+}
+
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_WorkerAssignment_WorkerPodIp(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validation.IsValidIP(fldPath, *value)
