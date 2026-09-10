@@ -20,6 +20,27 @@ Currently, Agent Substrate automatically wraps container output and injects thes
 
 ---
 
+## Replica-local ateapi status
+
+Each ateapi replica serves an operator status page at `/statusz` on its internal `status` port, 4040 by default. Like the router status page, this endpoint is unauthenticated and only exposed through the cluster-internal Service. Its build, readiness, uptime, and resolved configuration describe the one replica selected by the connection; they are not a cluster-wide view. Configuration values use a closed display policy: credentials and database connection strings are redacted, credential and configuration paths report only whether they are configured, values resolved from environment variables are redacted, and unrecognized flags are redacted.
+
+Port-forward the `api` Service to inspect a replica:
+
+```bash
+kubectl port-forward -n ate-system svc/api 4040:4040
+```
+
+Open [http://localhost:4040/statusz](http://localhost:4040/statusz) for HTML. Request the same snapshot as JSON with either form:
+
+```bash
+curl 'http://localhost:4040/statusz?format=json'
+curl -H 'Accept: application/json' http://localhost:4040/statusz
+```
+
+Responses use `Cache-Control: no-store`. Set `--status-port` to zero or a negative value to disable the listener.
+
+---
+
 ## 1. Logging
 
 Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
