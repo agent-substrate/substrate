@@ -1910,12 +1910,120 @@ func TestResumeActorPassesLiteralEnv(t *testing.T) {
 	}
 }
 
-// TestResumeActor_NoWorkers tests that resuming an actor fails when no free workers are available.
-// Workflow:
-// 1. Creates a mock ActorTemplate.
-// 2. Creates an actor.
-// 3. Calls ResumeActor RPC without creating any workers.
-// 4. Verifies that ResumeActor fails with FailedPrecondition status.
+// createGoldenDataTemplate creates "tmpl1" like createTemplate, but with
+// onCommit DATA and onResume.fromData GOLDEN, so a resumed-after-suspend
+// actor takes the DATA_ON_GOLDEN path: its data snapshot combined with the
+// template's golden.
+func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapipb.ActorTemplate {
+	t.Helper()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+
+	created, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     "tmpl1",
+			},
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				StorageLocation: testStorageLocation,
+				OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{
+				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				ConfigName:   "gvisor-default",
+			},
+			Containers: []*ateapipb.Container{{
+				Name:    "main",
+				Image:   "main@sha256:abc",
+				Command: []string{"/main"},
+			}},
+			WorkerSelector: &ateapipb.Selector{
+				MatchLabels: map[string]string{poolLabelKey: ns},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create actor template: %v", err)
+	}
+	updated, err := tc.persistence.UpdateActorTemplate(context.Background(),
+		resources.ActorTemplateRefFromActorTemplate(created), store.PreconditionFrom(created),
+		func(dbTemplate *ateapipb.ActorTemplate) error {
+			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
+				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				},
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("failed to record the template's golden snapshot: %v", err)
+	}
+	return updated
+}
+
+// TestResumeActor_GoldenDataResumeSetsBaseConfig drives the DATA_ON_GOLDEN
+// resume end to end and pins the wire request's base snapshot fields: while
+// the golden_snapshot_uri -> base_config transition lasts, ateapi sets both
+// and they must agree, so ateapi and atelet can roll in either order.
+func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
+	ns := namespaceForTest("ns-resume-golden-data")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	tmpl := createGoldenDataTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// First resume runs fresh from the golden; the suspend then commits a
+	// DATA snapshot per onCommit.
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor (first) failed: %v", err)
+	}
+	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	actorSnapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if actorSnapshotURI == "" {
+		t.Fatal("SuspendActor recorded no external snapshot")
+	}
+
+	// Second resume: the actor's DATA snapshot rides on the template's
+	// golden.
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor (second) failed: %v", err)
+	}
+	restoreReq := tc.fakeAtelet.lastRestoreRequest()
+	if restoreReq == nil {
+		t.Fatal("second resume sent no Restore request to atelet")
+	}
+	if got := restoreReq.GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
+		t.Fatalf("restore scope = %v, want SNAPSHOT_SCOPE_DATA_ON_GOLDEN", got)
+	}
+	if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != actorSnapshotURI {
+		t.Errorf("restore config snapshot uri = %q, want the actor's data snapshot %q", got, actorSnapshotURI)
+	}
+	golden := tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot().GetSnapshotUri()
+	if got := restoreReq.GetBaseConfig().GetSnapshotUri(); got != golden {
+		t.Errorf("restore base_config uri = %q, want the template's golden %q", got, golden)
+	}
+	if got := restoreReq.GetGoldenSnapshotUri(); got != golden {
+		t.Errorf("restore golden_snapshot_uri = %q, want %q (transitional dual-write must match base_config)", got, golden)
+	}
+}
+
 // TestResumeActor_NoWorkers tests that resuming an actor fails when no free workers are available.
 // Workflow:
 // 1. Creates a mock ActorTemplate.
@@ -2475,6 +2583,9 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 			}
 			if got := restoreReq.GetGoldenSnapshotUri(); got != "" {
 				t.Errorf("restore request to atelet had golden snapshot uri = %q, want empty", got)
+			}
+			if restoreReq.GetBaseConfig() != nil {
+				t.Errorf("restore request to atelet had base_config = %v, want unset", restoreReq.GetBaseConfig())
 			}
 		})
 	}
