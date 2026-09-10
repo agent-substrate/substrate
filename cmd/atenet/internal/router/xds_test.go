@@ -1048,16 +1048,18 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 		}
 	})
 
-	// The route timeout alone does not bound a long turn. A stream carrying no
-	// bytes while the actor works is idle by Envoy's reckoning, and Envoy resets
-	// it at the 5m stream idle default whatever the route timeout says. These
-	// pin the relationship: the idle timer never bites before the ceiling the
-	// operator asked for, and it is not tightened below what applies today.
-	t.Run("IdleTimeoutTracksLongerRouteTimeout", func(t *testing.T) {
+	// The two timeouts bound different things: the route timeout bounds the
+	// upstream response, the idle timeout bounds a stream with no activity on
+	// it. A stream carrying no bytes while the actor works is idle by the second
+	// measure even though the turn is progressing, so the ordering between them
+	// decides which one a caller actually experiences. These pin that ordering:
+	// the idle timer is a backstop that never fires first, and it is not
+	// tightened below what applies today.
+	t.Run("IdleTimeoutStaysAfterALongerRouteTimeout", func(t *testing.T) {
 		x := NewXdsServer(0)
 		x.SetRouteTimeout(30 * time.Minute)
-		if got := idleTimeout(t, x); got != 30*time.Minute {
-			t.Errorf("idle timeout with a 30m route timeout = %v, want 30m: a shorter idle timer would reset the stream first", got)
+		if got, want := idleTimeout(t, x), 30*time.Minute+routeIdleTimeoutMargin; got != want {
+			t.Errorf("idle timeout with a 30m route timeout = %v, want %v: an idle timer at or below the route timeout would reset the stream first", got, want)
 		}
 	})
 
@@ -1071,18 +1073,24 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 		}
 	})
 
-	// The default route timeout is exactly Envoy's stream idle default, so the
-	// two timers would otherwise race on a turn that sends nothing until it is
-	// done. The idle reset reaches the client as a torn stream rather than a
-	// timeout, so the idle timer is pinned explicitly at equality instead of
-	// being left implicit.
-	t.Run("IdleTimeoutAtTheDefaultRouteTimeout", func(t *testing.T) {
-		action := routeAction(t, NewXdsServer(0))
-		if action.GetIdleTimeout() == nil {
-			t.Fatal("no idle timeout set on the workload route")
-		}
-		if got, want := action.GetIdleTimeout().AsDuration(), envoyDefaultStreamIdleTimeout; got != want {
-			t.Errorf("idle timeout at the default route timeout = %v, want %v", got, want)
+	// The property the two cases above are instances of, checked across the
+	// range rather than at the values that happen to be interesting today. The
+	// default route timeout is 5m and so is Envoy's stream idle default, so
+	// without a margin the two would coincide there and either could fire. An
+	// idle-triggered end reaches the client as a torn stream where the route
+	// timeout reaches it as a 504, and only one of those is diagnosable.
+	t.Run("IdleTimeoutNeverFiresBeforeTheRouteTimeout", func(t *testing.T) {
+		for _, d := range []time.Duration{0, 10 * time.Second, time.Minute, defaultRouteTimeout, 30 * time.Minute} {
+			x := NewXdsServer(0)
+			x.SetRouteTimeout(d) // non-positive keeps the default; see above
+			action := routeAction(t, x)
+			if action.GetIdleTimeout() == nil {
+				t.Fatalf("SetRouteTimeout(%v): no idle timeout set on the workload route", d)
+			}
+			route, idle := action.GetTimeout().AsDuration(), action.GetIdleTimeout().AsDuration()
+			if idle <= route {
+				t.Errorf("SetRouteTimeout(%v): route timeout %v, idle timeout %v; the idle timer must be strictly later or the caller gets a reset instead of a 504", d, route, idle)
+			}
 		}
 	})
 }
