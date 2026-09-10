@@ -24,7 +24,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
+	"syscall"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -192,6 +195,17 @@ func PodIPv4() (net.IP, error) {
 	return nil, fmt.Errorf("pod eth0 has no IPv4 address")
 }
 
+// procSysDir is the mount point of the sysctl tree. ensureProcSysOn refuses any
+// path that does not resolve inside it.
+const procSysDir = "/proc/sys"
+
+// Forwarding sysctls. conf.all.forwarding also supplies the per-interface
+// default, so one IPv6 write covers both the veth and eth0.
+const (
+	procSysIPv4Forwarding = "/proc/sys/net/ipv4/ip_forward"
+	procSysIPv6Forwarding = "/proc/sys/net/ipv6/conf/all/forwarding"
+)
+
 // EnableForwarding enables IPv4 and IPv6 forwarding in the current network
 // namespace, so actor traffic (including DNS queries on IPv6-capable clusters)
 // is routed between the veth and eth0 instead of being dropped by ip_forward()
@@ -201,50 +215,96 @@ func EnableForwarding() error {
 	// the host-side veth and then leave through the pod's eth0. Without this, the
 	// kernel would not route traffic between those interfaces even though both
 	// live in the worker pod network namespace.
-	const path = "/proc/sys/net/ipv4/ip_forward"
-	if err := writeSysctlIfUnset(path); err != nil {
-		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
+	//
+	// The container runtime bind-mounts /proc/sys read-only for unprivileged
+	// pods. The worker holds CAP_SYS_ADMIN and uses no user namespace, so the
+	// read-only flag is not locked: if a write comes back EROFS, clear it for the
+	// duration of ensure and put it back afterwards.
+	ensure := func() error {
+		if err := ensureProcSysOn(procSysIPv4Forwarding); err != nil {
+			return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
+		}
+		// IPv6 forwarding: actor packets that arrive on the veth and leave via
+		// eth0 are IPv6 on dual-stack / IPv6-only clusters. Without
+		// net.ipv6.conf.all.forwarding the kernel drops every IPv6 packet in
+		// ip6_forward(), including the actor's DNS queries.
+		//
+		// A kernel with IPv6 disabled has no such node at all. That is benign --
+		// there is no IPv6 traffic to forward -- so log it and move on rather
+		// than failing the activation.
+		switch _, err := os.Stat(procSysIPv6Forwarding); {
+		case errors.Is(err, os.ErrNotExist):
+			slog.Info("IPv6 forwarding sysctl is absent, skipping", "path", procSysIPv6Forwarding)
+			return nil
+		case err != nil:
+			return fmt.Errorf("while checking %s: %w", procSysIPv6Forwarding, err)
+		}
+		if err := ensureProcSysOn(procSysIPv6Forwarding); err != nil {
+			return fmt.Errorf("while enabling IPv6 forwarding in worker pod netns: %w", err)
+		}
+		return nil
 	}
-	// IPv6 forwarding: actor packets that arrive on the veth and leave via eth0
-	// are IPv6 on dual-stack / IPv6-only clusters. Without
-	// net.ipv6.conf.all.forwarding the kernel drops every IPv6 packet in
-	// ip6_forward(), including the actor's DNS queries. conf.all.forwarding=1
-	// also implies the per-interface default, so a single write covers the veth
-	// and eth0.
-	const v6path = "/proc/sys/net/ipv6/conf/all/forwarding"
-	if err := writeSysctlIfUnset(v6path); err != nil {
-		return fmt.Errorf("while enabling IPv6 forwarding in worker pod netns: %w", err)
+
+	err := ensure()
+	if !errors.Is(err, syscall.EROFS) {
+		return err
 	}
-	return nil
+	return withWritableProcSys(ensure)
 }
 
-// writeSysctlIfUnset writes "1\n" to a sysctl path unless it already reads "1".
-// If the path does not exist (e.g. IPv6 sysctls on a kernel with IPv6 disabled),
-// it returns nil — IPv6 forwarding is simply unavailable, not an error.
-func writeSysctlIfUnset(path string) error {
-	if b, err := os.ReadFile(path); err == nil && len(b) > 0 && b[0] == '1' {
-		return nil
-	}
-	if err := os.WriteFile(path, []byte("1\n"), 0o644); err == nil {
-		return nil
-	}
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Path absent (e.g. IPv6 disabled in kernel): nothing to enable.
-		return nil
-	}
-	// Without privileged, the container runtime bind-mounts /proc/sys read-only.
-	// The worker holds CAP_SYS_ADMIN and uses no user namespace, so the ro flag
-	// is not locked: clear it, write the sysctl, restore ro.
-	if err := unix.Mount("none", "/proc/sys", "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
-		return fmt.Errorf("while remounting /proc/sys read-write to enable forwarding: %w", err)
+// withWritableProcSys remounts /proc/sys read-write, runs do, and restores the
+// read-only mount. It is only reachable when a write failed with EROFS, so a
+// writable /proc/sys never pays for the extra mounts.
+func withWritableProcSys(do func() error) error {
+	if err := unix.Mount("none", procSysDir, "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
+		return fmt.Errorf("while remounting %s read-write to enable forwarding: %w", procSysDir, err)
 	}
 	defer func() {
-		_ = unix.Mount("none", "/proc/sys", "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
+		if err := unix.Mount("none", procSysDir, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+			// Nothing left to do but be loud: the namespace is about to be torn
+			// down with actor cleanup, but until then /proc/sys is writable.
+			slog.Error("restoring read-only "+procSysDir+" mount failed", "err", err)
+		}
 	}()
+	return do()
+}
+
+// ensureProcSysOn writes "1\n" to the sysctl node at path unless it already
+// reads "1".
+//
+// The returned error wraps the underlying errno, so callers can react to a
+// read-only /proc/sys with errors.Is(err, syscall.EROFS).
+func ensureProcSysOn(path string) error {
+	// The path is a package-level constant in every caller today; check it
+	// anyway so a future caller cannot turn this helper into an arbitrary-file
+	// write.
+	if err := validateProcSysPath(path); err != nil {
+		return err
+	}
+	if procSysIsSet(path) {
+		return nil
+	}
 	if err := os.WriteFile(path, []byte("1\n"), 0o644); err != nil {
 		return fmt.Errorf("while writing %s: %w", path, err)
 	}
 	return nil
+}
+
+// validateProcSysPath rejects a path that does not resolve inside /proc/sys.
+func validateProcSysPath(path string) error {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) || !strings.HasPrefix(clean, procSysDir+"/") {
+		return fmt.Errorf("sysctl path %q is not under %s", path, procSysDir)
+	}
+	return nil
+}
+
+// procSysIsSet reports whether the sysctl node at path already reads "1". A
+// node reading anything else (e.g. "0") needs the write; one that cannot be
+// read at all is left to the caller's write path to report.
+func procSysIsSet(path string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && len(b) > 0 && b[0] == '1'
 }
 
 // InstallActorNftablesRules configures the NAT and filtering rules for the
