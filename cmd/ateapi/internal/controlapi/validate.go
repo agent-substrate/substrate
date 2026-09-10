@@ -82,17 +82,6 @@ func ValidateCustom_WorkerAssignment_WorkerPodIp(_ context.Context, _ operation.
 	return validation.IsValidIP(fldPath, *value)
 }
 
-// maxCSRBytes bounds MintCertRequest's CSR. Real CSRs are a few KB; this is
-// a guardrail, applied here because maxLength does not support bytes fields.
-const maxCSRBytes = 16384
-
-func ValidateCustom_MintCertRequest_CertificateSigningRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []byte) field.ErrorList {
-	if len(value) > maxCSRBytes {
-		return field.ErrorList{field.TooLong(fldPath, nil, maxCSRBytes)}
-	}
-	return nil
-}
-
 // ValidateCustom_ExternalVolume_VolumeType checks that a volume type string is well-formed.
 // It allows an optional "substrate.io/" prefix, followed by a valid DNS-1123 subdomain.
 func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

@@ -114,22 +114,22 @@ type Interface interface {
 	// Deletes and returns an Actor's policy subresource.
 	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
 
-	// CreateActorSnapshotTag creates an immutable tag to an actor snapshot.
+	// CreateTag creates an immutable tag to an actor snapshot.
 	//
 	// Returns ErrAlreadyExists if the name is taken — including by the caller's
 	// own unfinished attempt, which it can then read back and resume — or
 	// ErrFailedPrecondition if the tag's atespace does not exist.
-	CreateActorSnapshotTag(ctx context.Context, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error)
 
 	// Fetches an Atespace-owned tag by reference. Returns ErrNotFound if
 	// missing.
-	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
+	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 
-	// Lists ActorSnapshotTags in one atespace, or all atespaces when empty.
-	ListActorSnapshotTags(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshotTag], error)
+	// Lists Tags in one atespace, or all atespaces when empty.
+	ListTags(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.Tag], error)
 
-	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag
-	// addressed by tagRef, and returns the stored ActorSnapshotTag with
+	// UpdateTag performs a transactional read-modify-write on the tag
+	// addressed by tagRef, and returns the stored Tag with
 	// advanced metadata (version, update_time).
 	//
 	// precondition guards the write against landing on unexpected state: it is
@@ -149,10 +149,10 @@ type Interface interface {
 	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	//
 	// status.snapshot is immutable once set
-	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
+	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 
 	// Deletes and returns a tag.
-	DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
+	DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns

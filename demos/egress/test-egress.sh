@@ -33,7 +33,7 @@
 set -o errexit -o nounset -o pipefail
 
 CTX="${KUBECTL_CONTEXT:-kind-kind}"
-# The actor lives in the demo's atespace: --template-ref resolves the
+# The actor lives in the demo's atespace: --template resolves the
 # template by name within the actor's own atespace.
 ATESPACE="${ATESPACE:-ate-demo-egress}"
 ACTOR="${ACTOR:-egress-demo}"
@@ -95,7 +95,7 @@ info "target = ${TARGET_IP}:${TARGET_PORT}"
 
 log "create + resume Actor ${ATESPACE}/${ACTOR}"
 ${KATE} create atespace "${ATESPACE}" >/dev/null 2>&1 || true
-${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template-ref "${TEMPLATE}" >/dev/null 2>&1 || true
+${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 ${KATE} resume actor "${ACTOR}" -a "${ATESPACE}" >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do
   ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "ACTOR_STATE_RUNNING" && break
@@ -116,7 +116,7 @@ BEFORE=$(egress_log_count)
 ${K} -n ate-system port-forward service/atenet-router 18099:80 >/tmp/egress-pf.log 2>&1 &
 PF=$!; sleep 4
 CODE=$(curl -s -o /tmp/egress-body.txt -w '%{http_code}' -X POST http://localhost:18099/ \
-  -H "Host: ${ACTOR}.${ATESPACE}.actors.resources.substrate.ate.dev" \
+  -H "ate-target-actor: ${ATESPACE}/${ACTOR}" \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:${TARGET_PORT}/\"}" || true)
 kill "${PF}" >/dev/null 2>&1 || true

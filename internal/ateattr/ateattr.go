@@ -343,6 +343,16 @@ func NormalizeSandboxClass(class string) string {
 	}
 }
 
+// SandboxClassAttribute sets ate.sandbox.class. No source of the class is
+// validated, thus an emitter that sets the attribute must set it through this
+// helper and not through SandboxClassKey.
+//
+// To omit the attribute while the class is unknown is a different choice, and
+// two emitters make it: recordSchedulerAssignment and snapshotOp.attrs.
+func SandboxClassAttribute(class string) attribute.KeyValue {
+	return SandboxClassKey.String(NormalizeSandboxClass(class))
+}
+
 // WorkerPoolAttributes returns the namespaced identity of a WorkerPool. A
 // WorkerPool is namespaced, so half the pair identifies no pool: either key
 // missing drops both, rather than emit an empty-string series that merges
@@ -445,7 +455,7 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 	attrs := []attribute.KeyValue{
 		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
 		TemplateNameKey.String(a.GetActorTemplate().GetName()),
-		SandboxClassKey.String(sandboxClass),
+		SandboxClassAttribute(sandboxClass),
 		ActorOperationNameKey.String(operationName),
 	}
 	attrs = append(attrs, FailureAttributes(reason)...)

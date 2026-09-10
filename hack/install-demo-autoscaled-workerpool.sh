@@ -27,10 +27,9 @@ demo-autoscaled-workerpool_cmdline() {
     --deploy-demo-autoscaled-workerpool) demo-autoscaled-workerpool_deploy ;;
     --delete-demo-autoscaled-workerpool) demo-autoscaled-workerpool_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-autoscaled-workerpool_deploy() {

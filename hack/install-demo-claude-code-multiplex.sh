@@ -23,10 +23,9 @@ demo-claude-code-multiplex_cmdline() {
     --deploy-demo-claude-code-multiplex) demo-claude-code-multiplex_deploy ;;
     --delete-demo-claude-code-multiplex) demo-claude-code-multiplex_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 # Build the workload image, push to ${KO_DOCKER_REPO}, and echo the resolved

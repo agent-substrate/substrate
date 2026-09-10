@@ -15,7 +15,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -29,6 +31,10 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
@@ -359,6 +365,43 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 	}
 }
 
+// TestStatsPollerPeriodicEvents pins the events channel: one event per
+// executing sample per sweep, none for idle or mid-boot ateoms, identity
+// taken from the echo, pool labels from the sweep's own resolution.
+func TestStatsPollerPeriodicEvents(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-2": {resp: noSampleResponse(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	var buf syncBuffer
+	p.eventEmitter = newBufferEmitter(&buf, false)
+	p.workerPools = func(context.Context) map[string]workerPoolRef {
+		return map[string]workerPoolRef{"uid-1": {namespace: "pool-ns", name: "pool-a"}}
+	}
+
+	p.collect(context.Background())
+
+	lines := bytes.Count(bytes.TrimSpace(buf.Bytes()), []byte("\n")) + 1
+	if buf.Len() == 0 {
+		t.Fatal("no periodic event emitted for the executing ateom")
+	}
+	if lines != 1 {
+		t.Fatalf("emitted %d events, want 1 (idle ateoms emit nothing): %q", lines, buf.String())
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := rec["kind"]; got != "periodic" {
+		t.Errorf("kind = %v, want periodic", got)
+	}
+	labels, _ := rec["labels"].(map[string]any)
+	if got := labels["ate.workerpool.name"]; got != "pool-a" {
+		t.Errorf("labels[ate.workerpool.name] = %v, want pool-a", got)
+	}
+}
+
 func TestAddSat(t *testing.T) {
 	tests := []struct {
 		name string
@@ -424,5 +467,33 @@ func TestStatsPollerCPUDeltaSaturatesCorruptCounter(t *testing.T) {
 	got := p.collect(context.Background())[key].cpuDeltaUsec
 	if got != math.MaxInt64 {
 		t.Errorf("corrupt-counter sweep delta = %d, want pinned at MaxInt64", got)
+	}
+}
+
+// TestNodeWorkerPools pins the resolver's ingestion rules: a labeled worker
+// maps by pod UID, an empty label value names no pool and never enters the
+// map (the presence-only selector matches it anyway), and unlabeled pods are
+// not workers at all. The fake clientset honors label selectors but not the
+// spec.nodeName field selector, so node scoping is not assertable here.
+func TestNodeWorkerPools(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-a", Namespace: "pool-ns", UID: "uid-a",
+			Labels: map[string]string{workerPoolLabel: "pool-a"},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-empty", Namespace: "pool-ns", UID: "uid-empty",
+			Labels: map[string]string{workerPoolLabel: ""},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "bystander", Namespace: "other-ns", UID: "uid-bystander",
+		}},
+	)
+
+	got := nodeWorkerPools(client, "node-1")(context.Background())
+
+	want := map[string]workerPoolRef{"uid-a": {namespace: "pool-ns", name: "pool-a"}}
+	if diff := cmp.Diff(want, got, cmp.AllowUnexported(workerPoolRef{})); diff != "" {
+		t.Errorf("nodeWorkerPools mismatch (-want +got):\n%s", diff)
 	}
 }

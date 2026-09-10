@@ -23,16 +23,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var templateRefFlag string
+var templateFlag string
 var atespaceFlag string
-var sourceSnapshotTagFlag string
+var sourceTagFlag string
 
 var createActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Create an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateRefFlag, sourceSnapshotTagFlag)
+		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateFlag, sourceTagFlag)
 		if err != nil {
 			return err
 		}
@@ -53,36 +53,34 @@ var createActorCmd = &cobra.Command{
 	},
 }
 
-// buildCreateActorRequest assembles the CreateActor request from the command
-// flags.
-func buildCreateActorRequest(actorName, atespace, templateName, snapshotTag string) (*ateapipb.CreateActorRequest, error) {
+func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {
+	templateRef, err := parseAtespacedName(template, atespace)
+	if err != nil {
+		return nil, err
+	}
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
 			Atespace: atespace,
 			Name:     actorName,
 		},
-		ActorTemplate: &ateapipb.ObjectRef{
-			Atespace: atespace,
-			Name:     templateName,
-		},
+		ActorTemplate: templateRef,
 	}
 
-	if snapshotTag != "" {
-		ref, err := parseNamespacedName(snapshotTag)
+	if tag != "" {
+		ref, err := parseAtespacedName(tag, atespace)
 		if err != nil {
 			return nil, err
 		}
-		actor.SourceSnapshotTag = ref
+		actor.SourceTag = ref
 	}
 	return &ateapipb.CreateActorRequest{Actor: actor}, nil
 }
 
 func init() {
-	// TODO: rename "template-ref" to "template" now that the legacy CRD flag is gone.
-	createActorCmd.Flags().StringVar(&templateRefFlag, "template-ref", "", "Name of the substrate ActorTemplate resource to derive the actor from, resolved in the actor's atespace (--atespace)")
-	_ = createActorCmd.MarkFlagRequired("template-ref")
-	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
+	createActorCmd.Flags().StringVar(&templateFlag, "template", "", "The name of the ActorTemplate to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (--atespace)")
+	_ = createActorCmd.MarkFlagRequired("template")
+	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in")
 	_ = createActorCmd.MarkFlagRequired("atespace")
-	createActorCmd.Flags().StringVar(&sourceSnapshotTagFlag, "snapshot-tag", "", "Initialize from an ActorSnapshotTag in <atespace>/<name> format")
+	createActorCmd.Flags().StringVar(&sourceTagFlag, "tag", "", "The name of a Tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (--atespace)")
 	createCmd.AddCommand(createActorCmd)
 }

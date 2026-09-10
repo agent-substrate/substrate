@@ -21,12 +21,7 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorMetadataItem.path",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotTagScope",
+    "subject": "ateapi.TagScope",
     "message": "enum has no doc comment"
   },
   {
@@ -121,12 +116,12 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorSnapshotTagRequest",
+    "subject": "ateapi.DeleteTagRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorSnapshotTagRequest.actor_snapshot_tag",
+    "subject": "ateapi.DeleteTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
@@ -186,12 +181,12 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorSnapshotTagRequest",
+    "subject": "ateapi.GetTagRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorSnapshotTagRequest.actor_snapshot_tag",
+    "subject": "ateapi.GetTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
@@ -246,22 +241,22 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotTagsRequest",
+    "subject": "ateapi.ListTagsRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotTagsResponse",
+    "subject": "ateapi.ListTagsResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotTagsResponse.actor_snapshot_tags",
+    "subject": "ateapi.ListTagsResponse.tags",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotTagsResponse.next_page_token",
+    "subject": "ateapi.ListTagsResponse.next_page_token",
     "message": "field has no doc comment"
   },
   {
@@ -392,11 +387,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.TrustBundleDataSource.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.TrustBundleDataSource.path",
     "message": "field has no doc comment"
   },
   {

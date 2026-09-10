@@ -23,12 +23,14 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volumepath"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -221,6 +223,52 @@ func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operati
 	return nil
 }
 
+// validateProjectedPath applies the projected-path rule shared with atelet,
+// which re-checks it before writing to the host.
+func validateProjectedPath(fldPath *field.Path, p string) field.ErrorList {
+	if err := volumepath.ValidateProjected(p); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
+	}
+	return nil
+}
+
+func ValidateCustom_ActorMetadataItem_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateProjectedPath(fldPath, *value)
+}
+
+func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateProjectedPath(fldPath, *value)
+}
+
+// ValidateCustom_SystemInfoVolumeSource_DataSources requires every projected
+// file path to be unique across all data sources: atelet writes them in
+// order into one tree, so a repeated path silently clobbers the earlier file.
+func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.SystemInfoDataSource) field.ErrorList {
+	var errs field.ErrorList
+	seen := sets.New[string]()
+	for i, ds := range value {
+		switch {
+		case ds == nil:
+		case ds.TrustBundle != nil:
+			if seen.Has(ds.TrustBundle.Path) {
+				errs = append(errs, field.Duplicate(fldPath.Index(i).Child("trust_bundle", "path"), ds.TrustBundle.Path))
+			}
+			seen.Insert(ds.TrustBundle.Path)
+		case ds.ActorMetadata != nil:
+			for j, item := range ds.ActorMetadata.Items {
+				if item == nil {
+					continue
+				}
+				if seen.Has(item.Path) {
+					errs = append(errs, field.Duplicate(fldPath.Index(i).Child("actor_metadata", "items").Index(j).Child("path"), item.Path))
+				}
+				seen.Insert(item.Path)
+			}
+		}
+	}
+	return errs
+}
+
 // ValidateCustom_ImageVolumeSource_Reference requires image references to
 // be pinned by digest, because changing the image content under a fixed
 // reference invalidates snapshots.
@@ -271,6 +319,16 @@ func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, f
 		}
 	}
 	return errs
+}
+
+// ValidateCustom_SnapshotsConfig_StorageLocation ensures an
+// ActorTemplate's snapshotsConfig.location is a well-formed
+// URI with a bucket, so a bad location fails fast.
+func ValidateCustom_SnapshotsConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if err := resources.ValidateSnapshotLocation(*value); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
+	}
+	return nil
 }
 
 // ValidateCustom_SnapshotsConfig requires on_commit to be a

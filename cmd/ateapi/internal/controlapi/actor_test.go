@@ -48,7 +48,7 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	withStatus := withActorStatus
 	withMetadata := withActorMetadata
 	withActorTemplate := withActorActorTemplate
-	withSourceSnapshotTag := withActorSourceSnapshotTag
+	withSourceTag := withActorSourceTag
 	withWorkerSelector := withActorWorkerSelector
 
 	tests := []struct {
@@ -140,25 +140,25 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validReq(validActor(withWorkerSelector(map[string]string{"tier": "not valid!"}))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels").Key("tier"), "not valid!", "").WithOrigin("format=k8s-label-value")},
 	}, {
-		"valid actor.source_snapshot_tag",
-		validReq(validActor(withSourceSnapshotTag("as", "tag"))),
+		"valid actor.source_tag",
+		validReq(validActor(withSourceTag("as", "tag"))),
 		nil,
 	}, {
-		"missing actor.source_snapshot_tag.atespace",
-		validReq(validActor(withSourceSnapshotTag("", "tag"))),
-		field.ErrorList{field.Required(field.NewPath("actor", "source_snapshot_tag", "atespace"), "")},
+		"missing actor.source_tag.atespace",
+		validReq(validActor(withSourceTag("", "tag"))),
+		field.ErrorList{field.Required(field.NewPath("actor", "source_tag", "atespace"), "")},
 	}, {
-		"invalid actor.source_snapshot_tag.atespace",
-		validReq(validActor(withSourceSnapshotTag("invalid value", "tag"))),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "source_snapshot_tag", "atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+		"invalid actor.source_tag.atespace",
+		validReq(validActor(withSourceTag("invalid value", "tag"))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "source_tag", "atespace"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"missing actor.source_snapshot_tag.name",
-		validReq(validActor(withSourceSnapshotTag("as", ""))),
-		field.ErrorList{field.Required(field.NewPath("actor", "source_snapshot_tag", "name"), "")},
+		"missing actor.source_tag.name",
+		validReq(validActor(withSourceTag("as", ""))),
+		field.ErrorList{field.Required(field.NewPath("actor", "source_tag", "name"), "")},
 	}, {
-		"invalid actor.source_snapshot_tag.name",
-		validReq(validActor(withSourceSnapshotTag("as", "invalid value"))),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "source_snapshot_tag", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+		"invalid actor.source_tag.name",
+		validReq(validActor(withSourceTag("as", "invalid value"))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "source_tag", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestValidateActorUpdate(t *testing.T) {
 	withMetadata := withActorMetadata
 	withWorkerSelector := withActorWorkerSelector
 	withActorTemplate := withActorActorTemplate
-	withSourceSnapshotTag := withActorSourceSnapshotTag
+	withSourceTag := withActorSourceTag
 	withWorkerAssignment := withActorWorkerAssignment
 
 	tests := []struct {
@@ -237,20 +237,20 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(func(a *ateapipb.Actor) { a.ActorTemplate = nil }),
 		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},
 	}, {
-		"add actor.source_snapshot_tag",
+		"add actor.source_tag",
 		validInput(),
-		validOutput(withSourceSnapshotTag("as", "nm")),
-		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+		validOutput(withSourceTag("as", "nm")),
+		field.ErrorList{field.Invalid(field.NewPath("source_tag"), nil, "").WithOrigin("immutable")},
 	}, {
-		"clear actor.source_snapshot_tag",
-		validInput(withSourceSnapshotTag("as", "nm")),
-		validOutput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = nil }),
-		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+		"clear actor.source_tag",
+		validInput(withSourceTag("as", "nm")),
+		validOutput(func(a *ateapipb.Actor) { a.SourceTag = nil }),
+		field.ErrorList{field.Invalid(field.NewPath("source_tag"), nil, "").WithOrigin("immutable")},
 	}, {
-		"change actor.source_snapshot_tag",
-		validInput(withSourceSnapshotTag("as1", "nm1")),
-		validOutput(withSourceSnapshotTag("as2", "nm2")),
-		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+		"change actor.source_tag",
+		validInput(withSourceTag("as1", "nm1")),
+		validOutput(withSourceTag("as2", "nm2")),
+		field.ErrorList{field.Invalid(field.NewPath("source_tag"), nil, "").WithOrigin("immutable")},
 	}, {
 		"set valid worker_selector",
 		validInput(),
@@ -287,20 +287,20 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(withWorkerSelector(selectorLabelsOfSize(11))),
 		field.ErrorList{field.TooMany(field.NewPath("worker_selector", "match_labels"), 11, 10).WithOrigin("maxProperties")},
 	}, {
-		"add actor.source_snapshot_tag",
+		"add actor.source_tag",
 		validInput(),
-		validOutput(withSourceSnapshotTag("as", "nm")),
-		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+		validOutput(withSourceTag("as", "nm")),
+		field.ErrorList{field.Invalid(field.NewPath("source_tag"), nil, "").WithOrigin("immutable")},
 	}, {
-		"clear actor.source_snapshot_tag",
-		validInput(withSourceSnapshotTag("as", "nm")),
-		validOutput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = nil }),
-		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+		"clear actor.source_tag",
+		validInput(withSourceTag("as", "nm")),
+		validOutput(func(a *ateapipb.Actor) { a.SourceTag = nil }),
+		field.ErrorList{field.Invalid(field.NewPath("source_tag"), nil, "").WithOrigin("immutable")},
 	}, {
-		"change actor.source_snapshot_tag",
-		validInput(withSourceSnapshotTag("as1", "nm1")),
-		validOutput(withSourceSnapshotTag("as2", "nm2")),
-		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+		"change actor.source_tag",
+		validInput(withSourceTag("as1", "nm1")),
+		validOutput(withSourceTag("as2", "nm2")),
+		field.ErrorList{field.Invalid(field.NewPath("source_tag"), nil, "").WithOrigin("immutable")},
 	}, {
 		"unspecified actor.status",
 		validInput(withStatus()),
@@ -748,16 +748,16 @@ func TestUpdateActor(t *testing.T) {
 			want: &ateapipb.Actor{},
 		},
 		{
-			name:   "SourceSnapshotTag immutable field is kept",
-			stored: &ateapipb.Actor{SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"}},
+			name:   "SourceTag immutable field is kept",
+			stored: &ateapipb.Actor{SourceTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"}},
 			req: &ateapipb.Actor{
-				ActorTemplate:     &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName},
-				SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"},
-				WorkerSelector:    &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+				ActorTemplate:  &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName},
+				SourceTag:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"},
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 			},
 			want: &ateapipb.Actor{
-				SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"},
-				WorkerSelector:    &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+				SourceTag:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"},
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 			},
 		},
 		{
@@ -771,19 +771,19 @@ func TestUpdateActor(t *testing.T) {
 		},
 		{
 			name:   "an omitted immutable field is rejected",
-			stored: &ateapipb.Actor{SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"}},
+			stored: &ateapipb.Actor{SourceTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"}},
 			req: &ateapipb.Actor{
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName},
-				// Omitted SourceSnapshotTag
+				// Omitted SourceTag
 			},
 			wantCode: codes.InvalidArgument,
 		},
 		{
 			name:   "an immutable field the request rewrites is rejected",
-			stored: &ateapipb.Actor{SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"}},
+			stored: &ateapipb.Actor{SourceTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag1"}},
 			req: &ateapipb.Actor{
-				ActorTemplate:     &ateapipb.ObjectRef{Atespace: "attacker-ns", Name: "attacker-tmpl"},
-				SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag2"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "attacker-ns", Name: "attacker-tmpl"},
+				SourceTag:     &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag2"},
 			},
 			wantCode: codes.InvalidArgument,
 		},
@@ -1254,10 +1254,10 @@ func withActorActorTemplate(atespace, name string) func(*ateapipb.Actor) {
 	return func(a *ateapipb.Actor) { a.ActorTemplate = &ateapipb.ObjectRef{Atespace: atespace, Name: name} }
 }
 
-// withActorSourceSnapshotTag returns a modifier func (see validActor) which sets
-// the actor's source_snapshot_tag to a valid value.
-func withActorSourceSnapshotTag(atespace, name string) func(*ateapipb.Actor) {
-	return func(a *ateapipb.Actor) { a.SourceSnapshotTag = &ateapipb.ObjectRef{Atespace: atespace, Name: name} }
+// withActorSourceTag returns a modifier func (see validActor) which sets
+// the actor's source_tag to a valid value.
+func withActorSourceTag(atespace, name string) func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) { a.SourceTag = &ateapipb.ObjectRef{Atespace: atespace, Name: name} }
 }
 
 // withActorWorkerAssignment returns a modifier func (see validActor) which sets

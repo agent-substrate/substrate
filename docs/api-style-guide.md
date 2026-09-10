@@ -142,7 +142,7 @@ Rules:
 - Request message name **must** match the RPC name with a `Request` suffix.
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
 - Request **must** identify the resource with a single `ObjectRef` field (for both atespace-scoped and global-scoped resources).
-- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot_tag` for `ActorSnapshotTag`), not a generic name like `name` or `ref`.
+- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `tag` for `Tag`), not a generic name like `name` or `ref`.
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List
@@ -240,7 +240,7 @@ Rules:
 - RPC name **must** begin with `Update` followed by the singular resource name.
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
   - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
-  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `actor_template_name`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
+  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
 - Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
@@ -278,7 +278,7 @@ Rules:
 - RPC name **must** begin with `Delete` followed by the singular resource name.
 - Response **must** be the deleted resource.
 - Request **must** identify the resource with an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
-- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot_tag` for `ActorSnapshotTag`), not a generic name like `name` or `ref`.
+- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `tag` for `Tag`), not a generic name like `name` or `ref`.
 - If the resource does not exist: return `NOT_FOUND`.
 - `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
 - Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.

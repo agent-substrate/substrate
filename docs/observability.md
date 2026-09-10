@@ -154,6 +154,36 @@ ateapi's `Actor crashed` is the other one. It is written once per committed tran
 
 The counter carries the same reason but no actor identity, so this record is the only way to attribute a crash to one agent. The decision-point line that precedes it (`Setting Actor to crashed due to error`) carries only `ate.atespace` and `ate.actor.name`: it is written before the Actor is loaded, so no uid exists yet.
 
+### Per-Actor Usage Events
+
+atelet emits one usage record per **executing** actor per sampling tick, from the same sweep that feeds the [`ate.actor.stats.*` metrics](#the-metric-registry). The two are the halves of one split: the metrics aggregate to the bounded template/pool label set a TSDB can hold, and everything carrying actor identity travels here, on the log stream, where cardinality is free. An idle fleet is silent by design — a worker with no executing actor emits nothing.
+
+```json
+{"time":"…","level":"INFO","msg":"Actor usage sample",
+ "logging.googleapis.com/labels":{
+   "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
+   "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+   "ate.workerpool.namespace":"ate-demo-counter","ate.workerpool.name":"counter-pool"},
+ "kind":"periodic","sandbox_class":"gvisor","source":"cgroup",
+ "memory_current_bytes":39845888,"memory_peak_bytes":52428800,
+ "memory_working_set_bytes":31457280,"cpu_usage_usec":196776,
+ "observed_at_unix_nano":1788903245000000000}
+```
+
+* **Identity** rides in the same label group as the actor lifecycle events and container logs (`labels` off GCE, `logging.googleapis.com/labels` on GCE, which Cloud Logging promotes into `LogEntry.labels`), so every [query dimension above](#centralized-logging-backends-multi-dimensional-aggregation) applies unchanged, and one filter returns an actor's output, transitions, and usage interleaved. The pool pair is present when the worker pod resolved to a WorkerPool and absent otherwise, the same rule as on the metrics.
+* **Consumers filter on** `msg` plus `kind`. `kind` is `periodic` today; future kinds (lifecycle brackets) will join on the same record shape:
+
+```text
+labels."ate.actor.uid"="8f2a…" AND jsonPayload.msg="Actor usage sample"
+```
+
+* **The measurements** mirror the wire sample. `memory_current_bytes` and `memory_working_set_bytes` are point-in-time (current includes reclaimable page cache; the working set does not, and is the figure to compare against a memory limit). `memory_peak_bytes` and `cpu_usage_usec` **accumulate within the current epoch** (peak reads the cgroup's `memory.peak`, so it is zero on kernels older than 5.19 — unmeasured, not measured-as-zero), whose boundary depends on `source`: the `cgroup` source (host cgroup, gVisor) restarts both at zero on every restore, while the `guest-agent` source (inside the micro-VM) keeps counting across restores. Either way, per-actor CPU over a window is the increase between two samples, never a sum of raw values — and a decrease means the counter reset, not negative usage.
+* **Cadence and switch**: `--actor-stats-poll-interval` on atelet governs the sweep (default `1m`, floor `50s`, `0` disables the metrics and the events together).
+* **No trace context**: the sweep serves no request, so there is no span to join — the [Joining Logs to Traces](#joining-logs-to-traces) fields are absent on these records.
+* **Delivery is best-effort, decoupled from node health**: the records ride atelet's stdout behind a bounded queue, so a stalled log consumer costs events (with a `Usage events dropped` warning on recovery), never the sweep or the metrics. The feed does not honor atelet's `--log-level` — a node quieted to `warn` keeps emitting usage data; the interval flag is the only switch.
+
+**Do not put actor identity on a log-based metric.** Aggregating these events in the log store is what they are for, but a log-based metric built over them must label only by the bounded set (template, sandbox class, source, pool) — promoting `ate.actor.uid` or `ate.actor.name` into a metric label reintroduces exactly the per-actor cardinality this split keeps out of the TSDB.
+
 ### Which side failed: `ate.failure.domain`
 
 `ate.failure.reason` names the cause; `ate.failure.domain` names the side of the platform boundary it came from, as `infrastructure`, `workload`, or `unknown`. It rides on every signal that carries a reason, and the two are always emitted together — producers call `ateattr.FailureAttributes` or `ateattr.FailureLogAttrs` rather than setting either key directly.
@@ -168,7 +198,7 @@ One caveat belongs on any panel built from this. A `workload` domain says what t
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
 
-> [`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument. Read it when you need all the labels, the bucket limits, or the permitted values of a label. The table below does not have each instrument. The request-parking instruments and the actor resource-usage instruments are in the registry only. Refer to [The metric registry](#the-metric-registry).
+> [`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument. Read it when you need all the labels, the bucket limits, or the permitted values of a label. The table below does not have each instrument. The request-parking instruments and the actor resource-usage instruments (`ate.actor.stats.*`) are in the registry only. Refer to [The metric registry](#the-metric-registry); per-actor usage detail is the [events channel](#per-actor-usage-events)'s job.
 
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
@@ -220,7 +250,7 @@ The three snapshot labels are orthogonal and mean the same thing on every histog
 
 On a failure, `ate.failure.reason` marks the phase that died and the `total`, and nothing else, so `ate.actor.restore.duration{ate.snapshot.phase="download", ate.failure.reason!=""}` says how often the download is what breaks and why, while the phases that succeeded stay queryable as successes. The atelet histograms classify with substrate's own reason taxonomy (the same one `ate.actor.crashes` uses) rather than `error.type`, because these handlers return wrapped domain errors and the gRPC status is only assigned after the handler returns, so a status code would read `Unknown` for nearly every real failure. A failure that carries no reason reports `UNKNOWN`. [`ate.failure.domain`](#which-side-failed-atefailuredomain) rides alongside wherever the reason is present, so a restore that failed because the actor never passed its readyz probe is separable from one the node broke.
 
-The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead.
+The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead — for resource usage, on the [per-actor usage events](#per-actor-usage-events).
 
 ### The metric registry
 

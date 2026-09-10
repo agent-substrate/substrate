@@ -140,9 +140,11 @@ groups:
               stability: development
               value: unknown
               brief: >
-                The snapshot manifest has no class, or the class is not in this
-                list. The default is not gvisor. Thus a bad manifest stays
-                visible.
+                The source has no class, or a class that is not in this list.
+                The default is not gvisor. Thus a bad record stays visible.
+                ateapi reports it for a Worker that CreateWorker accepted with
+                no class, and for an ActorTemplate with no sandbox config.
+                atelet reports it for a snapshot manifest with no class.
 
   - id: registry.ate.snapshot
     type: attribute_group
@@ -620,6 +622,9 @@ groups:
       not write. Some moves into this state are not a loss of data. They are
       careful responses to a control plane problem. The ate.failure.reason key
       keeps these groups separate.
+      ate.sandbox.class is unknown when ateapi could not read the class of the
+      worker: the worker record is already gone, or its assignment is already
+      clear.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -660,6 +665,10 @@ groups:
       and not a gauge. ateapi sets both states to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
+      A worker with the class unknown is not capacity of the pool: the scheduler
+      puts no actor on it. Thus a query that asks how much capacity a pool has
+      must keep ate.sandbox.class, because a sum across the classes adds that
+      worker back into the total.
     annotations:
       substrate:
         emitted_by: [ateapi]

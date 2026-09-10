@@ -61,7 +61,7 @@ moves. A pinned pool cannot put those pods back on a moved node, so the old
 version drains away node by node. An unpinned pool breaks this constraints.
 #### Worker Capacity (`spec.template.resources`)
 
-Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope available to host an actor sandbox, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-specresources) on the `ActorTemplate`).
+Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope available to host an actor sandbox, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).
 
 - Size a pool's `limits` to the largest actor it should host. An actor occupies its whole worker, so worker capacity is the per-actor ceiling, not a shared budget.
 - Capacity is advisory for placement only: a worker that declares no CPU/memory limit reports zero capacity for that dimension, which the scheduler treats as **unconstrained** (placement is never blocked by missing data). The actual sandbox size still comes from the `ActorTemplate`.
@@ -112,24 +112,24 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 
 The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. It is used to generate the "Golden Snapshot" from which all actors of this type are derived.
 
-### Specification (`ActorTemplateSpec`)
+### Specification (`ActorTemplate`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
-| `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
+| `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
-| `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-specresources). Immutable, like the rest of the spec. |
+| `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
-Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` of the matching class. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the spec, is immutable, so each template's class is fixed at creation.
+Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` of the matching class. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
 
-### Sandbox Right-Sizing (`spec.resources`)
+### Sandbox Right-Sizing (`resources`)
 
-Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate` spec. Declared limits do three things:
+Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate`. Declared limits do three things:
 
 1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateom):
    - **gVisor (`ateom-gvisor`)** — applied to the container OCI spec: `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
@@ -141,19 +141,47 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
-### Workload Connectivity (Uniform DNS)
-Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and name:
+### Workload Connectivity
 
-**Format:** `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`
+A higher-order system reaches an actor through the **Substrate Router** by
+setting `ate-target-actor` to `<atespace>/<actor>`. This value selects the Actor;
+`Host` and HTTP/2 `:authority` remain application metadata. Normal HTTP requirements still apply:
+clients must send a valid `Host` or `:authority`, usually derived automatically
+from the request URL, and reverse proxies should preserve it when the application
+depends on the original authority.
+
+Clients that construct HTTP requests should add the routing header directly.
+For example, curl uses `-H`, Go uses `request.Header.Set`, and Python clients use
+their request `headers` mapping. WebSocket clients add the same header to the
+opening HTTP upgrade request. gRPC clients send it as outgoing metadata using
+the lowercase name `ate-target-actor`.
+
+For an HTTP `CONNECT` tunnel to a non-default Actor port, put the routing
+header on the outer `CONNECT` request and keep the target port in its
+authority. With curl, use `--proxy-header` instead of `-H`:
+
+```bash
+curl --proxytunnel --proxy http://localhost:8001 \
+  --proxy-header "ate-target-actor: my-atespace/my-actor" \
+  http://actor-upstream:9090/
+```
+
+Browser navigation cannot add custom request headers. Browser-based and other
+fixed clients must therefore connect through a user-controlled reverse proxy or
+policy enforcement point that overwrites the routing header before forwarding
+to `atenet-router`. The [Jupyter demo](../demos/jupyter/README.md) shows this
+pattern with NGINX. The proxy must derive the value from trusted configuration
+or authenticated request context rather than forwarding values supplied by an
+untrusted caller.
 
 ### SystemInfo Volumes
 
-To deliver identity information, including credentials, to a running actor, you can use a SystemInfo volume. Define it in `spec.volumes`, and mount it into each container that needs it.
+To deliver identity information, including credentials, to a running actor, you can use a SystemInfo volume. Define it in `volumes`, and mount it into each container that needs it.
 
 Available information sources:
 
 #### actorMetadata
-The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity and DNS name), or `uid` (server-generated, distinguishes incarnations of the same name) — and the relative `path` the value is written to, raw with no trailing newline.
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
 
 ```yaml
 spec:
@@ -226,7 +254,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
 | `env` | `[]EnvVar` | Optional. Literal `value` entries. |
 | `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
-| `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `spec.volumes` entry (e.g. `durableDir`) into this container. |
+| `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
 | `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |
 
@@ -276,7 +304,7 @@ A container that exceeds its memory limit is OOM-killed on its own; the actor's 
 
 Per-container limits are micro-VM only today. gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). A template that sets `resources` with `sandboxClass: gvisor` is rejected.
 
-These limits subdivide the sandbox that [`spec.resources`](#sandbox-right-sizing-specresources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A micro-VM guest is sized from `spec.resources.limits.memory` minus the VMM reserve, or from the template's [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) when the template declares no actor-level limit. The CPU ceiling is the guest's vCPU count, which falls back to the config's `default_vcpus` (1 unless the `SandboxConfig` raises it), so a template that declares no `spec.resources.limits.cpu` caps each container, and their sum, at `1000m`. A limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
+These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A micro-VM guest is sized from `resources.limits.memory` minus the VMM reserve, or from the template's [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) when the template declares no actor-level limit. The CPU ceiling is the guest's vCPU count, which falls back to the config's `default_vcpus` (1 unless the `SandboxConfig` raises it), so a template that declares no `resources.limits.cpu` caps each container, and their sum, at `1000m`. A limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
 
 Each limit is validated on its own at apply, but the sum across the actor's containers is only checked when the actor first runs, against the real guest size. A template whose limits do not fit is accepted by the API server and fails on its first actor.
 
@@ -338,16 +366,16 @@ snapshotsConfig:
 
 ```
 <location>/atespaces/<atespace>/actors/<actor uid>/snapshots/<snapshot name>
-<location>/atespaces/<atespace>/actor-snapshot-tags/<snapshot name>
+<location>/atespaces/<atespace>/tags/<tag uid>
 ```
 
 The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden actor lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/actors/<uid>/snapshots/<name>`.
 
-An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. The actor level is keyed on the UID rather than the name, so an actor recreated under a name that was used before never inherits its predecessor's objects.
+An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an actor or tag under the same name never inherits its predecessor's objects. A pending tag records its base location in `status.storageLocation`; together with its atespace and UID, this identifies any partial copy to collect if creation fails.
 
-An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `actor-snapshot-tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
+An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot`, an `ActorSnapshotTag` in `status.snapshot`, and an `ActorTemplate` its golden one in `status.goldenSnapshotStatus.goldenSnapshot` — each an `ExternalSnapshot` carrying `snapshotUri` and the `contentScope` it captured. The URI is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. All three are server-owned: do not send them on input, and parse a URI only against the scheme above.
+An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot`, a `Tag` in `status.snapshot`, and an `ActorTemplate` its golden one in `status.goldenSnapshotStatus.goldenSnapshot` — each an `ExternalSnapshot` carrying `snapshotUri` and the `contentScope` it captured. The URI is recorded when the snapshot is written. All three are server-owned: do not send them on input, and parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
@@ -421,13 +449,13 @@ When an `ActorTemplate` is created:
 4.  The template enters the `Ready` phase.
 
 ### Resumption Lifecycle
-Once a template is `Ready`, creating an actor logically (via `kubectl-ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
+Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
 
 ---
 
 ## 5. Best Practices
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
-*   **Symmetry:** Ensure your `ActorTemplate` and `WorkerPool` are in the same namespace or have appropriate RBAC permissions to reference each other.
+*   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
 
 ---
@@ -442,13 +470,13 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
-    *   `actor.source_snapshot_tag`: (Optional) `ObjectRef` of an `ActorSnapshotTag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.externalSnapshot` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.externalSnapshot` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`
 Replaces the mutable fields of an existing actor with the ones in the request.
 *   **Request:** `UpdateActorRequest`
-    *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_snapshot_tag` is immutable.
+    *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `ABORTED` if either guard no longer matches the stored resource.
 
@@ -466,7 +494,7 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.externalSnapshot`.
-*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateActorSnapshotTag` while the actor is still suspended.
+*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended.
 
 #### Snapshot lifetime
 

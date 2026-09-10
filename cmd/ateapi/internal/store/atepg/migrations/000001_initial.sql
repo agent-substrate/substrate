@@ -52,14 +52,14 @@ CREATE TABLE actor_templates (
     PRIMARY KEY (atespace, name)
 );
 
-CREATE TABLE actor_snapshot_tags (
+CREATE TABLE tags (
     atespace  text NOT NULL,
     name      text NOT NULL,
     uid       text NOT NULL,
     version   bigint NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name),
-    CONSTRAINT actor_snapshot_tags_atespace_fk
+    CONSTRAINT tags_atespace_fk
         FOREIGN KEY (atespace) REFERENCES atespaces(name) ON DELETE RESTRICT
 );
 

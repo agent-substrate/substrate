@@ -1055,7 +1055,7 @@ func TestValidateMintCertRequest(t *testing.T) {
 	}, {
 		"oversized certificate_signing_request",
 		validReq(func(r *ateapipb.MintCertRequest) { r.CertificateSigningRequest = make([]byte, 16385) }),
-		field.ErrorList{field.TooLong(field.NewPath("certificate_signing_request"), nil, 16384)},
+		field.ErrorList{field.TooLong(field.NewPath("certificate_signing_request"), nil, 16384).WithOrigin("maxBytes")},
 	}, {
 		"missing worker",
 		validReq(func(r *ateapipb.MintCertRequest) { r.Worker = nil }),

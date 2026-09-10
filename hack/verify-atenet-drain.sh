@@ -116,8 +116,8 @@ run_kubectl patch workerpool -n "${DEMO_NS}" "${DEMO_POOL}" --type merge -p '{"s
 run_kubectl rollout status "deploy/${DEMO_POOL}" -n "${DEMO_NS}" --timeout=180s >/dev/null
 
 log_step "creating actors ${ACTOR_BUSY} + ${ACTOR_PARKED} in atespace ${ATESPACE}"
-run_kubectl_ate create actor "${ACTOR_BUSY}" -a "${ATESPACE}" --template-ref "${DEMO_POOL}" >/dev/null
-run_kubectl_ate create actor "${ACTOR_PARKED}" -a "${ATESPACE}" --template-ref "${DEMO_POOL}" >/dev/null
+run_kubectl_ate create actor "${ACTOR_BUSY}" -a "${ATESPACE}" --template "${DEMO_POOL}" >/dev/null
+run_kubectl_ate create actor "${ACTOR_PARKED}" -a "${ATESPACE}" --template "${DEMO_POOL}" >/dev/null
 
 log_step "occupying the only worker with ${ACTOR_BUSY}"
 for i in $(seq 1 20); do
@@ -157,7 +157,7 @@ echo "steady state: /readyz=200 /healthz=200"
 
 log_step "firing the request that will park (single worker is busy)"
 ( curl -s --max-time 30 -w '\nHTTP=%{http_code}\n' \
-    -H "Host: ${ACTOR_PARKED}.${ATESPACE}.actors.resources.substrate.ate.dev" \
+  -H "ate-target-actor: ${ATESPACE}/${ACTOR_PARKED}" \
     "http://localhost:${LOCAL_HTTP_PORT}/" > "${CURL_OUT}" 2>&1 ) &
 CURL_PID=$!
 sleep 1  # inside the 5s park budget; the request is parked on the router

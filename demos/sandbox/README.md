@@ -47,13 +47,13 @@ kubectl ate get actor-template sandbox-template -a ate-demo-sandbox
 
 ### 2. Create a Sandbox Actor
 
-Create the sandbox actor in the demo's atespace with a chosen name (e.g., `my-sandbox-1`) — `--template-ref` names the template, resolved in the actor's atespace:
+Create the sandbox actor in the demo's atespace with a chosen name (e.g., `my-sandbox-1`) — `--template` names the template, resolved in the actor's atespace:
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template-ref sandbox-template
+kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template sandbox-template
 ```
 
 ### 3. Port-Forward Services
@@ -77,6 +77,16 @@ go build -o bin/sandbox-client ./demos/sandbox/client
 
 ./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
 ```
+
+The client sends each `/process` request to the router and automatically sets
+the routing header from `--name` and `--atespace`:
+
+```go
+req.Header.Set(atenet.TargetActorHeader, actorRef.String())
+```
+
+Any replacement HTTP client must send an equivalent `ate-target-actor` header;
+the URL and `Host` header do not select the Actor.
 
 Once in the `sandbox>` prompt, you can run commands:
 

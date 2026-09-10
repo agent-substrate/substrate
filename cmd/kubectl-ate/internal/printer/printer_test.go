@@ -83,8 +83,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `ATESPACE   NAME   TEMPLATE             STATE                 ATEOM POD         ATEOM IP   VERSION   AGE
-team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4    2         5m
+	expected := `ATESPACE   NAME   TEMPLATE             STATE                 WORKER POD        WORKER IP   VERSION   AGE
+team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4     2         5m
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -183,10 +183,10 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	}
 
 	// Sorted by atespace first, then template namespace, template name, name.
-	expected := `ATESPACE   NAME    TEMPLATE             STATE                   ATEOM POD   ATEOM IP   VERSION   AGE
-team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                 0         5m
-team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                 0         5h
-team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                 0         3d
+	expected := `ATESPACE   NAME    TEMPLATE             STATE                   WORKER POD   WORKER IP   VERSION   AGE
+team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                   0         5m
+team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                   0         5h
+team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                   0         3d
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -217,8 +217,8 @@ func TestPrintActorsTo_Table_TemplateRef(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   ATEOM POD   ATEOM IP   VERSION   AGE
-team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                 0         5m
+	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   WORKER POD   WORKER IP   VERSION   AGE
+team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                   0         5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -451,21 +451,21 @@ func TestPrintActorTemplatesTo_Invalid(t *testing.T) {
 	}
 }
 
-func TestPrintActorSnapshotTagsTo_Table(t *testing.T) {
+func TestPrintTagsTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	tags := []*ateapipb.ActorSnapshotTag{
+	tags := []*ateapipb.Tag{
 		{
 			Metadata: &ateapipb.ResourceMetadata{
 				Atespace:   "team-a",
 				Name:       "v2",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-			Status: &ateapipb.ActorSnapshotTagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/actor-snapshot-tags/v2", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
+			Status: &ateapipb.TagStatus{
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			},
 		},
 		{
@@ -474,9 +474,9 @@ func TestPrintActorSnapshotTagsTo_Table(t *testing.T) {
 				Name:       "v1",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
 			},
-			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-			Status: &ateapipb.ActorSnapshotTagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/actor-snapshot-tags/v1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			Status: &ateapipb.TagStatus{
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			},
 		},
 		{
@@ -487,31 +487,31 @@ func TestPrintActorSnapshotTagsTo_Table(t *testing.T) {
 				Name:       "v3",
 				CreateTime: timestamppb.New(now.Add(-30 * time.Second)),
 			},
-			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-			Status: &ateapipb.ActorSnapshotTagStatus{
-				InProgressSnapshotUri: "gs://private/atespaces/team-a/actor-snapshot-tags/9f1c",
+			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			Status: &ateapipb.TagStatus{
+				StorageLocation: "gs://private",
 			},
 		},
 	}
 
-	if err := PrintActorSnapshotTagsTo(&buf, tags, "table"); err != nil {
+	if err := PrintTagsTo(&buf, tags, "table"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Sorted by atespace, then name.
-	expected := `ATESPACE   NAME   SCOPE                                STATE     SNAPSHOT                                               CONTENT SCOPE                 AGE
-team-a     v1     ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/actor-snapshot-tags/v1   SNAPSHOT_CONTENT_SCOPE_FULL   5h
-team-a     v2     ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/actor-snapshot-tags/v2   SNAPSHOT_CONTENT_SCOPE_FULL   5m
-team-a     v3     ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE    Pending   <none>                                                 <none>                        30s
+	expected := `ATESPACE   NAME   SCOPE                 STATE     SNAPSHOT                                CONTENT SCOPE                 AGE
+team-a     v1     TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/tags/v1   SNAPSHOT_CONTENT_SCOPE_FULL   5h
+team-a     v2     TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/tags/v2   SNAPSHOT_CONTENT_SCOPE_FULL   5m
+team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                                  <none>                        30s
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestPrintActorSnapshotTagsTo_Invalid(t *testing.T) {
+func TestPrintTagsTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
-	if err := PrintActorSnapshotTagsTo(&buf, nil, "xml"); err == nil {
+	if err := PrintTagsTo(&buf, nil, "xml"); err == nil {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
