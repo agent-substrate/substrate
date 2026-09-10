@@ -471,10 +471,10 @@ func eventually(t *testing.T, condition func() bool, timeout time.Duration) {
 	}
 }
 
-// ApplyLocal is the store's commit-time fast path: events land in the cache
-// synchronously, ahead of the watch, and the watch's later duplicate (or any
-// older event still in the journal) must be a no-op.
-func TestCache_ApplyLocal_ImmediateAndFenced(t *testing.T) {
+// ApplyEvent is also the store's commit-time fast path: events land in the
+// cache synchronously, ahead of the watch, and the watch's later duplicate
+// (or any older event still in the journal) must be a no-op.
+func TestCache_ApplyEvent_ImmediateAndFenced(t *testing.T) {
 	w := makeWorker("ns", "pod1", 1)
 	fs := newFakeStore(w)
 	c := workercache.New(fs, time.Hour)
@@ -485,7 +485,7 @@ func TestCache_ApplyLocal_ImmediateAndFenced(t *testing.T) {
 	// Local publish is synchronous: visible with no watch delivery involved.
 	updated := makeWorker("ns", "pod1", 2)
 	updated.Status.Allocated = &ateapipb.WorkerResources{Actors: 1}
-	c.ApplyLocal(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	c.ApplyEvent(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
 	got, err := c.Worker(workerName("ns", "pod1"))
 	if err != nil {
 		t.Fatalf("Worker: %v", err)
@@ -504,25 +504,35 @@ func TestCache_ApplyLocal_ImmediateAndFenced(t *testing.T) {
 	}, 2*time.Second)
 
 	// An older local event must be fenced too.
-	c.ApplyLocal(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
+	c.ApplyEvent(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
 	if w, _ := c.Worker(workerName("ns", "pod1")); w.GetMetadata().GetVersion() != 2 {
 		t.Fatalf("older ApplyLocal regressed the cache to version %d", w.GetMetadata().GetVersion())
 	}
 }
 
-// Deletes must not be applied locally: cache absence is not versioned, so an
-// out-of-order local delete could be resurrected by an older watch event.
-// Deletes ride the journal only.
-func TestCache_ApplyLocal_IgnoresDeletes(t *testing.T) {
-	w := makeWorker("ns", "pod1", 3)
-	fs := newFakeStore(w)
+// fakePublishingStore is a fakeStore whose writes can also be announced
+// through an in-process sink, mirroring atepg's PublishEventsLocally.
+type fakePublishingStore struct {
+	*fakeStore
+	sink func(store.WorkerEvent)
+}
+
+func (f *fakePublishingStore) PublishEventsLocally(sink func(store.WorkerEvent)) { f.sink = sink }
+
+// Start must self-register the cache with a store that can publish its
+// committed writes locally: events delivered through the sink reach the
+// cache with no watch delivery involved.
+func TestCache_Start_RegistersLocalPublish(t *testing.T) {
+	fs := &fakePublishingStore{fakeStore: newFakeStore()}
 	c := workercache.New(fs, time.Hour)
 	if err := c.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-
-	c.ApplyLocal(store.WorkerEvent{Type: store.WorkerEventDeleted, Worker: w})
+	if fs.sink == nil {
+		t.Fatal("Start did not register the cache with the publishing store")
+	}
+	fs.sink(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod1", 1)})
 	if _, err := c.Worker(workerName("ns", "pod1")); err != nil {
-		t.Fatal("ApplyLocal applied a delete; deletes must only arrive via the watch")
+		t.Fatalf("event delivered through the local sink not visible: %v", err)
 	}
 }

@@ -61,10 +61,9 @@ type Persistence struct {
 	localEvents           func(store.WorkerEvent)
 }
 
-// PublishEventsLocally registers a fast-path sink for committed create/update
-// events ahead of outbox delivery. Later outbox duplicates are deduplicated
-// by version. Deletes are excluded to prevent resurrection races.
-// sink runs on the write path, so it must be fast and non-blocking.
+// PublishEventsLocally registers a sink for committed create/update/delete
+// worker events ahead of outbox delivery. Later outbox duplicates are deduplicated
+// by version.
 func (p *Persistence) PublishEventsLocally(sink func(store.WorkerEvent)) {
 	p.localEvents = sink
 }

@@ -1018,10 +1018,9 @@ func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
 	}
 }
 
-// TestPublishEventsLocally pins the local fast-path contract: create and
-// update events reach the registered sink synchronously at commit time,
-// carrying the committed (version-bumped) state, while deletes are withheld
-// (cache absence is not versioned; deletes ride the journal only).
+// TestPublishEventsLocally pins the local fast-path contract: every worker
+// event — create, update, and delete — reaches the registered sink
+// synchronously at commit time, carrying the committed state.
 func TestPublishEventsLocally(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
@@ -1077,7 +1076,10 @@ func TestPublishEventsLocally(t *testing.T) {
 	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("after delete: %d events, want still 2 — deletes must not publish locally", len(events))
+	if len(events) != 3 || events[2].Type != store.WorkerEventDeleted {
+		t.Fatalf("after delete: events = %+v, want a third WorkerEventDeleted", events)
+	}
+	if events[2].Worker.GetMetadata().GetName() != created.GetMetadata().GetName() {
+		t.Errorf("deleted event names worker %q, want %q", events[2].Worker.GetMetadata().GetName(), created.GetMetadata().GetName())
 	}
 }

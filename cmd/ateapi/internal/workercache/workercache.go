@@ -69,10 +69,18 @@ type workerListWatcher interface {
 // Start syncs the cache synchronously, then spawns a background goroutine
 // that streams updates, relists periodically, and resyncs on connection loss.
 // Returns as soon as the initial sync succeeds.
+//
+// Stores that publish their committed writes in-process
+// are wired to the cache here.
 func (c *Cache) Start(ctx context.Context) error {
 	watch, err := c.sync(ctx)
 	if err != nil {
 		return err
+	}
+	if publisher, ok := c.store.(interface {
+		PublishEventsLocally(func(store.WorkerEvent))
+	}); ok {
+		publisher.PublishEventsLocally(c.ApplyEvent)
 	}
 	c.ready.Store(true)
 	go c.watchEvents(ctx, watch)
@@ -176,7 +184,7 @@ func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 				}
 				c.ready.Store(true)
 			} else {
-				c.applyEvent(event)
+				c.ApplyEvent(event)
 			}
 		case <-ticker.C:
 			if err := c.relist(ctx); err != nil {
@@ -210,17 +218,9 @@ func (c *Cache) resync(ctx context.Context) *store.WorkerWatch {
 	return watch
 }
 
-// ApplyLocal eagerly updates the cache on commit, ahead of the watch.
-// Version fencing deduplicates later watch events. Deletes are ignored
-// to prevent out-of-order watch replays from resurrecting workers.
-func (c *Cache) ApplyLocal(event store.WorkerEvent) {
-	if event.Type == store.WorkerEventDeleted {
-		return
-	}
-	c.applyEvent(event)
-}
-
-func (c *Cache) applyEvent(event store.WorkerEvent) {
+// ApplyEvent applies one worker event to the cache. It is called both by the
+// background watch and eagerly by the local store on commit.
+func (c *Cache) ApplyEvent(event store.WorkerEvent) {
 	key := workerKey(event.Worker)
 	c.mu.Lock()
 	defer c.mu.Unlock()
