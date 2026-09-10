@@ -128,7 +128,7 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListA
 
 	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
-		return nil, fmt.Errorf("while listing actor templates in db: %w", err)
+		return nil, mapListError(fmt.Errorf("while listing actor templates in db: %w", err))
 	}
 	return &ateapipb.ListActorTemplatesResponse{
 		ActorTemplates: page.Items,
