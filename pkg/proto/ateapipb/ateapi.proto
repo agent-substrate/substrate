@@ -528,12 +528,12 @@ message ActorStatus {
   // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
-  // The name the in-progress durable snapshot will be stored under. Snapshot
-  // names are server-generated UUIDs, but any resource name is valid here.
+  // in_progress_snapshot_uri is the URI in object storage of the durable
+  // snapshot the Actor is currently taking.
   //
   // +k8s:optional
-  // +k8s:format=k8s-short-name
-  string in_progress_snapshot_name = 3;
+  // +k8s:maxLength=2048
+  string in_progress_snapshot_uri = 3;
 
   // external_snapshot is the Actor's current external snapshot.
   // If the Actor was created from a Tag this is the tag's snapshot, borrowed

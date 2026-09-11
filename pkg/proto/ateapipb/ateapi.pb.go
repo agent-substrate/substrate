@@ -1486,12 +1486,12 @@ type ActorStatus struct {
 	// +k8s:optional
 	// +k8s:update=NoModify # can be set and cleared, but not changed in place
 	WorkerAssignment *WorkerAssignment `protobuf:"bytes,2,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`
-	// The name the in-progress durable snapshot will be stored under. Snapshot
-	// names are server-generated UUIDs, but any resource name is valid here.
+	// in_progress_snapshot_uri is the URI in object storage of the durable
+	// snapshot the Actor is currently taking.
 	//
 	// +k8s:optional
-	// +k8s:format=k8s-short-name
-	InProgressSnapshotName string `protobuf:"bytes,3,opt,name=in_progress_snapshot_name,json=inProgressSnapshotName,proto3" json:"in_progress_snapshot_name,omitempty"`
+	// +k8s:maxLength=2048
+	InProgressSnapshotUri string `protobuf:"bytes,3,opt,name=in_progress_snapshot_uri,json=inProgressSnapshotUri,proto3" json:"in_progress_snapshot_uri,omitempty"`
 	// external_snapshot is the Actor's current external snapshot.
 	// If the Actor was created from a Tag this is the tag's snapshot, borrowed
 	// until the Actor's first suspend writes one of its own. Otherwise it is
@@ -1578,9 +1578,9 @@ func (x *ActorStatus) GetWorkerAssignment() *WorkerAssignment {
 	return nil
 }
 
-func (x *ActorStatus) GetInProgressSnapshotName() string {
+func (x *ActorStatus) GetInProgressSnapshotUri() string {
 	if x != nil {
-		return x.InProgressSnapshotName
+		return x.InProgressSnapshotUri
 	}
 	return ""
 }
@@ -6823,11 +6823,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x19CredentialHeaderInjection\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
-	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\x8b\x04\n" +
+	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\x89\x04\n" +
 	"\vActorStatus\x12(\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x12.ateapi.ActorStateR\x05state\x12E\n" +
-	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x129\n" +
-	"\x19in_progress_snapshot_name\x18\x03 \x01(\tR\x16inProgressSnapshotName\x12E\n" +
+	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x127\n" +
+	"\x18in_progress_snapshot_uri\x18\x03 \x01(\tR\x15inProgressSnapshotUri\x12E\n" +
 	"\x11external_snapshot\x18\x04 \x01(\v2\x18.ateapi.ExternalSnapshotR\x10externalSnapshot\x12I\n" +
 	"\x13local_snapshot_info\x18\x05 \x01(\v2\x19.ateapi.LocalSnapshotInfoR\x11localSnapshotInfo\x12;\n" +
 	"\ractor_volumes\x18\a \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\x12D\n" +
