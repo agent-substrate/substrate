@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -661,36 +660,21 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, status.Errorf(codes.InvalidArgument, "Failed to verify CSR signature")
 	}
 
-	// TODO(identity): Atunnel certificates should probably have a separate RPC,
-	// since different callers will be authorized to get atunnel certificates vs
-	// actor self-identity certificates.
-	var template *x509.Certificate
-	switch req.GetPurpose() {
-	case ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL:
-		template = &x509.Certificate{
-			URIs: []*url.URL{
-				{
-					Scheme: "spiffe",
-					// TODO(identity): Must be configurable per-install, so that each install can set it to a unique value.
-					Host: "substrate-actor.local",
-					// TODO(identity): Prefix with "atunnel" to prevent
-					// confusion between atunnel and an actor pretending to be
-					// an atunnel.
-					Path: path.Join("atespace", dbActor.GetMetadata().GetAtespace(), "actor", dbActor.GetMetadata().GetName()),
-				},
+	template := &x509.Certificate{
+		URIs: []*url.URL{
+			{
+				Scheme: "spiffe",
+				// TODO(identity): Must be configurable per-install, so that each install can set it to a unique value.
+				Host: "substrate-actor.local",
+				Path: path.Join("actor", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 			},
-			NotBefore:             time.Now().Add(-5 * time.Minute),
-			NotAfter:              time.Now().Add(time.Hour),
-			KeyUsage:              x509.KeyUsageDigitalSignature,
-			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-			BasicConstraintsValid: true,
-			IsCA:                  false,
-			Issuer: pkix.Name{
-				CommonName: "api.ate-system.svc.cluster.local",
-			},
-		}
-	default:
-		return nil, status.Errorf(codes.InvalidArgument, "certificate purpose must be specified")
+		},
+		NotBefore:             time.Now().Add(-5 * time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
 	}
 
 	err = substratex509.AddActorIdentityToCertificate(
@@ -698,7 +682,6 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 			Atespace:  dbActor.GetMetadata().GetAtespace(),
 			ActorName: dbActor.GetMetadata().GetName(),
 			ActorUid:  dbActor.GetMetadata().GetUid(),
-			Purpose:   substratex509.ActorIdentityPurposeAtunnel,
 		},
 		template,
 	)

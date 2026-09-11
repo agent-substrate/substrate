@@ -23,7 +23,9 @@ import (
 	"crypto/x509/pkix"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,12 +58,9 @@ func TestBrokerCertificateSourceMintsAndReusesKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := substratex509.ActorIdentityFromCertificate(cert.Leaf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if identity == nil || identity.ActorUid != "actor-uid" || identity.Purpose != substratex509.ActorIdentityPurposeAtunnel {
-		t.Fatalf("actor identity = %+v", identity)
+	wantURI := "spiffe://substrate-actor.local/ateom/actor/actor-atespace/actor-name"
+	if len(cert.Leaf.URIs) != 1 || cert.Leaf.URIs[0].String() != wantURI {
+		t.Fatalf("cert.Leaf.URIs = %v, want [%s]", cert.Leaf.URIs, wantURI)
 	}
 }
 
@@ -83,22 +82,11 @@ func TestBrokerCertificateSourceRejectsExpiredCertificate(t *testing.T) {
 	}
 }
 
-func TestBrokerCertificateSourceRejectsUnexpectedActor(t *testing.T) {
-	source, broker := newTestBrokerCertificateSource(t, testAteletIdentity("node-a"), time.Hour)
-	broker.actorUID = "another-actor-uid"
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if _, err := source.MintAteomCertificate(ctx); err == nil || !strings.Contains(err.Error(), "unexpected actor") {
-		t.Fatalf("Mint() error = %v, want actor UID rejection", err)
-	}
-}
-
 type ateomSupportStub struct {
 	ateletpb.UnimplementedAteomSupportServer
 	ca         *testCA
 	lifetime   time.Duration
 	publicKeys chan []byte
-	actorUID   string
 }
 
 func (s *ateomSupportStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -113,13 +101,15 @@ func (s *ateomSupportStub) MintActorCertificate(_ context.Context, req *ateletpb
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()),
 		Subject:      pkix.Name{CommonName: "actor"},
-		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(s.lifetime),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-	if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{Atespace: "team", ActorName: "actor", ActorUid: s.actorUID, Purpose: substratex509.ActorIdentityPurposeAtunnel}, template); err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		URIs: []*url.URL{{
+			Scheme: "spiffe",
+			Host:   "substrate-actor.local",
+			Path:   path.Join("ateom", "actor", req.GetActorAtespace(), req.GetActorName()),
+		}},
+		NotBefore:   now.Add(-time.Minute),
+		NotAfter:    now.Add(s.lifetime),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, s.ca.cert, csr.PublicKey, s.ca.key)
 	if err != nil {
@@ -172,7 +162,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    clientCAs,
 	})))
-	broker := &ateomSupportStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2), actorUID: "actor-uid"}
+	broker := &ateomSupportStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2)}
 	ateletpb.RegisterAteomSupportServer(server, broker)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {

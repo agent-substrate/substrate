@@ -316,9 +316,8 @@ class ControlServicer:
     def MintActorCertificate(self, request, context):
         """Create a Substrate-issued SPIFFE certificate asserting the actor identity.
 
-        * Called by atelet to provision an atunnel with a certificate for
-        communication with the egress gateway.  TODO(identity): Migrate this use
-        case to a distinct certificate to prevent actor/atunnel confusion.
+        SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
+
         * Called by the egress gateway when actor client certificate injection is
         configured for outbound requests.
         """
@@ -1584,10 +1583,7 @@ class Control:
 
 
 class WorkerServiceStub:
-    """WorkerService is how a Worker tells the control plane about itself. It is
-    separate from Control because the two have different callers and different
-    authorization: Control is the client-facing API, while these RPCs are served
-    only to an atelet, and only for the Workers on its own node.
+    """WorkerService is the RPC service tailored to be called by Atelet.
     """
 
     def __init__(self, channel):
@@ -1601,13 +1597,15 @@ class WorkerServiceStub:
                 request_serializer=ateapi__pb2.SetWorkerCapacityRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.SetWorkerCapacityResponse.FromString,
                 _registered_method=True)
+        self.MintAteomActorCertificate = channel.unary_unary(
+                '/ateapi.WorkerService/MintAteomActorCertificate',
+                request_serializer=ateapi__pb2.MintAteomActorCertificateRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.MintAteomActorCertificateResponse.FromString,
+                _registered_method=True)
 
 
 class WorkerServiceServicer:
-    """WorkerService is how a Worker tells the control plane about itself. It is
-    separate from Control because the two have different callers and different
-    authorization: Control is the client-facing API, while these RPCs are served
-    only to an atelet, and only for the Workers on its own node.
+    """WorkerService is the RPC service tailored to be called by Atelet.
     """
 
     def SetWorkerCapacity(self, request, context):
@@ -1623,6 +1621,16 @@ class WorkerServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def MintAteomActorCertificate(self, request, context):
+        """Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+        on behalf of a particular actor.
+
+        SPIFFE URI: spiffe://${trustdomain}/ateom/actor/${atespace}/${actor}
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_WorkerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -1630,6 +1638,11 @@ def add_WorkerServiceServicer_to_server(servicer, server):
                     servicer.SetWorkerCapacity,
                     request_deserializer=ateapi__pb2.SetWorkerCapacityRequest.FromString,
                     response_serializer=ateapi__pb2.SetWorkerCapacityResponse.SerializeToString,
+            ),
+            'MintAteomActorCertificate': grpc.unary_unary_rpc_method_handler(
+                    servicer.MintAteomActorCertificate,
+                    request_deserializer=ateapi__pb2.MintAteomActorCertificateRequest.FromString,
+                    response_serializer=ateapi__pb2.MintAteomActorCertificateResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1640,10 +1653,7 @@ def add_WorkerServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class WorkerService:
-    """WorkerService is how a Worker tells the control plane about itself. It is
-    separate from Control because the two have different callers and different
-    authorization: Control is the client-facing API, while these RPCs are served
-    only to an atelet, and only for the Workers on its own node.
+    """WorkerService is the RPC service tailored to be called by Atelet.
     """
 
     @staticmethod
@@ -1663,6 +1673,33 @@ class WorkerService:
             '/ateapi.WorkerService/SetWorkerCapacity',
             ateapi__pb2.SetWorkerCapacityRequest.SerializeToString,
             ateapi__pb2.SetWorkerCapacityResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MintAteomActorCertificate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.WorkerService/MintAteomActorCertificate',
+            ateapi__pb2.MintAteomActorCertificateRequest.SerializeToString,
+            ateapi__pb2.MintAteomActorCertificateResponse.FromString,
             options,
             channel_credentials,
             insecure,

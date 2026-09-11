@@ -21,13 +21,12 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/url"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +39,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -88,29 +86,10 @@ func (ca *testCA) roots() *x509.CertPool {
 	return pool
 }
 
-// oidActorIdentity mirrors the unexported OID substratex509 encodes the
-// ActorIdentity extension under: the Substrate PEN arc, sub-identifier 2.
-var oidActorIdentity = append(append(asn1.ObjectIdentifier{}, substratex509.GoogleSubstratePEN...), 2)
-
-// addActorIdentityUnchecked encodes identity into template the way
-// substratex509.AddActorIdentityToCertificate does, minus its validation, so
-// tests can mint the malformed identities a real CA would refuse to produce and
-// confirm the gateway rejects them anyway.
-func addActorIdentityUnchecked(identity *substratex509.ActorIdentity, template *x509.Certificate) error {
-	value, err := json.Marshal(identity)
-	if err != nil {
-		return err
-	}
-	template.ExtraExtensions = append(template.ExtraExtensions, pkix.Extension{Id: oidActorIdentity, Value: value})
-	return nil
-}
-
 // actorCertOptions mutates the leaf template so each test can break exactly one
 // property of an otherwise-valid actor certificate.
 type actorCertOptions struct {
-	identity      *substratex509.ActorIdentity
-	extraIdentity *substratex509.ActorIdentity
-	mutate        func(*x509.Certificate)
+	mutate func(*x509.Certificate)
 }
 
 // issueActorCert mints a leaf off ca, mirroring what ateapi's actoridentity
@@ -133,33 +112,19 @@ func (ca *testCA) issueActorCertDER(t *testing.T, opts actorCertOptions) []byte 
 		t.Fatalf("generating leaf key: %v", err)
 	}
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: testEgressActor},
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: testEgressActor},
+		URIs: []*url.URL{{
+			Scheme: "spiffe",
+			Host:   "substrate-actor.local",
+			Path:   path.Join("ateom", "actor", testEgressAtespace, testEgressActor),
+		}},
 		NotBefore:             time.Now().Add(-5 * time.Minute),
 		NotAfter:              time.Now().Add(time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
-	}
-	identity := opts.identity
-	if identity == nil {
-		identity = &substratex509.ActorIdentity{
-			Atespace:  testEgressAtespace,
-			ActorName: testEgressActor,
-			ActorUid:  testEgressActorUID,
-			Purpose:   substratex509.ActorIdentityPurposeAtunnel,
-		}
-	}
-	// AddActorIdentityToCertificate validates its input, so identities a real CA
-	// would refuse to mint are encoded directly.
-	if err := addActorIdentityUnchecked(identity, template); err != nil {
-		t.Fatalf("adding ActorIdentity extension: %v", err)
-	}
-	if opts.extraIdentity != nil {
-		if err := addActorIdentityUnchecked(opts.extraIdentity, template); err != nil {
-			t.Fatalf("adding second ActorIdentity extension: %v", err)
-		}
 	}
 	if opts.mutate != nil {
 		opts.mutate(template)
@@ -365,86 +330,114 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name: "no ActorIdentity extension",
+			name: "no URI SANs",
 			xfcc: func(t *testing.T) string {
 				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
-					c.ExtraExtensions = nil
+					c.URIs = nil
 				}}))
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			// Stays in DER: crypto/x509 refuses to parse a certificate with a
-			// duplicate extension OID at all, so the helper cannot hand back an
-			// *x509.Certificate here. That refusal is the first of the two
-			// layers guarding "exactly one ActorIdentity" — this case proves the
-			// handler denies rather than panics when the parse fails, and
-			// substratex509 rejects a second copy if a parser ever allowed one.
-			name: "two ActorIdentity extensions",
+			name: "multiple URI SANs",
 			xfcc: func(t *testing.T) string {
-				return xfccHeaderDER(ca.issueActorCertDER(t, actorCertOptions{
-					extraIdentity: &substratex509.ActorIdentity{
-						Atespace:  testEgressAtespace,
-						ActorName: "a-different-actor",
-						ActorUid:  "8f14e45f-ceea-467a-9575-25a0d5d5e4b0",
-						Purpose:   substratex509.ActorIdentityPurposeAtunnel,
-					},
-				}))
-			},
-			want: envoy_type.StatusCode_Forbidden,
-		},
-		{
-			name: "generic purpose",
-			xfcc: func(t *testing.T) string {
-				return xfccHeader(ca.issueActorCert(t, actorCertOptions{identity: &substratex509.ActorIdentity{
-					Atespace:  testEgressAtespace,
-					ActorName: testEgressActor,
-					ActorUid:  testEgressActorUID,
-					Purpose:   "generic",
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = append(c.URIs, &url.URL{
+						Scheme: "spiffe",
+						Host:   "substrate-actor.local",
+						Path:   path.Join("ateom", "actor", testEgressAtespace, "other-actor"),
+					})
 				}}))
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name: "missing purpose",
+			name: "non-spiffe URI scheme",
 			xfcc: func(t *testing.T) string {
-				return xfccHeader(ca.issueActorCert(t, actorCertOptions{identity: &substratex509.ActorIdentity{
-					Atespace:  testEgressAtespace,
-					ActorName: testEgressActor,
-					ActorUid:  testEgressActorUID,
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = []*url.URL{{
+						Scheme: "https",
+						Host:   "substrate-actor.local",
+						Path:   path.Join("ateom", "actor", testEgressAtespace, testEgressActor),
+					}}
 				}}))
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name: "empty atespace",
+			name: "empty trust domain",
 			xfcc: func(t *testing.T) string {
-				return xfccHeader(ca.issueActorCert(t, actorCertOptions{identity: &substratex509.ActorIdentity{
-					ActorName: testEgressActor,
-					ActorUid:  testEgressActorUID,
-					Purpose:   substratex509.ActorIdentityPurposeAtunnel,
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = []*url.URL{{
+						Scheme: "spiffe",
+						Host:   "",
+						Path:   "/" + path.Join("ateom", "actor", testEgressAtespace, testEgressActor),
+					}}
 				}}))
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name: "empty actor name",
+			name: "non-ateom actor SPIFFE URI",
 			xfcc: func(t *testing.T) string {
-				return xfccHeader(ca.issueActorCert(t, actorCertOptions{identity: &substratex509.ActorIdentity{
-					Atespace: testEgressAtespace,
-					ActorUid: testEgressActorUID,
-					Purpose:  substratex509.ActorIdentityPurposeAtunnel,
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = []*url.URL{{
+						Scheme: "spiffe",
+						Host:   "substrate-actor.local",
+						Path:   path.Join("actor", testEgressAtespace, testEgressActor),
+					}}
 				}}))
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name: "empty actor UID",
+			name: "malformed SPIFFE URI path (too few segments)",
 			xfcc: func(t *testing.T) string {
-				return xfccHeader(ca.issueActorCert(t, actorCertOptions{identity: &substratex509.ActorIdentity{
-					Atespace:  testEgressAtespace,
-					ActorName: testEgressActor,
-					Purpose:   substratex509.ActorIdentityPurposeAtunnel,
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = []*url.URL{{
+						Scheme: "spiffe",
+						Host:   "substrate-actor.local",
+						Path:   path.Join("ateom", "actor", testEgressAtespace),
+					}}
+				}}))
+			},
+			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name: "malformed SPIFFE URI path (extra segment)",
+			xfcc: func(t *testing.T) string {
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = []*url.URL{{
+						Scheme: "spiffe",
+						Host:   "substrate-actor.local",
+						Path:   path.Join("ateom", "actor", testEgressAtespace, testEgressActor, "extra"),
+					}}
+				}}))
+			},
+			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name: "invalid atespace resource name in SPIFFE URI",
+			xfcc: func(t *testing.T) string {
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = []*url.URL{{
+						Scheme: "spiffe",
+						Host:   "substrate-actor.local",
+						Path:   path.Join("ateom", "actor", "INVALID_ATESPACE", testEgressActor),
+					}}
+				}}))
+			},
+			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name: "invalid actor resource name in SPIFFE URI",
+			xfcc: func(t *testing.T) string {
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) {
+					c.URIs = []*url.URL{{
+						Scheme: "spiffe",
+						Host:   "substrate-actor.local",
+						Path:   path.Join("ateom", "actor", testEgressAtespace, "INVALID_ACTOR"),
+					}}
 				}}))
 			},
 			want: envoy_type.StatusCode_Forbidden,
@@ -495,29 +488,6 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 		err   error
 		want  envoy_type.StatusCode
 	}{
-		{
-			// The actor was deleted and recreated under the same name: the
-			// certificate is still cryptographically valid but names a UID that
-			// no longer exists, and must not carry over to the successor.
-			name: "actor UID does not match the certificate",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{
-					Atespace: testEgressAtespace,
-					Name:     testEgressActor,
-					Uid:      "d41d8cd9-8f00-4204-a980-0998ecf8427e",
-				},
-				Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
-			},
-			want: envoy_type.StatusCode_Forbidden,
-		},
-		{
-			name: "actor has no UID",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: testEgressAtespace, Name: testEgressActor},
-				Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
-			},
-			want: envoy_type.StatusCode_Forbidden,
-		},
 		{
 			name: "actor is not running",
 			actor: &ateapipb.Actor{

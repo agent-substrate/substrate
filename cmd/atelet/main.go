@@ -369,8 +369,7 @@ func main() {
 	ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
 
 	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
-		controlClient: ateapipb.NewControlClient(ateapiConn),
-		workers:       ateapipb.NewWorkerServiceClient(ateapiConn),
+		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
 	})
 	go func() {
 		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {

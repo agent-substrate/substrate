@@ -32,7 +32,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/substratex509"
 )
 
 // The gateway's front door requires a client certificate signed by the
@@ -88,9 +87,9 @@ func actorIdentityCA(t *testing.T, ctx context.Context) *localca.CA {
 	return pool.CAs[0]
 }
 
-// mintActorCredential issues a client credential for identity, in the shape
+// mintActorCredential issues a client credential for an actor, in the shape
 // atunnel gets from ateapi.
-func mintActorCredential(t *testing.T, ca *localca.CA, identity *substratex509.ActorIdentity) []byte {
+func mintActorCredential(t *testing.T, ca *localca.CA, atespace, actorName string) []byte {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -102,7 +101,7 @@ func mintActorCredential(t *testing.T, ca *localca.CA, identity *substratex509.A
 		URIs: []*url.URL{{
 			Scheme: "spiffe",
 			Host:   "substrate-actor.local",
-			Path:   path.Join("atespace", identity.Atespace, "actor", identity.ActorName),
+			Path:   path.Join("ateom", "actor", atespace, actorName),
 		}},
 		NotBefore:             time.Now().Add(-5 * time.Minute),
 		NotAfter:              time.Now().Add(actorCertificateLifetime),
@@ -112,13 +111,10 @@ func mintActorCredential(t *testing.T, ca *localca.CA, identity *substratex509.A
 		IsCA:                  false,
 		Issuer:                pkix.Name{CommonName: "api.ate-system.svc.cluster.local"},
 	}
-	if err := substratex509.AddActorIdentityToCertificate(identity, template); err != nil {
-		t.Fatalf("adding the ActorIdentity extension for %s/%s: %v", identity.Atespace, identity.ActorName, err)
-	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, ca.RootCertificate, key.Public(), ca.SigningKey)
 	if err != nil {
-		t.Fatalf("signing the actor certificate for %s/%s: %v", identity.Atespace, identity.ActorName, err)
+		t.Fatalf("signing the actor certificate for %s/%s: %v", atespace, actorName, err)
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
@@ -152,10 +148,5 @@ func provisionProbeCredentials(t *testing.T, ctx context.Context, ns string) {
 
 	// The name is scoped to the probe's namespace so a stray record cannot
 	// collide with anything.
-	writeCredentialSecret(t, ctx, ns, unknownActorCredentialSecret, mintActorCredential(t, actorIdentityCA(t, ctx), &substratex509.ActorIdentity{
-		Atespace:  probeAtespace,
-		ActorName: "no-such-actor-" + ns,
-		ActorUid:  "00000000-0000-0000-0000-000000000000",
-		Purpose:   substratex509.ActorIdentityPurposeAtunnel,
-	}))
+	writeCredentialSecret(t, ctx, ns, unknownActorCredentialSecret, mintActorCredential(t, actorIdentityCA(t, ctx), probeAtespace, "no-such-actor-"+ns))
 }

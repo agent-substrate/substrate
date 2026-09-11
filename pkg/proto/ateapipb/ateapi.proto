@@ -65,9 +65,8 @@ service Control {
 
   // Create a Substrate-issued SPIFFE certificate asserting the actor identity.
   //
-  // * Called by atelet to provision an atunnel with a certificate for
-  //   communication with the egress gateway.  TODO(identity): Migrate this use
-  //   case to a distinct certificate to prevent actor/atunnel confusion.
+  // SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
+  //
   // * Called by the egress gateway when actor client certificate injection is
   //   configured for outbound requests.
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
@@ -1541,24 +1540,8 @@ message MintActorCertificateRequest {
   // +k8s:maxBytes=16384
   bytes certificate_signing_request = 2;
 
-  // Purpose of the certificate.  Used to distinguish between system components
-  // acting on behalf of an actor, and the actor itself taking action.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=1 # keep this in sync with the ActorCertificatePurpose enum
-  ActorCertificatePurpose purpose = 4;
-}
-
-// Purpose of the certificate.  Used to distinguish between system components
-// acting on behalf of an actor, and the actor itself taking action.
-//
-// TODO(identity): This should be removed once ateom/atunnel certs are separated
-// from plain actor certs.
-enum ActorCertificatePurpose {
-  ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
-  ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
-  // Keep this in sync with MintCertRequest.purpose's maximum.
+  reserved 4;
+  reserved "purpose";
 }
 
 // Response message for MintActorCertificate.
@@ -1984,10 +1967,7 @@ message ActorAssignment {
   Resources resources = 5;
 }
 
-// WorkerService is how a Worker tells the control plane about itself. It is
-// separate from Control because the two have different callers and different
-// authorization: Control is the client-facing API, while these RPCs are served
-// only to an atelet, and only for the Workers on its own node.
+// WorkerService is the RPC service tailored to be called by Atelet.
 service WorkerService {
   // SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
   // to report rather than the control plane's to infer: it is what the ateom
@@ -1997,6 +1977,12 @@ service WorkerService {
   // atelet calls this with its own client certificate, as it does for
   // MintCert. Idempotent: re-sending the same capacity is not a write.
   rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse);
+
+  // Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+  // on behalf of a particular actor.
+  //
+  // SPIFFE URI: spiffe://${trustdomain}/ateom/actor/${atespace}/${actor}
+  rpc MintAteomActorCertificate(MintAteomActorCertificateRequest) returns (MintAteomActorCertificateResponse);
 }
 
 message SetWorkerCapacityRequest {
@@ -2018,4 +2004,37 @@ message SetWorkerCapacityRequest {
 message SetWorkerCapacityResponse {
   // The Worker as recorded, so a caller sees what its report resolved to.
   Worker worker = 1;
+}
+
+// Request message for MintAteomActorCertificate.
+message MintAteomActorCertificateRequest {
+  // The actor for which the certificate should be issued.
+  //
+  // Must be a valid actor that currently exists according to the actor store.
+  //
+  // +k8s:required
+  ObjectRef actor = 6;
+
+  // The UID of the actor --- used to guard against deletion and recreation of
+  // an actor with the same name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 7;
+
+  // Request contains DER encoded bytes of a x509 certificate signing request.
+  // The signer will ignore the contents of the CSR except to extract the
+  // subject public key.
+  //
+  // +k8s:required
+  // +k8s:maxBytes=16384
+  bytes certificate_signing_request = 2;
+}
+
+// Response message for MintAteomActorCertificate.
+message MintAteomActorCertificateResponse {
+  // Response contains a list of DER encoded certificates. The first entry is the
+  // leaf certificate, and any remaining entries are intermediates in
+  // leaf-to-root order.
+  repeated bytes actor_certificates = 1;
 }
