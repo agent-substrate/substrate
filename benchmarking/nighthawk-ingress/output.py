@@ -216,7 +216,9 @@ def session_succeeded(output_dict: dict) -> bool:
 def capacity_summary(
     output_dict: dict,
     *,
-    envoy_cpu: int,
+    envoy_cpu: int | None = None,
+    proxy_cpu: int | None = None,
+    dataplane: str = "envoy",
     actors: int,
     client_concurrency: int | None = None,
     tail_latency_slo_ms: float | None = None,
@@ -233,8 +235,13 @@ def capacity_summary(
     best_clean = max(
         clean, key=lambda r: r[_builtin_key("attempted-rps")], default=None
     )
+    if proxy_cpu is None:
+        proxy_cpu = envoy_cpu
+    if proxy_cpu is None:
+        raise ValueError("proxy_cpu is required")
     summary = {
-        "envoy_cpu": envoy_cpu,
+        "dataplane": dataplane,
+        "proxy_cpu": proxy_cpu,
         "actors": actors,
         "client_concurrency": client_concurrency,
         "tail_latency_slo_ms": tail_latency_slo_ms,
@@ -248,11 +255,14 @@ def capacity_summary(
         "converged": session_succeeded(output_dict) and testing is not None,
         "adjusting_stages": sum(1 for r in rows if r["stage"] != "testing"),
     }
+    if dataplane == "envoy":
+        summary["envoy_cpu"] = proxy_cpu
     if testing:
+        summary["testing_failed_thresholds"] = testing["failed_thresholds"]
         for name in ("attempted-rps", "achieved-rps", "send-rate", "success-rate"):
-            summary[_builtin_key(name)] = testing.get(_builtin_key(name))
+            summary[f"testing_{_builtin_key(name)}"] = testing.get(_builtin_key(name))
         for name in ("p50_ms", "p95_ms", "p99_ms"):
-            summary[name] = testing.get(name)
+            summary[f"testing_{name}"] = testing.get(name)
     return summary
 
 

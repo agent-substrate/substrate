@@ -432,6 +432,18 @@ tests:
     nighthawk-ingress:
       envoyCpu: 4
       tailLatencySloMs: 25
+  - name: ingress_routercap_agentgateway_2cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, AgentGateway at 2 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    ateArgs:
+      - "--atenet-router=agentgateway"
+    nighthawk-ingress:
+      dataplane: agentgateway
+      agentgatewayCpu: 2
+      tailLatencySloMs: 25
   - name: ingress_routercap_envoy_8cpu
     description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 8 CPUs"
     type: nighthawk-ingress

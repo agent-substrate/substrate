@@ -149,9 +149,10 @@ def test_capacity_summary_converged():
     assert summary["tail_latency_slo_ms"] == 25
     assert summary["adjusting_stages"] == 2
     assert "max_total_rps" not in summary
-    assert summary["metric_nighthawk.builtin_attempted_rps"] == 800.0
-    assert summary["metric_nighthawk.builtin_achieved_rps"] == 800.0
-    assert summary["p99_ms"] == 20.0
+    assert summary["testing_metric_nighthawk.builtin_attempted_rps"] == 800.0
+    assert summary["testing_metric_nighthawk.builtin_achieved_rps"] == 800.0
+    assert summary["testing_p99_ms"] == 20.0
+    assert summary["testing_failed_thresholds"] == []
     # slo_max = achieved-rps of the highest-attempted clean stage
     # (adjusting_001: 10000 sent / 10s).
     assert summary["binding_threshold"] == []
@@ -194,6 +195,24 @@ def test_capacity_summary_no_testing_stage():
     summary = output_mod.capacity_summary(session, envoy_cpu=2, actors=10)
     assert summary["converged"] is False
     assert "max_total_rps" not in summary
+
+
+def test_capacity_summary_keeps_boundary_probe_separate():
+    session = {
+        "session_status": {},
+        "adjusting_stage_results": [benchmark_result(rps=125, http_2xx=5000)],
+        "testing_stage_result": benchmark_result(
+            rps=250,
+            http_2xx=9000,
+            failed_metric="latency-ns-mean-plus-2stdev",
+        ),
+    }
+    summary = output_mod.capacity_summary(session, envoy_cpu=2, actors=10)
+    assert summary["slo_max_stage"] == "adjusting_000"
+    assert summary["testing_failed_thresholds"] == [
+        "latency-ns-mean-plus-2stdev"
+    ]
+    assert summary["testing_p95_ms"] == 8.0
 
 
 if __name__ == "__main__":
