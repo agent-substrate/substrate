@@ -196,7 +196,7 @@ def harvest_server_telemetry(
     start_ts: int,
     end_ts: int,
     steady_start_ts: int,
-    worker_pod_count: int,
+    worker_pod_count: int | None,
 ) -> dict[str, Any]:
     """Harvests all 4 ground truth metric streams from Prometheus."""
     summary: dict[str, Any] = {
@@ -231,10 +231,12 @@ def harvest_server_telemetry(
     for t in sorted(ts_packing_map.keys()):
         states = ts_packing_map[t]
         assigned = states.get("assigned", 0.0)
-        # Use known cluster worker pod count as true physical capacity denominator
+        # Prefer the real cluster worker pod count as the physical capacity
+        # denominator. When it is unknown, fall back to the worker states
+        # Prometheus itself reports rather than assuming a number.
         total = (
             float(worker_pod_count)
-            if worker_pod_count > 0
+            if worker_pod_count
             else (sum(states.values()) or 1.0)
         )
         ratio = round(assigned / total, 4) if total > 0 else 0.0
@@ -389,7 +391,7 @@ def extract_and_record_server_telemetry(
     end_ts: int,
     stats_history_csv: Path,
     active_users: int,
-    worker_pod_count: int,
+    worker_pod_count: int | None,
     output_json_path: Path,
     jsonl_path: Path,
     data_ts: str,

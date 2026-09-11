@@ -41,18 +41,18 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, TextIO
+from typing import IO, Any, TextIO
 
+from cluster_facts import (
+    EMPTY_FACTS,
+    append_trial_summary,
+    get_cluster_hardware_facts,
+)
 from common.boomer_config import build_config_json
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
-default_boomer = "/app/boomer-worker"
-if not os.path.exists(default_boomer) and os.path.exists("/app/boomer-glutton"):
-    default_boomer = "/app/boomer-glutton"
-BOOMER_BINARY = os.environ.get("BOOMER_BINARY", default_boomer)
-BOOMER_MASTER_PORT = int(os.environ.get("BOOMER_MASTER_PORT", "5557"))
-BOOMER_PROMETHEUS_ADDR = os.environ.get("BOOMER_PROMETHEUS_ADDR", ":8001")
+BOOMER_BINARY = "/app/boomer-worker"
 
 # Port for the headless /boomer-config server (common/boomer_config.py), which
 # gives boomer the values that change while a run continues. Locust already
@@ -97,6 +97,17 @@ def parse_args() -> argparse.Namespace:
             "Exit 0 when locust produced no measurement rows. For a run whose "
             "result is not in the locust statistics, such as a run that sends "
             "no request on purpose"
+        ),
+    )
+    p.add_argument(
+        "--cluster-facts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Read node capacity and worker pod count from the Kubernetes API "
+            "after the run to derive density frontiers. Pass "
+            "--no-cluster-facts to skip those API calls, for example on a "
+            "large cluster where listing nodes is expensive"
         ),
     )
     args, extra = p.parse_known_args()
@@ -267,13 +278,9 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
         "--csv", str(csv_prefix),
     ]
     if with_boomer:
-        # Master mode so boomer can connect as a worker.
+        # Master mode so boomer can connect as a worker on localhost:5557.
         # --expect-workers=1 makes locust wait for boomer before starting.
-        locust_cmd += [
-            "--master",
-            "--master-bind-port", str(BOOMER_MASTER_PORT),
-            "--expect-workers", "1",
-        ]
+        locust_cmd += ["--master", "--expect-workers", "1"]
         # Serve /boomer-config for the worker. --config-json gives boomer the
         # values one time, at its start, thus a run that changes a value while
         # it runs needs the endpoint. A load shape is one such run.
@@ -298,16 +305,7 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
 
     boomer_proc = None
     if with_boomer:
-        boomer_cmd = [BOOMER_BINARY]
-        if "boomer-glutton" not in os.path.basename(BOOMER_BINARY):
-            boomer_cmd += ["--user-class", Path(test_file(args.file)).stem]
-        boomer_cmd += [
-            "--master-port", str(BOOMER_MASTER_PORT),
-            "--prometheus-addr", BOOMER_PROMETHEUS_ADDR,
-        ]
-        api_endpoint = os.environ.get("BOOMER_API_ENDPOINT")
-        if api_endpoint:
-            boomer_cmd += ["-api-endpoint", api_endpoint]
+        boomer_cmd = [BOOMER_BINARY, "--user-class", Path(test_file(args.file)).stem]
         cfg_json = build_config_json(args.locust_extra)
         if cfg_json:
             boomer_cmd += ["--config-json", cfg_json]
@@ -389,304 +387,6 @@ def stats_to_jsonl(stats_csv: Path, jsonl_path: Path, timestamp: str, tag: str, 
     return rows_written
 
 
-def parse_k8s_cpu(cpu_str: str) -> float:
-    cpu_str = cpu_str.strip()
-    if cpu_str.endswith("m"):
-        return float(cpu_str[:-1]) / 1000.0
-    if cpu_str.endswith("u"):
-        return float(cpu_str[:-1]) / 1_000_000.0
-    if cpu_str.endswith("n"):
-        return float(cpu_str[:-1]) / 1_000_000_000.0
-    return float(cpu_str)
-
-
-def parse_k8s_memory(mem_str: str) -> int:
-    mem_str = mem_str.strip()
-    multipliers = {
-        "Ki": 1024,
-        "Mi": 1024**2,
-        "Gi": 1024**3,
-        "Ti": 1024**4,
-        "Pi": 1024**5,
-        "Ei": 1024**6,
-        "k": 1000,
-        "K": 1000,
-        "m": 1000**2,
-        "M": 1000**2,
-        "g": 1000**3,
-        "G": 1000**3,
-        "t": 1000**4,
-        "T": 1000**4,
-        "p": 1000**5,
-        "P": 1000**5,
-        "e": 1000**6,
-        "E": 1000**6,
-    }
-    for suffix, mult in multipliers.items():
-        if mem_str.endswith(suffix):
-            num = float(mem_str[: -len(suffix)].strip())
-            return int(num * mult)
-    return int(float(mem_str))
-
-
-def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, any]:
-    facts: dict[str, any] = {
-        "node_count": None,
-        "allocatable_cores": None,
-        "allocatable_ram_gb": None,
-        "worker_pod_count": None,
-    }
-    # 1. Environment variables override
-    if "NODE_COUNT" in os.environ:
-        try:
-            facts["node_count"] = int(os.environ["NODE_COUNT"])
-        except ValueError:
-            pass
-    if "ALLOCATABLE_VCPU" in os.environ or "ALLOCATABLE_CORES" in os.environ:
-        try:
-            facts["allocatable_cores"] = float(
-                os.environ.get("ALLOCATABLE_VCPU") or os.environ.get("ALLOCATABLE_CORES")
-            )
-        except ValueError:
-            pass
-    if "ALLOCATABLE_RAM_GB" in os.environ:
-        try:
-            facts["allocatable_ram_gb"] = float(os.environ["ALLOCATABLE_RAM_GB"])
-        except ValueError:
-            pass
-    elif "ALLOCATABLE_RAM_BYTES" in os.environ:
-        try:
-            facts["allocatable_ram_gb"] = round(
-                float(os.environ["ALLOCATABLE_RAM_BYTES"]) / (1024**3), 2
-            )
-        except ValueError:
-            pass
-    if "WORKER_POD_COUNT" in os.environ:
-        try:
-            facts["worker_pod_count"] = int(os.environ["WORKER_POD_COUNT"])
-        except ValueError:
-            pass
-
-    if all(
-        facts[k] is not None
-        for k in ("node_count", "allocatable_cores", "allocatable_ram_gb", "worker_pod_count")
-    ):
-        return facts
-
-    # 2. In-cluster HTTP API or local kubectl discovery
-    try:
-        nodes_data = None
-        token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
-
-        if token_path.exists():
-            import ssl
-            import urllib.request
-
-            token = token_path.read_text().strip()
-            ctx = ssl.create_default_context()
-            ca_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
-            if ca_path.exists():
-                ctx.load_verify_locations(cafile=str(ca_path))
-
-            # Query nodes
-            if any(facts[k] is None for k in ("node_count", "allocatable_cores", "allocatable_ram_gb")):
-                try:
-                    req = urllib.request.Request(
-                        "https://kubernetes.default.svc/api/v1/nodes",
-                        headers={"Authorization": f"Bearer {token}"},
-                    )
-                    with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                        nodes_data = json.loads(resp.read().decode())
-                except Exception as e:
-                    if logs:
-                        tee(logs, f"Notice: In-cluster nodes API: {e}")
-
-            # Query worker pods (ate.dev/worker-pool)
-            if facts["worker_pod_count"] is None:
-                for url in (
-                    "https://kubernetes.default.svc/api/v1/namespaces/benchmark-workloads/pods?labelSelector=ate.dev%2Fworker-pool",
-                    "https://kubernetes.default.svc/api/v1/pods?labelSelector=ate.dev%2Fworker-pool",
-                ):
-                    try:
-                        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-                        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                            p_data = json.loads(resp.read().decode())
-                            items = [
-                                p for p in p_data.get("items", [])
-                                if p.get("status", {}).get("phase") in ("Running", "Pending")
-                            ]
-                            if items:
-                                facts["worker_pod_count"] = len(items)
-                                break
-                    except Exception:
-                        pass
-        elif shutil.which("kubectl"):
-            # Local workstation fallback via kubectl
-            if any(facts[k] is None for k in ("node_count", "allocatable_cores", "allocatable_ram_gb")):
-                res = subprocess.run(
-                    ["kubectl", "get", "nodes", "-o", "json"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if res.returncode == 0:
-                    nodes_data = json.loads(res.stdout)
-            if facts["worker_pod_count"] is None:
-                for cmd in (
-                    ["kubectl", "get", "pods", "-n", "benchmark-workloads", "-l", "ate.dev/worker-pool", "-o", "json"],
-                    ["kubectl", "get", "pods", "-A", "-l", "ate.dev/worker-pool", "-o", "json"],
-                ):
-                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                    if res.returncode == 0:
-                        p_data = json.loads(res.stdout)
-                        items = [
-                            p for p in p_data.get("items", [])
-                            if p.get("status", {}).get("phase") in ("Running", "Pending")
-                        ]
-                        if items:
-                            facts["worker_pod_count"] = len(items)
-                            break
-
-        if nodes_data and "items" in nodes_data:
-            nodes = nodes_data["items"]
-            if facts["node_count"] is None:
-                facts["node_count"] = len(nodes)
-            total_cores = 0.0
-            total_ram_bytes = 0
-            for node in nodes:
-                alloc = node.get("status", {}).get("allocatable", {})
-                if "cpu" in alloc:
-                    total_cores += parse_k8s_cpu(alloc["cpu"])
-                if "memory" in alloc:
-                    total_ram_bytes += parse_k8s_memory(alloc["memory"])
-            if facts["allocatable_cores"] is None:
-                facts["allocatable_cores"] = round(total_cores, 2)
-            if facts["allocatable_ram_gb"] is None:
-                facts["allocatable_ram_gb"] = round(total_ram_bytes / (1024**3), 2)
-
-        # Graceful fallback: if no worker pods found, fall back to node_count
-        if facts["worker_pod_count"] is None and facts["node_count"]:
-            facts["worker_pod_count"] = facts["node_count"]
-    except Exception as e:
-        if logs:
-            tee(logs, f"Notice: Cluster hardware discovery skipped/failed: {e}")
-
-    return facts
-
-
-def append_trial_summary(
-    jsonl_path: Path,
-    stats_csv: Path,
-    stats_history_csv: Path,
-    args: argparse.Namespace,
-    data_ts: str,
-    facts: dict[str, any],
-    logs: TextIO | None = None,
-) -> None:
-    active_users = args.users
-    node_count = facts.get("node_count")
-    cores = facts.get("allocatable_cores")
-    ram_gb = facts.get("allocatable_ram_gb")
-    pod_count = facts.get("worker_pod_count")
-
-    actors_per_node = round(active_users / node_count, 2) if node_count else None
-    actors_per_vcpu = round(active_users / cores, 2) if cores else None
-    actors_per_gb_ram = round(active_users / ram_gb, 2) if ram_gb else None
-
-    # Calculate steady-state A/P percentiles from stats_history.csv
-    ap_p50, ap_p90, ap_p99 = None, None, None
-    if stats_history_csv.exists() and pod_count and pod_count > 0:
-        try:
-            user_counts: list[float] = []
-            with open(stats_history_csv) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    name = row.get("Name", "")
-                    if name in ("", "Aggregated", "Total") and "User Count" in row:
-                        try:
-                            u = float(row["User Count"])
-                            # Steady-state window: when load reaches configured users
-                            if u >= active_users * 0.9:
-                                user_counts.append(u)
-                        except ValueError:
-                            pass
-            if not user_counts:
-                # Fallback: if no rows matched threshold, use non-zero samples
-                with open(stats_history_csv) as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        name = row.get("Name", "")
-                        if name in ("", "Aggregated", "Total") and "User Count" in row:
-                            try:
-                                u = float(row["User Count"])
-                                if u > 0:
-                                    user_counts.append(u)
-                            except ValueError:
-                                pass
-            if user_counts:
-                ratios = sorted([round(u / pod_count, 4) for u in user_counts])
-                n = len(ratios)
-                ap_p50 = round(ratios[int(n * 0.50)], 2)
-                ap_p90 = round(ratios[min(int(n * 0.90), n - 1)], 2)
-                ap_p99 = round(ratios[min(int(n * 0.99), n - 1)], 2)
-            else:
-                static_ratio = round(active_users / pod_count, 2)
-                ap_p50, ap_p90, ap_p99 = static_ratio, static_ratio, static_ratio
-        except Exception as e:
-            if logs:
-                tee(logs, f"Notice: Error calculating A/P ratio percentiles: {e}")
-
-    # Calculate aggregate failure ratio from stats_csv
-    total_requests = 0
-    total_failures = 0
-    if stats_csv.exists():
-        try:
-            with open(stats_csv) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    name = row.get("Name", "")
-                    reqs = int(row.get("Request Count", 0) or 0)
-                    fails = int(row.get("Failure Count", 0) or 0)
-                    if name == "Aggregated":
-                        total_requests = reqs
-                        total_failures = fails
-                        break
-                    total_requests += reqs
-                    total_failures += fails
-        except Exception:
-            pass
-
-    failure_ratio = (
-        round(total_failures / total_requests, 4) if total_requests > 0 else 0.0
-    )
-
-    summary_entry = {
-        "timestamp": data_ts,
-        "tag": args.tag,
-        "test_name": args.name,
-        "metric": "trial_summary",
-        "raw_configuration": {
-            "node_count": node_count,
-            "allocatable_cores": cores,
-            "allocatable_ram_gb": ram_gb,
-            "worker_pod_count": pod_count,
-        },
-        "frontiers": {
-            "actors_per_node": actors_per_node,
-            "actors_per_vcpu": actors_per_vcpu,
-            "actors_per_gb_ram": actors_per_gb_ram,
-            "ap_ratio_p50": ap_p50,
-            "ap_ratio_p90": ap_p90,
-            "ap_ratio_p99": ap_p99,
-            "aggregate_failure_ratio": failure_ratio,
-        },
-    }
-    with open(jsonl_path, "a") as f:
-        f.write(json.dumps(summary_entry) + "\n")
-    if logs:
-        tee(logs, f"Appended trial_summary to {jsonl_path}")
-
-
 def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
     # Imported here so non-GCS use doesn't require google-cloud-storage.
     from google.cloud import storage
@@ -701,11 +401,23 @@ def upload(src: Path, dest: str) -> None:
     if dest.startswith("gs://"):
         upload_to_gcs(src, dest)
     else:
-        path_str = dest[7:] if dest.startswith("file://") else dest
-        dest_path = Path(path_str)
+        dest_path = Path(dest)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src, dest_path)
 
+
+def collect_cluster_facts(
+    args: argparse.Namespace, logs: TextIO
+) -> dict[str, Any]:
+    """Returns cluster hardware facts, or empty facts when discovery is off.
+
+    --no-cluster-facts short-circuits before any Kubernetes API call, for
+    clusters where listing nodes and pods is expensive.
+    """
+    if not args.cluster_facts:
+        tee(logs, "Skipping cluster hardware discovery (--no-cluster-facts)")
+        return dict(EMPTY_FACTS)
+    return get_cluster_hardware_facts(logs)
 
 
 def main() -> None:
@@ -757,55 +469,59 @@ def main() -> None:
                         jsonl_path.unlink()
                 else:
                     stats_generated = jsonl_path.exists()
-                    if stats_generated:
-                        facts = get_cluster_hardware_facts(logs)
-                        stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
-                        append_trial_summary(
-                            jsonl_path,
-                            stats_csv,
-                            stats_history_csv,
-                            args,
-                            data_ts,
-                            facts,
-                            logs,
-                        )
-
-                        # Harvest server-side ground truth from Prometheus (bin-packing, PSI, snapshots)
-                        prom_url = os.environ.get(
-                            "PROMETHEUS_URL",
-                            "http://prometheus.benchmarking.svc.cluster.local:9090",
-                        )
-                        try:
-                            from server_telemetry import (
-                                extract_and_record_server_telemetry,
-                            )
-
-                            extract_and_record_server_telemetry(
-                                prom_url=prom_url,
-                                start_ts=run_ts,
-                                end_ts=run_end_ts,
-                                stats_history_csv=stats_history_csv,
-                                active_users=args.users,
-                                worker_pod_count=facts.get("worker_pod_count")
-                                or 5,
-                                output_json_path=server_summary_json,
-                                jsonl_path=jsonl_path,
-                                data_ts=data_ts,
-                                tag=args.tag,
-                                test_name=args.name,
-                                logs=logs,
-                            )
-                        except Exception as e:
-                            tee(
-                                logs,
-                                f"Warning: Failed to harvest server telemetry: {e}",
-                            )
             except Exception as e:
                 tee(logs, f"Failed to generate JSONL from {stats_csv}: {e}")
                 if jsonl_path.exists():
                     jsonl_path.unlink()
         else:
             tee(logs, f"Stats CSV {stats_csv} not produced; skipping JSONL")
+
+        # Density frontiers and server-side telemetry are additive. They are
+        # kept out of the block above so that a failure here cannot discard
+        # the measurements the trial actually came for.
+        if stats_generated:
+            stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
+            # Seeded up front so that a later failure still leaves a usable
+            # value for the telemetry call below.
+            facts = dict(EMPTY_FACTS)
+            try:
+                facts = collect_cluster_facts(args, logs)
+                append_trial_summary(
+                    jsonl_path,
+                    stats_csv,
+                    stats_history_csv,
+                    args,
+                    data_ts,
+                    facts,
+                    logs,
+                )
+            except Exception as e:
+                tee(logs, f"Warning: Failed to record cluster facts: {e}")
+
+            # Harvest server-side ground truth from Prometheus (bin-packing, PSI, snapshots)
+            prom_url = os.environ.get(
+                "PROMETHEUS_URL",
+                "http://prometheus.benchmarking.svc.cluster.local:9090",
+            )
+            try:
+                from server_telemetry import extract_and_record_server_telemetry
+
+                extract_and_record_server_telemetry(
+                    prom_url=prom_url,
+                    start_ts=run_ts,
+                    end_ts=run_end_ts,
+                    stats_history_csv=stats_history_csv,
+                    active_users=args.users,
+                    worker_pod_count=facts.get("worker_pod_count"),
+                    output_json_path=server_summary_json,
+                    jsonl_path=jsonl_path,
+                    data_ts=data_ts,
+                    tag=args.tag,
+                    test_name=args.name,
+                    logs=logs,
+                )
+            except Exception as e:
+                tee(logs, f"Warning: Failed to harvest server telemetry: {e}")
 
     status_path.write_text(
         json.dumps(
@@ -824,7 +540,6 @@ def main() -> None:
         (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
         (server_summary_json, "server_summary.json"),
         # TODO: remove after data migration
-        (server_summary_json, f"{args.name}_server_summary.json"),
         (jsonl_path, f"{args.name}.jsonl"),
     ]
     for src, basename in files:

@@ -188,6 +188,52 @@ class HarvestServerTelemetryTest(unittest.TestCase):
         self.assertEqual(snapshots["size_p50_mb"], 11.5)
         self.assertIsNotNone(snapshots["throughput_mb_s"])
 
+    @mock.patch("server_telemetry.query_prometheus_range")
+    @mock.patch("server_telemetry.query_prometheus_instant")
+    def test_unknown_pod_count_uses_prometheus_total(
+        self, mock_instant, mock_range
+    ):
+        """An unknown pod count must fall back to what Prometheus reports.
+
+        cluster_facts deliberately returns None rather than assuming a worker
+        count, because Prometheus already knows the real number. If a guess is
+        ever reintroduced upstream it would pre-empt this branch, so the
+        denominator is asserted explicitly.
+        """
+        mock_range.side_effect = [
+            # Packing query: 4 assigned out of 20 workers actually reporting.
+            [
+                {
+                    "metric": {"ate_worker_state": "assigned"},
+                    "values": [[100, "4.0"]],
+                },
+                {
+                    "metric": {"ate_worker_state": "idle"},
+                    "values": [[100, "16.0"]],
+                },
+            ],
+            [{"values": [[100, "0.0"]]}],  # CPU PSI
+            [{"values": [[100, "0.0"]]}],  # Memory PSI
+            [{"values": [[100, "0.0"]]}],  # IO PSI
+            [{"values": [[100, "0.0"]]}],  # CFS throttled
+        ]
+        # Snapshot queries are irrelevant here, and each empty quantile costs
+        # a second call via the fallback, so the count is not fixed.
+        mock_instant.return_value = []
+
+        summary = server_telemetry.harvest_server_telemetry(
+            prom_url="http://localhost:9090",
+            start_ts=100,
+            end_ts=105,
+            steady_start_ts=100,
+            worker_pod_count=None,
+        )
+
+        point = summary["cluster_packing"]["timeseries"][0]
+        # 4 + 16 observed workers, not a fabricated node count and not 1.0.
+        self.assertEqual(point["total_workers"], 20.0)
+        self.assertEqual(point["packing_ratio"], 0.2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -224,7 +224,12 @@ roleRef:
   kind: ClusterRole
   name: locust-hardware-discovery
 subjects:
+# The locust Deployment runs as `default`; the automated runner Job in
+# benchmarking/automation/manifests/runner-job.yaml.tmpl runs as
+# `benchmark-runner`. Both execute runner.py, so both need to read capacity.
 - kind: ServiceAccount
   name: default
   namespace: benchmarking
-
+- kind: ServiceAccount
+  name: benchmark-runner
+  namespace: benchmarking
