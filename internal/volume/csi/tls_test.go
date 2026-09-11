@@ -364,3 +364,40 @@ func TestMTLSPicksUpCARotation(t *testing.T) {
 	}
 	plugin2.client.Close()
 }
+
+func TestCAPoolCache_HitAndFileChange(t *testing.T) {
+	t.Parallel()
+	ca := newTestCA(t)
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "trust-bundle.pem")
+	writeFile(t, caPath, ca.certPEM())
+
+	cache := newCAPoolCache(caPath)
+
+	pool1, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("failed to get cert pool: %v", err)
+	}
+
+	// 2nd call should return the exact cached instance (pointer equality).
+	pool2, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("failed to get cert pool: %v", err)
+	}
+	if pool1 != pool2 {
+		t.Errorf("expected cached cert pool pointer equality on unchanged file, got %p != %p", pool1, pool2)
+	}
+
+	// Modify the file.
+	writeFile(t, caPath, ca.certPEM())
+
+	// 3rd call should detect file change and return a newly parsed pool.
+	pool3, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("failed to get cert pool: %v", err)
+	}
+	if pool1 == pool3 {
+		t.Errorf("expected new cert pool after file modification, got same pointer %p", pool3)
+	}
+}

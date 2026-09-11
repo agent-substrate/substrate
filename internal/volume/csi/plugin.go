@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
@@ -336,9 +337,10 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 		return nil, fmt.Errorf("only pod identity TLS is supported in this configuration")
 	}
 
-	// Verify CA pool exists and is readable at construction time.
-	_, err := getCertPool(paths.caCert)
-	if err != nil {
+	caCache := newCAPoolCache(paths.caCert)
+
+	// Verify CA pool exists, is readable, and populate the initial cache.
+	if _, err := caCache.getCertPool(); err != nil {
 		return nil, fmt.Errorf("failed to load CA cert pool from %q: %w", paths.caCert, err)
 	}
 
@@ -358,15 +360,16 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 		// Standard tls.Config.RootCAs is a static cert pool evaluated at construction time.
 		// To automatically pick up CA trust bundle rotations on disk without restarting the process,
 		// we set InsecureSkipVerify=true and verify the server certificate chain dynamically
-		// against the latest CA bundle read from disk in VerifyConnection.
+		// against the CA bundle in VerifyConnection.
+		// caCache avoids re-reading and re-parsing the CA bundle from disk on every handshake
+		// unless the file has changed.
 		InsecureSkipVerify: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
 				return fmt.Errorf("server did not present certificates")
 			}
 
-			// Read CA trust bundle on each TLS connection handshake.
-			roots, err := getCertPool(paths.caCert)
+			roots, err := caCache.getCertPool()
 			if err != nil {
 				return fmt.Errorf("failed to load CA cert pool from %q: %w", paths.caCert, err)
 			}
@@ -391,14 +394,62 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 	}, nil
 }
 
-func getCertPool(path string) (*x509.CertPool, error) {
+// caPoolCache holds the parsed *x509.CertPool and file stat so unchanged CA trust bundles
+// are not re-read from disk on every TLS handshake.
+type caPoolCache struct {
+	path string
+
+	mu   sync.Mutex
+	fi   os.FileInfo
+	pool *x509.CertPool
+}
+
+func newCAPoolCache(path string) *caPoolCache {
+	return &caPoolCache{path: path}
+}
+
+// isFileUnchanged reports whether newFi is the same file as the stat the cached
+// pool was parsed from.
+func (c *caPoolCache) isFileUnchanged(newFi os.FileInfo) bool {
+	if c.fi == nil || newFi == nil {
+		return false
+	}
+	return os.SameFile(c.fi, newFi) && c.fi.ModTime().Equal(newFi.ModTime()) && c.fi.Size() == newFi.Size()
+}
+
+// getCertPool returns the parsed CA cert pool, re-reading the file only when it has changed
+// on disk (identity, modification time, or size).
+func (c *caPoolCache) getCertPool() (*x509.CertPool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	fi, err := os.Stat(c.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat CA cert file %q: %w", c.path, err)
+	}
+
+	if c.pool != nil && c.isFileUnchanged(fi) {
+		return c.pool, nil
+	}
+
+	pool, err := parseCertPool(c.path)
+	if err != nil {
+		return nil, err
+	}
+
+	c.fi, c.pool = fi, pool
+	return c.pool, nil
+}
+
+func parseCertPool(path string) (*x509.CertPool, error) {
 	certBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read cert file %q: %w", path, err)
 	}
-	certPool := x509.NewCertPool()
-	if !certPool.AppendCertsFromPEM(certBytes) {
-		return nil, fmt.Errorf("failed to parse certs from %q", path)
+
+	pool := x509.NewCertPool()
+	if ok := pool.AppendCertsFromPEM(certBytes); !ok {
+		return nil, fmt.Errorf("failed to parse any certificates from %q", path)
 	}
-	return certPool, nil
+	return pool, nil
 }
