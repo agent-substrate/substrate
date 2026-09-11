@@ -155,14 +155,7 @@ const partitions = 9
 // hash-partitioned table on key, keeping its indexes, constraints and
 // foreign keys. PostgreSQL rejects any of them that omits key.
 func partitionTable(ctx context.Context, pool *pgxpool.Pool, table, key string) error {
-	rows, err := pool.Query(ctx, `
-		SELECT format('ALTER TABLE %s ADD CONSTRAINT %I %s', conrelid::regclass, conname, pg_get_constraintdef(oid))
-		FROM pg_constraint
-		WHERE contype = 'f' AND conparentid = 0 AND $1::regclass IN (conrelid, confrelid)`, table)
-	if err != nil {
-		return err
-	}
-	foreignKeys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	fks, err := foreignKeys(ctx, pool)
 	if err != nil {
 		return err
 	}
@@ -174,9 +167,14 @@ func partitionTable(ctx context.Context, pool *pgxpool.Pool, table, key string) 
 	if _, err := pool.Exec(ctx, strings.Join(ddl, ";\n")); err != nil {
 		return fmt.Errorf("%s cannot be partitioned by %s: %w", table, key, err)
 	}
-	for _, fk := range foreignKeys {
-		if _, err := pool.Exec(ctx, fk); err != nil {
-			return fmt.Errorf("foreign key cannot reference %s partitioned by %s: %s: %w", table, key, fk, err)
+	// LIKE copies no foreign key, and DROP CASCADE removed the ones onto the
+	// table, so add back every one that touches it.
+	for _, fk := range fks {
+		if fk.From != table && fk.To != table {
+			continue
+		}
+		if _, err := pool.Exec(ctx, fk.ddl()); err != nil {
+			return fmt.Errorf("foreign key cannot reference %s partitioned by %s: %s: %w", table, key, fk.ddl(), err)
 		}
 	}
 	return nil
@@ -297,24 +295,6 @@ func normalizeSQL(sql string) string {
 	return strings.Join(strings.Fields(sql), " ")
 }
 
-// migratedPool opens a pool on a fresh schema with the migrations applied.
-func migratedPool(t *testing.T, schema string) *pgxpool.Pool {
-	t.Helper()
-	admin := requirePool(t)
-	quoted := pgx.Identifier{schema}.Sanitize()
-	if _, err := admin.Exec(t.Context(), `DROP SCHEMA IF EXISTS `+quoted+` CASCADE; CREATE SCHEMA `+quoted); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS `+quoted+` CASCADE`) })
-	pool := openPool(t, schema, nil)
-	p, err := NewPersistence(t.Context(), pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.Close()
-	return pool
-}
-
 // partitionedPool opens a pool on a fresh schema with tables partitioned on
 // key, and returns the tables it partitioned. A nil tables partitions every
 // table that has a column named key.
@@ -330,41 +310,4 @@ func partitionedPool(t *testing.T, schema, key string, tables []string) (*pgxpoo
 		}
 	}
 	return pool, tables
-}
-
-// tablesWithColumn lists the tables in the pool's schema that have column.
-func tablesWithColumn(t *testing.T, pool *pgxpool.Pool, column string) []string {
-	t.Helper()
-	rows, err := pool.Query(t.Context(), `
-		SELECT table_name FROM information_schema.columns
-		WHERE table_schema = current_schema() AND column_name = $1
-		ORDER BY table_name`, column)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tables) == 0 {
-		t.Fatalf("no table has a %s column", column)
-	}
-	return tables
-}
-
-// openPool opens a pool on schema, tracing every statement with tracer.
-func openPool(t *testing.T, schema string, tracer pgx.QueryTracer) *pgxpool.Pool {
-	t.Helper()
-	cfg, err := pgxpool.ParseConfig(containerDSN)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	cfg.ConnConfig.Tracer = tracer
-	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
 }
