@@ -184,7 +184,7 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 	if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
 			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
-			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:abc"}},
 			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
 			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 		},
@@ -753,7 +753,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 						Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
 						Containers: []*ateapipb.Container{{
 							Name:         "main",
-							Image:        "example.com/app:v1",
+							Image:        "example.com/app:v1@sha256:abc",
 							VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 						}},
 						Volumes:         tmpl.volumes,

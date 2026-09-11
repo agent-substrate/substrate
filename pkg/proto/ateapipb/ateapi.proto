@@ -898,9 +898,12 @@ message Container {
   // +k8s:format=k8s-short-name
   string name = 1;
 
+  // image is the container image name. Must include a digest
+  // (e.g. "name@sha256:...").
+  //
   // +k8s:required
   // +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
-  // TODO: validate that this is a well-formed image reference
+  // +k8s:customValidation
   string image = 2;
 
   // Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
@@ -1073,14 +1076,15 @@ message Volume {
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
-// reference must be pinned by digest: changing the image invalidates
+// reference must include a digest: changing the image invalidates
 // snapshots.
 message ImageVolumeSource {
-  // reference is the OCI image reference, pinned by digest.
+  // reference is the OCI image reference. Must include a digest
+  // (e.g. "name@sha256:...").
   //
   // +k8s:required
   // +k8s:maxLength=512
-  // +k8s:customValidation # must be pinned by digest; no contains tag exists
+  // +k8s:customValidation
   string reference = 1;
 }
 

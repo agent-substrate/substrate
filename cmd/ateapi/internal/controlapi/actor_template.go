@@ -269,14 +269,21 @@ func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ oper
 	return errs
 }
 
-// ValidateCustom_ImageVolumeSource_Reference requires image references to
-// be pinned by digest, because changing the image content under a fixed
-// reference invalidates snapshots.
-func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if !strings.Contains(*value, "@") {
-		return field.ErrorList{field.Invalid(fldPath, *value, "must be pinned by digest (changing the image invalidates snapshots)")}
+// validatePinnedImage requires an image reference to include a digest
+// (e.g. "name@sha256:...").
+func validatePinnedImage(fldPath *field.Path, value string) field.ErrorList {
+	if !strings.Contains(value, "@") {
+		return field.ErrorList{field.Invalid(fldPath, value, "must include a digest")}
 	}
 	return nil
+}
+
+func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validatePinnedImage(fldPath, *value)
+}
+
+func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validatePinnedImage(fldPath, *value)
 }
 
 func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

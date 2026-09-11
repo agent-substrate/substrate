@@ -2593,9 +2593,12 @@ type Container struct {
 	// +k8s:required
 	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// image is the container image name. Must include a digest
+	// (e.g. "name@sha256:...").
+	//
 	// +k8s:required
 	// +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
-	// TODO: validate that this is a well-formed image reference
+	// +k8s:customValidation
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
 	// ignored and the process argv is command + args. Unlike Kubernetes,
@@ -3144,15 +3147,16 @@ func (x *Volume) GetImage() *ImageVolumeSource {
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
-// reference must be pinned by digest: changing the image invalidates
+// reference must include a digest: changing the image invalidates
 // snapshots.
 type ImageVolumeSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// reference is the OCI image reference, pinned by digest.
+	// reference is the OCI image reference. Must include a digest
+	// (e.g. "name@sha256:...").
 	//
 	// +k8s:required
 	// +k8s:maxLength=512
-	// +k8s:customValidation # must be pinned by digest; no contains tag exists
+	// +k8s:customValidation
 	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

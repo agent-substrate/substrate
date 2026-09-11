@@ -238,7 +238,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `name` | `string` | **Required.** DNS-label-safe container name. |
-| `image` | `string` | **Required.** Must be pinned by digest (`...@sha256:...`) — changing the image invalidates snapshots. |
+| `image` | `string` | **Required.** Container image name; must include a digest (`name@sha256:...`). |
 | `command` | `[]string` | Optional. Entrypoint array. If unset, the image's `ENTRYPOINT` is used. If set, it replaces **both** the image's `ENTRYPOINT` and `CMD`. |
 | `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
 | `env` | `[]EnvVar` | Optional. Literal `value` entries. |
@@ -328,7 +328,7 @@ metadata:
   name: secret-agent
 containers:
 - name: agent
-  image: gcr.io/my-project/my-agent:latest
+  image: gcr.io/my-project/my-agent@sha256:7f28ab0e...
   # Optional: gate Run/Restore on the agent's HTTP readiness endpoint.
   # See "Container Readiness Probe (readyz)" above.
   readyz:
@@ -394,7 +394,7 @@ This means a single, cluster-managed config pins the sandbox runtime version for
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. An `ActorTemplate` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
-| `pauseImage` | `string` | **Required.** The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must be pinned by digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
+| `pauseImage` | `string` | **Required.** The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
 | `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
