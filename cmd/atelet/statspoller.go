@@ -436,7 +436,7 @@ func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx
 			LabelSelector: workerPoolLabel,
 		})
 		if err != nil {
-			slog.DebugContext(ctx, "Actor stats sweep: worker pool resolution failed; samples group without pool labels", slog.Any("err", err))
+			slog.DebugContext(ctx, "Actor stats sweep: worker pool list failed; answering from cached resolutions", slog.Any("err", err))
 			return nil
 		}
 		pools := make(map[string]workerPoolRef, len(pods.Items))

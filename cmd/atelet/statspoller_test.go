@@ -500,12 +500,15 @@ func TestNewWorkerPoolFetcher(t *testing.T) {
 
 // TestStatsPollerPoolCacheSurvivesListFlap pins the fix for the label-set
 // split: a failed list must answer from the cache and keep that tick's
-// samples on the pooled label set.
+// samples -- including the CPU increase computed during the flap, the value
+// that feeds the monotonic counter and can never be re-attributed -- on the
+// pooled label set.
 func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
-	fakes := map[string]*fakeStatsAteom{
-		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
-	}
-	p, _ := newPollerFixture(t, fakes)
+	resp := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp.GetSample().ActorUid = "uid-a"
+	resp.GetSample().CpuUsageUsec = 1000
+	fake := &fakeStatsAteom{resp: resp}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-1": fake})
 	listOK := true
 	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
 		if !listOK {
@@ -517,19 +520,27 @@ func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
 	pooled := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup",
 		workerPool: workerPoolRef{namespace: "pool-ns", name: "pool-a"}}
 
-	// Sweep 1 resolves and seeds the cache.
+	// Sweep 1 resolves, seeds the pool cache, and baselines the CPU counter.
 	if got := p.collect(context.Background()); got[pooled] == nil {
 		t.Fatalf("sweep 1: no pooled aggregate; got %v", got)
 	}
 
-	// Sweep 2's list fails; the samples must STILL group under the pool.
+	// Sweep 2: the list fails AND the actor consumed CPU. Both the sample and
+	// its delta must still group under the pool.
 	listOK = false
+	resp2 := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2.GetSample().ActorUid = "uid-a"
+	resp2.GetSample().CpuUsageUsec = 1600
+	fake.resp = resp2
 	got := p.collect(context.Background())
 	if got[pooled] == nil {
-		t.Errorf("sweep 2 (list flap): samples left the pooled label set; got %v", got)
+		t.Fatalf("sweep 2 (list flap): samples left the pooled label set; got %v", got)
 	}
 	if len(got) != 1 {
 		t.Errorf("sweep 2 (list flap): %d label sets, want 1 (no pool-less split)", len(got))
+	}
+	if got[pooled].cpuDeltaUsec != 600 {
+		t.Errorf("sweep 2 (list flap): pooled cpu delta = %d, want 600 -- the counter increment must land on the pooled series", got[pooled].cpuDeltaUsec)
 	}
 }
 
@@ -581,10 +592,11 @@ func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
 // all-nil flap test above -- a whole-map fallback would pass that test and
 // fail this one.
 func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
-	fakes := map[string]*fakeStatsAteom{
-		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
-	}
-	p, _ := newPollerFixture(t, fakes)
+	resp := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp.GetSample().ActorUid = "uid-a"
+	resp.GetSample().CpuUsageUsec = 1000
+	fake := &fakeStatsAteom{resp: resp}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-1": fake})
 	full := true
 	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
 		if !full {
@@ -603,8 +615,15 @@ func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
 	}
 
 	full = false
+	resp2 := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2.GetSample().ActorUid = "uid-a"
+	resp2.GetSample().CpuUsageUsec = 1250
+	fake.resp = resp2
 	got := p.collect(context.Background())
 	if got[pooled] == nil || len(got) != 1 {
 		t.Errorf("sweep 2 (partial list): samples left the pooled label set; got %v", got)
+	}
+	if got[pooled] != nil && got[pooled].cpuDeltaUsec != 250 {
+		t.Errorf("sweep 2 (partial list): pooled cpu delta = %d, want 250", got[pooled].cpuDeltaUsec)
 	}
 }
