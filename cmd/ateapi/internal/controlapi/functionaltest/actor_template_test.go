@@ -53,9 +53,14 @@ func TestActorTemplateCRUD(t *testing.T) {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
 	want := &ateapipb.ActorTemplate{
-		Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
-		Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:abc"}},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+		Metadata:   &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
+		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:abc"}},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: "gs://my-bucket/snapshots",
+			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
+		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 			ConfigName:   "gvisor-default",

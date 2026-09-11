@@ -28,10 +28,13 @@ import (
 )
 
 func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	inAtespace := req.GetAtespace()
 	if inAtespace != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inAtespace.Metadata)
 		// no status field, but if there were, we would scrub it here
+		defaultAtespace(inAtespace)
 	}
 
 	// Validate the request, including the object within it.
