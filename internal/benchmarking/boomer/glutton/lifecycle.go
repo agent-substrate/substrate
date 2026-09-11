@@ -88,6 +88,11 @@ type taskRuntime struct {
 // (the analog of locust's per-user on_start); subsequent calls run a
 // resume/ping/suspend cycle.
 func (r *taskRuntime) iterate() {
+	// A defer, rather than a call at the tail of the function, so that a
+	// crashed actor's resume failures are still paced at the configured
+	// wait instead of retrying as fast as ateapi can reject them.
+	defer func() { time.Sleep(r.dynamicWait()) }()
+
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
@@ -121,8 +126,6 @@ func (r *taskRuntime) iterate() {
 	user.churnRAM(ctx)
 	user.ping(ctx)
 	user.suspend(ctx)
-
-	time.Sleep(r.dynamicWait())
 }
 
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
