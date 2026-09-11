@@ -1838,6 +1838,233 @@ func (*GetActiveWorkloadStatsResponse_Sample) isGetActiveWorkloadStatsResponse_R
 
 func (*GetActiveWorkloadStatsResponse_NoSampleReason) isGetActiveWorkloadStatsResponse_Result() {}
 
+type PrepareSandboxRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid  string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	RunscPath string                 `protobuf:"bytes,2,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	// Whether the actor network needs transparent egress redirection.
+	RedirectEgress bool `protobuf:"varint,3,opt,name=redirect_egress,json=redirectEgress,proto3" json:"redirect_egress,omitempty"`
+	// The actor's declared size. The pause/root container is created by this RPC,
+	// so it must receive the same limits as the later RunWorkload call.
+	CpuMilli    int64 `protobuf:"varint,4,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	MemoryBytes int64 `protobuf:"varint,5,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	// Runtime assets needed before a microVM can boot. Empty for gVisor.
+	RuntimeAssetPaths map[string]string `protobuf:"bytes,6,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Runtime-specific preparation needs the workload shape: gVisor declares
+	// durable mount hints while microVM decides its early sandbox shape.
+	// Application rootfs and volume data are consumed only by RunWorkload or
+	// RestoreWorkload, after atelet finishes preparing them.
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// Whether RestoreWorkload, rather than RunWorkload, will consume this
+	// sandbox. Runtimes can defer initialization that depends on checkpoint
+	// contents.
+	FromCheckpoint bool `protobuf:"varint,8,opt,name=from_checkpoint,json=fromCheckpoint,proto3" json:"from_checkpoint,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PrepareSandboxRequest) Reset() {
+	*x = PrepareSandboxRequest{}
+	mi := &file_ateom_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSandboxRequest) ProtoMessage() {}
+
+func (x *PrepareSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateom_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSandboxRequest.ProtoReflect.Descriptor instead.
+func (*PrepareSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_ateom_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PrepareSandboxRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+func (x *PrepareSandboxRequest) GetRunscPath() string {
+	if x != nil {
+		return x.RunscPath
+	}
+	return ""
+}
+
+func (x *PrepareSandboxRequest) GetRedirectEgress() bool {
+	if x != nil {
+		return x.RedirectEgress
+	}
+	return false
+}
+
+func (x *PrepareSandboxRequest) GetCpuMilli() int64 {
+	if x != nil {
+		return x.CpuMilli
+	}
+	return 0
+}
+
+func (x *PrepareSandboxRequest) GetMemoryBytes() int64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *PrepareSandboxRequest) GetRuntimeAssetPaths() map[string]string {
+	if x != nil {
+		return x.RuntimeAssetPaths
+	}
+	return nil
+}
+
+func (x *PrepareSandboxRequest) GetSpec() *WorkloadSpec {
+	if x != nil {
+		return x.Spec
+	}
+	return nil
+}
+
+func (x *PrepareSandboxRequest) GetFromCheckpoint() bool {
+	if x != nil {
+		return x.FromCheckpoint
+	}
+	return false
+}
+
+type PrepareSandboxResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareSandboxResponse) Reset() {
+	*x = PrepareSandboxResponse{}
+	mi := &file_ateom_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSandboxResponse) ProtoMessage() {}
+
+func (x *PrepareSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ateom_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSandboxResponse.ProtoReflect.Descriptor instead.
+func (*PrepareSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_ateom_proto_rawDescGZIP(), []int{23}
+}
+
+type DiscardPreparedSandboxRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid      string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscardPreparedSandboxRequest) Reset() {
+	*x = DiscardPreparedSandboxRequest{}
+	mi := &file_ateom_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscardPreparedSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscardPreparedSandboxRequest) ProtoMessage() {}
+
+func (x *DiscardPreparedSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateom_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscardPreparedSandboxRequest.ProtoReflect.Descriptor instead.
+func (*DiscardPreparedSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_ateom_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *DiscardPreparedSandboxRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+type DiscardPreparedSandboxResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscardPreparedSandboxResponse) Reset() {
+	*x = DiscardPreparedSandboxResponse{}
+	mi := &file_ateom_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscardPreparedSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscardPreparedSandboxResponse) ProtoMessage() {}
+
+func (x *DiscardPreparedSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ateom_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscardPreparedSandboxResponse.ProtoReflect.Descriptor instead.
+func (*DiscardPreparedSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_ateom_proto_rawDescGZIP(), []int{25}
+}
+
 var File_ateom_proto protoreflect.FileDescriptor
 
 const file_ateom_proto_rawDesc = "" +
@@ -1978,7 +2205,24 @@ const file_ateom_proto_rawDesc = "" +
 	"\x1eGetActiveWorkloadStatsResponse\x124\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleH\x00R\x06sample\x12A\n" +
 	"\x10no_sample_reason\x18\x02 \x01(\x0e2\x15.ateom.NoSampleReasonH\x00R\x0enoSampleReasonB\b\n" +
-	"\x06result*\x84\x01\n" +
+	"\x06result\"\xb9\x03\n" +
+	"\x15PrepareSandboxRequest\x12\x1b\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\x12\x1d\n" +
+	"\n" +
+	"runsc_path\x18\x02 \x01(\tR\trunscPath\x12'\n" +
+	"\x0fredirect_egress\x18\x03 \x01(\bR\x0eredirectEgress\x12\x1b\n" +
+	"\tcpu_milli\x18\x04 \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\x05 \x01(\x03R\vmemoryBytes\x12c\n" +
+	"\x13runtime_asset_paths\x18\x06 \x03(\v23.ateom.PrepareSandboxRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12'\n" +
+	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12'\n" +
+	"\x0ffrom_checkpoint\x18\b \x01(\bR\x0efromCheckpoint\x1aD\n" +
+	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x18\n" +
+	"\x16PrepareSandboxResponse\"<\n" +
+	"\x1dDiscardPreparedSandboxRequest\x12\x1b\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\" \n" +
+	"\x1eDiscardPreparedSandboxResponse*\x84\x01\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
@@ -1995,8 +2239,10 @@ const file_ateom_proto_rawDesc = "" +
 	"\x0eNoSampleReason\x12 \n" +
 	"\x1cNO_SAMPLE_REASON_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cNO_SAMPLE_REASON_NO_WORKLOAD\x10\x01\x12'\n" +
-	"#NO_SAMPLE_REASON_NOT_MEASURABLE_YET\x10\x022\x9a\x04\n" +
-	"\x05Ateom\x12F\n" +
+	"#NO_SAMPLE_REASON_NOT_MEASURABLE_YET\x10\x022\xd4\x05\n" +
+	"\x05Ateom\x12O\n" +
+	"\x0ePrepareSandbox\x12\x1c.ateom.PrepareSandboxRequest\x1a\x1d.ateom.PrepareSandboxResponse\"\x00\x12g\n" +
+	"\x16DiscardPreparedSandbox\x12$.ateom.DiscardPreparedSandboxRequest\x1a%.ateom.DiscardPreparedSandboxResponse\"\x00\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
 	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +
 	"\x0fRestoreWorkload\x12\x1d.ateom.RestoreWorkloadRequest\x1a\x1e.ateom.RestoreWorkloadResponse\"\x00\x12U\n" +
@@ -2017,7 +2263,7 @@ func file_ateom_proto_rawDescGZIP() []byte {
 }
 
 var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_ateom_proto_goTypes = []any{
 	(SnapshotScope)(0),                     // 0: ateom.SnapshotScope
 	(SandboxClass)(0),                      // 1: ateom.SandboxClass
@@ -2045,14 +2291,19 @@ var file_ateom_proto_goTypes = []any{
 	(*GetWorkloadStatsResponse)(nil),       // 23: ateom.GetWorkloadStatsResponse
 	(*GetActiveWorkloadStatsRequest)(nil),  // 24: ateom.GetActiveWorkloadStatsRequest
 	(*GetActiveWorkloadStatsResponse)(nil), // 25: ateom.GetActiveWorkloadStatsResponse
-	nil,                                    // 26: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 27: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 28: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(*PrepareSandboxRequest)(nil),          // 26: ateom.PrepareSandboxRequest
+	(*PrepareSandboxResponse)(nil),         // 27: ateom.PrepareSandboxResponse
+	(*DiscardPreparedSandboxRequest)(nil),  // 28: ateom.DiscardPreparedSandboxRequest
+	(*DiscardPreparedSandboxResponse)(nil), // 29: ateom.DiscardPreparedSandboxResponse
+	nil,                                    // 30: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 31: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 32: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 33: ateom.PrepareSandboxRequest.RuntimeAssetPathsEntry
 }
 var file_ateom_proto_depIdxs = []int32{
 	8,  // 0: ateom.TerminateWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
 	8,  // 1: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	26, // 2: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	30, // 2: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
 	7,  // 3: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	9,  // 4: ateom.WorkloadSpec.containers:type_name -> ateom.Container
 	14, // 5: ateom.Container.readyz:type_name -> ateom.Readyz
@@ -2062,10 +2313,10 @@ var file_ateom_proto_depIdxs = []int32{
 	13, // 9: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
 	15, // 10: ateom.Readyz.http_get:type_name -> ateom.HTTPGetAction
 	8,  // 11: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	27, // 12: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	31, // 12: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 13: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
 	8,  // 14: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	28, // 15: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	32, // 15: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 16: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
 	7,  // 17: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	1,  // 18: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass
@@ -2073,23 +2324,29 @@ var file_ateom_proto_depIdxs = []int32{
 	22, // 20: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
 	22, // 21: ateom.GetActiveWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
 	3,  // 22: ateom.GetActiveWorkloadStatsResponse.no_sample_reason:type_name -> ateom.NoSampleReason
-	6,  // 23: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
-	17, // 24: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
-	19, // 25: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
-	21, // 26: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
-	24, // 27: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
-	4,  // 28: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
-	16, // 29: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
-	18, // 30: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
-	20, // 31: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
-	23, // 32: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
-	25, // 33: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
-	5,  // 34: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
-	29, // [29:35] is the sub-list for method output_type
-	23, // [23:29] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	33, // 23: ateom.PrepareSandboxRequest.runtime_asset_paths:type_name -> ateom.PrepareSandboxRequest.RuntimeAssetPathsEntry
+	8,  // 24: ateom.PrepareSandboxRequest.spec:type_name -> ateom.WorkloadSpec
+	26, // 25: ateom.Ateom.PrepareSandbox:input_type -> ateom.PrepareSandboxRequest
+	28, // 26: ateom.Ateom.DiscardPreparedSandbox:input_type -> ateom.DiscardPreparedSandboxRequest
+	6,  // 27: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
+	17, // 28: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
+	19, // 29: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
+	21, // 30: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
+	24, // 31: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
+	4,  // 32: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
+	27, // 33: ateom.Ateom.PrepareSandbox:output_type -> ateom.PrepareSandboxResponse
+	29, // 34: ateom.Ateom.DiscardPreparedSandbox:output_type -> ateom.DiscardPreparedSandboxResponse
+	16, // 35: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
+	18, // 36: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
+	20, // 37: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
+	23, // 38: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
+	25, // 39: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
+	5,  // 40: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
+	33, // [33:41] is the sub-list for method output_type
+	25, // [25:33] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_ateom_proto_init() }
@@ -2109,7 +2366,7 @@ func file_ateom_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateom_proto_rawDesc), len(file_ateom_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   25,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

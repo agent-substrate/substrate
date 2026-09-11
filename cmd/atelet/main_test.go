@@ -68,6 +68,20 @@ const (
 	goldenSnapshotURI = "gs://" + goldenSnapshotPath
 )
 
+type unimplementedPrepareClient struct {
+	ateompb.AteomClient
+}
+
+func (unimplementedPrepareClient) PrepareSandbox(context.Context, *ateompb.PrepareSandboxRequest, ...grpc.CallOption) (*ateompb.PrepareSandboxResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "runtime uses RunWorkload")
+}
+
+func TestPrepareSandboxFallsBackWhenUnimplemented(t *testing.T) {
+	if err := prepareSandbox(context.Background(), unimplementedPrepareClient{}, &ateompb.PrepareSandboxRequest{}); err != nil {
+		t.Fatalf("prepareSandbox returned an error for a runtime without the split RPC: %v", err)
+	}
+}
+
 // TestPortFlagDefault verifies the default value of the --port flag.
 func TestPortFlagDefault(t *testing.T) {
 	f := pflag.Lookup("port")
@@ -476,6 +490,22 @@ func TestToAteomSnapshotScope(t *testing.T) {
 	for _, tc := range tests {
 		if got := toAteomSnapshotScope(tc.in); got != tc.want {
 			t.Errorf("toAteomSnapshotScope(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestShouldPrepareSandboxForRestore(t *testing.T) {
+	tests := []struct {
+		scope ateletpb.SnapshotScope
+		want  bool
+	}{
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, true},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, false},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, false},
+	}
+	for _, tt := range tests {
+		if got := shouldPrepareSandboxForRestore(tt.scope); got != tt.want {
+			t.Errorf("shouldPrepareSandboxForRestore(%v) = %v, want %v", tt.scope, got, tt.want)
 		}
 	}
 }
