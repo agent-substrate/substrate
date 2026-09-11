@@ -49,6 +49,11 @@ type Server struct {
 	handlers      Handlers
 	recorder      *QueryRecorder
 	routeDuration metric.Float64Histogram
+	// forceDirection, when non-empty, pins every request to this direction
+	// instead of inferring it with directionOf. It is for a dataplane leg that
+	// carries no filter-chain name — the egress MITM leg — where the instance
+	// serves exactly one handler and inference has nothing to key on.
+	forceDirection Direction
 }
 
 // NewServer builds the ext_proc mux serving the given handlers. Passing a
@@ -61,6 +66,15 @@ func NewServer(port int, routeDuration metric.Float64Histogram, handlers Handler
 		recorder:      NewQueryRecorder(100),
 		routeDuration: routeDuration,
 	}
+}
+
+// NewServerForDirection builds a server that serves exactly one handler and
+// pins every request to dir, skipping directionOf. Use it for the egress MITM
+// leg, whose ext_proc filter sends no filter-chain name for directionOf to read.
+func NewServerForDirection(port int, routeDuration metric.Float64Histogram, dir Direction, handler Handler) *Server {
+	s := NewServer(port, routeDuration, Handlers{dir: handler})
+	s.forceDirection = dir
+	return s
 }
 
 // Queries returns the most recently processed requests, newest first, for the
@@ -77,10 +91,15 @@ func (s *Server) Recorder() *QueryRecorder { return s.recorder }
 // The caller owns its lifecycle: Run serves it, and the drain sequence in
 // drain.go stops it — gracefully first so in-flight streams (parked requests
 // above all) finish, forcefully past the drain timeout.
-func (s *Server) NewGRPCServer() *grpc.Server {
-	grpcServer := grpc.NewServer(
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-	)
+//
+// Extra opts are appended after the default stats handler; the CONNECT-leg
+// router passes none (Envoy dials it over localhost), while the egress MITM
+// injector passes grpc.Creds for the mTLS the gateway dials it with.
+func (s *Server) NewGRPCServer(opts ...grpc.ServerOption) *grpc.Server {
+	grpcServer := grpc.NewServer(append(
+		[]grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())},
+		opts...,
+	)...)
 	extprocv3.RegisterExternalProcessorServer(grpcServer, s)
 	return grpcServer
 }
@@ -138,8 +157,12 @@ func (s *Server) processRequestHeaders(
 	//
 	// Which handler runs is decided by the filter chain the dataplane says
 	// accepted the request, never by anything in the request itself (see
-	// directionOf).
-	dir := directionOf(req)
+	// directionOf). A server pinned to one direction (the MITM leg, whose
+	// filter sends no filter-chain name) skips that inference.
+	dir := s.forceDirection
+	if dir == "" {
+		dir = directionOf(req)
+	}
 
 	var res Result
 	var err error

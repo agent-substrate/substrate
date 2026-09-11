@@ -28,6 +28,12 @@ const (
 	DirectionIngress Direction = "ingress"
 	// DirectionEgress is outbound traffic tunneled out of an actor.
 	DirectionEgress Direction = "egress"
+	// DirectionEgressInject is decrypted outbound traffic on the egress
+	// gateway's MITM leg, processed by the credential-injection handler. Unlike
+	// the other two it is never inferred from a request — the MITM ext_proc
+	// filter sends no filter-chain name — so a server that serves it pins the
+	// direction (see NewServerForDirection) rather than relying on directionOf.
+	DirectionEgressInject Direction = "egress-inject"
 )
 
 // EgressFilterChainName is the Envoy filter chain that terminates actor egress
