@@ -35,6 +35,9 @@ export CLUSTER_VERSION=1.36.3-gke.1767000
 export NODE_POOL_NAME=gvisor-pool
 export NODE_POOL_VERSION=1.36.3-gke.1767000
 export GVISOR_NODE_MACHINE_TYPE=c3-standard-4
+# Boot disk customizations (optional; defaults to GKE's default boot disk)
+# export BOOT_DISK_SIZE_GB=500
+# export BOOT_DISK_TYPE=hyperdisk-balanced
 
 # Set this if you are using an existing cluster with a different context name.
 export KUBECTL_CONTEXT=

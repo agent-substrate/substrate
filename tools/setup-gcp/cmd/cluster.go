@@ -58,6 +58,15 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 			DatapathProvider: containerpb.DatapathProvider_ADVANCED_DATAPATH,
 		}
 	}
+	nodeConfig := &containerpb.NodeConfig{
+		MachineType: cfg.MachineType,
+	}
+	if cfg.BootDiskSizeGB > 0 {
+		nodeConfig.DiskSizeGb = cfg.BootDiskSizeGB
+	}
+	if cfg.BootDiskType != "" {
+		nodeConfig.DiskType = cfg.BootDiskType
+	}
 	return &containerpb.CreateClusterRequest{
 		Parent: parent,
 		Cluster: &containerpb.Cluster{
@@ -67,9 +76,7 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 				{
 					Name:             "substrate-node-pool",
 					InitialNodeCount: 2,
-					Config: &containerpb.NodeConfig{
-						MachineType: cfg.MachineType,
-					},
+					Config:           nodeConfig,
 				},
 			},
 			EnableK8SBetaApis: &containerpb.K8SBetaAPIConfig{
@@ -106,6 +113,9 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 }
 
 func createClusterIdempotent(ctx context.Context, cfg *Config) error {
+	if err := validateBootDisk(cfg); err != nil {
+		return err
+	}
 	client, err := container.NewClusterManagerClient(ctx)
 	if err != nil {
 		return err
@@ -312,6 +322,13 @@ func containsAll(clusterAPIs []string, requiredAPIs []string) bool {
 	return true
 }
 
+// validateBootDisk ensures BootDiskSizeGB is non-negative.
+func validateBootDisk(cfg *Config) error {
+	if cfg.BootDiskSizeGB < 0 {
+		return fmt.Errorf("boot disk size %d is invalid: must be greater than or equal to 0", cfg.BootDiskSizeGB)
+	}
+	return nil
+}
 var clusterCmd = &cobra.Command{
 	Use:   "cluster",
 	Short: "Create GKE cluster",
@@ -332,4 +349,6 @@ func init() {
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", getEnv("GVISOR_NODE_MACHINE_TYPE", "c3-standard-4"), "Machine type for the gVisor node pool [env: GVISOR_NODE_MACHINE_TYPE]")
 	clusterCmd.Flags().BoolVar(&cfg.EnableDataplaneV2, "enable-dataplane-v2", getEnv("ENABLE_DATAPLANE_V2", true), "Enable Dataplane V2 [env: ENABLE_DATAPLANE_V2]")
+	clusterCmd.Flags().Int32Var(&cfg.BootDiskSizeGB, "boot-disk-size", getEnv("BOOT_DISK_SIZE_GB", int32(0)), "Boot disk size in GB for the node pool; 0 = GKE default (100 GB) [env: BOOT_DISK_SIZE_GB]")
+	clusterCmd.Flags().StringVar(&cfg.BootDiskType, "boot-disk-type", getEnv("BOOT_DISK_TYPE", ""), "Boot disk type for the node pool; empty = GKE default [env: BOOT_DISK_TYPE]")
 }
