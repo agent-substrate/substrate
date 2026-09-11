@@ -110,6 +110,10 @@ type routerConfig struct {
 	// every egress CONNECT fail closed and is correct for an ingress-only
 	// router (it never sees the egress listener).
 	ActorIdentityCAFile string
+	// EgressPolicyCacheTTL is how long the egress handler reuses a fetched
+	// EgressPolicy, and so how long a policy change takes to bite. 0 disables
+	// the cache.
+	EgressPolicyCacheTTL time.Duration
 
 	LogLevel    string
 	MetricsAddr string
@@ -229,6 +233,9 @@ func (c routerConfig) validate() error {
 	if c.ExtProcMaxRequests > 0 && c.ParkedRequest.Max > 0 && c.ExtProcMaxRequests < c.ParkedRequest.Max {
 		return fmt.Errorf("--extproc-max-requests (%d) must be >= --parked-request-max (%d): a circuit breaker below the parking lot silently truncates it with Envoy-generated 503s",
 			c.ExtProcMaxRequests, c.ParkedRequest.Max)
+	}
+	if c.EgressPolicyCacheTTL < 0 {
+		return fmt.Errorf("--egress-policy-cache-ttl must not be negative, got %s (0 disables the cache)", c.EgressPolicyCacheTTL)
 	}
 	if c.DrainDelay < 0 {
 		return fmt.Errorf("--drain-delay must not be negative, got %s", c.DrainDelay)

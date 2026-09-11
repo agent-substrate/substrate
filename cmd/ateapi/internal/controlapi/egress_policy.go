@@ -22,13 +22,13 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -202,10 +202,14 @@ func ValidateCustom_EgressRuleEffects_InjectStaticHeaders(_ context.Context, _ o
 	return errs
 }
 
+// Validation uses the parsers the egress gateway matches with, so what the
+// API accepts and what the gateway can evaluate cannot drift apart.
 func ValidateCustom_IPBlockRule_Cidrs(_ context.Context, _ operation.Operation, p *field.Path, cidrs, _ []string) field.ErrorList {
 	var errs field.ErrorList
 	for i, cidr := range cidrs {
-		errs = append(errs, validation.IsValidCIDR(p.Index(i), cidr)...)
+		if _, err := egresspolicy.ParsePrefix(cidr); err != nil {
+			errs = append(errs, field.Invalid(p.Index(i), cidr, "must be a canonical IPv4 or IPv6 prefix"))
+		}
 	}
 	return errs
 }
@@ -214,8 +218,7 @@ func validateHostnamePattern(raw string, p *field.Path) field.ErrorList {
 	if raw == "" {
 		return field.ErrorList{field.Required(p, "")}
 	}
-	name := strings.TrimPrefix(raw, "*.")
-	if len(content.IsDNS1123Subdomain(name)) != 0 || len(validation.IsValidIP(p, name)) == 0 {
+	if _, err := egresspolicy.ParseHostnamePattern(raw); err != nil {
 		return field.ErrorList{
 			field.Invalid(p, raw, "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
 		}

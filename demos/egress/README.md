@@ -44,6 +44,12 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
   actor-identity CA, so a non-actor client is refused at the handshake. It authorizes the
   certificate against the ATE API and rejects it unless the certified **UID** matches a real,
   `RUNNING` actor.
+5. **Policy authorization.** What goes through the tunnel is checked against the Actor's
+  `EgressPolicy`: the address rules (`ip_blocks`, `all`) once per connection at the `CONNECT`,
+  against the original `IP:port`; the hostname rules on every request the gateway can read
+  (cleartext HTTP, or TLS the sdsmint gateway terminates). TLS the plain gateway does not
+  terminate, and opaque TCP, are allowed by address only. An Actor with no policy gets no
+  tunnel at all.
 
 ## Choose a dataplane
 
@@ -80,6 +86,10 @@ rejects that option with agentgateway rather than silently omitting it.
 - **Egress opt-in** — `ate-api-server --egress-gateway-address=atenet-egress.ate-system.svc:443`
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
   atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.
+- **Egress policy** — the gateway denies by default, so the demo Actor needs an `EgressPolicy`
+  (created through the `CreateActorEgressPolicy` API against the Actor) before its fetches
+  succeed. `kubectl ate` has no verb for it yet; the e2e suites create theirs with
+  `e2e.EnsureEgressPolicy`, and an `all` rule reproduces the pre-policy behavior.
 - **Actor-identity trust** — the gateway mounts the `actor-id-ca-certs` Secret, a cert-only copy of
   the actor-identity CA root that `hack/install-ate.sh` derives from `actor-id-ca-pool` (which also
   holds the CA signing key and is deliberately *not* mounted here).
@@ -159,8 +169,8 @@ kubectl -n ate-system logs deploy/atenet-egress -c envoy | grep '\[egress\]'
 #   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/ate-demo-egress/actor/egress-demo … code=200 …
 
 # The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
-kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress identity\|egress denied'
-#   egress identity authenticated  atespace=ate-demo-egress actor=egress-demo actorUid=… destination=<TARGET_IP>:80
+kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress tunnel opened\|egress denied'
+#   egress tunnel opened: an address rule allows the destination  leg=egress actor=ate-demo-egress/egress-demo actorUid=… destination=<TARGET_IP>:80 rule=0
 ```
 
 With agentgateway:
@@ -210,9 +220,12 @@ from the cluster, works for a manual run.
 
 ## Notes / limitations
 
-- This milestone **authenticates** identity (is this a real, running actor?). **Authorizing**
-  egress by destination and injecting upstream credentials/tokens is a follow-up, implemented in
-  the same `ext_proc` (policy API TBD).
+- The gateway **authenticates** identity (is this a real, running actor?) and **authorizes**
+  destinations against the Actor's `EgressPolicy`. Injecting upstream credentials/tokens is a
+  follow-up in the same `ext_proc`; a policy rule that declares an injection is denied (501)
+  until it lands.
+- `test-egress.sh` creates and resumes the Actor but cannot create its `EgressPolicy` (no CLI
+  verb yet), so its positive fetch needs the policy created out of band first.
 - Identity comes entirely from the actor certificate: the atespace, actor name, and UID are read
   out of the `ActorIdentity` extension and the UID is matched against the live actor, so a
   certificate cannot survive its actor being deleted and recreated under the same name. Nothing

@@ -12,27 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package egress implements the ext_proc handler for outbound actor traffic:
-// it authenticates the actor behind an egress CONNECT before the gateway
-// tunnels it out.
+// Package egress implements the ext_proc handler for outbound actor traffic.
+// It authenticates the actor behind an egress CONNECT and authorizes what goes
+// through the tunnel against the actor's EgressPolicy: address rules once, at
+// the CONNECT; hostname rules on every request the gateway can read.
 //
-// The identity this handler acts on comes from the actor certificate presented
-// in the mTLS handshake and signed by the actor-identity CA — never from a
-// request header. That is the opposite of the ingress package's model, where
-// every header is unauthenticated client input. Keeping the two in separate
-// packages keeps that difference explicit; the ext_proc mux is what guarantees
-// a request only ever reaches the handler for the filter chain that accepted
-// it.
+// Identity comes from the actor certificate presented in the mTLS handshake,
+// never from a request header. On the inner legs it arrives as filter state
+// Envoy derived from that certificate, which nothing inside the tunnel can
+// write. The filter chain name tells the handler which leg it is on.
 package egress
 
 import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,8 +41,10 @@ import (
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -67,31 +70,61 @@ const (
 	xfccChainKey = "chain"
 )
 
-// Handler authenticates the actor behind each egress CONNECT.
+// deniedBody is the body of every policy denial. The reason goes to the log,
+// not to the actor.
+const deniedBody = "egress denied"
+
+// Handler authenticates the actor behind each egress CONNECT and authorizes
+// the traffic inside the tunnel against the actor's EgressPolicy.
 type Handler struct {
 	apiClient ateapipb.ControlClient
 	// actorIdentityRoots is the actor-identity CA bundle every actor
 	// certificate must chain to. Nil means the gateway cannot authenticate
 	// anyone, and every CONNECT fails closed.
 	actorIdentityRoots *x509.CertPool
+	// policies is the per-actor EgressPolicy cache every leg reads through.
+	policies *policyCache
 }
 
-// New builds the egress handler. actorIdentityRoots is the same trust bundle
-// the egress listener uses as its trusted_ca; see verifyActorCertificate for
-// why the check is made again here.
-func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool) *Handler {
-	return &Handler{apiClient: apiClient, actorIdentityRoots: actorIdentityRoots}
+// New builds the egress handler. actorIdentityRoots is the egress listener's
+// trusted_ca; see verifyActorCertificate for why it is checked again here.
+// policyCacheTTL of 0 fetches the policy on every callout.
+func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration) *Handler {
+	return &Handler{
+		apiClient:          apiClient,
+		actorIdentityRoots: actorIdentityRoots,
+		policies:           newPolicyCache(apiClient, policyCacheTTL),
+	}
 }
 
 func (h *Handler) Direction() extproc.Direction { return extproc.DirectionEgress }
 
-// HandleRequestHeaders authenticates the actor behind an egress CONNECT before
-// the gateway tunnels it out, using the actor certificate atunnel presented in
-// the mTLS handshake. Nothing the actor can write — no CONNECT header, no
-// request metadata — contributes to the identity; the only inputs are the
-// certificate the actor-identity CA signed and the control plane's own view of
-// that actor.
+// HandleRequestHeaders dispatches on the filter chain the request arrived on.
+// An empty chain name is a non-Envoy dataplane, which calls out for the
+// CONNECT alone. Anything unrecognized is refused, not guessed.
 func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestMetadata) (extproc.Result, error) {
+	switch leg := md.Attribute(extproc.FilterChainNameAttribute); leg {
+	case extproc.EgressFilterChainName, "":
+		return h.handleConnect(ctx, md, leg)
+	case extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName:
+		return h.handleRequest(ctx, md, leg)
+	default:
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_NotFound,
+			"egress denied: this gateway does not serve filter chain %q", leg)
+	}
+}
+
+// handleConnect authenticates the actor behind an egress CONNECT from the
+// certificate atunnel presented, and decides the policy's address rules
+// against the original destination. Nothing the actor can write contributes
+// to the identity.
+//
+// Three outcomes: an address rule allows the destination, so the tunnel opens
+// and the destination goes back as dynamic metadata for the passthrough chain
+// to dial; no address rule allows it but the policy has hostname rules, so the
+// tunnel opens with nothing to dial and the request legs decide by Host;
+// neither, so the CONNECT is refused here, where there is still a response.
+func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	// Sanity check that we were called on the Egress listener filter chain with
 	// a CONNECT.
 	if !strings.EqualFold(md.Method, "CONNECT") {
@@ -124,20 +157,90 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		return extproc.Result{}, err
 	}
 
-	slog.InfoContext(ctx, "egress identity authenticated",
-		slog.String("atespace", identity.Atespace),
-		slog.String("actor", identity.ActorName),
-		slog.String("actorUid", identity.ActorUid),
-		// For a CONNECT the :authority is the actor's original destination
-		// (IP:port).
-		slog.String("destination", md.Host))
+	ref := resources.ActorRef{Atespace: identity.Atespace, Name: identity.ActorName}
 
-	// Identity is authenticated; let the CONNECT proceed unchanged.
+	// atunnel always sends the address the actor's kernel dialed, never a
+	// name. Refuse a name here, where there is still a response to do it with.
+	dest, err := egresspolicy.NormalizeAuthority(md.Host)
+	if err != nil || !dest.IP.IsValid() || dest.Port == 0 {
+		slog.WarnContext(ctx, "egress denied: CONNECT authority is not an IP:port", slog.Any("actor", ref), slog.String("leg", leg), slog.String("authority", md.Host), slog.Any("err", err))
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+	}
+
+	// This also warms the cache for the requests inside the tunnel. dest has
+	// no hostname, so only ip_blocks and all can match here.
+	policy, err := h.lookupPolicy(ctx, leg, ref)
+	if err != nil {
+		return extproc.Result{}, err
+	}
+	decision := policy.Evaluate(dest)
+	attrs := []any{
+		slog.Any("actor", ref),
+		slog.String("actorUid", identity.ActorUid),
+		slog.String("leg", leg),
+		slog.String("destination", md.Host),
+		slog.Int("rule", decision.RuleIndex),
+	}
+	switch {
+	case decision.Allowed:
+		slog.InfoContext(ctx, "egress tunnel opened: an address rule allows the destination", attrs...)
+		res := allow()
+		res.DynamicMetadata = passthroughDestination(dest)
+		return res, nil
+	case leg == extproc.EgressFilterChainName && policy.HasHostnameRules():
+		// Only the Envoy gateway has request legs behind this one. A dataplane
+		// that calls out for the CONNECT alone sends no chain name and is
+		// refused below.
+		slog.InfoContext(ctx, "egress tunnel opened: no address rule allows the destination, requests inside it are decided by name", attrs...)
+		return allow(), nil
+	default:
+		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs...)
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+	}
+}
+
+// passthroughDestination is the dynamic metadata naming the one address the
+// passthrough chain may dial, as IP:port.
+func passthroughDestination(dest egresspolicy.Destination) *structpb.Struct {
+	address := net.JoinHostPort(dest.IP.String(), strconv.Itoa(int(dest.Port)))
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressPassthroughDestinationKey: structpb.NewStringValue(address),
+		}}),
+	}}
+}
+
+// allow is the response for a request the handler lets through unchanged.
+func allow() extproc.Result {
 	return extproc.Result{
 		Response: &extprocv3.HeadersResponse{
 			Response: &extprocv3.CommonResponse{},
 		},
-	}, nil
+	}
+}
+
+// lookupPolicy is the check every leg starts with. Every error it returns is
+// already a client-facing denial.
+func (h *Handler) lookupPolicy(ctx context.Context, leg string, ref resources.ActorRef) (*egresspolicy.Policy, error) {
+	policy, err := h.policies.get(ctx, ref)
+	switch {
+	case ctx.Err() != nil && errors.Is(err, ctx.Err()):
+		// The caller gave up mid-fetch: not a decision.
+		slog.DebugContext(ctx, "egress policy lookup abandoned by the caller", slog.Any("actor", ref), slog.String("leg", leg))
+		return nil, extproc.WrapReqError(envoy_type.StatusCode_RequestTimeout, err, "egress request canceled")
+	case errors.Is(err, errNoPolicy):
+		slog.WarnContext(ctx, "egress denied: actor has no egress policy", slog.Any("actor", ref), slog.String("leg", leg))
+		return nil, extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+	case err != nil:
+		// The control plane failed, not the actor: 503, and nothing is cached.
+		slog.ErrorContext(ctx, "egress policy lookup failed", slog.Any("actor", ref), slog.String("leg", leg), slog.Any("err", err))
+		return nil, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, "egress unavailable: policy lookup failed")
+	case policy.RuleCount() == 0:
+		// Can authorize nothing, so the same posture as having no policy.
+		slog.WarnContext(ctx, "egress denied: actor's egress policy has no rules", slog.Any("actor", ref), slog.String("leg", leg))
+		return nil, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+	}
+	return policy, nil
 }
 
 // validateIdentity checks that the identity a verified actor certificate
@@ -279,6 +382,13 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (*substratex
 	if identity.Purpose != substratex509.ActorIdentityPurposeAtunnel {
 		return nil, fmt.Errorf("actor certificate purpose %q is not %q",
 			identity.Purpose, substratex509.ActorIdentityPurposeAtunnel)
+	}
+	// The CONNECT authenticates on the extension; the request legs attribute
+	// traffic to the URI SAN, via Envoy's filter state. ateapi mints both from
+	// one actor; check it rather than assume it.
+	want := resources.ActorSPIFFEID(resources.ActorRef{Atespace: identity.Atespace, Name: identity.ActorName}).String()
+	if len(leaf.URIs) != 1 || leaf.URIs[0].String() != want {
+		return nil, fmt.Errorf("actor certificate URI SANs %v do not name the actor in its ActorIdentity extension (%s)", leaf.URIs, want)
 	}
 	return identity, nil
 }

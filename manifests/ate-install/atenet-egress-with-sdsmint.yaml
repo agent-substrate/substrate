@@ -17,6 +17,13 @@
 #     actor-identity client cert),
 #   * terminate the actor's HTTP CONNECT and tunnel raw TCP to the CONNECT
 #     authority (the actor's original destination, always sent as IP:port).
+#
+# What goes through the tunnel is authorized against the actor's EgressPolicy
+# by the ext_proc sidecar: the address rules once, at the CONNECT, against the
+# original destination; the hostname rules on every request, for cleartext
+# HTTP and for the TLS this gateway terminates. Anything else reaches the
+# original destination only when an address rule allowed it. See
+# cmd/atenet/internal/router/README.md.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -109,7 +116,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                   log_format:
                     text_format_source:
-                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
+                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% passthrough=%DYNAMIC_METADATA(dev.ate.egress:passthrough_destination)% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
               route_config:
                 name: connect_route
                 virtual_hosts:
@@ -153,15 +160,26 @@ data:
                       # Without this an absent SAN renders as "-", which is a
                       # non-empty string and fails open at whatever reads it.
                       omit_empty_values: true
-              # Actor-identity authorization: on every egress CONNECT, ext_proc
-              # reads the actor certificate out of x-forwarded-client-cert,
-              # re-verifies it against the actor-identity CA, pulls the
-              # ActorIdentity extension, and asks the ate API whether that UID is
-              # a real, running actor. Denials come back as an immediate 403.
-              # Fails closed if the router is down.
+                  # Keys the inner hop's connection pool per actor. Filter state is not
+                  # part of the pool key, so without this two actors dialing the same
+                  # IP:port would share a pool and the second would arrive on the inner
+                  # listener as the first. Not shared upstream, so it never acts as an
+                  # SNI override.
+                  - object_key: envoy.network.upstream_server_name
+                    skip_if_empty: true
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DOWNSTREAM_PEER_URI_SAN%"
+                      omit_empty_values: true
+              # The CONNECT leg. The sidecar authenticates the actor from its
+              # certificate and decides the address rules against the CONNECT
+              # authority (see cmd/atenet/internal/router/egress). It answers with
+              # dev.ate.egress:passthrough_destination when an address rule allowed
+              # the destination. Fails closed if the router is down.
               - name: envoy.filters.http.ext_proc
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                  stat_prefix: egress_identity
                   grpc_service:
                     envoy_grpc:
                       cluster_name: ext_proc_server
@@ -187,26 +205,33 @@ data:
                     response_body_mode: NONE
                     request_trailer_mode: SKIP
                     response_trailer_mode: SKIP
-              # Copy the CONNECT authority into filter state so the passthrough
-              # chain can still see it after the internal-listener hop. The value
-              # is a literal address -- 163.172.157.3:9001 -- never a hostname:
-              # atunnel takes it from SO_ORIGINAL_DST, the address the actor's
-              # kernel was dialing.
-              #
-              # For a tunnel that carries neither TLS nor HTTP there is no SNI and
-              # no Host header, so that address is the only record of where the
-              # traffic was going. The MITM leg's two HTTP chains recover it from
-              # inside the tunnel instead and never needed this; the raw TCP chain
-              # has nothing to read and does.
+                  # This leg authenticates and never rewrites; the sidecar may
+                  # not touch routing or Envoy's own headers here.
+                  mutation_rules:
+                    disallow_system: true
+                    disallow_is_error: true
+                  # Envoy silently drops metadata from a namespace not listed
+                  # here, and the filter state below would never be set.
+                  metadata_options:
+                    receiving_namespaces:
+                      untyped:
+                      - dev.ate.egress
+              # The address the passthrough chains may dial, from the CONNECT
+              # leg's answer, shared with the inner listener as the filter state
+              # the ORIGINAL_DST cluster reads. With no answer nothing is written
+              # (omit_empty_values plus skip_if_empty), and a TLS or opaque
+              # connection is closed. Must stay after ext_proc.
               - name: envoy.filters.http.set_filter_state
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
                   on_request_headers:
                   - object_key: envoy.network.transport_socket.original_dst_address
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
                     format_string:
                       text_format_source:
-                        inline_string: "%REQ(:AUTHORITY)%"
-                    shared_with_upstream: ONCE
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:passthrough_destination)%"
+                      omit_empty_values: true
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -230,16 +255,23 @@ data:
       # of the stream as a request line, finds no request, and drops the
       # connection with nothing in the access log to say why.
       #
-      # The two HTTP chains carry an #ATE_MITM_EXTPROC_FILTER marker, and the
-      # cluster list a matching #ATE_MITM_EXTPROC_CLUSTER. They are inert
-      # comments until hack/install-ate.sh is run with
+      # The two HTTP chains are named so ext_proc can tell them apart
+      # (xds.filter_chain_name; the names must match
+      # cmd/atenet/internal/router/extproc/dispatch.go), and each runs the
+      # policy ext_proc on every request. They also carry an
+      # #ATE_MITM_EXTPROC_FILTER marker, with a matching
+      # #ATE_MITM_EXTPROC_CLUSTER in the cluster list: inert comments until
+      # hack/install-ate.sh is run with
       # --experimental-additional-egress-extproc-service, which replaces each
-      # with a generated block.
+      # with a generated block for an additional, external processor. The
+      # marker sits above the policy filter so that processor sees the request
+      # before anything is injected into it.
       #
-      # The passthrough chain carries no marker. It is a tcp_proxy, so there is
-      # no HTTP filter chain to put one in, and an opaque stream has no request
-      # to authorize -- which is the limit of what that chain can be policed on,
-      # not an oversight here.
+      # The passthrough chain is a tcp_proxy, so it has no HTTP filters of its
+      # own, and it decides nothing: it dials the address the CONNECT leg
+      # allowed, carried here as filter state, and closes when there is none.
+      # An opaque stream names no host, so only an ip_blocks or all rule can
+      # allow it.
       # ---------------------------------------------------------------------
       - name: mitm_listener
         stat_prefix: mitm
@@ -265,7 +297,8 @@ data:
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector
         filter_chains:
-        - filter_chain_match:
+        - name: egress_tls_mitm
+          filter_chain_match:
             transport_protocol: tls
           filters:
           - name: envoy.filters.network.http_connection_manager
@@ -348,12 +381,43 @@ data:
                   - match: { prefix: "/" }
                     route:
                       cluster: egress_forward_proxy
-                      # The route timeout runs until the response is completely
-                      # processed, which for a stream is never, so 0 is what an
-                      # SSE or long-poll response needs to survive at all.
+                      # The route timeout runs until the response completes, which
+                      # for SSE or long-poll is never, so 0.
                       timeout: 0s
               http_filters:
               #ATE_MITM_EXTPROC_FILTER -- see the mitm_listener comment above.
+              # Every request on this chain is authorized against the actor's
+              # EgressPolicy by the same sidecar; the actor comes from the filter
+              # state the CONNECT leg set, never from a header.
+              - name: envoy.filters.http.ext_proc
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                  stat_prefix: egress_policy
+                  grpc_service:
+                    envoy_grpc:
+                      cluster_name: ext_proc_server
+                    timeout: 5s
+                  failure_mode_allow: false
+                  # A cache miss in the sidecar is one ateapi round trip; 5s covers that
+                  # with room, and a slower answer is a denied request, not an allowed one.
+                  message_timeout: 5s
+                  request_attributes:
+                  - xds.filter_chain_name
+                  - filter_state['dev.ate.actor.identity']
+                  - filter_state['envoy.network.transport_socket.original_dst_address']
+                  - connection.requested_server_name
+                  processing_mode:
+                    request_header_mode: SEND
+                    response_header_mode: SKIP
+                    request_body_mode: NONE
+                    response_body_mode: NONE
+                    request_trailer_mode: SKIP
+                    response_trailer_mode: SKIP
+                  # The sidecar may add headers but never touch routing: a rewritten
+                  # Host would dial a name other than the one policed.
+                  mutation_rules:
+                    disallow_system: true
+                    disallow_is_error: true
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
@@ -407,7 +471,8 @@ data:
         #
         # application_protocols is what confines it to traffic http_inspector
         # actually recognised as HTTP.
-        - filter_chain_match:
+        - name: egress_cleartext
+          filter_chain_match:
             transport_protocol: raw_buffer
             application_protocols: ["http/1.0", "http/1.1", "h2c"]
           filters:
@@ -415,6 +480,10 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_cleartext
+              # http_inspector steers HTTP/1.0 here; without this the codec
+              # answers it 426 before any filter runs.
+              http_protocol_options:
+                accept_http_10: true
               upgrade_configs:
               - upgrade_type: websocket
               stream_idle_timeout: 0s
@@ -453,6 +522,38 @@ data:
                       timeout: 0s
               http_filters:
               #ATE_MITM_EXTPROC_FILTER -- Don't modify this line.
+              # Every request on this chain is authorized against the actor's
+              # EgressPolicy by the same sidecar; the actor comes from the filter
+              # state the CONNECT leg set, never from a header.
+              - name: envoy.filters.http.ext_proc
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                  stat_prefix: egress_policy
+                  grpc_service:
+                    envoy_grpc:
+                      cluster_name: ext_proc_server
+                    timeout: 5s
+                  failure_mode_allow: false
+                  # A cache miss in the sidecar is one ateapi round trip; 5s covers that
+                  # with room, and a slower answer is a denied request, not an allowed one.
+                  message_timeout: 5s
+                  request_attributes:
+                  - xds.filter_chain_name
+                  - filter_state['dev.ate.actor.identity']
+                  - filter_state['envoy.network.transport_socket.original_dst_address']
+                  - connection.requested_server_name
+                  processing_mode:
+                    request_header_mode: SEND
+                    response_header_mode: SKIP
+                    request_body_mode: NONE
+                    response_body_mode: NONE
+                    request_trailer_mode: SKIP
+                    response_trailer_mode: SKIP
+                  # The sidecar may add headers but never touch routing: a rewritten
+                  # Host would dial a name other than the one policed.
+                  mutation_rules:
+                    disallow_system: true
+                    disallow_is_error: true
               # Same reasoning as the TLS chain: resolve from the request's own
               # Host, so the name that was policed is the name that is dialled.
               - name: envoy.filters.http.dynamic_forward_proxy
@@ -465,21 +566,23 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 
-        # The passthrough chain: everything the two inspectors could not claim,
-        # plus everything from a client that sent nothing at all. No filter
-        # chain match beyond raw_buffer, so it is the fallback the more specific
-        # chains above fall out of.
-        #
-        # This leg is deliberately blind. It does not decrypt, does not mint,
-        # and cannot name what it is carrying -- an opaque byte stream has no
-        # Host and no SNI to police.
-        - filter_chain_match:
+        # The passthrough chain: everything the inspectors could not claim. It
+        # matches raw_buffer rather than nothing, because Envoy buckets filter
+        # chains by transport protocol and never falls back out of a populated
+        # bucket: egress_cleartext owns the raw_buffer bucket with its HTTP
+        # application protocols, so a chain matching nothing would be
+        # unreachable. Nothing here decides: tcp_proxy dials the
+        # original_dst_address filter state the CONNECT leg produced, and with
+        # none present the connection is closed before a byte is relayed
+        # (flags UH in the log).
+        - name: egress_passthrough
+          filter_chain_match:
             transport_protocol: raw_buffer
           filters:
           - name: envoy.filters.network.tcp_proxy
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-              stat_prefix: mitm_passthrough
+              stat_prefix: passthrough
               cluster: egress_tcp_passthrough
               access_log:
               - name: envoy.access_loggers.file
@@ -490,7 +593,11 @@ data:
                     json_format:
                       leg: passthrough
                       time: "%START_TIME%"
+                      actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
+                      # What tls_inspector read; nothing is decided on it.
                       sni: "%REQUESTED_SERVER_NAME%"
+                      # The address an address rule allowed; null when nothing was dialed.
+                      destination: "%FILTER_STATE(envoy.network.transport_socket.original_dst_address:PLAIN)%"
                       flags: "%RESPONSE_FLAGS%"
                       duration_ms: "%DURATION%"
                       bytes_sent: "%BYTES_SENT%"
@@ -504,11 +611,22 @@ data:
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
         connect_timeout: 1s
+        # One CONNECT per connection: the filter state internal_upstream copies
+        # belongs to the tunnel this connection was made for, and a reused
+        # connection would carry it into the next tunnel.
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            common_http_protocol_options:
+              max_requests_per_connection: 1
+            explicit_http_config:
+              http_protocol_options: {}
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection. Two objects ride this hop,
-        # both set on the CONNECT leg above: dev.ate.actor.identity, which the MITM
-        # access logs and the optional ext_proc filter read, and
-        # original_dst_address, which egress_tcp_passthrough dials.
+        # both set on the CONNECT leg above: dev.ate.actor.identity, which the
+        # policy ext_proc and the MITM access logs read, and
+        # original_dst_address, present only when an address rule allowed the
+        # original destination, which the passthrough chain dials.
         #
         # Without this neither reaches mitm_listener, and nothing reports it:
         # the request proxies and every read resolves to the zero value, which
@@ -688,11 +806,9 @@ data:
               http_protocol_options: {}
               http2_protocol_options: {}
 
-      # The passthrough chain's upstream. Not a dynamic forward proxy like the
-      # other two: there is no name to resolve. The destination arrives as the
-      # literal IP:port the actor's kernel recorded in SO_ORIGINAL_DST, relayed
-      # here as the envoy.network.transport_socket.original_dst_address filter
-      # state object.
+      # The passthrough chains' upstream. It dials the original_dst_address
+      # filter state the CONNECT leg produced and has no other source of an
+      # address; without it the connection is closed.
       - name: egress_tcp_passthrough
         type: ORIGINAL_DST
         lb_policy: CLUSTER_PROVIDED

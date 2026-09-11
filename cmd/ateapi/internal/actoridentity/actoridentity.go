@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"path"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
@@ -166,13 +165,8 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		return nil, status.Errorf(codes.Internal, "Failed to verify CSR signature")
 	}
 
-	spiffeURI := &url.URL{
-		Scheme: "spiffe",
-		Host:   "substrate-actor.local",
-		Path:   path.Join("atespace", atespace, "actor", actorName),
-	}
 	template := &x509.Certificate{
-		URIs:                  []*url.URL{spiffeURI},
+		URIs:                  []*url.URL{resources.ActorSPIFFEID(actorRef)},
 		NotBefore:             time.Now().Add(-5 * time.Minute),
 		NotAfter:              time.Now().Add(actorCertificateLifetime),
 		KeyUsage:              x509.KeyUsageDigitalSignature,

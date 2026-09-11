@@ -237,6 +237,15 @@ func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.Rout
 // the Actor reports as a 502.
 func postThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string, payload []byte) (int, []byte) {
 	t.Helper()
+	return postThroughEgressActorUntil(t, ctx, router, actorRef, path, payload, func(status int, _ []byte) bool {
+		return status == http.StatusOK
+	})
+}
+
+// postThroughEgressActorUntil is postThroughEgressActor with the caller
+// deciding which answer is final.
+func postThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string, payload []byte, done func(status int, body []byte) bool) (int, []byte) {
+	t.Helper()
 
 	const timeout = 30 * time.Second
 	deadline := time.Now().Add(timeout)
@@ -250,7 +259,7 @@ func postThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.Route
 		if err != nil {
 			t.Fatalf("reading egress response body (HTTP %d): %v", response.StatusCode, err)
 		}
-		if response.StatusCode == http.StatusOK || time.Now().After(deadline) {
+		if done(response.StatusCode, body) || time.Now().After(deadline) {
 			return response.StatusCode, body
 		}
 		t.Logf("POST %s through egress Actor returned HTTP %d; retrying... body: %s", path, response.StatusCode, body)
@@ -349,8 +358,15 @@ func accessLogField(line, key string) (string, bool) {
 
 func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture) (string, *ateapipb.Actor) {
 	t.Helper()
+	return createAndResumeActorWithEgress(t, ctx, prefix, template, e2e.EgressAllowAll())
+}
+
+// createAndResumeActorWithEgress is createAndResumeActor with the actor's
+// EgressPolicy spelled out; nil rules leave the actor without one.
+func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture, rules ...*ateapipb.EgressRule) (string, *ateapipb.Actor) {
+	t.Helper()
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
-	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith)
+	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith, rules)
 }
 
 // createAndResumeSubstrateActor is createAndResumeActor for a substrate
@@ -358,10 +374,13 @@ func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, temp
 func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, *ateapipb.Actor) {
 	t.Helper()
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
-	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith)
+	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith, []*ateapipb.EgressRule{e2e.EgressAllowAll()})
 }
 
-func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string) (string, *ateapipb.Actor) {
+// createAndResume creates the actor, gives it an EgressPolicy with rules (none
+// when rules is nil), and resumes it. The policy goes in before the resume so
+// the actor's first outbound connection already finds it.
+func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string, rules []*ateapipb.EgressRule) (string, *ateapipb.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
@@ -379,6 +398,9 @@ func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *at
 		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
 		_, _ = clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef})
 	})
+	if rules != nil {
+		e2e.EnsureEgressPolicy(t, ctx, clients, actorRef, rules...)
+	}
 
 	resumeResponse, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef})
 	if err != nil {

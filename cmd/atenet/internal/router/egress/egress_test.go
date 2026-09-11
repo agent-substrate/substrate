@@ -29,6 +29,7 @@ import (
 	"math/big"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,9 +38,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -111,6 +114,9 @@ type actorCertOptions struct {
 	identity      *substratex509.ActorIdentity
 	extraIdentity *substratex509.ActorIdentity
 	mutate        func(*x509.Certificate)
+	// uriSAN overrides the SPIFFE URI SAN, which otherwise names the
+	// identity's actor the way ateapi mints it.
+	uriSAN string
 }
 
 // issueActorCert mints a leaf off ca, mirroring what ateapi's actoridentity
@@ -156,6 +162,15 @@ func (ca *testCA) issueActorCertDER(t *testing.T, opts actorCertOptions) []byte 
 	if err := addActorIdentityUnchecked(identity, template); err != nil {
 		t.Fatalf("adding ActorIdentity extension: %v", err)
 	}
+	san := opts.uriSAN
+	if san == "" {
+		san = resources.ActorSPIFFEID(resources.ActorRef{Atespace: identity.Atespace, Name: identity.ActorName}).String()
+	}
+	uri, err := url.Parse(san)
+	if err != nil {
+		t.Fatalf("parsing URI SAN %q: %v", san, err)
+	}
+	template.URIs = []*url.URL{uri}
 	if opts.extraIdentity != nil {
 		if err := addActorIdentityUnchecked(opts.extraIdentity, template); err != nil {
 			t.Fatalf("adding second ActorIdentity extension: %v", err)
@@ -190,15 +205,27 @@ func xfccHeaderDER(chain ...[]byte) string {
 		url.PathEscape(buf.String()))
 }
 
-// egressHandler builds a Handler whose GetActor returns actor/err.
+// egressHandler builds a Handler with an allow-everything policy, so the
+// identity tests are about identity alone.
 func egressHandler(roots *x509.CertPool, actor *ateapipb.Actor, err error) *Handler {
-	return New(&egressMockClient{actor: actor, err: err}, roots)
+	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, roots, DefaultPolicyCacheTTL)
 }
 
+// egressMockClient is the slice of ateapi the egress handler talks to.
 type egressMockClient struct {
 	ateapipb.ControlClient
 	actor *ateapipb.Actor
 	err   error
+
+	// policy is what GetActorEgressPolicy returns; nil answers NotFound.
+	// policyErr, when set, is returned instead.
+	policy    *ateapipb.EgressPolicy
+	policyErr error
+	// policyCalls counts GetActorEgressPolicy calls, for the cache tests.
+	policyCalls atomic.Int32
+	// policyGate, when non-nil, blocks each GetActorEgressPolicy until it is
+	// closed, so a test can hold several callers on one fetch.
+	policyGate chan struct{}
 }
 
 func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -206,6 +233,34 @@ func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, 
 		return nil, m.err
 	}
 	return m.actor, nil
+}
+
+func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	m.policyCalls.Add(1)
+	if m.policyGate != nil {
+		select {
+		case <-m.policyGate:
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+	}
+	if m.policyErr != nil {
+		return nil, m.policyErr
+	}
+	if m.policy == nil {
+		return nil, status.Error(codes.NotFound, "EgressPolicy not found")
+	}
+	return m.policy, nil
+}
+
+func allowAllPolicy() *ateapipb.EgressPolicy {
+	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}}
+}
+
+func hostnamesPolicy(patterns ...string) *ateapipb.EgressPolicy {
+	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
+		Hostnames: &ateapipb.HostnameRule{Patterns: patterns},
+	}}}
 }
 
 func runningActor() *ateapipb.Actor {
@@ -219,7 +274,8 @@ func runningActor() *ateapipb.Actor {
 	}
 }
 
-// egressMetadata builds the CONNECT the egress listener hands to ext_proc.
+// egressMetadata builds the CONNECT the egress listener hands to ext_proc,
+// with the peer certificate and the chain name of the CONNECT leg.
 func egressMetadata(xfcc string) *extproc.RequestMetadata {
 	headers := []*corev3.HeaderValue{
 		{Key: ":method", RawValue: []byte("CONNECT")},
@@ -228,7 +284,13 @@ func egressMetadata(xfcc string) *extproc.RequestMetadata {
 	if xfcc != "" {
 		headers = append(headers, &corev3.HeaderValue{Key: forwardedClientCertHeader, RawValue: []byte(xfcc)})
 	}
-	return extproc.NewRequestMetadata(headers, nil)
+	return extproc.NewRequestMetadata(headers, map[string]*structpb.Struct{
+		"envoy.filters.http.ext_proc": {
+			Fields: map[string]*structpb.Value{
+				extproc.FilterChainNameAttribute: structpb.NewStringValue(extproc.EgressFilterChainName),
+			},
+		},
+	})
 }
 
 func agentgatewayEgressMetadata(certificate string) *extproc.RequestMetadata {
@@ -276,6 +338,81 @@ func TestHandleRequestHeadersAllowsVerifiedActor(t *testing.T) {
 	}
 	if res.Target != "" {
 		t.Errorf("target = %q, want %q", res.Target, "")
+	}
+	// The all rule allows the original destination, so the passthrough chain
+	// may dial it.
+	if got := passthroughDestinationOf(res); got != "93.184.216.34:80" {
+		t.Errorf("passthrough destination = %q, want the original destination", got)
+	}
+}
+
+// passthroughDestinationOf reads the address a CONNECT decision handed back
+// for the passthrough chain, or "" when it handed back none.
+func passthroughDestinationOf(res extproc.Result) string {
+	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressPassthroughDestinationKey].GetStringValue()
+}
+
+// An address match opens the tunnel and names what the passthrough chain may
+// dial; hostname rules alone open it with nothing to dial; neither refuses it.
+func TestConnectLegDecidesAddressRules(t *testing.T) {
+	ca := newTestCA(t, "actor-identity-ca")
+	leaf := ca.issueActorCert(t, actorCertOptions{})
+	both := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{hostnamesPolicy("api.example.com").Rules[0], ipBlocksPolicy("93.184.216.0/24").Rules[0]}}
+
+	tests := []struct {
+		name      string
+		policy    *ateapipb.EgressPolicy
+		authority string
+		want      envoy_type.StatusCode // 0 means the tunnel opens
+		wantDial  string                // "" means no passthrough destination
+	}{
+		{name: "all", policy: allowAllPolicy(), authority: "93.184.216.34:80", wantDial: "93.184.216.34:80"},
+		{name: "address in ip block", policy: ipBlocksPolicy("93.184.216.0/24"), authority: "93.184.216.34:443", wantDial: "93.184.216.34:443"},
+		{name: "ipv6 address in ip block", policy: ipBlocksPolicy("2001:db8::/32"), authority: "[2001:db8::7]:5432", wantDial: "[2001:db8::7]:5432"},
+		{name: "address rule later in the policy", policy: both, authority: "93.184.216.34:443", wantDial: "93.184.216.34:443"},
+		{name: "hostname rules only defer to the request legs", policy: hostnamesPolicy("api.example.com"), authority: "93.184.216.34:443"},
+		{name: "address outside the block with hostname rules defers", policy: both, authority: "198.51.100.1:443"},
+		{name: "address outside the block and no hostname rules", policy: ipBlocksPolicy("203.0.113.0/24"), authority: "93.184.216.34:443", want: envoy_type.StatusCode_Forbidden},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0)
+			md := egressMetadata(xfccHeader(leaf))
+			md.Host = tc.authority
+			md.Headers[":authority"] = tc.authority
+			res, err := h.HandleRequestHeaders(context.Background(), md)
+			if tc.want != 0 {
+				wantStatus(t, err, tc.want)
+				return
+			}
+			if err != nil {
+				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
+			}
+			if got := passthroughDestinationOf(res); got != tc.wantDial {
+				t.Errorf("passthrough destination = %q, want %q", got, tc.wantDial)
+			}
+		})
+	}
+}
+
+// A dataplane that calls out for the CONNECT alone has no request legs to
+// defer to, so a policy that could only allow by name allows nothing there.
+func TestConnectLegWithoutRequestLegsFailsClosed(t *testing.T) {
+	ca := newTestCA(t, "actor-identity-ca")
+	leaf := ca.issueActorCert(t, actorCertOptions{})
+	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw}))
+
+	h := New(&egressMockClient{actor: runningActor(), policy: hostnamesPolicy("api.example.com")}, ca.roots(), 0)
+	_, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
+	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+
+	h = New(&egressMockClient{actor: runningActor(), policy: ipBlocksPolicy("93.184.216.0/24")}, ca.roots(), 0)
+	res, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
+	}
+	if got := passthroughDestinationOf(res); got != "93.184.216.34:80" {
+		t.Errorf("passthrough destination = %q, want the original destination", got)
 	}
 }
 
@@ -467,6 +604,24 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
+			// The CONNECT would authenticate as one actor and the requests
+			// inside the tunnel be policed as another.
+			name: "URI SAN names a different actor",
+			xfcc: func(t *testing.T) string {
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{
+					uriSAN: "spiffe://substrate-actor.local/atespace/" + testEgressAtespace + "/actor/other-actor",
+				}))
+			},
+			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name: "no URI SAN at all",
+			xfcc: func(t *testing.T) string {
+				return xfccHeader(ca.issueActorCert(t, actorCertOptions{mutate: func(c *x509.Certificate) { c.URIs = nil }}))
+			},
+			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
 			name: "XFCC Chain that is not a certificate",
 			xfcc: func(*testing.T) string {
 				return `Chain="` + url.PathEscape("-----BEGIN CERTIFICATE-----\nbm90LWEtY2VydA==\n-----END CERTIFICATE-----\n") + `"`
@@ -561,6 +716,22 @@ func TestHandleRequestHeadersWithoutConfiguredCA(t *testing.T) {
 
 	_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 	wantStatus(t, err, envoy_type.StatusCode_ServiceUnavailable)
+}
+
+// atunnel always sends the address the actor's kernel dialed; a name here is
+// not a tunnel this gateway can carry, and is refused where it can still say so.
+func TestHandleRequestHeadersRejectsNonAddressAuthority(t *testing.T) {
+	ca := newTestCA(t, "actor-identity-ca")
+	leaf := ca.issueActorCert(t, actorCertOptions{})
+	h := egressHandler(ca.roots(), runningActor(), nil)
+
+	for _, authority := range []string{"example.com:443", "93.184.216.34", ""} {
+		md := egressMetadata(xfccHeader(leaf))
+		md.Host = authority
+		md.Headers[":authority"] = authority
+		_, err := h.HandleRequestHeaders(context.Background(), md)
+		wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+	}
 }
 
 func TestHandleRequestHeadersRejectsNonConnect(t *testing.T) {

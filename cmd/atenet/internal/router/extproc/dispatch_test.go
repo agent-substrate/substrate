@@ -146,3 +146,20 @@ func TestDirectionOfIgnoresClientSuppliedAttributeHeader(t *testing.T) {
 		t.Errorf("directionOf() = %v for a client-forged filter chain header, want %v", got, DirectionIngress)
 	}
 }
+
+// Every ext_proc-calling chain of the egress gateway must select the egress
+// handler. An inner chain classified as ingress is refused outright by an
+// egress-only router.
+func TestDirectionOfInnerEgressChains(t *testing.T) {
+	for _, chain := range []string{
+		EgressTLSMITMFilterChainName,
+		EgressCleartextFilterChainName,
+	} {
+		if got := directionOf(connectRequest("envoy.filters.http.ext_proc", chain)); got != DirectionEgress {
+			t.Errorf("directionOf(%q) = %v, want %v", chain, got, DirectionEgress)
+		}
+	}
+	if IsEgressFilterChain("egress_something_else") {
+		t.Error("IsEgressFilterChain accepted a name that is not one of the gateway's chains")
+	}
+}

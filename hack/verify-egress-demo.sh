@@ -59,7 +59,7 @@ RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:18000/ \
   -d "{\"url\":\"${TARGET_URL}\"}") || true
 echo "actor round-trip HTTP ${RESP} (200 = the actor fetched ${TARGET_URL} through egress)"
 
-echo "== NEW egress authentication log lines (proof of CONNECT+mTLS+identity) =="
+echo "== NEW egress tunnel log lines (proof of CONNECT+mTLS+identity+policy) =="
 # The CONNECT can land seconds after the actor's response, so we poll. And the
 # Actor's HTTP client keeps the
 # tunnel alive: a repeat fetch to a host it already reached rides the open tunnel
@@ -69,19 +69,19 @@ echo "== NEW egress authentication log lines (proof of CONNECT+mTLS+identity) ==
 NEW=""
 for _ in $(seq 1 15); do
   NEW=$(${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 2>/dev/null \
-    | tail -n +"$((BEFORE + 1))" | grep 'egress identity authenticated' || true)
+    | tail -n +"$((BEFORE + 1))" | grep 'egress tunnel opened' || true)
   [ -n "${NEW}" ] && break
   sleep 2
 done
 if [ -n "${NEW}" ]; then
   echo "${NEW}"
 elif ${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 2>/dev/null \
-  | grep 'egress identity authenticated' | grep -q "${ATESPACE}.*${ACTOR}\|${ACTOR}.*${ATESPACE}"; then
+  | grep 'egress tunnel opened' | grep -q "${ATESPACE}.*${ACTOR}\|${ACTOR}.*${ATESPACE}"; then
   echo "   no new CONNECT — the actor reused an already-open tunnel; its existing entries:"
   ${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 \
-    | grep 'egress identity authenticated' | grep "${ATESPACE}.*${ACTOR}\|${ACTOR}.*${ATESPACE}" | tail -3
+    | grep 'egress tunnel opened' | grep "${ATESPACE}.*${ACTOR}\|${ACTOR}.*${ATESPACE}" | tail -3
 else
-  echo "!! no egress authentication lines for ${ATESPACE}/${ACTOR} — dumping recent ext_proc logs:"
+  echo "!! no egress tunnel lines for ${ATESPACE}/${ACTOR} — dumping recent ext_proc logs:"
   ${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=20
   exit 1
 fi

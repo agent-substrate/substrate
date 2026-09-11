@@ -37,16 +37,24 @@ const (
 	TargetActorFilterStateAttribute      = "filter_state['" + TargetActorFilterStateKey + "']"
 	ConnectAuthorityFilterStateAttribute = "filter_state['" + ConnectAuthorityFilterStateKey + "']"
 
-	// ActorIdentityFilterStateKey is the filter-state key holding the actor
-	// identity the egress gateway read from the peer certificate it verified
-	// against the actor-identity CA. Egress-only, and set and read entirely in
-	// manifests/ate-install/atenet-egress-with-sdsmint.yaml: the MITM access
-	// logs stamp it, and the optional additional ext_proc service
-	// (hack/experimental-additional-egress-extproc.sh) requests it. No Go in
-	// this repository reads it — this handler authenticates the certificate
-	// itself — but it is part of the same namespace and drifts if it is not
-	// declared with the rest.
+	// ActorIdentityFilterStateKey holds the actor's SPIFFE ID
+	// (resources.ActorSPIFFEID), read from the peer certificate's URI SAN.
+	// The outer CONNECT chain sets it from %DOWNSTREAM_PEER_URI_SAN% and
+	// shares it with the inner legs, which have no certificate of their own.
 	ActorIdentityFilterStateKey = "dev.ate.actor.identity"
+	// ActorIdentityFilterStateAttribute is the CEL expression ext_proc
+	// evaluates to read ActorIdentityFilterStateKey back out.
+	ActorIdentityFilterStateAttribute = "filter_state['" + ActorIdentityFilterStateKey + "']"
+
+	// EgressMetadataNamespace is the dynamic-metadata namespace the CONNECT
+	// leg answers in. Envoy only keeps it when the outer ext_proc filter lists
+	// it under metadata_options.receiving_namespaces; the manifest tests check.
+	EgressMetadataNamespace = "dev.ate.egress"
+	// EgressPassthroughDestinationKey, under EgressMetadataNamespace, is the
+	// original destination as IP:port, present only when an address rule
+	// allowed it. The outer chain copies it into the ORIGINAL_DST filter state;
+	// absent, a TLS or opaque connection has no upstream and is closed.
+	EgressPassthroughDestinationKey = "passthrough_destination"
 
 	// directionAttribute carries the Direction outright, for dataplanes that
 	// have no Envoy filter chain to name. It is set from a dataplane expression,
@@ -68,3 +76,19 @@ const (
 // ingress here, so every egress CONNECT would silently take the ingress path and
 // 404 on the actor DNS name parse.
 const FilterChainNameAttribute = "xds.filter_chain_name"
+
+// EgressPassthroughDestinationFormat is the access-log and set_filter_state
+// format string that reads EgressPassthroughDestinationKey back out.
+const EgressPassthroughDestinationFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":" + EgressPassthroughDestinationKey + ")%"
+
+// OriginalDstFilterStateKey is Envoy's filter-state key for the address an
+// ORIGINAL_DST cluster dials. The outer CONNECT chain sets it from
+// EgressPassthroughDestinationKey; the request legs read it for their logs.
+const OriginalDstFilterStateKey = "envoy.network.transport_socket.original_dst_address"
+
+// OriginalDstAttribute is the CEL expression that reads OriginalDstFilterStateKey.
+const OriginalDstAttribute = "filter_state['" + OriginalDstFilterStateKey + "']"
+
+// RequestedServerNameAttribute is the SNI of the connection a request arrived
+// on. The handler logs it next to the Host it authorized.
+const RequestedServerNameAttribute = "connection.requested_server_name"

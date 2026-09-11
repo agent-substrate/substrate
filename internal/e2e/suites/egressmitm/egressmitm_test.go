@@ -97,7 +97,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 	defer rc.Close()
 
-	const origin = "https://example.com/"
+	const origin = "https://" + egressOriginHost + "/"
 
 	// sdsmintd signs with the pool mounted into the gateway pod, and kubelet
 	// propagates Secret contents into that mount on its own schedule (up to
@@ -128,7 +128,19 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	} else if !strings.Contains(neg.Error, "certificate") && !strings.Contains(neg.Error, "x509") {
 		t.Errorf("fetch with system roots failed, but not with a certificate-verification error: %s", neg.Error)
 	}
+
+	// The policy names example.com only, so another host is refused. Here that
+	// is an HTTP 403 on the decrypted request, after a successful handshake.
+	denied := probeFetch(t, ctx, rc, id, "https://example.org/", "bundle")
+	if denied.Error != "" {
+		t.Errorf("fetch of a host outside the policy failed at the transport (%s), want an HTTP 403 from the gateway", denied.Error)
+	} else if denied.Status != "403" {
+		t.Errorf("fetch of a host outside the policy returned status %s, want 403", denied.Status)
+	}
 }
+
+// egressOriginHost is the one host the probe actor's EgressPolicy allows.
+const egressOriginHost = "example.com"
 
 type fetchResponse struct {
 	Status string `json:"status"`
@@ -184,6 +196,9 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
+	// The gateway refuses every tunnel for an actor without a policy. Naming
+	// only the origin also lets the same actor show a denial.
+	e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHostnames(egressOriginHost))
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {

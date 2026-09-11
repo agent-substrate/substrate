@@ -216,7 +216,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				return fmt.Errorf("loading --actor-identity-ca-file %q: %w", s.cfg.ActorIdentityCAFile, err)
 			}
 		}
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots)
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

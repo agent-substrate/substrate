@@ -30,10 +30,30 @@ const (
 	DirectionEgress Direction = "egress"
 )
 
-// EgressFilterChainName is the Envoy filter chain that terminates actor egress
-// CONNECTs, and so the one that selects the egress handler. It must stay in sync
-// with the filter chain name in manifests/ate-install/atenet-egress.yaml.
-const EgressFilterChainName = "egress"
+// Filter chains of the egress gateway that call ext_proc; each is a leg of the
+// egress handler. Must match the chain names in
+// manifests/ate-install/atenet-egress.yaml and atenet-egress-with-sdsmint.yaml.
+const (
+	// EgressFilterChainName terminates the actor's outer mTLS CONNECT: the
+	// certificate is authenticated and the address rules decided here.
+	EgressFilterChainName = "egress"
+	// EgressTLSMITMFilterChainName is the sdsmint gateway's chain for TLS it
+	// terminated with a minted leaf. The handler authorizes every request.
+	EgressTLSMITMFilterChainName = "egress_tls_mitm"
+	// EgressCleartextFilterChainName is the chain for HTTP the actor sent in
+	// the clear, on both gateways. The handler authorizes every request.
+	EgressCleartextFilterChainName = "egress_cleartext"
+)
+
+// IsEgressFilterChain reports whether name is one of the egress gateway's
+// ext_proc-calling filter chains.
+func IsEgressFilterChain(name string) bool {
+	switch name {
+	case EgressFilterChainName, EgressTLSMITMFilterChainName, EgressCleartextFilterChainName:
+		return true
+	}
+	return false
+}
 
 // directionOf reports which direction's handler an ext_proc RequestHeaders
 // callback belongs to.
@@ -53,7 +73,7 @@ func directionOf(req *extprocv3.ProcessingRequest) Direction {
 	if requestAttribute(req, directionAttribute) == string(DirectionEgress) {
 		return DirectionEgress
 	}
-	if filterChainName(req) == EgressFilterChainName {
+	if IsEgressFilterChain(filterChainName(req)) {
 		return DirectionEgress
 	}
 	return DirectionIngress
