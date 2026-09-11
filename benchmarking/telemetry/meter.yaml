@@ -144,6 +144,13 @@ data:
           receivers: [count]
           processors: [deltatocumulative]
           exporters: [prometheus]
+
+        # Forward raw OTLP metrics directly to the Prometheus exporter on :8889.
+        # (monitoring.yaml auto-scrapes telemetry-meter:8889 via pod annotations).
+        metrics/raw:
+          receivers: [otlp]
+          processors: [memory_limiter]
+          exporters: [prometheus]
       telemetry:
         metrics:
           level: detailed
