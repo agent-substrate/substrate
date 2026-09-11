@@ -133,3 +133,13 @@ func TestActorTemplateCRUD(t *testing.T) {
 	})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, `sandbox_config\.config_name`)
 }
+
+func TestListActorTemplates_InvalidPageToken(t *testing.T) {
+	ns := namespaceForTest("ns-template-invalid-token")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.ListActorTemplates(context.Background(),
+		&ateapipb.ListActorTemplatesRequest{PageToken: "%%%"})
+	assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
+}
