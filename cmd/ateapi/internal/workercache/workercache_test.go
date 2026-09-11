@@ -471,10 +471,9 @@ func eventually(t *testing.T, condition func() bool, timeout time.Duration) {
 	}
 }
 
-// ApplyEvent is also the store's commit-time fast path: events land in the
-// cache synchronously, ahead of the watch, and the watch's later duplicate
-// (or any older event still in the journal) must be a no-op.
-func TestCache_ApplyEvent_ImmediateAndFenced(t *testing.T) {
+// The watch may replay an event or deliver one out of order, so an event
+// older than what the cache already holds must not regress it.
+func TestCache_WatchEventsAreFenced(t *testing.T) {
 	w := makeWorker("ns", "pod1", 1)
 	fs := newFakeStore(w)
 	c := workercache.New(fs, time.Hour)
@@ -482,57 +481,30 @@ func TestCache_ApplyEvent_ImmediateAndFenced(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Local publish is synchronous: visible with no watch delivery involved.
 	updated := makeWorker("ns", "pod1", 2)
 	updated.Status.Allocated = &ateapipb.WorkerResources{Actors: 1}
-	c.ApplyEvent(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
-	got, err := c.Worker(workerName("ns", "pod1"))
-	if err != nil {
-		t.Fatalf("Worker: %v", err)
-	}
-	if got.GetMetadata().GetVersion() != 2 {
-		t.Fatalf("version after ApplyLocal = %d, want 2 (local event must apply synchronously)", got.GetMetadata().GetVersion())
-	}
-
-	// The watch replaying the same (or an older) journal event must not
-	// regress the cache.
-	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
 	eventually(t, func() bool {
 		w, err := c.Worker(workerName("ns", "pod1"))
 		return err == nil && w.GetMetadata().GetVersion() == 2 && w.GetStatus().GetAllocated().GetActors() == 1
 	}, 2*time.Second)
 
-	// An older local event must be fenced too.
-	c.ApplyEvent(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
-	if w, _ := c.Worker(workerName("ns", "pod1")); w.GetMetadata().GetVersion() != 2 {
-		t.Fatalf("older ApplyLocal regressed the cache to version %d", w.GetMetadata().GetVersion())
-	}
-}
+	// A replayed and an older event must both be no-ops.
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
+	// Ordering on the channel means observing a later event proves the two
+	// above were already applied.
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod2", 1)})
+	eventually(t, func() bool {
+		_, err := c.Worker(workerName("ns", "pod2"))
+		return err == nil
+	}, 2*time.Second)
 
-// fakePublishingStore is a fakeStore whose writes can also be announced
-// through an in-process sink, mirroring atepg's PublishEventsLocally.
-type fakePublishingStore struct {
-	*fakeStore
-	sink func(store.WorkerEvent)
-}
-
-func (f *fakePublishingStore) PublishEventsLocally(sink func(store.WorkerEvent)) { f.sink = sink }
-
-// Start must self-register the cache with a store that can publish its
-// committed writes locally: events delivered through the sink reach the
-// cache with no watch delivery involved.
-func TestCache_Start_RegistersLocalPublish(t *testing.T) {
-	fs := &fakePublishingStore{fakeStore: newFakeStore()}
-	c := workercache.New(fs, time.Hour)
-	if err := c.Start(t.Context()); err != nil {
-		t.Fatalf("Start: %v", err)
+	got, err := c.Worker(workerName("ns", "pod1"))
+	if err != nil {
+		t.Fatalf("Worker: %v", err)
 	}
-	if fs.sink == nil {
-		t.Fatal("Start did not register the cache with the publishing store")
-	}
-	fs.sink(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod1", 1)})
-	if _, err := c.Worker(workerName("ns", "pod1")); err != nil {
-		t.Fatalf("event delivered through the local sink not visible: %v", err)
+	if got.GetMetadata().GetVersion() != 2 || got.GetStatus().GetAllocated().GetActors() != 1 {
+		t.Fatalf("stale event regressed the cache to version %d", got.GetMetadata().GetVersion())
 	}
 }
