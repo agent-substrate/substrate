@@ -19,11 +19,13 @@ package ateomnet
 import (
 	"context"
 	"errors"
+	"net"
 	"runtime"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/roottest"
 	"github.com/google/nftables"
+	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
@@ -235,6 +237,111 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 			return nil
 		}); err != nil {
 			t.Fatalf("inspecting interior netns: %v", err)
+		}
+	})
+}
+
+// addForwardingTarget gives the pod netns somewhere to forward actor packets
+// to, standing in for the real pod's eth0 and default route. Without it a
+// forwarded packet is dropped for want of a route before it ever reaches the
+// forward hook the rules under test live on. The device is a dummy, so the
+// packets go nowhere after that, which is all the assertions need.
+func addForwardingTarget(t *testing.T, cidr string) {
+	t.Helper()
+	link := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: "target0"}}
+	if err := netlink.LinkAdd(link); err != nil {
+		t.Fatalf("creating the forwarding target link: %v", err)
+	}
+	if err := netlink.AddrAdd(link, MustParseAddr(cidr)); err != nil {
+		t.Fatalf("addressing the forwarding target link: %v", err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		t.Fatalf("bringing up the forwarding target link: %v", err)
+	}
+}
+
+// droppedUDPPackets reads the packet count off the forward chain's counted
+// rule, which [ActorNonDNSUDPDropRule] is.
+func droppedUDPPackets(t *testing.T) uint64 {
+	t.Helper()
+	c := &nftables.Conn{}
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	if err != nil {
+		t.Fatalf("listing nftables tables: %v", err)
+	}
+	for _, table := range tables {
+		if table.Name != ActorNftTableName {
+			continue
+		}
+		rules, err := c.GetRules(table, &nftables.Chain{Name: "forward", Table: table})
+		if err != nil {
+			t.Fatalf("listing forward chain rules: %v", err)
+		}
+		for _, rule := range rules {
+			for _, e := range rule.Exprs {
+				if counter, ok := e.(*expr.Counter); ok {
+					return counter.Packets
+				}
+			}
+		}
+		t.Fatalf("forward chain has no counted rule, got %d rules", len(rules))
+	}
+	t.Fatalf("nftables table %q is missing", ActorNftTableName)
+	return 0
+}
+
+// sendUDP sends one datagram to addr and reports whether the local send
+// succeeded. UDP has no acknowledgement, so a successful send says nothing
+// about delivery -- the drop is observed through the nftables counter instead.
+func sendUDP(t *testing.T, addr string) {
+	t.Helper()
+	conn, err := net.Dial("udp4", addr)
+	if err != nil {
+		t.Fatalf("dialing %s: %v", addr, err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("probe")); err != nil {
+		t.Fatalf("sending a datagram to %s: %v", addr, err)
+	}
+}
+
+// TestActorNonDNSUDPIsDropped covers the forward-chain rule behaviorally: only
+// TCP is redirected into atunnel, so UDP on any port but 53 must not reach the
+// masquerade, and DNS must still get through or the sandbox cannot resolve
+// anything.
+func TestActorNonDNSUDPIsDropped(t *testing.T) {
+	roottest.Require(t, "creating network namespaces, veth pairs, and nftables rules")
+	ctx := context.Background()
+
+	withTestNetNS(t, func(interior netns.NsHandle) {
+		requireNftables(t)
+
+		const target = "192.0.2.1"
+		addForwardingTarget(t, "192.0.2.254/24")
+		if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
+			t.Fatalf("SetupActorNetwork: %v", err)
+		}
+
+		before := droppedUDPPackets(t)
+		if err := NetNSDo(ctx, interior, func(context.Context) error {
+			sendUDP(t, net.JoinHostPort(target, "53"))
+			return nil
+		}); err != nil {
+			t.Fatalf("sending DNS from the interior netns: %v", err)
+		}
+		if got := droppedUDPPackets(t); got != before {
+			t.Errorf("DNS datagram was dropped: counter went from %d to %d", before, got)
+		}
+
+		if err := NetNSDo(ctx, interior, func(context.Context) error {
+			sendUDP(t, net.JoinHostPort(target, "443"))
+			sendUDP(t, net.JoinHostPort(target, "9999"))
+			return nil
+		}); err != nil {
+			t.Fatalf("sending non-DNS UDP from the interior netns: %v", err)
+		}
+		if got := droppedUDPPackets(t); got != before+2 {
+			t.Errorf("dropped packets = %d, want %d: non-DNS UDP reached the masquerade", got, before+2)
 		}
 	})
 }
