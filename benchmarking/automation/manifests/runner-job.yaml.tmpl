@@ -41,6 +41,36 @@ roleRef:
   name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io
 ---
+# Hardware discovery for the runner: runner.py reads nodes and worker pods to
+# derive cluster capacity frontiers. Same ClusterRole as the one in
+# benchmarking/locust/manifests/locust.yaml, repeated here so this manifest
+# stands alone -- the locust Deployment is not part of an automated run.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: locust-hardware-discovery
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  # Intentionally not named locust-hardware-discovery: that binding belongs to
+  # locust.yaml. Two bindings on one ClusterRole add up, but two bindings
+  # sharing a name overwrite each other, silently revoking whichever subject
+  # the losing copy listed.
+  name: benchmark-runner-hardware-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: locust-hardware-discovery
+subjects:
+- kind: ServiceAccount
+  name: benchmark-runner
+  namespace: benchmarking
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
