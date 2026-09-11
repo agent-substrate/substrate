@@ -22,9 +22,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
-	"path"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -34,10 +32,12 @@ import (
 )
 
 // TLSConfig authenticates this worker to atelet with its Pod certificate, and
-// accepts only the atelet on this worker's own node.
-func TLSConfig(credentialBundlePath, trustBundlePath string) (*tls.Config, error) {
-	if credentialBundlePath == "" || trustBundlePath == "" {
-		return nil, fmt.Errorf("worker credentials and trust bundle are required")
+// accepts only the atelet on this worker's own node. ateletSPIFFEID is the
+// identity atelet presents; it names atelet's namespace, not this worker's, so
+// the caller passes it in rather than deriving it from the downward API.
+func TLSConfig(credentialBundlePath, trustBundlePath, ateletSPIFFEID string) (*tls.Config, error) {
+	if credentialBundlePath == "" || trustBundlePath == "" || ateletSPIFFEID == "" {
+		return nil, fmt.Errorf("worker credentials, trust bundle, and atelet SPIFFE ID are required")
 	}
 	localCert, err := credbundle.Parse(credentialBundlePath)
 	if err != nil {
@@ -55,7 +55,6 @@ func TLSConfig(credentialBundlePath, trustBundlePath string) (*tls.Config, error
 	if !roots.AppendCertsFromPEM(trustPEM) {
 		return nil, fmt.Errorf("atelet trust bundle contains no certificates")
 	}
-	expectedURI := (&url.URL{Scheme: "spiffe", Host: "cluster.local", Path: path.Join("ns", "ate-system", "sa", "atelet")}).String()
 	return &tls.Config{
 		MinVersion:           tls.VersionTLS13,
 		InsecureSkipVerify:   true, // Verification below supports SPIFFE Pod certificates without a DNS name.
@@ -75,7 +74,7 @@ func TLSConfig(credentialBundlePath, trustBundlePath string) (*tls.Config, error
 				return fmt.Errorf("verify atelet certificate: %w", err)
 			}
 			leaf := state.PeerCertificates[0]
-			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != expectedURI {
+			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != ateletSPIFFEID {
 				return fmt.Errorf("node-local peer is not atelet")
 			}
 			identity, err := substratex509.PodIdentityFromCertificate(leaf)

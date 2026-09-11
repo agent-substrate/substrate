@@ -35,6 +35,23 @@ if [[ -z "${KUBECTL_CONTEXT:-}" ]]; then
 fi
 # otherwise just use the current cluster in KUBECONFIG ...
 
+# Namespace the substrate control plane is installed into. Defaults to the
+# canonical ate-system so existing flows are unaffected.
+#
+# This applies to the resources this script creates and waits on: the mTLS
+# authorities, the api-server ConfigMaps, and the rollout checks. It does NOT
+# relocate the checked-in manifests, which carry `namespace: ate-system`
+# literally and are applied verbatim by render_ate_system_manifests. Installing
+# into another namespace means installing with the Helm chart and using this
+# script only for the bootstrap steps; require_default_namespace_for_manifests
+# below refuses the combination that would half-install.
+ATE_NAMESPACE="${ATE_NAMESPACE:-ate-system}"
+
+# Service name fronting ateapi. It is the audience the API authentication config
+# accepts, so it has to match the Service the deployment actually creates; a
+# Helm release that prefixes resource names needs it set.
+ATE_API_SERVICE_NAME="${ATE_API_SERVICE_NAME:-api}"
+
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
@@ -247,8 +264,20 @@ rollout_timeout() {
   echo "${timeout}"
 }
 
+# ensure_ate_namespace creates ATE_NAMESPACE and waits for it to go Active.
+ensure_ate_namespace() {
+  if [[ "${ATE_NAMESPACE}" == "ate-system" ]]; then
+    run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml
+  else
+    run_kubectl create namespace "${ATE_NAMESPACE}" --dry-run=client -o yaml \
+      | run_kubectl apply -f -
+  fi
+  run_kubectl wait --for=jsonpath='{.status.phase}'=Active \
+    "namespace/${ATE_NAMESPACE}" --timeout=60s
+}
+
 default_postgres_connection_string() {
-  echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+  echo "postgresql://postgres@postgres.${ATE_NAMESPACE}.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 }
 
 # True if deploying the bundled in-cluster PostgreSQL. Returns false if an
@@ -310,7 +339,30 @@ label_nodes_substrate_version() {
   done
 }
 
+# require_default_namespace_for_manifests stops the manifest-applying paths when
+# ATE_NAMESPACE has been overridden. Those manifests name ate-system literally,
+# so proceeding would put the workloads in ate-system while this script created
+# their secrets and ConfigMaps somewhere else — an install that comes up far
+# enough to look healthy and then fails on a missing envFrom source.
+require_default_namespace_for_manifests() {
+  if [[ "${ATE_NAMESPACE}" != "ate-system" ]]; then
+    echo "error: ATE_NAMESPACE=${ATE_NAMESPACE} cannot be used with the manifest-applying subcommands." >&2
+    echo "       manifests/ate-install/ hardcodes the ate-system namespace. Install into" >&2
+    echo "       another namespace with the Helm chart, then use this script only for the" >&2
+    echo "       --create-* bootstrap steps." >&2
+    exit 1
+  fi
+  if [[ "${ATE_API_SERVICE_NAME}" != "api" ]]; then
+    echo "error: ATE_API_SERVICE_NAME=${ATE_API_SERVICE_NAME} cannot be used with the manifest-applying subcommands." >&2
+    echo "       manifests/ate-install/ creates the Service literally named api, so tokens" >&2
+    echo "       minted for this audience would all be rejected. A renamed Service comes" >&2
+    echo "       from a Helm install; use this script only for the --create-* bootstrap steps." >&2
+    exit 1
+  fi
+}
+
 render_ate_system_manifests() {
+  require_default_namespace_for_manifests
   local router=""
   router="$(atenet_router)"
 
@@ -387,14 +439,14 @@ apply_atenet_egress() {
   # bootstrap arrives as a ConfigMap change, and an otherwise unchanged
   # Deployment will not pick that up on its own.
   local running=false
-  if run_kubectl -n ate-system get deployment/atenet-egress >/dev/null 2>&1; then
+  if run_kubectl -n "${ATE_NAMESPACE}" get deployment/atenet-egress >/dev/null 2>&1; then
     running=true
   fi
 
   echo "${manifests}" | run_kubectl apply -f -
 
   if [[ "${running}" == "true" ]] && additional_egress_extproc_enabled; then
-    run_kubectl -n ate-system rollout restart deployment/atenet-egress
+    run_kubectl -n "${ATE_NAMESPACE}" rollout restart deployment/atenet-egress
   fi
 }
 
@@ -443,28 +495,28 @@ apply_otel_endpoint_override() {
   fi
 
   local current=""
-  current="$(run_kubectl -n ate-system get configmap ate-otel-config \
+  current="$(run_kubectl -n "${ATE_NAMESPACE}" get configmap ate-otel-config \
     -o jsonpath='{.data.OTEL_EXPORTER_OTLP_ENDPOINT}' 2>/dev/null || true)"
   if [[ "${current}" == "${ATE_OTLP_ENDPOINT}" ]]; then
     return 0
   fi
 
   echo "Overriding OTEL_EXPORTER_OTLP_ENDPOINT with ${ATE_OTLP_ENDPOINT}"
-  run_kubectl -n ate-system patch configmap ate-otel-config --type=merge \
+  run_kubectl -n "${ATE_NAMESPACE}" patch configmap ate-otel-config --type=merge \
     -p "{\"data\":{\"OTEL_EXPORTER_OTLP_ENDPOINT\":\"${ATE_OTLP_ENDPOINT}\"}}"
 
   local workload
   for workload in deployment/ate-api-server deployment/ate-controller \
                   deployment/atenet-router; do
-    if run_kubectl -n ate-system get "${workload}" >/dev/null 2>&1; then
-      run_kubectl -n ate-system rollout restart "${workload}"
+    if run_kubectl -n "${ATE_NAMESPACE}" get "${workload}" >/dev/null 2>&1; then
+      run_kubectl -n "${ATE_NAMESPACE}" rollout restart "${workload}"
     fi
   done
   # atelet DaemonSet names carry a version suffix; restart whichever versions
   # are installed.
   local ds=""
-  for ds in $(run_kubectl -n ate-system get daemonset -l app=atelet -o name 2>/dev/null); do
-    run_kubectl -n ate-system rollout restart "${ds}"
+  for ds in $(run_kubectl -n "${ATE_NAMESPACE}" get daemonset -l app=atelet -o name 2>/dev/null); do
+    run_kubectl -n "${ATE_NAMESPACE}" rollout restart "${ds}"
   done
 }
 
@@ -486,7 +538,7 @@ create_jwt_authority_pool_secret() {
   run_kubectl_ate admin make-jwt-pool \
     --key-id="1" \
     --name="actor-id-jwt-pool" \
-    --secret-namespace=ate-system
+    --secret-namespace="${ATE_NAMESPACE}"
 }
 
 create_actor_id_ca_pool_secret() {
@@ -494,7 +546,7 @@ create_actor_id_ca_pool_secret() {
   run_kubectl_ate admin make-ca-pool \
     --ca-id="1" \
     --name="actor-id-ca-pool" \
-    --secret-namespace=ate-system
+    --secret-namespace="${ATE_NAMESPACE}"
 }
 
 # The egress gateway has to verify actor client certificates, which means it
@@ -508,7 +560,7 @@ create_actor_id_ca_certs_secret() {
   # inside the create-secret argument list, which would silently produce an
   # empty trust bundle and an egress gateway that rejects every actor.
   local actorid_root=""
-  actorid_root=$(ca_pool_root_pem actor-id-ca-pool ate-system)
+  actorid_root=$(ca_pool_root_pem actor-id-ca-pool "${ATE_NAMESPACE}")
   if [[ -z "${actorid_root}" ]]; then
     echo "error: failed to extract the actor-identity CA root for actor-id-ca-certs" >&2
     return 1
@@ -516,7 +568,7 @@ create_actor_id_ca_certs_secret() {
 
   run_kubectl create secret generic actor-id-ca-certs \
     --from-literal=ca.crt="${actorid_root}" \
-    -n ate-system \
+    -n "${ATE_NAMESPACE}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }
@@ -530,7 +582,7 @@ create_egress_mitm_ca_pool_secret() {
   run_kubectl_ate admin make-ca-pool \
     --ca-id="1" \
     --name="egress-mitm-ca-pool" \
-    --secret-namespace=ate-system \
+    --secret-namespace="${ATE_NAMESPACE}" \
     --key-type=ECDSAP256
 }
 
@@ -541,7 +593,7 @@ ensure_egress_mitm_ca_pool_secret() {
   if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
     return 0
   fi
-  run_kubectl get secret -n ate-system egress-mitm-ca-pool >/dev/null 2>&1 \
+  run_kubectl get secret -n "${ATE_NAMESPACE}" egress-mitm-ca-pool >/dev/null 2>&1 \
     || create_egress_mitm_ca_pool_secret
 }
 
@@ -576,7 +628,7 @@ resolve_cloudsql_instance() {
     echo "${ATE_API_POSTGRES_CLOUDSQL_INSTANCE}"
     return
   fi
-  run_kubectl get configmap -n ate-system ate-api-server-envvars \
+  run_kubectl get configmap -n "${ATE_NAMESPACE}" ate-api-server-envvars \
     -o jsonpath='{.data.ATE_API_POSTGRES_CLOUDSQL_INSTANCE}' 2>/dev/null || true
 }
 
@@ -587,13 +639,13 @@ resolve_cloudsql_gsa() {
     echo "${ATE_API_POSTGRES_CLOUDSQL_GSA}"
     return
   fi
-  run_kubectl get serviceaccount ate-api-server -n ate-system \
+  run_kubectl get serviceaccount ate-api-server -n "${ATE_NAMESPACE}" \
     -o "jsonpath={.metadata.annotations.iam\.gke\.io/gcp-service-account}" 2>/dev/null || true
 }
 
 # recorded_envvar echoes one key from the ate-api-server-envvars ConfigMap.
 recorded_envvar() {
-  run_kubectl get configmap -n ate-system ate-api-server-envvars \
+  run_kubectl get configmap -n "${ATE_NAMESPACE}" ate-api-server-envvars \
     -o "jsonpath={.data.$1}" 2>/dev/null || true
 }
 
@@ -602,11 +654,11 @@ recorded_envvar() {
 # would prune the ConfigMap key and leave the running Deployment without a DSN.
 # Full deploys are safe because they update the Deployment manifest immediately.
 ensure_env_vars_safe_standalone() {
-  if ! run_kubectl get deployment ate-api-server -n ate-system >/dev/null 2>&1; then
+  if ! run_kubectl get deployment ate-api-server -n "${ATE_NAMESPACE}" >/dev/null 2>&1; then
     return 0 # fresh install: the manifest applied later carries the secretRef
   fi
   local refs
-  refs="$(run_kubectl get deployment ate-api-server -n ate-system \
+  refs="$(run_kubectl get deployment ate-api-server -n "${ATE_NAMESPACE}" \
     -o jsonpath='{.spec.template.spec.containers[0].envFrom[*].secretRef.name}' 2>/dev/null || true)"
   if [[ "${refs}" != *ate-api-server-secret-envvars* ]]; then
     echo "Error: the running ate-api-server Deployment does not reference the" \
@@ -621,22 +673,22 @@ ensure_env_vars_safe_standalone() {
 # updates don't roll pods automatically, we patch a hash of the config into
 # the deployment template.
 annotate_api_server_env_hash() {
-  if ! run_kubectl get deployment ate-api-server -n ate-system >/dev/null 2>&1; then
+  if ! run_kubectl get deployment ate-api-server -n "${ATE_NAMESPACE}" >/dev/null 2>&1; then
     return 0 # fresh install: the first rollout starts with the new values
   fi
   local hash
-  hash="$({ run_kubectl get configmap -n ate-system ate-api-server-envvars \
+  hash="$({ run_kubectl get configmap -n "${ATE_NAMESPACE}" ate-api-server-envvars \
               -o jsonpath='{.data}' 2>/dev/null || true
-            run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
+            run_kubectl get secret -n "${ATE_NAMESPACE}" ate-api-server-secret-envvars \
               -o jsonpath='{.data}' 2>/dev/null || true; } \
           | openssl dgst -sha256 | awk '{print $NF}')"
-  run_kubectl patch deployment ate-api-server -n ate-system --type=strategic -p \
+  run_kubectl patch deployment ate-api-server -n "${ATE_NAMESPACE}" --type=strategic -p \
     "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"ate.dev/env-hash\":\"${hash}\"}}}}}"
 }
 
 create_api_server_env_vars() {
   log_step "create_api_server_env_vars"
-  run_kubectl create namespace ate-system --dry-run=client -o yaml \
+  run_kubectl create namespace "${ATE_NAMESPACE}" --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
   local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
@@ -670,7 +722,7 @@ create_api_server_env_vars() {
         fi
       fi
       if [[ -z "${postgres_connection_string}" ]]; then
-        postgres_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
+        postgres_connection_string="$(run_kubectl get secret -n "${ATE_NAMESPACE}" ate-api-server-secret-envvars \
           -o jsonpath='{.data.ATE_API_POSTGRES_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
       fi
     fi
@@ -754,7 +806,7 @@ create_api_server_env_vars() {
         ;;
     esac
   fi
-  run_kubectl create configmap -n ate-system ate-api-server-envvars \
+  run_kubectl create configmap -n "${ATE_NAMESPACE}" ate-api-server-envvars \
     ${cm_args[@]+"${cm_args[@]}"} \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
@@ -763,7 +815,7 @@ create_api_server_env_vars() {
   # auth), so it lives in a Secret, not the ConfigMap above. The deployment
   # lists the secretRef after the configMapRef, so this value wins if both
   # define the key.
-  run_kubectl create secret generic -n ate-system ate-api-server-secret-envvars \
+  run_kubectl create secret generic -n "${ATE_NAMESPACE}" ate-api-server-secret-envvars \
     --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
     --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
     --dry-run=client -o yaml \
@@ -774,7 +826,7 @@ create_api_server_env_vars() {
   # Cloud SQL: gcloud sql ssl server-ca-certs list --instance=<name> \
   #   --format="value(cert)" > server-ca.pem
   if [[ -n "${ATE_API_POSTGRES_SERVER_CA_FILE:-}" ]]; then
-    run_kubectl create secret generic -n ate-system postgres-server-ca \
+    run_kubectl create secret generic -n "${ATE_NAMESPACE}" postgres-server-ca \
       --from-file=server-ca.pem="${ATE_API_POSTGRES_SERVER_CA_FILE}" \
       --dry-run=client -o yaml \
       | run_kubectl apply -f -
@@ -805,7 +857,7 @@ apply_podcert_workers_override() {
 
 create_api_authentication_config() {
   log_step "create_api_authentication_config"
-  run_kubectl create namespace ate-system --dry-run=client -o yaml \
+  run_kubectl create namespace "${ATE_NAMESPACE}" --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
   # ate-api-server accepts a token only if its iss claim equals this string
@@ -830,10 +882,10 @@ create_api_authentication_config() {
       ;;
   esac
   local authentication_config
-  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n%s' "${jwt_issuer}" "${discovery_config}")
+  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [%s.%s.svc]\n%s' "${jwt_issuer}" "${ATE_API_SERVICE_NAME}" "${ATE_NAMESPACE}" "${discovery_config}")
   echo "ate-api-authentication authentication.yaml:"
   echo "  | ${authentication_config//$'\n'/$'\n'  | }"
-  run_kubectl create configmap -n ate-system ate-api-authentication \
+  run_kubectl create configmap -n "${ATE_NAMESPACE}" ate-api-authentication \
     --from-literal=authentication.yaml="${authentication_config}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
@@ -894,8 +946,7 @@ deploy_ate_system() {
   ensure_substrate_version
 
   # Ensure namespace exists before applying RBAC or CRDs
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+  ensure_ate_namespace
 
   # The atelet DaemonSet applied below and the demo WorkerPools' worker pods
   # schedule only to version-labeled nodes.
@@ -967,13 +1018,13 @@ deploy_ate_system() {
 
   log_step "Waiting for ATE system components to be ready..."
   if use_bundled_postgres; then
-    run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+    run_kubectl rollout status statefulset/postgres -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
   fi
-  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status deployment/ate-controller -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/ate-api-server -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/ate-controller -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-router -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-egress -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
+  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
 
   # After the bundle, which carries its own copy of ate-otel-config.
   apply_otel_endpoint_override
@@ -982,18 +1033,18 @@ deploy_ate_system() {
 # Ensure secrets and configmaps required by ate-apiserver
 ensure_apiserver_prerequisites() {
   log_step "ensure_apiserver_prerequisites"
-  run_kubectl get secret -n ate-system actor-id-jwt-pool >/dev/null 2>&1 \
+  run_kubectl get secret -n "${ATE_NAMESPACE}" actor-id-jwt-pool >/dev/null 2>&1 \
     || create_jwt_authority_pool_secret
-  run_kubectl get secret -n ate-system actor-id-ca-pool >/dev/null 2>&1 \
+  run_kubectl get secret -n "${ATE_NAMESPACE}" actor-id-ca-pool >/dev/null 2>&1 \
     || create_actor_id_ca_pool_secret
   # Derived from actor-id-ca-pool above, so it must come after it.
-  run_kubectl get secret -n ate-system actor-id-ca-certs >/dev/null 2>&1 \
+  run_kubectl get secret -n "${ATE_NAMESPACE}" actor-id-ca-certs >/dev/null 2>&1 \
     || create_actor_id_ca_certs_secret
   run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
     || create_podcertificate_controller_cas
   # Always reconcile the PostgreSQL connection settings.
   create_api_server_env_vars
-  run_kubectl get configmap -n ate-system ate-api-authentication >/dev/null 2>&1 \
+  run_kubectl get configmap -n "${ATE_NAMESPACE}" ate-api-authentication >/dev/null 2>&1 \
     || create_api_authentication_config
 }
 
@@ -1003,8 +1054,7 @@ deploy_ate_apiserver() {
   ensure_crds
 
   # Ensure namespace exists
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+  ensure_ate_namespace
 
   ensure_apiserver_prerequisites
   apply_otel_config
@@ -1012,7 +1062,7 @@ deploy_ate_apiserver() {
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
   reconcile_cloudsql_proxy_sidecar
-  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/ate-api-server -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
 }
 
 # Reconciles the Cloud SQL Auth Proxy sidecar and Workload Identity
@@ -1032,19 +1082,19 @@ reconcile_cloudsql_proxy_sidecar() {
     # SQL IAM database user.
     gsa="$(resolve_cloudsql_gsa)"
     if [[ -n "${gsa}" ]]; then
-      run_kubectl annotate serviceaccount ate-api-server -n ate-system \
+      run_kubectl annotate serviceaccount ate-api-server -n "${ATE_NAMESPACE}" \
         "iam.gke.io/gcp-service-account=${gsa}" --overwrite
     fi
-    run_kubectl patch deployment ate-api-server -n ate-system \
+    run_kubectl patch deployment ate-api-server -n "${ATE_NAMESPACE}" \
       --patch-file manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml
-  elif run_kubectl get deployment ate-api-server -n ate-system \
+  elif run_kubectl get deployment ate-api-server -n "${ATE_NAMESPACE}" \
       -o jsonpath='{.spec.template.spec.initContainers[*].name}' 2>/dev/null \
       | grep -qw cloud-sql-proxy; then
     log_step "reconcile_cloudsql_proxy_sidecar (remove)"
     # shellcheck disable=SC2016
-    run_kubectl patch deployment ate-api-server -n ate-system --type=strategic \
+    run_kubectl patch deployment ate-api-server -n "${ATE_NAMESPACE}" --type=strategic \
       -p '{"spec":{"template":{"spec":{"initContainers":[{"name":"cloud-sql-proxy","$patch":"delete"}]}}}}'
-    run_kubectl annotate serviceaccount ate-api-server -n ate-system \
+    run_kubectl annotate serviceaccount ate-api-server -n "${ATE_NAMESPACE}" \
       "iam.gke.io/gcp-service-account-" >/dev/null 2>&1 || true
   fi
 }
@@ -1055,8 +1105,7 @@ deploy_atelet() {
   ensure_crds
 
   # Ensure namespace exists
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+  ensure_ate_namespace
 
   label_nodes_substrate_version
   apply_otel_config
@@ -1071,7 +1120,7 @@ deploy_atelet() {
     manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml | substitute_version)
   fi
   echo "${manifest}" | run_kubectl apply -f -
-  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
 }
 
 deploy_atenet() {
@@ -1079,8 +1128,7 @@ deploy_atenet() {
   ensure_crds
 
   # Ensure namespace exists
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+  ensure_ate_namespace
 
   apply_otel_config
   apply_otel_endpoint_override
@@ -1091,8 +1139,8 @@ deploy_atenet() {
 
   ensure_egress_mitm_ca_pool_secret
   apply_atenet_egress
-  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-router -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-egress -n "${ATE_NAMESPACE}" --timeout="$(rollout_timeout)"
 }
 
 # get_actor_state echoes the actor's state enum (e.g. ACTOR_STATE_SUSPENDED).
@@ -1160,7 +1208,7 @@ delete_demo_actors_substrate() {
     return 1
   fi
 
-  if ! run_kubectl get deployment/ate-api-server -n ate-system >/dev/null 2>&1; then
+  if ! run_kubectl get deployment/ate-api-server -n "${ATE_NAMESPACE}" >/dev/null 2>&1; then
     log_step "ate-api-server not found; skipping actor cleanup"
     return 0
   fi
@@ -1341,7 +1389,7 @@ delete_ate_system() {
     run_kubectl delete --ignore-not-found -f manifests/ate-install
   fi
 
-  run_kubectl delete --ignore-not-found -n ate-system daemonset -l app=atelet
+  run_kubectl delete --ignore-not-found -n "${ATE_NAMESPACE}" daemonset -l app=atelet
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/components/agentgateway/configmap.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/postgres/postgres.yaml

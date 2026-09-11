@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -53,7 +53,7 @@ func Cert(t *testing.T, spiffePath string, podIdentity *substratex509.PodIdentit
 		NotAfter:     time.Now().Add(time.Hour),
 	}
 	if spiffePath != "" {
-		template.URIs = []*url.URL{{Scheme: "spiffe", Host: ateletauth.TrustDomain, Path: spiffePath}}
+		template.URIs = []*url.URL{{Scheme: "spiffe", Host: installdefaults.AteletTrustDomain, Path: spiffePath}}
 	}
 	if podIdentity != nil {
 		if err := substratex509.AddPodIdentityToCertificate(podIdentity, template); err != nil {
@@ -72,11 +72,18 @@ func Cert(t *testing.T, spiffePath string, podIdentity *substratex509.PodIdentit
 	return cert
 }
 
-// PodIdentityOn returns a well-formed atelet PodIdentity pinned to nodeName.
+// PodIdentityOn returns a well-formed atelet PodIdentity pinned to nodeName,
+// for an atelet running in the default install namespace.
 func PodIdentityOn(nodeName string) *substratex509.PodIdentity {
+	return PodIdentityIn(installdefaults.SystemNamespace, nodeName)
+}
+
+// PodIdentityIn returns a well-formed atelet PodIdentity pinned to nodeName,
+// for an atelet running in namespace.
+func PodIdentityIn(namespace, nodeName string) *substratex509.PodIdentity {
 	return &substratex509.PodIdentity{
-		Namespace:          ateletauth.Namespace,
-		ServiceAccountName: ateletauth.ServiceAccount,
+		Namespace:          namespace,
+		ServiceAccountName: installdefaults.AteletServiceAccount,
 		ServiceAccountUID:  "sa-uid",
 		PodName:            "atelet-xyz",
 		PodUID:             "pod-uid",
@@ -85,10 +92,17 @@ func PodIdentityOn(nodeName string) *substratex509.PodIdentity {
 	}
 }
 
-// CertOn returns the certificate of the atelet running on nodeName.
+// CertOn returns the certificate of the atelet running on nodeName in the
+// default install namespace.
 func CertOn(t *testing.T, nodeName string) *x509.Certificate {
 	t.Helper()
-	return Cert(t, path.Join("ns", ateletauth.Namespace, "sa", ateletauth.ServiceAccount), PodIdentityOn(nodeName))
+	return CertIn(t, installdefaults.SystemNamespace, nodeName)
+}
+
+// CertIn returns the certificate of the atelet running on nodeName in namespace.
+func CertIn(t *testing.T, namespace, nodeName string) *x509.Certificate {
+	t.Helper()
+	return Cert(t, path.Join("ns", namespace, "sa", installdefaults.AteletServiceAccount), PodIdentityIn(namespace, nodeName))
 }
 
 // ContextWith injects cert as the transport-authenticated peer certificate. A

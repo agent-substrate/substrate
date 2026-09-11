@@ -26,12 +26,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
@@ -62,6 +62,10 @@ const (
 	testNode         = "node-a"
 	testOtherNode    = "node-b"
 )
+
+// ateletSPIFFEID is the identity a default install's atelet presents, and what
+// the Server under test is configured to accept.
+var ateletSPIFFEID = installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount)
 
 // newTestCert builds a self-signed leaf carrying the given SPIFFE URI path
 // (skipped when empty) and, when podIdentity is non-nil, a PodIdentity
@@ -106,7 +110,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers)
+	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, ateletSPIFFEID)
 }
 
 // staleWatchStore wraps a store with a WatchWorkers that never delivers,
@@ -328,7 +332,7 @@ func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercac
 		ActiveForSigning: "1",
 	}
 
-	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers)
+	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, ateletSPIFFEID)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
@@ -519,7 +523,7 @@ func TestMintCertAuthorization(t *testing.T) {
 			cert: func(t *testing.T) *x509.Certificate {
 				id := ateletauthtest.PodIdentityOn(testNode)
 				id.ServiceAccountName = "some-workload"
-				return ateletauthtest.Cert(t, path.Join("ns", ateletauth.Namespace, "sa", "some-workload"), id)
+				return ateletauthtest.Cert(t, path.Join("ns", installdefaults.SystemNamespace, "sa", "some-workload"), id)
 			},
 			fixture:  runningOnNode(testNode),
 			wantCode: codes.PermissionDenied,
@@ -528,7 +532,7 @@ func TestMintCertAuthorization(t *testing.T) {
 			cert: func(t *testing.T) *x509.Certificate {
 				id := ateletauthtest.PodIdentityOn(testNode)
 				id.Namespace = "someone-elses-system"
-				return ateletauthtest.Cert(t, path.Join("ns", "someone-elses-system", "sa", ateletauth.ServiceAccount), id)
+				return ateletauthtest.Cert(t, path.Join("ns", "someone-elses-system", "sa", installdefaults.AteletServiceAccount), id)
 			},
 			fixture:  runningOnNode(testNode),
 			wantCode: codes.PermissionDenied,
@@ -542,7 +546,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"certificate carries no PodIdentity extension": {
 			cert: func(t *testing.T) *x509.Certificate {
-				return ateletauthtest.Cert(t, path.Join("ns", ateletauth.Namespace, "sa", ateletauth.ServiceAccount), nil)
+				return ateletauthtest.Cert(t, path.Join("ns", installdefaults.SystemNamespace, "sa", installdefaults.AteletServiceAccount), nil)
 			},
 			fixture:  runningOnNode(testNode),
 			wantCode: codes.PermissionDenied,
@@ -937,7 +941,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 		ActiveForSigning: "1",
 	}
 
-	srv := New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers)
+	srv := New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, ateletSPIFFEID)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {
