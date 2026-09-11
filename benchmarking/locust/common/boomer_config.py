@@ -18,6 +18,7 @@ Flag registration lives in the modules that own each flag:
   * --trace-probability             → common.trace.init_tracing
   * --min-wait-time / --max-wait-time → common.wait_time.init_wait_time
   * --resume-mode                   → common.resume_mode.add_resume_mode_arguments
+  * --lifecycle-mode                → common.lifecycle_mode.add_lifecycle_mode_arguments
   * --durdir-*                      → common.durdir_config.add_durdir_arguments
   * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
 
@@ -51,6 +52,7 @@ _FLAGS = {
     "--max-wait-time": float,
     "--durdir-file-size-bytes": int,
     "--resume-mode": str,
+    "--lifecycle-mode": str,
     "--durdir-read-mode": str,
     "--durdir-template": str,
     "--mem-target": str,
@@ -132,6 +134,7 @@ def init_boomer_config() -> None:
     from locust.env import Environment
 
     from common.durdir_config import add_durdir_arguments
+    from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments
     from common.resume_mode import add_resume_mode_arguments
     from common.trace import init_tracing

@@ -29,8 +29,9 @@ import (
 
 type fakeControlClient struct {
 	ateapipb.ControlClient
-	mu    sync.Mutex
-	calls []string
+	mu             sync.Mutex
+	calls          []string
+	deleteRequests []*ateapipb.DeleteActorRequest
 }
 
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
@@ -61,10 +62,18 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
+func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "PauseActor")
+	return &ateapipb.PauseActorResponse{}, nil
+}
+
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
+	f.deleteRequests = append(f.deleteRequests, in)
 	return &ateapipb.Actor{}, nil
 }
 
@@ -72,6 +81,12 @@ func (f *fakeControlClient) recordedCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeControlClient) recordedDeleteRequests() []*ateapipb.DeleteActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapipb.DeleteActorRequest(nil), f.deleteRequests...)
 }
 
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures

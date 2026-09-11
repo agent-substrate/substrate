@@ -33,10 +33,11 @@ import (
 
 func TestDurDirLoopSequence(t *testing.T) {
 	tests := []struct {
-		name         string
-		resumeMode   string
-		wantGRPCCall []string
-		wantHTTPCall []string
+		name          string
+		resumeMode    string
+		lifecycleMode string
+		wantGRPCCall  []string
+		wantHTTPCall  []string
 	}{
 		{
 			name:         "explicit resume mode",
@@ -50,6 +51,13 @@ func TestDurDirLoopSequence(t *testing.T) {
 			wantGRPCCall: []string{"SuspendActor"}, // No ResumeActor RPC!
 			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
 		},
+		{
+			name:          "pause lifecycle mode",
+			lifecycleMode: dynconfig.LifecycleModePause,
+			resumeMode:    dynconfig.ResumeModeExplicit,
+			wantGRPCCall:  []string{"PauseActor", "ResumeActor"},
+			wantHTTPCall:  []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
+		},
 	}
 
 	for _, tc := range tests {
@@ -59,7 +67,8 @@ func TestDurDirLoopSequence(t *testing.T) {
 			cfg := &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					ResumeMode: tc.resumeMode,
+					ResumeMode:    tc.resumeMode,
+					LifecycleMode: tc.lifecycleMode,
 				}),
 			}
 			du := newTestDurDirUser(t, srv, cfg)
@@ -244,5 +253,33 @@ func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
 	calls := fakeCtrl.recordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
 		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
+	}
+	reqs := fakeCtrl.recordedDeleteRequests()
+	if len(reqs) == 0 || !reqs[0].GetAnyState() {
+		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
+	}
+}
+
+func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
+	fakeCtrl := &fakeControlClient{}
+	cfg := &userclass.Config{
+		APIStub: fakeCtrl,
+		Dyn: dynconfig.NewHolder(dynconfig.Config{
+			LifecycleMode: dynconfig.LifecycleModePause,
+		}),
+	}
+	du := newTestDurDirUser(t, &fake.Server{}, cfg)
+
+	rt := &durDirRuntime{cfg: du.cfg}
+	rt.users.Store(boomerutil.GoroutineID(), du)
+	rt.shutdown(context.Background())
+
+	calls := fakeCtrl.recordedCalls()
+	if len(calls) < 2 || calls[len(calls)-2] != "PauseActor" || calls[len(calls)-1] != "DeleteActor" {
+		t.Errorf("recordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
+	}
+	reqs := fakeCtrl.recordedDeleteRequests()
+	if len(reqs) == 0 || !reqs[0].GetAnyState() {
+		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
 	}
 }

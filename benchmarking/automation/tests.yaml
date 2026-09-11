@@ -91,6 +91,21 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  - name: glutton_baseline_1_user_pause
+    type: locust
+    description: "Glutton baseline (pause): 1 concurrent user for 1 minute"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--lifecycle-mode"
+      - "pause"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
   # Large-memory variants: same load shape as the 1-user baseline, but the
   # GluttonUser fills the actor's RAM to --mem-target through the
   # glutton WriteRAM API before the first suspend, so every suspend/resume
@@ -114,6 +129,28 @@ tests:
     workerCount: 1
     actorMemory: "1536Mi"
     flags:
+      - "--mem-target"
+      - "1Gi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--mem-read"
+      - "all"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_mem_1gi_gvisor_pause
+    type: locust
+    description: "Large-memory (pause): 1Gi resident working set, gvisor"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    actorMemory: "1536Mi"
+    flags:
+      - "--lifecycle-mode"
+      - "pause"
       - "--mem-target"
       - "1Gi"
       - "--mem-churn"
@@ -165,6 +202,28 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  - name: glutton_mem_2gi_gvisor_pause
+    type: locust
+    description: "Large-memory (pause): 2Gi resident working set, gvisor"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    actorMemory: "2560Mi"
+    flags:
+      - "--lifecycle-mode"
+      - "pause"
+      - "--mem-target"
+      - "2Gi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--mem-read"
+      - "all"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
   - name: glutton_mem_2gi_microvm
     type: locust
     description: "Large-memory: 2Gi resident working set, microvm"
@@ -199,6 +258,21 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  - name: glutton_baseline_5_users_pause
+    type: locust
+    description: "Glutton baseline (pause): 5 concurrent users for 1 minute"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 5
+    workerCount: 5
+    flags:
+      - "--lifecycle-mode"
+      - "pause"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
   - name: glutton_baseline_10_users
     type: locust
     description: "Glutton baseline: 10 concurrent users for 1 minute (doubles the number of workers/node)"
@@ -208,6 +282,21 @@ tests:
     users: 10
     workerCount: 10
     flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_baseline_10_users_pause
+    type: locust
+    description: "Glutton baseline (pause): 10 concurrent users for 1 minute"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 10
+    workerCount: 10
+    flags:
+      - "--lifecycle-mode"
+      - "pause"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -313,6 +402,27 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  - name: durdir_data_pause
+    type: locust
+    description: "DurDir data baseline (pause): 1 concurrent user, 8 MiB file, pause lifecycle"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--lifecycle-mode"
+      - "pause"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
   - name: durdir_full_baseline
     type: locust
     description: "DurDir full baseline: 1 concurrent user, 8 MiB file, full memory restore comparison"
@@ -324,6 +434,27 @@ tests:
     flags:
       - "--durdir-template"
       - "glutton-durdir-full"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_full_pause
+    type: locust
+    description: "DurDir full baseline (pause): 1 concurrent user, 8 MiB file, full memory restore comparison"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-full"
+      - "--lifecycle-mode"
+      - "pause"
       - "--resume-mode"
       - "explicit"
       - "--durdir-file-size-bytes"
@@ -404,6 +535,29 @@ tests:
     flags:
       - "--durdir-template"
       - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-read-mode"
+      - "digest"
+      - "--durdir-file-size-bytes"
+      - "67108864"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_size_64mb_pause
+    type: locust
+    description: "DurDir file size sweep (64 MiB, pause): 1 concurrent user, digest read mode"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--lifecycle-mode"
+      - "pause"
       - "--resume-mode"
       - "explicit"
       - "--durdir-read-mode"

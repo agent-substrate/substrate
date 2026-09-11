@@ -138,7 +138,7 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) 
 		return nil, err
 	}
 	if err := u.bootstrap(ctx, dynCfg); err != nil {
-		u.suspendAndDelete(ctx)
+		u.hibernateAndDelete(ctx, dynCfg)
 		bmetrics.UpdateUsers(durDirUserClass, -1)
 		return nil, err
 	}
@@ -146,9 +146,10 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) 
 }
 
 func (r *durDirRuntime) shutdown(ctx context.Context) {
+	dynCfg := r.cfg.Dyn.Load()
 	r.users.Range(func(_, val any) bool {
 		u := val.(*durDirUser)
-		u.suspendAndDelete(ctx)
+		u.hibernateAndDelete(ctx, dynCfg)
 		bmetrics.UpdateUsers(durDirUserClass, -1)
 		return true
 	})
@@ -212,6 +213,15 @@ func (u *durDirUser) resume(ctx context.Context, mode string) bool {
 	return err == nil
 }
 
+func (u *durDirUser) pause(ctx context.Context) {
+	_ = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{
+			Actor: u.ref(),
+		}, grpc.Trailer(tr))
+		return err
+	})
+}
+
 func (u *durDirUser) suspend(ctx context.Context) {
 	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
@@ -221,21 +231,35 @@ func (u *durDirUser) suspend(ctx context.Context) {
 	})
 }
 
-// suspendAndDelete suspends the actor before deleting it. DeleteActor requires
-// SUSPENDED or CRASHED; deleting a running actor leaks it. The suspend is
-// unmetered (teardown precondition, not benchmark latency), while the delete
-// is metered so true leaks still surface in failures.csv.
-func (u *durDirUser) suspendAndDelete(ctx context.Context) {
-	_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: u.ref(),
-	})
+func (u *durDirUser) hibernate(ctx context.Context, dynCfg dynconfig.Config) {
+	if dynCfg.LifecycleMode == dynconfig.LifecycleModePause {
+		u.pause(ctx)
+	} else {
+		u.suspend(ctx)
+	}
+}
+
+// hibernateAndDelete hibernates (suspends or pauses) the actor before deleting it.
+// The hibernate call is unmetered (teardown precondition, not benchmark latency),
+// while the delete is metered so true leaks still surface in failures.csv.
+func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg dynconfig.Config) {
+	if dynCfg.LifecycleMode == dynconfig.LifecycleModePause {
+		_, _ = u.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
+			Actor: u.ref(),
+		})
+	} else {
+		_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor: u.ref(),
+		})
+	}
 	u.delete(ctx)
 }
 
 func (u *durDirUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor: u.ref(),
+			Actor:    u.ref(),
+			AnyState: true,
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -278,8 +302,8 @@ func (u *durDirUser) params(dynCfg dynconfig.Config) (int64, gluttonpb.ReadMode)
 func (u *durDirUser) step(ctx context.Context, dynCfg dynconfig.Config) {
 	fileSize, readMode := u.params(dynCfg)
 
-	// 1. Suspend actor
-	u.suspend(ctx)
+	// 1. Suspend or pause actor
+	u.hibernate(ctx, dynCfg)
 
 	// 2. Resume — a no-op in implicit mode, where router traffic wakes the actor.
 	if !u.resume(ctx, dynCfg.ResumeMode) {

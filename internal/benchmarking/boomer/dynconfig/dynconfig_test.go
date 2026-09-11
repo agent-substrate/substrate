@@ -32,6 +32,7 @@ func TestParseValid(t *testing.T) {
 		"max_wait_time": 0.5,
 		"durdir_file_size_bytes": 1048576,
 		"resume_mode": "explicit",
+		"lifecycle_mode": "pause",
 		"durdir_read_mode": "data",
 		"durdir_template": "glutton-durdir-data"
 	}`)
@@ -55,6 +56,9 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.ResumeMode != ResumeModeExplicit {
 		t.Errorf("ResumeMode: got %q, want %q", cfg.ResumeMode, ResumeModeExplicit)
+	}
+	if cfg.LifecycleMode != LifecycleModePause {
+		t.Errorf("LifecycleMode: got %q, want %q", cfg.LifecycleMode, LifecycleModePause)
 	}
 	if cfg.DurDirReadMode != ReadModeData {
 		t.Errorf("DurDirReadMode: got %q, want %q", cfg.DurDirReadMode, ReadModeData)
@@ -100,6 +104,10 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "invalid resume mode",
 			json: `{"resume_mode": "invalid_mode"}`,
+		},
+		{
+			name: "invalid lifecycle mode",
+			json: `{"lifecycle_mode": "invalid_lifecycle"}`,
 		},
 		{
 			name: "invalid read mode",

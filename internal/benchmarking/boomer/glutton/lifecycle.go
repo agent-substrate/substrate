@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -120,7 +121,7 @@ func (r *taskRuntime) iterate() {
 	// window moves instead of re-dirtying the same prefix.
 	user.churnRAM(ctx)
 	user.ping(ctx)
-	user.suspend(ctx)
+	user.hibernate(ctx)
 
 	time.Sleep(r.dynamicWait())
 }
@@ -143,7 +144,7 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 	return u, nil
 }
 
-// shutdown suspends (if still running) and deletes every actor this worker
+// shutdown hibernates (if still running) and deletes every actor this worker
 // created. Boomer has no per-VU stop hook, so a mid-run user-count decrease
 // leaks actors until shutdown — acceptable for benchmark runs that ramp up,
 // hold, then tear down cleanly.
@@ -151,7 +152,7 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 	r.users.Range(func(_, val any) bool {
 		u := val.(*gluttonUser)
 		if u.actorRunning {
-			u.suspend(ctx)
+			u.hibernate(ctx)
 		}
 		u.delete(ctx)
 		bmetrics.UpdateUsers(userClass, -1)
@@ -234,6 +235,24 @@ func (u *gluttonUser) resume(ctx context.Context) bool {
 	return true
 }
 
+func (u *gluttonUser) hibernate(ctx context.Context) {
+	if u.cfg.Dyn.Load().LifecycleMode == dynconfig.LifecycleModePause {
+		u.pause(ctx)
+	} else {
+		u.suspend(ctx)
+	}
+}
+
+func (u *gluttonUser) pause(ctx context.Context) {
+	_ = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{
+			Actor: u.ref(),
+		}, grpc.Trailer(tr))
+		return err
+	})
+	u.actorRunning = false
+}
+
 func (u *gluttonUser) suspend(ctx context.Context) {
 	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
@@ -247,7 +266,8 @@ func (u *gluttonUser) suspend(ctx context.Context) {
 func (u *gluttonUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor: u.ref(),
+			Actor:    u.ref(),
+			AnyState: true,
 		}, grpc.Trailer(tr))
 		return err
 	})

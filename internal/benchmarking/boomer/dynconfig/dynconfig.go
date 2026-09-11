@@ -42,6 +42,9 @@ const (
 
 	ReadModeData   = "data"
 	ReadModeDigest = "digest"
+
+	LifecycleModeSuspend = "suspend"
+	LifecycleModePause   = "pause"
 )
 
 // Config is the dynamic-mutable subset of boomer's behavior. Holder swaps
@@ -52,6 +55,7 @@ type Config struct {
 	TraceProbability float64
 	DurDirFileSize   int64  // bytes
 	ResumeMode       string // ResumeModeExplicit | ResumeModeImplicit
+	LifecycleMode    string // LifecycleModeSuspend | LifecycleModePause
 	DurDirReadMode   string // ReadModeData | ReadModeDigest
 	DurDirTemplate   string // ActorTemplate name
 	MemTarget        string // resident RAM the GluttonUser fills via WriteRAM, suffixed (e.g. "2Gi"); "" disables
@@ -92,6 +96,7 @@ type payload struct {
 	MaxWaitTime      *float64 `json:"max_wait_time"`
 	DurDirFileSize   *float64 `json:"durdir_file_size_bytes"`
 	ResumeMode       *string  `json:"resume_mode"`
+	LifecycleMode    *string  `json:"lifecycle_mode"`
 	DurDirReadMode   *string  `json:"durdir_read_mode"`
 	DurDirTemplate   *string  `json:"durdir_template"`
 	MemTarget        *string  `json:"mem_target"`
@@ -166,6 +171,9 @@ func (c Config) Validate() error {
 	if c.ResumeMode != "" && c.ResumeMode != ResumeModeExplicit && c.ResumeMode != ResumeModeImplicit {
 		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", c.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
 	}
+	if c.LifecycleMode != "" && c.LifecycleMode != LifecycleModeSuspend && c.LifecycleMode != LifecycleModePause {
+		return fmt.Errorf("invalid lifecycle_mode %q: must be %q or %q", c.LifecycleMode, LifecycleModeSuspend, LifecycleModePause)
+	}
 	if c.DurDirReadMode != "" && c.DurDirReadMode != ReadModeData && c.DurDirReadMode != ReadModeDigest {
 		return fmt.Errorf("invalid durdir_read_mode %q: must be %q or %q", c.DurDirReadMode, ReadModeData, ReadModeDigest)
 	}
@@ -195,6 +203,9 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.ResumeMode != nil {
 		out.ResumeMode = *p.ResumeMode
+	}
+	if p.LifecycleMode != nil {
+		out.LifecycleMode = *p.LifecycleMode
 	}
 	if p.DurDirReadMode != nil {
 		out.DurDirReadMode = *p.DurDirReadMode
@@ -274,6 +285,7 @@ func StartPoll(
 					slog.Duration("max_wait", next.MaxWait),
 					slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
 					slog.String("resume_mode", next.ResumeMode),
+					slog.String("lifecycle_mode", next.LifecycleMode),
 					slog.String("durdir_read_mode", next.DurDirReadMode),
 					slog.String("durdir_template", next.DurDirTemplate),
 					slog.String("mem_target", next.MemTarget),
@@ -310,6 +322,7 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Duration("max_wait", next.MaxWait),
 			slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
 			slog.String("resume_mode", next.ResumeMode),
+			slog.String("lifecycle_mode", next.LifecycleMode),
 			slog.String("durdir_read_mode", next.DurDirReadMode),
 			slog.String("durdir_template", next.DurDirTemplate),
 			slog.String("mem_target", next.MemTarget),
