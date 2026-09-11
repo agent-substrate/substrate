@@ -127,6 +127,9 @@ type FakeAteletServer struct {
 	UploadRequest *ateletpb.UploadPausedCheckpointRequest
 	FailUpload    error
 
+	TerminateCalled  bool
+	TerminateRequest *ateletpb.TerminateRequest
+
 	// objectStore, when set, receives the objects a checkpoint or an upload
 	// writes, so the control plane's copy and release steps have real external
 	// snapshots to act on. setupTest points it at the test's own store.
@@ -175,6 +178,8 @@ func (f *FakeAteletServer) Reset() {
 	f.FailUpload = nil
 
 	f.objectStore = nil
+	f.TerminateCalled = false
+	f.TerminateRequest = nil
 }
 
 func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
@@ -231,6 +236,15 @@ func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreReq
 		return nil, f.FailRestore
 	}
 	return &ateletpb.RestoreResponse{}, nil
+}
+
+func (f *FakeAteletServer) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.Lock.Lock()
+	defer f.Lock.Unlock()
+
+	f.TerminateCalled = true
+	f.TerminateRequest = proto.Clone(req).(*ateletpb.TerminateRequest)
+	return &ateletpb.TerminateResponse{}, nil
 }
 
 func (f *FakeAteletServer) lastRestoreRequest() *ateletpb.RestoreRequest {

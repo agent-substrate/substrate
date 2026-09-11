@@ -74,6 +74,7 @@ func NewRPCService(
 	dialer *AteletDialer,
 	instruments *Instruments,
 	egressGatewayAddress string,
+	injectEgressTrustBundle bool,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 	objectStore objectstore.Store,
 ) *RPCService {
@@ -89,7 +90,7 @@ func NewRPCService(
 		volumePlugins:         volumePlugins,
 		objectStore:           objectStore,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, injectEgressTrustBundle, s, objectStore)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }

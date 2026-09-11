@@ -69,16 +69,17 @@ func markSkipped(ctx context.Context, reason string) {
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
 type ActorWorkflow struct {
-	store                actorWorkflowStore
-	workerCache          *workercache.Cache
-	scheduler            scheduling.Scheduler
-	dialer               *AteletDialer
-	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
-	storageClassLister   storagev1listers.StorageClassLister
-	instruments          *Instruments
-	egressGatewayAddress string
-	pluginRegistry       VolumePluginRegistry
-	objectStore          objectstore.Store
+	store                   actorWorkflowStore
+	workerCache             *workercache.Cache
+	scheduler               scheduling.Scheduler
+	dialer                  *AteletDialer
+	sandboxConfigLister     listersv1alpha1.SandboxConfigLister
+	storageClassLister      storagev1listers.StorageClassLister
+	instruments             *Instruments
+	egressGatewayAddress    string
+	injectEgressTrustBundle bool
+	pluginRegistry          VolumePluginRegistry
+	objectStore             objectstore.Store
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -94,20 +95,22 @@ func NewActorWorkflow(
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
 	egressGatewayAddress string,
+	injectEgressTrustBundle bool,
 	pluginRegistry VolumePluginRegistry,
 	objectStore objectstore.Store,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
-		store:                store,
-		workerCache:          workerCache,
-		scheduler:            scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
-		dialer:               dialer,
-		sandboxConfigLister:  sandboxConfigLister,
-		storageClassLister:   storageClassLister,
-		instruments:          instruments,
-		egressGatewayAddress: egressGatewayAddress,
-		pluginRegistry:       pluginRegistry,
-		objectStore:          objectStore,
+		store:                   store,
+		workerCache:             workerCache,
+		scheduler:               scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
+		dialer:                  dialer,
+		sandboxConfigLister:     sandboxConfigLister,
+		storageClassLister:      storageClassLister,
+		instruments:             instruments,
+		egressGatewayAddress:    egressGatewayAddress,
+		injectEgressTrustBundle: injectEgressTrustBundle,
+		pluginRegistry:          pluginRegistry,
+		objectStore:             objectStore,
 	}
 }
 
