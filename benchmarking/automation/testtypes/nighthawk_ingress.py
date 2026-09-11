@@ -29,10 +29,11 @@ from util import build_and_push, parse_duration_seconds, run
 
 TEST_TYPE = "nighthawk-ingress"
 
-# Defaults for the tests.yaml `nighthawk-ingress:` block; envoyCpu has no default —
-# it is the benchmark's independent variable. Documented in
+# Defaults for the tests.yaml `nighthawk-ingress:` block. The selected proxy's CPU
+# has no default — it is the benchmark's independent variable. Documented in
 # benchmarking/nighthawk-ingress/README.md, "Configuration knobs".
 DEFAULTS = {
+    "dataplane": "envoy",
     # Actor namespace: one atespace per experiment, never per run —
     # nothing deletes atespaces automatically.
     "atespace": "ingress-benchmark",
@@ -49,6 +50,10 @@ DEFAULTS = {
     "sendRateThreshold": 0.9,
     # Tail-latency SLO (mean+2stdev) in ms; 0 disables.
     "tailLatencySloMs": 0,
+    # Optional placement for the resource-heavy client Job. The router and
+    # WorkerPool have their own placement mechanisms; see the benchmark README.
+    "runnerNodeSelector": {},
+    "runnerTolerations": [],
 }
 
 
@@ -71,7 +76,7 @@ def validate(test: dict[str, Any]) -> None:
         raise ValueError(f"nighthawk-ingress test {name!r} missing 'duration'")
     # Unknown knobs are rejected rather than silently merged: a typo (or a
     # knob removed in a schema change) must not run with defaults.
-    allowed = set(DEFAULTS) | {"envoyCpu"}
+    allowed = set(DEFAULTS) | {"envoyCpu", "agentgatewayCpu"}
     unknown = set(test.get("nighthawk-ingress", {})) - allowed
     if unknown:
         raise ValueError(
@@ -79,16 +84,41 @@ def validate(test: dict[str, Any]) -> None:
             f"{sorted(unknown)}; allowed: {sorted(allowed)}"
         )
     nh = config(test)
-    envoy_cpu = nh.get("envoyCpu")
-    if not isinstance(envoy_cpu, int) or envoy_cpu < 1:
+    dataplane = nh["dataplane"]
+    if dataplane not in ("envoy", "agentgateway"):
         raise ValueError(
-            f"nighthawk-ingress test {name!r} needs nighthawk-ingress.envoyCpu (int >= 1)"
+            f"nighthawk-ingress test {name!r} has invalid dataplane {dataplane!r}; "
+            "want 'envoy' or 'agentgateway'"
+        )
+    cpu_key = "envoyCpu" if dataplane == "envoy" else "agentgatewayCpu"
+    proxy_cpu = nh.get(cpu_key)
+    if not isinstance(proxy_cpu, int) or proxy_cpu < 1:
+        raise ValueError(
+            f"nighthawk-ingress test {name!r} needs nighthawk-ingress.{cpu_key} "
+            "(int >= 1)"
         )
     client_concurrency = nh["clientConcurrency"]
     if not isinstance(client_concurrency, int) or client_concurrency < 1:
         raise ValueError(
             f"nighthawk-ingress test {name!r} has invalid "
             f"nighthawk-ingress.clientConcurrency {client_concurrency!r}"
+        )
+    runner_node_selector = nh["runnerNodeSelector"]
+    if not isinstance(runner_node_selector, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in runner_node_selector.items()
+    ):
+        raise ValueError(
+            f"nighthawk-ingress test {name!r} has invalid "
+            "nighthawk-ingress.runnerNodeSelector (want string:string map)"
+        )
+    runner_tolerations = nh["runnerTolerations"]
+    if not isinstance(runner_tolerations, list) or not all(
+        isinstance(toleration, dict) for toleration in runner_tolerations
+    ):
+        raise ValueError(
+            f"nighthawk-ingress test {name!r} has invalid "
+            "nighthawk-ingress.runnerTolerations (want a list of toleration maps)"
         )
     worker_count = test.get("workerCount")
     if not isinstance(worker_count, int) or worker_count < 1:
@@ -115,43 +145,64 @@ def build_image(commit: str) -> str:
 
 
 def pre_test(test: dict[str, Any]) -> None:
-    """Pin atenet-router to the test's envoyCpu: both containers get
-    requests=limits=envoyCpu (Guaranteed QoS), and envoy's command is
-    replaced to add --concurrency envoyCpu and drop the base manifest's
-    debug log flags. Blocks on rollout. No unpatch: every test redeploys
-    substrate."""
-    cpu = str(config(test)["envoyCpu"])
-    patch = {
-        "spec": {
-            "template": {
-                "spec": {
-                    "containers": [
-                        {
-                            "name": "atenet-router",
+    """Pin atenet-router to the selected proxy CPU allocation.
+
+    Envoy's data plane and ext_proc sidecar each receive envoyCpu, while
+    AgentGateway is a single proxy container and receives agentgatewayCpu.
+    Envoy gets --concurrency equal to its CPU allocation.
+    """
+    nh = config(test)
+    dataplane = nh["dataplane"]
+    cpu_key = "envoyCpu" if dataplane == "envoy" else "agentgatewayCpu"
+    cpu = str(nh[cpu_key])
+    if dataplane == "agentgateway":
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{
+                            "name": "agentgateway",
                             "resources": {
                                 "requests": {"cpu": cpu},
                                 "limits": {"cpu": cpu},
                             },
-                        },
-                        {
-                            "name": "envoy",
-                            "command": [
-                                "/usr/local/bin/envoy",
-                                "-c",
-                                "/etc/envoy/envoy.yaml",
-                                "--concurrency",
-                                cpu,
-                            ],
-                            "resources": {
-                                "requests": {"cpu": cpu},
-                                "limits": {"cpu": cpu},
-                            },
-                        },
-                    ]
+                        }]
+                    }
                 }
             }
         }
-    }
+    else:
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "atenet-router",
+                                "resources": {
+                                    "requests": {"cpu": cpu},
+                                    "limits": {"cpu": cpu},
+                                },
+                            },
+                            {
+                                "name": "envoy",
+                                "command": [
+                                    "/usr/local/bin/envoy",
+                                    "-c",
+                                    "/etc/envoy/envoy.yaml",
+                                    "--concurrency",
+                                    cpu,
+                                ],
+                                "resources": {
+                                    "requests": {"cpu": cpu},
+                                    "limits": {"cpu": cpu},
+                                },
+                            },
+                        ]
+                    }
+                }
+            }
+        }
     run(
         [
             "kubectl",
@@ -181,8 +232,10 @@ def pre_test(test: dict[str, Any]) -> None:
 def job_subs(test: dict[str, Any]) -> dict[str, Any]:
     """Template substitutions specific to the nighthawk runner Job."""
     nh = config(test)
+    cpu_key = "envoyCpu" if nh["dataplane"] == "envoy" else "agentgatewayCpu"
     return {
-        "ENVOY_CPU": nh["envoyCpu"],
+        "DATAPLANE": nh["dataplane"],
+        "PROXY_CPU": nh[cpu_key],
         "ATESPACE": nh["atespace"],
         # Warm-path-only measurement: one running actor per worker, so
         # the fleet size is the worker count.
@@ -200,4 +253,6 @@ def job_subs(test: dict[str, Any]) -> dict[str, Any]:
         "TAIL_LATENCY_SLO_MS": nh["tailLatencySloMs"],
         # One core per event loop + one for the python runner.
         "RUNNER_CPU": nh["clientConcurrency"] + 1,
+        "RUNNER_NODE_SELECTOR": json.dumps(nh["runnerNodeSelector"]),
+        "RUNNER_TOLERATIONS": json.dumps(nh["runnerTolerations"]),
     }

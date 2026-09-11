@@ -35,3 +35,13 @@ spec:
   replicas: ${WORKER_COUNT}
   sandboxClass: ${SANDBOX_CLASS}
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}
+  template:
+    nodeSelector: ${WORKER_NODE_SELECTOR}
+    tolerations: ${WORKER_TOLERATIONS}
+    resources:
+      requests:
+        cpu: "1"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"

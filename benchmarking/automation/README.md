@@ -26,12 +26,12 @@ the router capacity benchmark — see
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
-   `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
-   is the benchmark's independent variable and the shipped manifest sets
-   no cpu resources or `--concurrency`, so each test pins cpu
-   requests=limits and Envoy's thread count to its own `envoyCpu`, then
-   waits for the rollout before deploying workloads. The teardown after
-   each test redeploys substrate, so the pin never outlives its run.
+   `atenet-router` Deployment right after `deploy_substrate`: the selected
+   proxy CPU allocation is the benchmark's independent variable. Envoy tests
+   pin both containers and Envoy's thread count to `envoyCpu`; AgentGateway
+   tests pin its single container to `agentgatewayCpu`, then wait for the
+   rollout before deploying workloads. The teardown after each test redeploys
+   substrate, so the pin never outlives its run.
 6. For each test in `tests.yaml`:
    - Submits a Job using the just-built image for the test's type
      (`runner-job.yaml.tmpl` for locust,
