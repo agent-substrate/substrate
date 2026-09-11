@@ -16,7 +16,9 @@
 package ateompath
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -40,10 +42,31 @@ var (
 	// under it.
 	ActorsDir = filepath.Join(BasePath, "actors")
 
+	// GoldenCacheDir is the node-local cache of golden snapshot files (see
+	// cmd/atelet/internal/filecache). It lives under BasePath because cache
+	// hits are served as hard links into the per-actor restore dirs under
+	// ActorsDir, and link(2) requires both ends on one mounted filesystem —
+	// the same mount, not merely the same disk.
+	GoldenCacheDir = filepath.Join(BasePath, "golden-cache")
+
 	// CredentialBrokerSocket is the node-local atelet socket used by atunnel
 	// to request credentials for the worker's current actor assignment.
 	CredentialBrokerSocket = filepath.Join(BasePath, "credential-broker.sock")
 )
+
+// UnderBasePath reports whether dir resolves to a directory strictly under
+// BasePath (BasePath itself does not count). A relative dir resolves against
+// the process working directory. Callers use it to detect a cache directory
+// configured off the shared mount, where consequences are theirs to judge:
+// the image cache's GC watermarks then measure a different volume than actor
+// state, and the golden cache cannot hard-link hits into restore dirs at all.
+func UnderBasePath(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = filepath.Clean(dir)
+	}
+	return strings.HasPrefix(abs, BasePath+string(os.PathSeparator))
+}
 
 func RunSCBinaryPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)

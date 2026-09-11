@@ -29,10 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -76,24 +73,15 @@ func validateImageCacheGCFlags() error {
 		// future), making just-pulled layers evictable.
 		return fmt.Errorf("--image-cache-min-age %v must be >= 0", *imageCacheMinAge)
 	}
-	if imageCacheDirOutsideBasePath(*imageCacheDir) {
+	// Warn-worthy, not an error: a separate cache volume is legitimate
+	// (recommended for IOPS), but the watermarks then measure a different
+	// volume than actor state.
+	if !ateompath.UnderBasePath(*imageCacheDir) {
 		slog.Warn("Image cache dir is outside the ateom base path; its volume watermarks are measured separately from actor state",
 			slog.String("image_cache_dir", *imageCacheDir),
 			slog.String("actors_dir", ateompath.ActorsDir))
 	}
 	return nil
-}
-
-// imageCacheDirOutsideBasePath reports whether the cache dir is outside
-// the ateom base path — the watermarks then measure a different volume
-// than actor state. Warn-worthy, not an error: a separate cache volume is
-// legitimate (recommended for IOPS).
-func imageCacheDirOutsideBasePath(dir string) bool {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		abs = filepath.Clean(dir)
-	}
-	return !strings.HasPrefix(abs, ateompath.BasePath+string(os.PathSeparator))
 }
 
 // imageCacheGCTarget computes the bytes a pass should free: the larger

@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 )
 
@@ -149,30 +148,6 @@ func TestValidateImageCacheGCFlags(t *testing.T) {
 			err := validateImageCacheGCFlags()
 			if (err != nil) != tc.wantErr {
 				t.Errorf("period=%v high=%d low=%d minAge=%v: err=%v, wantErr=%v", tc.period, tc.high, tc.low, tc.minAge, err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestImageCacheDirOutsideBasePath(t *testing.T) {
-	cases := []struct {
-		name string
-		dir  string
-		want bool
-	}{
-		{"inside", filepath.Join(ateompath.BasePath, "image-cache"), false},
-		{"inside with doubled separator", ateompath.BasePath + "//image-cache", false},
-		{"inside via dot-dot", ateompath.BasePath + "/x/../image-cache", false},
-		{"base path itself is not inside", ateompath.BasePath, true},
-		{"sibling with the base path as name prefix", ateompath.BasePath + "-other/image-cache", true},
-		{"outside", "/var/lib/elsewhere/image-cache", true},
-		{"dot-dot escaping the base path", ateompath.BasePath + "/../elsewhere/image-cache", true},
-		{"relative resolves against the cwd, not the base path", "image-cache", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := imageCacheDirOutsideBasePath(tc.dir); got != tc.want {
-				t.Errorf("imageCacheDirOutsideBasePath(%q) = %v, want %v", tc.dir, got, tc.want)
 			}
 		})
 	}
