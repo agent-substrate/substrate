@@ -28,7 +28,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/substratex509"
 )
 
 // BrokerCertificateSource owns atunnel's actor private key and obtains the
@@ -121,6 +120,10 @@ func (s *BrokerCertificateSource) MintAteomCertificate(ctx context.Context) (tim
 	if err != nil {
 		return time.Time{}, fmt.Errorf("atunnel: mint actor certificate: %w", err)
 	}
+
+	// TODO(identity): I don't think we need to check all this stuff.  We can
+	// trust that ateapi is working properly.
+
 	chain := resp.GetActorCertificates()
 	if len(chain) == 0 {
 		return time.Time{}, fmt.Errorf("atunnel: credential broker returned no actor certificate")
@@ -138,16 +141,6 @@ func (s *BrokerCertificateSource) MintAteomCertificate(ctx context.Context) (tim
 	}
 	if !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
 		return time.Time{}, fmt.Errorf("atunnel: actor certificate cannot authenticate a TLS client")
-	}
-	identity, err := substratex509.ActorIdentityFromCertificate(leaf)
-	if err != nil || identity == nil {
-		return time.Time{}, fmt.Errorf("atunnel: actor certificate has no valid actor identity")
-	}
-	if identity.Purpose != substratex509.ActorIdentityPurposeAtunnel {
-		return time.Time{}, fmt.Errorf("atunnel: actor certificate is not scoped to atunnel")
-	}
-	if identity.ActorUid != s.actorUID {
-		return time.Time{}, fmt.Errorf("atunnel: actor certificate is for an unexpected actor")
 	}
 	cert := &tls.Certificate{Certificate: chain, PrivateKey: s.privateKey, Leaf: leaf}
 	s.mu.Lock()

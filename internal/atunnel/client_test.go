@@ -261,7 +261,7 @@ func newTestClient(t *testing.T, ca *testCA, opts ...ClientOption) *Client {
 	dir := t.TempDir()
 	trustPath := filepath.Join(dir, "trust.pem")
 	certificate := ca.issue(t,
-		"spiffe://substrate-actor.local/atespace/team/actor/actor",
+		"spiffe://substrate-actor.local/ateom/actor/team/actor",
 		[]x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	)
 	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
