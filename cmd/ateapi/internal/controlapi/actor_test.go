@@ -400,15 +400,19 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
 		},
 	}, {
-		"valid actor.status.in_progress_snapshot_name",
+		"valid actor.status.in_progress_snapshot_uri",
 		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressSnapshotName = "snap-1" })),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.InProgressSnapshotUri = "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1"
+		})),
 		nil,
 	}, {
-		"invalid actor.status.in_progress_snapshot_name",
+		"invalid actor.status.in_progress_snapshot_uri: too long",
 		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressSnapshotName = "SNAP 1" })),
-		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.InProgressSnapshotUri = "gs://" + strings.Repeat("x", 2044)
+		})),
+		field.ErrorList{field.TooLong(field.NewPath("status", "in_progress_snapshot_uri"), nil, 2048).WithOrigin("maxLength")},
 	}, {
 		"valid actor.status.external_snapshot",
 		validInput(),

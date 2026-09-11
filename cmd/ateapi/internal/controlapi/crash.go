@@ -94,7 +94,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 
-		// InProgressSnapshotName and InProgressLocalSnapshotName are kept for
+		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept for
 		// debugging; failed workflow steps must never promote either of them to an
 		// ActorSnapshot or to LocalSnapshotInfo.
 		toUpdate.Status.WorkerAssignment = nil
