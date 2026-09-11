@@ -16,7 +16,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -333,10 +332,11 @@ var clusterCmd = &cobra.Command{
 	Use:   "cluster",
 	Short: "Create GKE cluster",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cfg.ProjectID == "" {
-			return errors.New("--project-id is required")
+		ctx := cmd.Context()
+		if err := resolveProjectID(ctx, &cfg); err != nil {
+			return err
 		}
-		return createClusterIdempotent(cmd.Context(), &cfg)
+		return createClusterIdempotent(ctx, &cfg)
 	},
 }
 

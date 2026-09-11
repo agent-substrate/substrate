@@ -419,14 +419,14 @@ var cloudsqlCmd = &cobra.Command{
 	Use:   "cloudsql",
 	Short: "Create a Cloud SQL PostgreSQL instance for the ateapi store, with IAM database authentication",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cfg.ProjectID == "" {
-			return errors.New("--project-id is required")
+		ctx := cmd.Context()
+		if err := resolveProjectID(ctx, &cfg); err != nil {
+			return err
 		}
 		// Require explicit region to prevent silent cross-region latency and egress costs.
 		if !cmd.Flags().Changed("region") && os.Getenv("GCE_REGION") == "" {
 			return errors.New("--region is required (or set GCE_REGION): the instance must be in the cluster's region")
 		}
-		ctx := cmd.Context()
 		if err := enableCloudSQLAPIs(ctx, &cfg); err != nil {
 			return err
 		}

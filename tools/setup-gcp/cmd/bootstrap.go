@@ -26,17 +26,13 @@ var bootstrapCmd = &cobra.Command{
 	Short: "Fully bootstrap the GCP environment",
 	Long:  `Runs all setup steps in order: enable APIs, create cluster, create bucket, grant IAM permissions, and create dashboards.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cfg.ProjectID == "" {
-			return errors.New("--project-id is required")
-		}
-		if cfg.ProjectNumber == "" {
-			return errors.New("--project-number is required")
+		ctx := cmd.Context()
+		if err := resolveProjectID(ctx, &cfg); err != nil {
+			return err
 		}
 		if cfg.BucketName == "" {
 			return errors.New("--bucket-name is required")
 		}
-
-		ctx := cmd.Context()
 
 		slog.Info("Starting full bootstrap...")
 

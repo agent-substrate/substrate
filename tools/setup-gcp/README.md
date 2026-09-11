@@ -45,8 +45,8 @@ These flags can be passed to the root command and apply to all subcommands:
 
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
-| `--project-id` | GCP Project ID. | `PROJECT_ID` | None |
-| `--project-number` | GCP Project Number (required for IAM). | `PROJECT_NUMBER` | None |
+| `--project-id` | GCP Project ID. | `PROJECT_ID` | None (Required) |
+| `--project-number` | GCP Project Number (optional, resolved from `--project-id` if needed). | `PROJECT_NUMBER` | None |
 | `--region` | GCP Region for regional resources. | `GCE_REGION` | `us-west1` |
 
 ## Subcommands

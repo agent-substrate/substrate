@@ -136,12 +136,9 @@ func grantAteletPermissions(ctx context.Context, cfg *Config) error {
 // grants run. Each grant is a separate SetIamPolicy call, so a flag validated
 // partway through the sequence reports a usage error only after the earlier
 // grants have already been written to the project.
-func validateIamFlags(cfg *Config, bucketBindings bool) error {
-	if cfg.ProjectID == "" {
-		return errors.New("--project-id is required")
-	}
-	if cfg.ProjectNumber == "" {
-		return errors.New("--project-number is required")
+func validateIamFlags(ctx context.Context, cfg *Config, bucketBindings bool) error {
+	if err := resolveProject(ctx, cfg); err != nil {
+		return err
 	}
 	if bucketBindings && cfg.BucketName == "" {
 		return errors.New("--bucket is required for bucket bindings")
@@ -157,7 +154,7 @@ var iamCmd = &cobra.Command{
 		atelet, _ := cmd.Flags().GetBool("atelet")
 		bucketBindings, _ := cmd.Flags().GetBool("bucket-bindings")
 
-		if err := validateIamFlags(&cfg, bucketBindings); err != nil {
+		if err := validateIamFlags(cmd.Context(), &cfg, bucketBindings); err != nil {
 			return err
 		}
 
