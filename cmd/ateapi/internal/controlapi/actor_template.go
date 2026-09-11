@@ -428,19 +428,14 @@ func actorTemplateObjectRef(actor *ateapipb.Actor) *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
 }
 
-// ValidateCustom_Container_VolumeMounts rejects two mounts at the same path
-// within one container. The list is keyed by volume name (one mount per
-// volume), so path uniqueness cannot come from the list-map key
+// ValidateCustom_Container_VolumeMounts rejects mounts that nest under one
+// another.
 func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
 	var errs field.ErrorList
-	seen := make(map[string]bool, len(value))
 	for i, m := range value {
 		path := m.GetMountPath()
 		if path == "" {
 			continue // required is enforced by tags
-		}
-		if seen[path] {
-			errs = append(errs, field.Duplicate(fldPath.Index(i).Child("mount_path"), path))
 		}
 		// Nested mounts are unsupported (volumes cannot mount onto
 		// other volumes).
@@ -454,7 +449,6 @@ func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operat
 					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
 			}
 		}
-		seen[path] = true
 	}
 	return errs
 }

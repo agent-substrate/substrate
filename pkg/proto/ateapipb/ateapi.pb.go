@@ -1511,8 +1511,6 @@ type ActorStatus struct {
 	// They are deleted when the actor is deleted. Each template volume
 	// appears at most once.
 	//
-	// TODO: consider a literal map keyed by volume_name instead of a list-map.
-	//
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches the template's volumes bound
 	// +k8s:listType=map
@@ -2635,15 +2633,14 @@ type Container struct {
 	//
 	// +k8s:optional
 	Readyz *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
-	// TODO: Kubernetes permits mounting a single volume at multiple paths
-	// (which requires keying by mountPath). We restrict it to one mount per
-	// volume (keyed by name).
+	// Keyed by mount_path: each path hosts exactly one mount, while a volume
+	// may be mounted at multiple paths.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=map
-	// +k8s:listMapKey=name
-	// +k8s:customValidation # mount_path must be unique within the container
+	// +k8s:listMapKey=mount_path
+	// +k8s:customValidation # mounts must not nest
 	VolumeMounts []*VolumeMount `protobuf:"bytes,7,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// security_context adjusts the container's security settings. Unset leaves
 	// the default capability set.

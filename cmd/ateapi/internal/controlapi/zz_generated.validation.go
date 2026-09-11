@@ -1465,12 +1465,12 @@ func Validate_Container(
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.Name == b.Name }); len(e) != 0 {
+				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.MountPath == b.MountPath }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.Name == b.Name }, ateDeepEqual, Validate_VolumeMount); len(e) != 0 {
+				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.MountPath == b.MountPath }, ateDeepEqual, Validate_VolumeMount); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
