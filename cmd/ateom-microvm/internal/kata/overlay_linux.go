@@ -82,6 +82,12 @@ func UpperWorkDirs(upperBase, containerID string) (upper, work string) {
 // stock kata flow.
 func GuestSharedRootfs(containerID string) string { return guestSharedDir + containerID + "/rootfs" }
 
+// DefaultGuestHookPath is the conventional location for OCI hooks inside a
+// guest image, in {prestart,poststart,poststop} subdirectories. It is only a
+// suggested value: nothing scans for hooks unless a caller asks for it via
+// CreateSandboxOpts.GuestHookPath.
+const DefaultGuestHookPath = "/usr/share/oci/hooks"
+
 // GuestSharedVolumeDir is the in-guest path one image volume's contents appear
 // at, beside the container's rootfs in the same kataShared tree.
 func GuestSharedVolumeDir(containerID, volumeName string) string {
@@ -378,6 +384,11 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 type CreateSandboxOpts struct {
 	SandboxID string
 	Hostname  string
+	// GuestHookPath, when set, is passed to the agent so it scans that
+	// directory in the guest for OCI hooks. Empty is the default and means the
+	// agent never looks, which matches kata's own behaviour of leaving guest
+	// hooks disabled unless asked for.
+	GuestHookPath string
 }
 
 // CreateSandboxForActor creates the guest sandbox with the kataShared virtio-fs mount
@@ -390,10 +401,14 @@ func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSand
 		Fstype:     typeVirtioFS,
 		MountPoint: guestSharedDir,
 	}}
+	// The agent only scans for guest hooks when this is non-empty, so leaving it
+	// unset keeps the current behaviour and setting it is what opts a deployment
+	// in.
 	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
-		Hostname:  opts.Hostname,
-		SandboxId: opts.SandboxID,
-		Storages:  storages,
+		Hostname:      opts.Hostname,
+		SandboxId:     opts.SandboxID,
+		Storages:      storages,
+		GuestHookPath: opts.GuestHookPath,
 	})
 }
 
