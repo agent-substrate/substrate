@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package imagevolume exercises image volumes, and the volume mount semantics
-// they share with durable dirs and external volumes, against a live cluster.
-package imagevolume
+// Package combinedvolumes exercises the three volume sources -- image volumes,
+// durable dirs, and external volumes -- mounted together on a single actor,
+// along with the mount semantics they share, against a live cluster.
+package combinedvolumes
 
 import (
 	"archive/tar"
@@ -43,7 +44,7 @@ import (
 )
 
 const (
-	atespace = "imagevolume"
+	atespace = "combinedvolumes"
 
 	// mountPath must not collide with anything the probe's own image ships.
 	mountPath = "/mnt/ate-image-volume"
@@ -130,7 +131,7 @@ func buildFixtureImage(t *testing.T, repo string) string {
 	// A unique tag per run: some registries refuse to overwrite an existing
 	// tag. The returned reference is digest-pinned, so the tag itself is
 	// throwaway.
-	ref := fmt.Sprintf("%s/e2e-imagevolume-fixture:%d", strings.TrimSuffix(repo, "/"), time.Now().UnixNano())
+	ref := fmt.Sprintf("%s/e2e-combinedvolumes-fixture:%d", strings.TrimSuffix(repo, "/"), time.Now().UnixNano())
 	tag, err := name.ParseReference(ref, name.Insecure)
 	if err != nil {
 		t.Fatalf("parsing %q: %v", ref, err)
@@ -177,13 +178,13 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	}
 
 	// The probe supplies this suite's container image and resolved runtime.
-	probeAtespace, _ := e2e.DeployProbe(t, env["BUCKET_NAME"], "imagevolume")
+	probeAtespace, _ := e2e.DeployProbe(t, env["BUCKET_NAME"], "combinedvolumes")
 	src := e2e.SubstrateFixture{
 		Atespace:      probeAtespace,
 		Name:          probeName,
 		PoolNamespace: probeAtespace,
 		PoolName:      probeName,
-		DeployWith:    "the imagevolume suite's own DeployProbe",
+		DeployWith:    "the combinedvolumes suite's own DeployProbe",
 	}
 
 	return e2e.CreateSubstrateTemplateFrom(ctx, t, clients, ns.Name, src, e2e.SubstrateTemplateOptions{
@@ -193,7 +194,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 		PoolReplicas: 2,
 		// The pool is labeled uniquely to this namespace so the cluster-wide
 		// scheduler cannot hand its workers to another suite's actors.
-		Labels: map[string]string{"imagevolume": ns.Name},
+		Labels: map[string]string{"combinedvolumes": ns.Name},
 		SnapshotsConfig: &ateapipb.SnapshotsConfig{
 			StorageLocation: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
 		},
@@ -306,7 +307,7 @@ func requireSharedWrite(ctx context.Context, t *testing.T, router *e2e.RouterCli
 	requireContentAtBoth(ctx, t, router, actorRef, writePath, aliasPath, probeWrittenContent)
 }
 
-func TestImageVolume(t *testing.T) {
+func TestCombinedVolumes(t *testing.T) {
 	repo := os.Getenv("KO_DOCKER_REPO")
 	if repo == "" {
 		t.Skip("KO_DOCKER_REPO is unset; it names the registry both this host and the cluster can reach")
@@ -321,7 +322,7 @@ func TestImageVolume(t *testing.T) {
 	storageClass := storageClassOrEmpty(ctx, t, clients)
 	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, storageClass)
 
-	actorRef := resources.ActorRef{Atespace: atespace, Name: "iv-" + ns.Name}
+	actorRef := resources.ActorRef{Atespace: atespace, Name: "cv-" + ns.Name}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
