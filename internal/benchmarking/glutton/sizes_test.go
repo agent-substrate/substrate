@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package glutton
 
 import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/glutton"
+	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 )
 
 func TestParseBytes(t *testing.T) {
@@ -56,14 +56,14 @@ func TestParseBytes(t *testing.T) {
 }
 
 func TestWriteRAMSuffixedSize(t *testing.T) {
-	svc, err := newGluttonService(t.TempDir())
+	svc, err := New(t.TempDir())
 	if err != nil {
-		t.Fatalf("newGluttonService: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	defer svc.Close()
 	ctx := context.Background()
 
-	if _, err := svc.WriteRAM(ctx, &glutton.WriteRAMRequest{Key: "a", Size: "1Mi"}); err != nil {
+	if _, err := svc.WriteRAM(ctx, &gluttonpb.WriteRAMRequest{Key: "a", Size: "1Mi"}); err != nil {
 		t.Fatalf("WriteRAM(size=1Mi): %v", err)
 	}
 	svc.mu.Lock()
@@ -73,13 +73,13 @@ func TestWriteRAMSuffixedSize(t *testing.T) {
 		t.Errorf("ram[a] = %d bytes, want %d", got, 1<<20)
 	}
 
-	if _, err := svc.WriteRAM(ctx, &glutton.WriteRAMRequest{Key: "b", Size: "zap"}); err == nil {
+	if _, err := svc.WriteRAM(ctx, &gluttonpb.WriteRAMRequest{Key: "b", Size: "zap"}); err == nil {
 		t.Error("WriteRAM(size=zap) succeeded, want error")
 	}
-	if _, err := svc.WriteRAM(ctx, &glutton.WriteRAMRequest{Key: "c", Size: "-1Gi"}); err == nil {
+	if _, err := svc.WriteRAM(ctx, &gluttonpb.WriteRAMRequest{Key: "c", Size: "-1Gi"}); err == nil {
 		t.Error("WriteRAM(size=-1Gi) succeeded, want error")
 	}
-	if _, err := svc.WriteRAM(ctx, &glutton.WriteRAMRequest{Key: "d"}); err == nil {
+	if _, err := svc.WriteRAM(ctx, &gluttonpb.WriteRAMRequest{Key: "d"}); err == nil {
 		t.Error("WriteRAM(no size) succeeded, want error")
 	}
 }

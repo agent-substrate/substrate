@@ -27,6 +27,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -184,8 +186,48 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 			mockDriverName: mockPlugin,
 		}
 	}
+
+	actorJWTAuthority, err := localjwtauthority.GenerateECDSAP256Authority("1")
+	if err != nil {
+		t.Fatalf("Error generating actor JWT authority: %v", err)
+	}
+
+	actorJWTAuthorityPool := &localjwtauthority.ConcretePool{
+		Authorities: []*localjwtauthority.Authority{
+			actorJWTAuthority,
+		},
+		ActiveForSigning: "1",
+	}
+
+	actorCA, err := localca.GenerateCA("1", localca.KeyTypeECDSAP256, 365*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Error generating actor CA: %v", err)
+	}
+
+	actorCAPool := &localca.ConcretePool{
+		CAs: []*localca.CA{
+			actorCA,
+		},
+		ActiveForSigning: "1",
+	}
+
 	objectStore := objectstoretest.New()
-	service := controlapi.NewRPCService(persistence, wc, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins, objectStore)
+
+	service := controlapi.NewRPCService(
+		persistence,
+		wc,
+		sandboxConfigLister,
+		csiDriverConfigLister,
+		scLister,
+		dialer,
+		instruments,
+		"",
+		volPlugins,
+		objectStore,
+		"https://nonexistent-issuer.example",
+		actorJWTAuthorityPool,
+		actorCAPool,
+	)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
@@ -434,7 +476,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 
 // testPauseImage is the pause image the default test SandboxConfig carries;
 // it is what a resolved WorkloadSpec's sandbox assets should name.
-const testPauseImage = "pause@sha256:abc"
+const testPauseImage = "pause@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // ensureDefaultGvisorSandboxConfig creates the cluster-scoped "gvisor-default"
 // SandboxConfig (idempotently) and waits for it to appear in the lister.
@@ -485,7 +527,7 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 		},
 		Spec: atev1alpha1.WorkerPoolSpec{
 			Replicas:    1,
-			WorkerImage: "ateom@sha256:abc",
+			WorkerImage: "ateom@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		},
 	}
 	_, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})

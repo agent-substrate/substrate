@@ -271,34 +271,31 @@ func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ oper
 	return errs
 }
 
-// ValidateCustom_Container_Image checks that the image is a well-formed
-// OCI image reference, using the same grammar the container runtimes parse
-// with. Unlike image volumes, a tag reference is allowed.
-func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if *value == "" {
+// validatePinnedImage requires a well-formed OCI image reference pinned by
+// digest (e.g. "name@sha256:..."): changing the image content under a fixed
+// reference invalidates snapshots. It parses with the same grammar the
+// container runtimes use, so a malformed digest is rejected rather than
+// treated as pinned.
+func validatePinnedImage(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" {
 		return nil // required is enforced by tags
 	}
-	if _, err := reference.ParseNormalizedNamed(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
+	ref, err := reference.ParseNormalizedNamed(value)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
+	}
+	if _, ok := ref.(reference.Digested); !ok {
+		return field.ErrorList{field.Invalid(fldPath, value, "must be pinned by digest (changing the image invalidates snapshots)")}
 	}
 	return nil
 }
 
-// ValidateCustom_ImageVolumeSource_Reference requires a well-formed image
-// reference pinned by digest, because changing the image content under a
-// fixed reference invalidates snapshots.
 func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if *value == "" {
-		return nil // required is enforced by tags
-	}
-	ref, err := reference.ParseNormalizedNamed(*value)
-	if err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
-	}
-	if _, ok := ref.(reference.Digested); !ok {
-		return field.ErrorList{field.Invalid(fldPath, *value, "must be pinned by digest (changing the image invalidates snapshots)")}
-	}
-	return nil
+	return validatePinnedImage(fldPath, *value)
+}
+
+func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validatePinnedImage(fldPath, *value)
 }
 
 func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

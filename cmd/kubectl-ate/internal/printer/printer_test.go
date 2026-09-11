@@ -28,9 +28,9 @@ import (
 // age rendering is deterministic, restoring it on cleanup.
 func pinNow(t *testing.T, now time.Time) {
 	t.Helper()
-	prev := timeNow
-	timeNow = func() time.Time { return now }
-	t.Cleanup(func() { timeNow = prev })
+	prev := TimeNow
+	TimeNow = func() time.Time { return now }
+	t.Cleanup(func() { TimeNow = prev })
 }
 
 func TestFormatAge(t *testing.T) {
@@ -234,14 +234,26 @@ func TestPrintActorsTo_Invalid(t *testing.T) {
 }
 
 func TestPrintWorkersTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
 	var buf bytes.Buffer
 	workers := []*ateapipb.Worker{
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "gvisor",
-			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity: &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
+					{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"},
+				}}},
+				Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
+					{Name: "cpu", Quantity: "500m"}, {Name: "memory", Quantity: "1Gi"},
+				}}},
+			},
 		},
 	}
 
@@ -250,8 +262,8 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAMESPACE   POOL     CLASS    POD     STATUS
-default     pool-1   gvisor   pod-1   ASSIGNED(1/1)
+	expected := `NAME       POOL     STATE                 ACTORS   CPU      MEMORY    POD             AGE
+worker-1   pool-1   WORKER_STATE_ACTIVE   1/4      500m/2   1Gi/4Gi   default/pod-1   3d
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -260,8 +272,13 @@ default     pool-1   gvisor   pod-1   ASSIGNED(1/1)
 
 // A worker assigned to an actor created from a substrate ActorTemplate
 // carries only ActorTemplateRef; the printer must not dereference the legacy
-// CRD ref (regression test for a nil-pointer panic).
+// CRD ref (regression test for a nil-pointer panic). It also has no Status
+// or Metadata set at all, exercising the nil-capacity "-" fallback for
+// CPU/MEMORY and the zero-value ACTORS/STATE/AGE rendering.
 func TestPrintWorkersTo_Table_Free(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
 	var buf bytes.Buffer
 	workers := []*ateapipb.Worker{
 		{
@@ -276,8 +293,8 @@ func TestPrintWorkersTo_Table_Free(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAMESPACE   POOL     CLASS   POD     STATUS
-default     pool-1           pod-1   FREE
+	expected := `NAME   POOL     STATE                      ACTORS   CPU   MEMORY   POD             AGE
+       pool-1   WORKER_STATE_UNSPECIFIED   0/0      -     -        default/pod-1   56y
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -285,19 +302,25 @@ default     pool-1           pod-1   FREE
 }
 
 func TestPrintWorkersTo_Table_Sorted(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
 	var buf bytes.Buffer
 	workers := []*ateapipb.Worker{
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-z", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-z",
 		},
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-a", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-a",
 		},
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-o", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "other",
 			WorkerPool:      "pool-2",
 			WorkerPod:       "pod-1",
@@ -308,10 +331,10 @@ func TestPrintWorkersTo_Table_Sorted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `NAMESPACE   POOL     CLASS   POD     STATUS
-default     pool-1           pod-a   FREE
-default     pool-1           pod-z   FREE
-other       pool-2           pod-1   FREE
+	expected := `NAME       POOL     STATE                      ACTORS   CPU   MEMORY   POD             AGE
+worker-a   pool-1   WORKER_STATE_UNSPECIFIED   0/0      -     -        default/pod-a   5m
+worker-z   pool-1   WORKER_STATE_UNSPECIFIED   0/0      -     -        default/pod-z   5m
+worker-o   pool-2   WORKER_STATE_UNSPECIFIED   0/0      -     -        other/pod-1     5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

@@ -289,14 +289,17 @@ func (*SetWorkerCapacityResponse) Descriptor() ([]byte, []int) {
 
 type MintActorCertificateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The actor for which the certificate should be issued.
+	ActorAtespace string `protobuf:"bytes,3,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
+	ActorName     string `protobuf:"bytes,4,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// The UID of the actor --- used to guard against deletion and recreation of
+	// an actor with the same name.
+	ActorUid string `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// DER-encoded PKCS #10 certificate signing request. Atunnel retains the
 	// corresponding private key.
 	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
-	// Actor incarnation this activation expects. Ateapi resolves the actor from
-	// the authenticated worker and rejects the request if its UID differs.
-	ExpectedActorUid string `protobuf:"bytes,2,opt,name=expected_actor_uid,json=expectedActorUid,proto3" json:"expected_actor_uid,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *MintActorCertificateRequest) Reset() {
@@ -329,18 +332,32 @@ func (*MintActorCertificateRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{2}
 }
 
+func (x *MintActorCertificateRequest) GetActorAtespace() string {
+	if x != nil {
+		return x.ActorAtespace
+	}
+	return ""
+}
+
+func (x *MintActorCertificateRequest) GetActorName() string {
+	if x != nil {
+		return x.ActorName
+	}
+	return ""
+}
+
+func (x *MintActorCertificateRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
 func (x *MintActorCertificateRequest) GetCertificateSigningRequest() []byte {
 	if x != nil {
 		return x.CertificateSigningRequest
 	}
 	return nil
-}
-
-func (x *MintActorCertificateRequest) GetExpectedActorUid() string {
-	if x != nil {
-		return x.ExpectedActorUid
-	}
-	return ""
 }
 
 type MintActorCertificateResponse struct {
@@ -2664,10 +2681,13 @@ const file_atelet_proto_rawDesc = "" +
 	"\fatelet.proto\x12\x06atelet\x1a\x1fpkg/proto/ateapipb/ateapi.proto\"O\n" +
 	"\x18SetWorkerCapacityRequest\x123\n" +
 	"\bcapacity\x18\x01 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\"\x1b\n" +
-	"\x19SetWorkerCapacityResponse\"\x8b\x01\n" +
-	"\x1bMintActorCertificateRequest\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\x12,\n" +
-	"\x12expected_actor_uid\x18\x02 \x01(\tR\x10expectedActorUid\"M\n" +
+	"\x19SetWorkerCapacityResponse\"\xc0\x01\n" +
+	"\x1bMintActorCertificateRequest\x12%\n" +
+	"\x0eactor_atespace\x18\x03 \x01(\tR\ractorAtespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x04 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
+	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa6\x02\n" +
 	"\x10TerminateRequest\x12(\n" +

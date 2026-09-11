@@ -4603,13 +4603,13 @@ func Validate_LocalSnapshotInfo(
 	return errs
 }
 
-// Validate_MintCertRequest validates an instance of MintCertRequest according
+// Validate_MintActorCertificateRequest validates an instance of MintActorCertificateRequest according
 // to declarative validation rules in the API schema.
-func Validate_MintCertRequest(
+func Validate_MintActorCertificateRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.MintCertRequest) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.MintActorCertificateRequest) (errs field.ErrorList) {
 
-	{ // field ateapipb.MintCertRequest.Worker
+	{ // field ateapipb.MintActorCertificateRequest.Actor
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.ObjectRef,
@@ -4629,69 +4629,18 @@ func Validate_MintCertRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			func() { // cohort = "atespace"
-				earlyReturn := false
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
-					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if earlyReturn {
-					return // do not proceed
-				}
-			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintCertRequest) *ateapipb.ObjectRef {
-				return oldObj.Worker
+			func(oldObj *ateapipb.MintActorCertificateRequest) *ateapipb.ObjectRef {
+				return oldObj.Actor
 			})
-		errs = append(errs, fn(fldPath.Child("worker"), obj.Worker, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintCertRequest.CertificateSigningRequest
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj []byte,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 16384); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintCertRequest) []byte {
-				return oldObj.CertificateSigningRequest
-			})
-		errs = append(errs, fn(fldPath.Child("certificate_signing_request"), obj.CertificateSigningRequest, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateapipb.MintCertRequest.ExpectedActorUid
+	{ // field ateapipb.MintActorCertificateRequest.ActorUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -4717,13 +4666,45 @@ func Validate_MintCertRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintCertRequest) *string {
-				return &oldObj.ExpectedActorUid
+			func(oldObj *ateapipb.MintActorCertificateRequest) *string {
+				return &oldObj.ActorUid
 			})
-		errs = append(errs, fn(fldPath.Child("expected_actor_uid"), &obj.ExpectedActorUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintCertRequest.Purpose
+	{ // field ateapipb.MintActorCertificateRequest.CertificateSigningRequest
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []byte,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 16384); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.MintActorCertificateRequest) []byte {
+				return oldObj.CertificateSigningRequest
+			})
+		errs = append(errs, fn(fldPath.Child("certificate_signing_request"), obj.CertificateSigningRequest, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.MintActorCertificateRequest.Purpose
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.ActorCertificatePurpose,
@@ -4752,7 +4733,7 @@ func Validate_MintCertRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintCertRequest) *ateapipb.ActorCertificatePurpose {
+			func(oldObj *ateapipb.MintActorCertificateRequest) *ateapipb.ActorCertificatePurpose {
 				return &oldObj.Purpose
 			})
 		errs = append(errs, fn(fldPath.Child("purpose"), &obj.Purpose, oldVal, oldObj != nil)...)
@@ -4761,13 +4742,76 @@ func Validate_MintCertRequest(
 	return errs
 }
 
-// Validate_MintJWTRequest validates an instance of MintJWTRequest according
+// Validate_MintActorJWTRequest validates an instance of MintActorJWTRequest according
 // to declarative validation rules in the API schema.
-func Validate_MintJWTRequest(
+func Validate_MintActorJWTRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.MintJWTRequest) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.MintActorJWTRequest) (errs field.ErrorList) {
 
-	{ // field ateapipb.MintJWTRequest.Audience
+	{ // field ateapipb.MintActorJWTRequest.Actor
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ObjectRef,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.MintActorJWTRequest) *ateapipb.ObjectRef {
+				return oldObj.Actor
+			})
+		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.MintActorJWTRequest.ActorUid
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.MintActorJWTRequest) *string {
+				return &oldObj.ActorUid
+			})
+		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.MintActorJWTRequest.Audience
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []string,
@@ -4804,105 +4848,10 @@ func Validate_MintJWTRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintJWTRequest) []string {
+			func(oldObj *ateapipb.MintActorJWTRequest) []string {
 				return oldObj.Audience
 			})
 		errs = append(errs, fn(fldPath.Child("audience"), obj.Audience, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateapipb.MintJWTRequest.Atespace
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintJWTRequest) *string {
-				return &oldObj.Atespace
-			})
-		errs = append(errs, fn(fldPath.Child("atespace"), &obj.Atespace, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateapipb.MintJWTRequest.ActorName
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintJWTRequest) *string {
-				return &oldObj.ActorName
-			})
-		errs = append(errs, fn(fldPath.Child("actor_name"), &obj.ActorName, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateapipb.MintJWTRequest.ActorUid
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintJWTRequest) *string {
-				return &oldObj.ActorUid
-			})
-		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs

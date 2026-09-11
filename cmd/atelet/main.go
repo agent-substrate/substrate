@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -35,6 +34,7 @@ import (
 	"sync"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -53,7 +53,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/internal/volumepath"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -69,7 +68,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sys/unix"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -82,7 +80,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/lru"
 )
@@ -129,6 +126,7 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
+	slog.InfoContext(ctx, "atelet starting", slog.String("version", version.Version))
 
 	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
 	// streaming a multi-GiB snapshot) is not cancelled the moment SIGTERM
@@ -273,22 +271,19 @@ func main() {
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	// Start an informer on the ClusterTrustBundle we care about (currently
-	// only the egress trust bundle). The v1beta1 API is feature-gated: on a
-	// cluster that does not serve it, startup blocks at WaitForCacheSync
-	// below, with the reflector's errors naming the missing API.
-	coreFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 0,
+	clusterTrustBundleInformerFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 24*time.Hour,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
 			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
 		}))
-	clusterTrustBundleLister := coreFactory.Certificates().V1beta1().ClusterTrustBundles().Lister()
+	clusterTrustBundles := clusterTrustBundleInformerFactory.Certificates().V1beta1().ClusterTrustBundles()
+	systemInfoVolumes := newSystemInfoVolumeRefresher(clusterTrustBundles.Lister(), clusterTrustBundles.Informer())
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	ateFactory.Start(stopCh)
-	coreFactory.Start(stopCh)
+	clusterTrustBundleInformerFactory.Start(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
-	coreFactory.WaitForCacheSync(stopCh)
+	clusterTrustBundleInformerFactory.WaitForCacheSync(stopCh)
 
 	wmService := NewService(
 		ctx,
@@ -299,8 +294,9 @@ func main() {
 		instruments,
 		volPlugins,
 		csiDriverConfigLister,
-		clusterTrustBundleLister,
+		systemInfoVolumes,
 	)
+	go systemInfoVolumes.run(ctx)
 
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
@@ -370,7 +366,7 @@ func main() {
 	}
 	brokerServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(brokerTLS)))
 	ateletpb.RegisterCredentialBrokerServer(brokerServer, &credentialBroker{
-		actorIdentityClient: ateapipb.NewActorIdentityClient(ateapiConn),
+		controlClient: ateapipb.NewControlClient(ateapiConn),
 	})
 	ateletpb.RegisterWorkerCapacityServer(brokerServer, &workerCapacityService{
 		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
@@ -435,15 +431,15 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer              *AteomDialer
-	imageCache               *imagecache.Store
-	anonGCSClient            ategcs.ObjectStorage
-	gcsClient                ategcs.ObjectStorage
-	instruments              *Instruments
-	mu                       sync.RWMutex
-	volumePlugins            map[string]volume.VolumePluginWorkerPlane
-	csiDriverConfigLister    listersv1alpha1.CSIDriverConfigLister
-	clusterTrustBundleLister certlisters.ClusterTrustBundleLister
+	ateomDialer           *AteomDialer
+	imageCache            *imagecache.Store
+	anonGCSClient         ategcs.ObjectStorage
+	gcsClient             ategcs.ObjectStorage
+	instruments           *Instruments
+	mu                    sync.RWMutex
+	volumePlugins         map[string]volume.VolumePluginWorkerPlane
+	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+	systemInfoVolumes     *systemInfoVolumeRefresher
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -458,17 +454,17 @@ func NewService(
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
-	clusterTrustBundleLister certlisters.ClusterTrustBundleLister,
+	systemInfoVolumes *systemInfoVolumeRefresher,
 ) *AteomHerder {
 	wms := &AteomHerder{
-		ateomDialer:              ateomDialer,
-		imageCache:               imageCache,
-		anonGCSClient:            anonGCSClient,
-		gcsClient:                gcsClient,
-		instruments:              instruments,
-		volumePlugins:            volumePlugins,
-		csiDriverConfigLister:    csiDriverConfigLister,
-		clusterTrustBundleLister: clusterTrustBundleLister,
+		ateomDialer:           ateomDialer,
+		imageCache:            imageCache,
+		anonGCSClient:         anonGCSClient,
+		gcsClient:             gcsClient,
+		instruments:           instruments,
+		volumePlugins:         volumePlugins,
+		csiDriverConfigLister: csiDriverConfigLister,
+		systemInfoVolumes:     systemInfoVolumes,
 	}
 	return wms
 }
@@ -507,6 +503,14 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
+	defer func() {
+		if err != nil {
+			s.systemInfoVolumes.Deregister(actorUID)
+		}
+	}()
+	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+		return nil, err
+	}
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
 		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
 	); err != nil {
@@ -661,6 +665,8 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		op.failedPhase = ateattr.SnapshotPhaseAteomCheckpoint
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
+
+	s.systemInfoVolumes.Deregister(actorUID)
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
@@ -1106,6 +1112,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		runtimeRec = goldenRec
 	}
 
+	// Undo the Register if the restore fails.
+	defer func() {
+		if err != nil {
+			s.systemInfoVolumes.Deregister(actorUID)
+		}
+	}()
+
 	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
 	// CONCURRENTLY. They are independent — only the final ateom.RestoreWorkload
 	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
@@ -1173,6 +1186,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
+		}
+		if err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
+			return err
 		}
 		t := time.Now()
 		err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
@@ -1294,6 +1311,9 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		}
 	}
 
+	// Deregister after teardown succeeds
+	s.systemInfoVolumes.Deregister(actorUID)
+
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, fmt.Errorf("failed to unmount external volumes during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
@@ -1323,163 +1343,11 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 		}
 		src := filepath.Join(srcDir, snapshotName, fileName)
 		dst := filepath.Join(dstDir, fileName)
-		if _, err := copyFile(src, dst); err != nil {
+		if _, err := sparsefile.CopyFile(src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
 	}
 
-	return nil
-}
-
-var createDestFile = func(name string) (io.WriteCloser, error) { return os.Create(name) }
-
-// sparseDest is the part of *os.File a hole-preserving copy needs. Destinations that
-// do not implement it are copied densely instead.
-type sparseDest interface {
-	Truncate(size int64) error
-	WriteAt(b []byte, off int64) (int, error)
-}
-
-// errSparseUnsupported means the source filesystem cannot report holes, so the caller
-// should fall back to a dense copy.
-var errSparseUnsupported = errors.New("filesystem cannot report holes")
-
-// errKernelCopyUnsupported means this platform, kernel or filesystem cannot copy a
-// range in the kernel, so the caller should copy through userspace instead.
-var errKernelCopyUnsupported = errors.New("kernel range copy unsupported")
-
-// copyFile copies src to dst, preserving holes where it can, and returns the number of
-// logical bytes copied.
-//
-// Preserving holes matters because the biggest thing copied here is a guest memory
-// image, which is mostly unallocated: a plain io.Copy reads holes as zeroes and writes
-// them as data, inflating a snapshot to its full logical size. That costs disk on every
-// local checkpoint restore, and it destroys the sparseness that later stages rely on to
-// tell which parts of guest RAM actually hold anything.
-func copyFile(src, dst string) (int64, error) {
-	sourceFileStat, err := os.Stat(src)
-	if err != nil {
-		return 0, err
-	}
-
-	if !sourceFileStat.Mode().IsRegular() {
-		return 0, fmt.Errorf("%s is not a regular file", src)
-	}
-
-	source, err := os.Open(src)
-	if err != nil {
-		return 0, err
-	}
-	defer source.Close()
-
-	destination, err := createDestFile(dst)
-	if err != nil {
-		return 0, err
-	}
-
-	if sd, ok := destination.(sparseDest); ok {
-		switch err := copySparse(source, sd, sourceFileStat.Size()); {
-		case err == nil:
-			return sourceFileStat.Size(), destination.Close()
-		case !errors.Is(err, errSparseUnsupported):
-			return 0, errors.Join(err, destination.Close())
-		}
-		// Unsupported: nothing has been written yet, but probing moved the read
-		// offset, so rewind before the dense copy below.
-		if _, err := source.Seek(0, io.SeekStart); err != nil {
-			return 0, errors.Join(err, destination.Close())
-		}
-	}
-
-	nBytes, err := io.Copy(destination, source)
-	return nBytes, errors.Join(err, destination.Close())
-}
-
-// copySparse writes only src's populated extents to dst, located with SEEK_DATA and
-// SEEK_HOLE, leaving the rest of dst unallocated. It reports errSparseUnsupported
-// before writing anything if the filesystem cannot report holes.
-//
-// Extents are copied in the kernel where possible. The dense io.Copy this replaces got
-// that for free (os.File's ReadFrom uses copy_file_range), so without it a fully
-// populated file — a guest that really did touch all its RAM — would copy slower than
-// before.
-func copySparse(src *os.File, dst sparseDest, size int64) error {
-	fd := int(src.Fd())
-
-	// Probe first so an unsupported filesystem falls back with dst untouched. ENXIO
-	// means the seek ran but found no data at all, i.e. the file is one big hole.
-	if _, err := unix.Seek(fd, 0, unix.SEEK_DATA); err != nil {
-		if errors.Is(err, unix.ENXIO) {
-			return dst.Truncate(size)
-		}
-		return errSparseUnsupported
-	}
-	if err := dst.Truncate(size); err != nil {
-		return err
-	}
-
-	// A destination that exposes its descriptor can be written by the kernel; anything
-	// else (the test seam substitutes plain writers) goes through userspace.
-	dstFd := -1
-	if f, ok := dst.(interface{ Fd() uintptr }); ok {
-		dstFd = int(f.Fd())
-	}
-	var buf []byte
-
-	for off := int64(0); off < size; {
-		dataOff, err := unix.Seek(fd, off, unix.SEEK_DATA)
-		if err != nil {
-			if errors.Is(err, unix.ENXIO) {
-				break // no data past off; the tail is a hole
-			}
-			return fmt.Errorf("seeking to data at %d: %w", off, err)
-		}
-		if dataOff >= size {
-			break // data starts past the size we were asked to copy
-		}
-		holeOff, err := unix.Seek(fd, dataOff, unix.SEEK_HOLE)
-		if err != nil {
-			return fmt.Errorf("seeking to hole at %d: %w", dataOff, err)
-		}
-		// Refuse to spin: every iteration must move off forward, which a
-		// filesystem reporting a hole at or before where we started would not.
-		if holeOff <= off {
-			return fmt.Errorf("seeking to hole at %d returned non-advancing offset %d", dataOff, holeOff)
-		}
-		if holeOff > size {
-			holeOff = size
-		}
-		for pos := dataOff; pos < holeOff; {
-			if dstFd >= 0 {
-				copied, err := kernelCopyRange(fd, dstFd, pos, holeOff-pos)
-				if err == nil {
-					pos += copied
-					continue
-				}
-				if !errors.Is(err, errKernelCopyUnsupported) {
-					return fmt.Errorf("copying %d bytes at %d: %w", holeOff-pos, pos, err)
-				}
-				// Give up on the kernel path for the rest of this file, but redo
-				// this chunk below: nothing was copied.
-				dstFd = -1
-			}
-			if buf == nil {
-				buf = make([]byte, 4<<20)
-			}
-			n := int64(len(buf))
-			if rem := holeOff - pos; rem < n {
-				n = rem
-			}
-			if _, err := src.ReadAt(buf[:n], pos); err != nil {
-				return fmt.Errorf("reading %d bytes at %d: %w", n, pos, err)
-			}
-			if _, err := dst.WriteAt(buf[:n], pos); err != nil {
-				return fmt.Errorf("writing %d bytes at %d: %w", n, pos, err)
-			}
-			pos += n
-		}
-		off = holeOff
-	}
 	return nil
 }
 
@@ -1558,17 +1426,11 @@ func (s *AteomHerder) prepareOCIBundles(
 ) error {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
-		switch volSrc := vol.GetSource().(type) {
+		switch vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
-			}
-
-		case *ateletpb.Volume_SystemInfo:
-			volRootHostPath := ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName())
-			if err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, s.clusterTrustBundleLister, volSrc.SystemInfo); err != nil {
-				return fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
 			}
 		}
 	}
@@ -1627,86 +1489,6 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	return g.Wait()
-}
-
-// writeSystemInfoVolume populates the root directory of a system-info volume
-// with one file per projected item. It runs on every Run/Restore, before the
-// sandbox starts, so the files carry the values of the actor actually being
-// started, no matter what checkpointed state it boots from.
-//
-// Every file must be a plain file at a stable real path across regenerations:
-// the micro-VM virtiofsds run in find-paths migration mode, which re-binds
-// the guest's FUSE state to files by the paths recorded at suspend, and
-// gVisor's gofer likewise re-opens files by path on restore. Symlink-swap
-// schemes (kubelet's atomic writer) move the payload files to a new
-// timestamped directory on every write and delete the old one, so guest
-// state from the snapshot could not re-bind. Per-file write-to-temp-and-
-// rename is atomic enough: this only runs while the sandbox is down, so no
-// reader can observe a partial write.
-//
-// TODO(#802): rotating data sources (identity JWTs, certificates) will need
-// these files refreshed while the actor runs, not just at Run/Restore — and
-// must keep the per-file rename discipline so visible paths never move.
-// actorMetadata never changes after start, so writing here is enough for it.
-//
-// TODO(#932): trustBundle projections currently refresh only here, on
-// Run/Restore; live refresh for running actors is PR 2 of that issue.
-func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, ctbLister certlisters.ClusterTrustBundleLister, si *ateletpb.SystemInfoVolume) error {
-	if err := os.MkdirAll(rootPath, 0o755); err != nil {
-		return fmt.Errorf("while creating %q: %w", rootPath, err)
-	}
-
-	for _, dataSourceAny := range si.GetDataSources() {
-		switch dataSource := dataSourceAny.GetDataSource().(type) {
-		case *ateletpb.SystemInfoDataSource_TrustBundle:
-			tb := dataSource.TrustBundle
-			pemBundle, err := resolveTrustBundle(ctbLister, tb.GetName())
-			if err != nil {
-				return fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
-			}
-			if err := writeSystemInfoFile(rootPath, tb.GetPath(), pemBundle); err != nil {
-				return err
-			}
-		case *ateletpb.SystemInfoDataSource_ActorMetadata:
-			for _, item := range dataSource.ActorMetadata.GetItems() {
-				var value string
-				switch item.GetField() {
-				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME:
-					value = actorRef.Name
-				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE:
-					value = actorRef.Atespace
-				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID:
-					value = actorUID
-				default:
-					// Unknown fields come only from a newer ateapi; skip the
-					// item rather than write an empty file under its path.
-					continue
-				}
-				if err := writeSystemInfoFile(rootPath, item.GetPath(), []byte(value)); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// writeSystemInfoFile writes one projected file at relPath under rootPath via
-// write-to-temp-and-rename, creating parent directories as needed. relPath is
-// re-checked against the rule ateapi applied at template creation: atelet is
-// the last line before the value hits the host filesystem.
-func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
-	if err := volumepath.ValidateProjected(relPath); err != nil {
-		return fmt.Errorf("invalid system-info path %q: %w", relPath, err)
-	}
-	dst := filepath.Join(rootPath, filepath.FromSlash(relPath))
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("while creating parent of %q: %w", dst, err)
-	}
-	if err := writeFileAtomic(dst, data, 0o644); err != nil {
-		return fmt.Errorf("while writing system-info file %q: %w", dst, err)
-	}
-	return nil
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom

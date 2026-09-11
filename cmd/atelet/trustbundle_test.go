@@ -66,23 +66,24 @@ func ctbLister(t *testing.T, bundles ...*certsv1beta1.ClusterTrustBundle) certli
 // maps EgressTrustBundleName to (named by atecontroller's reconciler).
 const egressTrustBundleObjectName = "egress-mitm.ate.dev:mitm:primary-bundle"
 
-func TestResolveTrustBundle(t *testing.T) {
+func TestRawTrustBundle(t *testing.T) {
 	certPEM := testCertPEM(t)
-	junk := "garbage\n" + string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte("x")}))
 
-	t.Run("resolves the allowlisted name through the mapped object and sanitizes", func(t *testing.T) {
+	t.Run("resolves the allowlisted name through the mapped object, unsanitized", func(t *testing.T) {
+		raw := "garbage\n" + string(certPEM)
 		lister := ctbLister(t, &certsv1beta1.ClusterTrustBundle{
 			ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName},
-			// Junk around the certificate proves kubelet-style sanitization:
-			// only the CERTIFICATE block survives, and the duplicate is dropped.
-			Spec: certsv1beta1.ClusterTrustBundleSpec{TrustBundle: junk + string(certPEM) + string(certPEM)},
+			Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: raw},
 		})
-		got, err := resolveTrustBundle(lister, EgressTrustBundleName)
+		objectName, got, err := rawTrustBundle(lister, EgressTrustBundleName)
 		if err != nil {
-			t.Fatalf("resolveTrustBundle: %v", err)
+			t.Fatalf("rawTrustBundle: %v", err)
 		}
-		if string(got) != string(certPEM) {
-			t.Errorf("pem bundle = %q, want the sanitized certificate", got)
+		if objectName != egressTrustBundleObjectName {
+			t.Errorf("objectName = %q, want %q", objectName, egressTrustBundleObjectName)
+		}
+		if got != raw {
+			t.Errorf("raw = %q, want the backing contents verbatim", got)
 		}
 	})
 
@@ -93,37 +94,16 @@ func TestResolveTrustBundle(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "my-own-bundle"},
 			Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: string(certPEM)},
 		})
-		_, err := resolveTrustBundle(lister, "my-own-bundle")
+		_, _, err := rawTrustBundle(lister, "my-own-bundle")
 		if err == nil || !strings.Contains(err.Error(), `"my-own-bundle"`) || !strings.Contains(err.Error(), "not supported") || !strings.Contains(err.Error(), EgressTrustBundleName) {
 			t.Errorf("error = %v, want unsupported-name error listing the allowlist", err)
 		}
 	})
 
 	t.Run("missing bundle fails naming it", func(t *testing.T) {
-		_, err := resolveTrustBundle(ctbLister(t), EgressTrustBundleName)
+		_, _, err := rawTrustBundle(ctbLister(t), EgressTrustBundleName)
 		if err == nil || !strings.Contains(err.Error(), egressTrustBundleObjectName) || !strings.Contains(err.Error(), "not found") {
 			t.Errorf("error = %v, want not-found naming the backing object", err)
-		}
-	})
-
-	t.Run("unusable bundle fails naming it", func(t *testing.T) {
-		lister := ctbLister(t, &certsv1beta1.ClusterTrustBundle{
-			ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName},
-			Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: junk},
-		})
-		_, err := resolveTrustBundle(lister, EgressTrustBundleName)
-		if err == nil || !strings.Contains(err.Error(), "unusable") {
-			t.Errorf("error = %v, want unusable-bundle error", err)
-		}
-	})
-
-	t.Run("nil lister fails with a clear error, not a panic", func(t *testing.T) {
-		// A nil lister is a wiring bug (production always registers the
-		// informer at boot); it must fail the actor start, not panic the
-		// node daemon.
-		_, err := resolveTrustBundle(nil, EgressTrustBundleName)
-		if err == nil || !strings.Contains(err.Error(), "no ClusterTrustBundle lister") {
-			t.Errorf("error = %v, want no-lister error", err)
 		}
 	})
 }

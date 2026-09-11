@@ -114,7 +114,7 @@ func do(ctx context.Context) error {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		return err
 	}
-	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
+	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.Version))
 
 	const serviceName = "ateom-microvm"
 	// Export through atelet's node-local relay when it is there, so telemetry
@@ -521,7 +521,7 @@ type actorEgress struct {
 	expiresAt         time.Time
 }
 
-func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, gateway *ateompb.EgressGateway) (*actorEgress, error) {
+func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, actorName, actorUID string, gateway *ateompb.EgressGateway) (*actorEgress, error) {
 	if gateway == nil {
 		return nil, nil
 	}
@@ -536,14 +536,17 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 		SocketPath:           ateompath.CredentialBrokerSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
-		ExpectedActorUID:     actorUID,
+
+		ActorAtespace: actorAtespace,
+		ActorName:     actorName,
+		ActorUID:      actorUID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)
 	}
 	// Mint before starting the workload so configured tunneled egress fails
 	// closed. The source retains the private key for mTLS and renewal.
-	expiresAt, err := certificateSource.Mint(ctx)
+	expiresAt, err := certificateSource.MintAteomCertificate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("while obtaining actor certificate: %w", err)
 	}

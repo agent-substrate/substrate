@@ -40,6 +40,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -129,6 +130,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if err := serverboot.SetLogLevel(s.cfg.LogLevel); err != nil {
 		return err
 	}
+	slog.InfoContext(ctx, "atenet router starting", slog.String("version", version.Version))
 
 	// Tracing must be initialized before constructing the ateapi gRPC client
 	// below, because otelgrpc.NewClientHandler captures the global

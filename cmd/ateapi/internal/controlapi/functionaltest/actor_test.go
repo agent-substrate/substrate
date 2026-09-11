@@ -184,7 +184,7 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 	if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
 			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
-			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
 			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 		},
@@ -753,7 +753,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 						Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
 						Containers: []*ateapipb.Container{{
 							Name:         "main",
-							Image:        "example.com/app:v1",
+							Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 							VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 						}},
 						Volumes:         tmpl.volumes,
@@ -3420,10 +3420,12 @@ func TestCreateActor_RejectsUnknownRequestFields(t *testing.T) {
 // capacity would stay booked until the Worker itself went away.
 func TestDeleteActor_ReleasesAnAssignmentTheActorDoesNotReference(t *testing.T) {
 	ns := namespaceForTest("ns-delete-orphan")
+
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
+
 	createWorkerPool(t, tc, ns, "pool-1", nil)
 	podUID := createWorkerPod(t, tc, ns, "worker-1", "node-1", "pool-1")
 
@@ -3435,6 +3437,7 @@ func TestDeleteActor_ReleasesAnAssignmentTheActorDoesNotReference(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
+
 	actorUID := actor.GetMetadata().GetUid()
 
 	// Bind straight through the store, leaving the Actor's backlink unset:
@@ -3462,5 +3465,40 @@ func TestDeleteActor_ReleasesAnAssignmentTheActorDoesNotReference(t *testing.T) 
 	}
 	if got := worker.GetStatus().GetAllocated().GetActors(); got != 0 {
 		t.Errorf("worker still books %d actors after the Actor was deleted, want 0", got)
+	}
+}
+
+func TestMintActorJWT_Success(t *testing.T) {
+	ns := namespaceForTest("ns-mintactorjwt-success")
+
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	createResp, err := tc.client.CreateActor(t.Context(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     "id1",
+			},
+			ActorTemplate:  &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			Status:         &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	_, err = tc.client.MintActorJWT(t.Context(), &ateapipb.MintActorJWTRequest{
+		Actor: &ateapipb.ObjectRef{
+			Atespace: createResp.GetMetadata().GetAtespace(),
+			Name:     createResp.GetMetadata().GetName(),
+		},
+		ActorUid: createResp.GetMetadata().GetUid(),
+		Audience: []string{"foo"},
+	})
+	if err != nil {
+		t.Fatalf("Error while calling MintActorJWT: %v", err)
 	}
 }

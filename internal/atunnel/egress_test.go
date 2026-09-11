@@ -159,7 +159,7 @@ func TestEgressRetriesRenewalAfterExpiry(t *testing.T) {
 }
 
 func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
-	for _, code := range []codes.Code{codes.FailedPrecondition, codes.PermissionDenied} {
+	for _, code := range []codes.Code{codes.Aborted, codes.FailedPrecondition, codes.PermissionDenied} {
 		t.Run(code.String(), func(t *testing.T) {
 			called := make(chan struct{}, 1)
 			egress, err := NewEgress(func(net.Conn) (string, error) { return "", nil })
@@ -353,7 +353,7 @@ type fakeActorCertificateSource struct {
 	release   <-chan struct{}
 }
 
-func (s fakeActorCertificateSource) Mint(context.Context) (time.Time, error) {
+func (s fakeActorCertificateSource) MintAteomCertificate(context.Context) (time.Time, error) {
 	if s.calls != nil {
 		s.calls.Add(1)
 	}

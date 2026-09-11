@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -99,6 +98,7 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
+	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -198,11 +198,6 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	controlSrv := controlapi.NewRPCService(persistence, workerCache, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins, objectStore)
-
-	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
-	templateReconciler.Start(shutdownCtx)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
@@ -214,7 +209,25 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
-	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, actorIDJWTAuthorityPool, actorIDCAPool, persistence, workerCache)
+	controlSrv := controlapi.NewRPCService(
+		persistence,
+		workerCache,
+		sandboxConfigLister,
+		csiDriverConfigLister,
+		storageClassLister,
+		ateletDialer,
+		instruments,
+		*egressGatewayAddress,
+		volPlugins,
+		objectStore,
+		actorIdentityJWTIssuer,
+		actorIDJWTAuthorityPool,
+		actorIDCAPool,
+	)
+
+	// Drive stored ActorTemplates through the golden actor flow.
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
+	templateReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -248,7 +261,6 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterActorIdentityServer(mux, actorIdentitySrv)
 	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence))
 
 	readiness := &serverboot.Readiness{}
