@@ -1072,9 +1072,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// and its pinned sandbox binaries are the ones that will run the restored
 	// guest (the golden snapshot's memory image must be resumed by the binaries
 	// that created it).
+	baseCfg := restoreBaseConfig(req)
 	var goldenRec *sandboxAssetsRecord
 	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		goldenURI, err := resources.ParseSnapshotURI(req.GetGoldenSnapshotUri())
+		goldenURI, err := resources.ParseSnapshotURI(baseCfg.GetSnapshotUri())
 		if err != nil {
 			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL)
 		}
@@ -1143,7 +1144,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				if goldenRec == nil {
 					return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
 				}
-				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
+				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), baseCfg.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 				}
 			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
@@ -1166,7 +1167,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			})
 			if combineWithGolden {
 				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
+					if err := s.downloadExternalCheckpoint(gLocalCtx, baseCfg.GetSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
 						return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 					}
 					return nil
@@ -1242,7 +1243,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		// Informational: for DATA_ON_GOLDEN the golden snapshot's files are
 		// already staged into the restore dir by the combined download above;
 		// ateom restores from the shared dir and never fetches this URI.
-		GoldenSnapshotUri: req.GetGoldenSnapshotUri(),
+		GoldenSnapshotUri: baseCfg.GetSnapshotUri(),
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
@@ -1750,14 +1751,33 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	}
 
 	// A DATA_ON_GOLDEN restore needs both halves: the actor's data snapshot
-	// (local pause checkpoint or external commit) and the golden snapshot,
-	// which is always external.
+	// (local pause checkpoint or external commit) and the base snapshot,
+	// which is always external. base_config supersedes golden_snapshot_uri;
+	// a transitional caller sets both, and they must agree.
+	base, legacy := req.GetBaseConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri()
+	if base != "" && legacy != "" && base != legacy {
+		return fmt.Errorf("base_config.snapshot_uri %q and golden_snapshot_uri %q disagree", base, legacy)
+	}
 	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		if _, err := resources.ParseSnapshotURI(req.GetGoldenSnapshotUri()); err != nil {
-			return fmt.Errorf("invalid golden_snapshot_uri: %w", err)
+		if _, err := resources.ParseSnapshotURI(restoreBaseConfig(req).GetSnapshotUri()); err != nil {
+			return fmt.Errorf("invalid base snapshot URI: %w", err)
 		}
-	} else if req.GetGoldenSnapshotUri() != "" {
-		return fmt.Errorf("golden_snapshot_uri is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
+	} else if base != "" || legacy != "" {
+		return fmt.Errorf("a base snapshot (base_config or golden_snapshot_uri) is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
+	}
+	return nil
+}
+
+// restoreBaseConfig returns the base snapshot source of a DATA_ON_GOLDEN
+// restore, preferring base_config over the superseded golden_snapshot_uri
+// (still sent by callers that predate it). Nil when the request carries
+// neither; proto getters make that safe to read through.
+func restoreBaseConfig(req *ateletpb.RestoreRequest) *ateletpb.ExternalRestoreConfiguration {
+	if req.GetBaseConfig().GetSnapshotUri() != "" {
+		return req.GetBaseConfig()
+	}
+	if uri := req.GetGoldenSnapshotUri(); uri != "" {
+		return &ateletpb.ExternalRestoreConfiguration{SnapshotUri: uri}
 	}
 	return nil
 }

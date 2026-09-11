@@ -700,6 +700,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			// Transitional dual-write: base_config supersedes
+			// golden_snapshot_uri, but an atelet from before it reads only
+			// the old field. Dropped once both components have rolled.
+			req.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
 		default:
 			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
@@ -718,11 +722,16 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		var scope ateletpb.SnapshotScope
 		var goldenSnapshotURI string
+		var baseConfig *ateletpb.ExternalRestoreConfiguration
 		switch {
 		case src.TemplateReplaced:
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			// Transitional dual-write: base_config supersedes
+			// golden_snapshot_uri, but an atelet from before it reads only
+			// the old field. Dropped once both components have rolled.
+			baseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
 			goldenSnapshotURI = src.GoldenSnapshotURI.String()
 		default:
 			scope = actorSnapshotContentScopeToAtelet(src.Scope)
@@ -737,12 +746,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
-				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+				ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
 			Scope: scope,
-			// Empty unless this is a Golden data resume.
+			// Both empty unless this is a Golden data resume.
+			BaseConfig:        baseConfig,
 			GoldenSnapshotUri: goldenSnapshotURI,
 			ActorUid:          actor.GetMetadata().Uid,
 			EgressGateway:     egressGateway,
