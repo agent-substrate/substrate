@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package imagevolume exercises image volumes against a live cluster.
+// Package imagevolume exercises image volumes, and the volume mount semantics
+// they share with durable dirs and external volumes, against a live cluster.
 package imagevolume
 
 import (
@@ -38,6 +39,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -45,6 +47,25 @@ const (
 
 	// mountPath must not collide with anything the probe's own image ships.
 	mountPath = "/mnt/ate-image-volume"
+	// mountPathAlias is a second mount of the same image volume: one volume
+	// may be mounted at multiple paths.
+	mountPathAlias = "/mnt/ate-image-volume-alias"
+
+	// The scratch durable-dir volume is mounted at both of these paths; a
+	// write through one must be readable through the other.
+	scratchPathA = "/mnt/ate-scratch-a"
+	scratchPathB = "/mnt/ate-scratch-b"
+
+	// The external (CSI-backed) volume is mounted at both of these paths.
+	// Unlike the durable dir it is provisioned per actor and detached on
+	// suspend, so it must come back attached once and visible at both.
+	extVolume   = "external"
+	extPathA    = "/mnt/ate-external-a"
+	extPathB    = "/mnt/ate-external-b"
+	extCapacity = "1Gi"
+
+	// probeWrittenContent is the fixed string the probe's /writefile writes.
+	probeWrittenContent = "written by probe"
 
 	payloadName    = "payload.txt"
 	payloadContent = "delivered by an image volume"
@@ -128,11 +149,26 @@ func buildFixtureImage(t *testing.T, repo string) string {
 	return fmt.Sprintf("%s@%s", tag.Context().Name(), digest)
 }
 
+// storageClassOrEmpty returns the configured StorageClass if the cluster has
+// one, and "" if it does not. The CSI driver is optional, so a missing class
+// drops the external volume from the template instead of failing every test
+// in the suite.
+func storageClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients) string {
+	t.Helper()
+
+	if _, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, e2e.StorageClass, metav1.GetOptions{}); err != nil {
+		t.Logf("StorageClass %q not found (%v); the external-volume case will be skipped", e2e.StorageClass, err)
+		return ""
+	}
+	return e2e.StorageClass
+}
+
 // createTemplate builds a probe ActorTemplate with the fixture attached as an
 // image volume, copying the resolved runtime from the shared probe template.
 // The template's name is suffixed per test run: it lives in the suite's
-// shared atespace, which outlives the per-test k8s namespace.
-func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage string) *ateapipb.ActorTemplate {
+// shared atespace, which outlives the per-test k8s namespace. A non-empty
+// storageClass adds the external volume.
+func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage, storageClass string) *ateapipb.ActorTemplate {
 	t.Helper()
 
 	env, err := e2e.CheckEnv("BUCKET_NAME")
@@ -162,11 +198,35 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 			StorageLocation: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
 		},
 		Modify: func(tmpl *ateapipb.ActorTemplate) {
+			// Every volume is mounted at two paths, covering the read-only
+			// (image), writable (durable-dir) and per-actor provisioned
+			// (external) multi-path cases.
 			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
-				&ateapipb.VolumeMount{Name: "fixture", MountPath: mountPath})
+				&ateapipb.VolumeMount{Name: "fixture", MountPath: mountPath},
+				&ateapipb.VolumeMount{Name: "fixture", MountPath: mountPathAlias},
+				&ateapipb.VolumeMount{Name: "scratch", MountPath: scratchPathA},
+				&ateapipb.VolumeMount{Name: "scratch", MountPath: scratchPathB})
+			tmpl.Volumes = append(tmpl.Volumes,
+				&ateapipb.Volume{
+					Name:  "fixture",
+					Image: &ateapipb.ImageVolumeSource{Reference: fixtureImage},
+				},
+				&ateapipb.Volume{
+					Name:       "scratch",
+					DurableDir: &ateapipb.DurableDirVolumeSource{},
+				})
+			if storageClass == "" {
+				return
+			}
+			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
+				&ateapipb.VolumeMount{Name: extVolume, MountPath: extPathA},
+				&ateapipb.VolumeMount{Name: extVolume, MountPath: extPathB})
 			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
-				Name:  "fixture",
-				Image: &ateapipb.ImageVolumeSource{Reference: fixtureImage},
+				Name: extVolume,
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					Capacity:         extCapacity,
+					StorageClassName: storageClass,
+				},
 			})
 		},
 	})
@@ -205,7 +265,8 @@ func TestImageVolume(t *testing.T) {
 
 	fixtureImage := buildFixtureImage(t, repo)
 	t.Logf("fixture image: %s", fixtureImage)
-	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage)
+	storageClass := storageClassOrEmpty(ctx, t, clients)
+	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, storageClass)
 
 	actorRef := resources.ActorRef{Atespace: atespace, Name: "iv-" + ns.Name}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
@@ -268,6 +329,45 @@ func TestImageVolume(t *testing.T) {
 		}
 	})
 
+	t.Run("SameImageVolumeAtTwoPaths", func(t *testing.T) {
+		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+mountPathAlias+"/"+payloadName)
+		if got["error"] != "" {
+			t.Fatalf("reading %s through the alias mount: %s", payloadName, got["error"])
+		}
+		if got["content"] != payloadContent {
+			t.Errorf("content through alias mount = %q, want %q", got["content"], payloadContent)
+		}
+	})
+
+	t.Run("SameDurableVolumeAtTwoPathsSharesWrites", func(t *testing.T) {
+		if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+scratchPathA+"/multi.txt"); got["error"] != "" {
+			t.Fatalf("writing through %s: %s", scratchPathA, got["error"])
+		}
+		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+scratchPathB+"/multi.txt")
+		if got["error"] != "" {
+			t.Fatalf("reading through %s what was written through %s: %s", scratchPathB, scratchPathA, got["error"])
+		}
+		if got["content"] != probeWrittenContent {
+			t.Errorf("content through second mount = %q, want %q", got["content"], probeWrittenContent)
+		}
+	})
+
+	t.Run("SameExternalVolumeAtTwoPathsSharesWrites", func(t *testing.T) {
+		if storageClass == "" {
+			t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
+		}
+		if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+extPathA+"/multi.txt"); got["error"] != "" {
+			t.Fatalf("writing through %s: %s", extPathA, got["error"])
+		}
+		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+extPathB+"/multi.txt")
+		if got["error"] != "" {
+			t.Fatalf("reading through %s what was written through %s: %s", extPathB, extPathA, got["error"])
+		}
+		if got["content"] != probeWrittenContent {
+			t.Errorf("content through second mount = %q, want %q", got["content"], probeWrittenContent)
+		}
+	})
+
 	t.Run("SurvivesSuspendResume", func(t *testing.T) {
 		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
 			t.Fatalf("SuspendActor: %v", err)
@@ -282,6 +382,36 @@ func TestImageVolume(t *testing.T) {
 		}
 		if got["content"] != payloadContent {
 			t.Errorf("content after resume = %q, want %q", got["content"], payloadContent)
+		}
+
+		// Restore must re-establish all mounts and preserve shared writes across them.
+		got = probeJSON(resumeCtx, t, router, actorRef, "/readfile?path="+mountPathAlias+"/"+payloadName)
+		if got["error"] != "" {
+			t.Fatalf("reading %s through the alias mount after resume: %s", payloadName, got["error"])
+		}
+		if got["content"] != payloadContent {
+			t.Errorf("content through alias mount after resume = %q, want %q", got["content"], payloadContent)
+		}
+
+		got = probeJSON(resumeCtx, t, router, actorRef, "/readfile?path="+scratchPathB+"/multi.txt")
+		if got["error"] != "" {
+			t.Fatalf("reading %s/multi.txt after resume: %s", scratchPathB, got["error"])
+		}
+		if got["content"] != probeWrittenContent {
+			t.Errorf("content through second mount after resume = %q, want %q", got["content"], probeWrittenContent)
+		}
+
+		if storageClass == "" {
+			return
+		}
+		// Suspend detached the external volume; the resume must reattach it
+		// once and restore both of its mounts.
+		got = probeJSON(resumeCtx, t, router, actorRef, "/readfile?path="+extPathB+"/multi.txt")
+		if got["error"] != "" {
+			t.Fatalf("reading %s/multi.txt after resume: %s", extPathB, got["error"])
+		}
+		if got["content"] != probeWrittenContent {
+			t.Errorf("external content through second mount after resume = %q, want %q", got["content"], probeWrittenContent)
 		}
 	})
 }

@@ -551,8 +551,6 @@ message ActorStatus {
   // They are deleted when the actor is deleted. Each template volume
   // appears at most once.
   //
-  // TODO: consider a literal map keyed by volume_name instead of a list-map.
-  //
   // +k8s:optional
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
@@ -937,15 +935,14 @@ message Container {
   // +k8s:optional
   ContainerReadyz readyz = 6;
 
-  // TODO: Kubernetes permits mounting a single volume at multiple paths
-  // (which requires keying by mountPath). We restrict it to one mount per
-  // volume (keyed by name).
+  // Keyed by mount_path: each path hosts exactly one mount, while a volume
+  // may be mounted at multiple paths.
   //
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=map
-  // +k8s:listMapKey=name
-  // +k8s:customValidation # mount_path must be unique within the container
+  // +k8s:listMapKey=mount_path
+  // +k8s:customValidation # mounts must not nest
   repeated VolumeMount volume_mounts = 7;
 
   // security_context adjusts the container's security settings. Unset leaves
@@ -1598,10 +1595,6 @@ message ListWorkersResponse {
   // Pagination token for the next page. Empty if this is the last page.
   string next_page_token = 2;
 }
-
-// TODO: Workers are still created, updated, and deleted by writing directly to
-// the store from the WorkerPoolSyncer and the actor workflows; migrating those
-// callers onto the RPCs below lands in a follow-up change.
 
 message GetWorkerRequest {
   // The Worker to fetch. atespace is always empty; Workers are global-scoped.

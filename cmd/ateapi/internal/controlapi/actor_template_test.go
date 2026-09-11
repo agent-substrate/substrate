@@ -567,15 +567,13 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("env").Index(1), nil)},
 	}, {
-		// One mount per volume for now; see the TODO on volume_mounts.
-		name: "same volume mounted twice is rejected",
+		name: "the same volume mounted at two paths is allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
 				{Name: "data", MountPath: "/var/data"},
 				{Name: "data", MountPath: "/mnt/data"},
 			}
 		},
-		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1), nil)},
 	}, {
 		name: "two volumes at the same path are rejected",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -584,7 +582,7 @@ func TestValidateActorTemplate(t *testing.T) {
 				{Name: "other", MountPath: "/var/data"},
 			}
 		},
-		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil)},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1), nil)},
 	}, {
 		name: "nested mount paths are rejected",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
