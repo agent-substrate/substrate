@@ -212,9 +212,9 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 // owned by this actor), records where the local snapshot lives, and commits
 // PAUSED with the assignment cleared in a single update — or CRASHED when the
 // worker's node name was lost, since a local snapshot on an unknown node can
-// never be resumed. It re-reads the actor first so an out-of-band transition
-// (e.g. the syncer crashing the actor after its worker died) is not
-// overwritten: with no assignment left there is nothing to finalize.
+// never be resumed. It re-reads the actor after releasing the worker and only
+// finalizes PAUSING, so an out-of-band transition (e.g. worker deletion
+// crashing the actor) is not overwritten.
 func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
@@ -222,6 +222,9 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	latestActor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
+	}
+	if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_PAUSING {
+		return nil, status.Errorf(codes.FailedPrecondition, "FinalizePaused prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_PAUSING)
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
@@ -251,7 +254,9 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		if err != nil {
 			return nil, err
 		}
-		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
+		if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_PAUSING {
+			return nil, status.Errorf(codes.FailedPrecondition, "FinalizePaused prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_PAUSING)
+		}
 		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
@@ -288,7 +293,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			toUpdate.Status.WorkerAssignment = nil
 			return nil
 		})
-		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
+		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
 			logActorCrashed(ctx, latestActor, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 			recordActorCrash(ctx, crashAttrs)
 		}
