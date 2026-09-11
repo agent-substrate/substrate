@@ -112,7 +112,7 @@ func (s *BrokerCertificateSource) MintAteomCertificate(ctx context.Context) (tim
 		return time.Time{}, err
 	}
 	defer conn.Close()
-	resp, err := ateletpb.NewCredentialBrokerClient(conn).MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{
+	resp, err := ateletpb.NewAteomSupportClient(conn).MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{
 		ActorAtespace:             s.actorAtespace,
 		ActorName:                 s.actorName,
 		ActorUid:                  s.actorUID,
