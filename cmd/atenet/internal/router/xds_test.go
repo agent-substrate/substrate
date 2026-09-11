@@ -1021,15 +1021,18 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	})
 
 	t.Run("SetterOverrides", func(t *testing.T) {
+		// Deliberately not 5m: that is the default, so it would pass whether or
+		// not the setter did anything. Lowering is also the direction an
+		// operator capping turn length actually goes.
 		x := NewXdsServer(0)
-		x.SetRouteTimeout(5 * time.Minute)
-		if got := routeTimeout(t, x); got != 5*time.Minute {
-			t.Errorf("route timeout after SetRouteTimeout(5m) = %v, want 5m", got)
+		x.SetRouteTimeout(30 * time.Second)
+		if got := routeTimeout(t, x); got != 30*time.Second {
+			t.Errorf("route timeout after SetRouteTimeout(30s) = %v, want 30s", got)
 		}
 	})
 
 	// The flag cannot produce a zero: --route-timeout carries defaultRouteTimeout,
-	// so an operator who never passes it gets 10s, not 0. The guard is on the
+	// so an operator who never passes it gets the default, not 0. The guard is on the
 	// setter because SetRouteTimeout is part of the type's API and reachable
 	// from any caller, and because a zero here is the one value Envoy reads as
 	// "no timeout at all" — a mis-set knob would silently turn every stuck
@@ -1045,25 +1048,48 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 		}
 	})
 
-	// The route timeout alone does not bound a long turn. A stream carrying no
-	// bytes while the actor works is idle by Envoy's reckoning, and Envoy resets
-	// it at the 5m stream idle default whatever the route timeout says. These
-	// pin the relationship: the idle timer never bites before the ceiling the
-	// operator asked for, and it is not tightened below what applies today.
-	t.Run("IdleTimeoutTracksLongerRouteTimeout", func(t *testing.T) {
+	// The two timeouts bound different things: the route timeout bounds the
+	// upstream response, the idle timeout bounds a stream with no activity on
+	// it. A stream carrying no bytes while the actor works is idle by the second
+	// measure even though the turn is progressing, so the ordering between them
+	// decides which one a caller actually experiences. These pin that ordering:
+	// the idle timer is a backstop that never fires first, and it is not
+	// tightened below what applies today.
+	t.Run("IdleTimeoutStaysAfterALongerRouteTimeout", func(t *testing.T) {
 		x := NewXdsServer(0)
 		x.SetRouteTimeout(30 * time.Minute)
-		if got := idleTimeout(t, x); got != 30*time.Minute {
-			t.Errorf("idle timeout with a 30m route timeout = %v, want 30m: a shorter idle timer would reset the stream first", got)
+		if got, want := idleTimeout(t, x), 30*time.Minute+routeIdleTimeoutMargin; got != want {
+			t.Errorf("idle timeout with a 30m route timeout = %v, want %v: an idle timer at or below the route timeout would reset the stream first", got, want)
 		}
 	})
 
 	t.Run("IdleTimeoutKeepsEnvoyDefaultWhenRouteTimeoutIsShorter", func(t *testing.T) {
-		for _, d := range []time.Duration{defaultRouteTimeout, envoyDefaultStreamIdleTimeout} {
+		for _, d := range []time.Duration{10 * time.Second, time.Minute} {
 			x := NewXdsServer(0)
 			x.SetRouteTimeout(d)
 			if got := idleTimeout(t, x); got != envoyDefaultStreamIdleTimeout {
 				t.Errorf("idle timeout with a %v route timeout = %v, want %v (unchanged from Envoy's default)", d, got, envoyDefaultStreamIdleTimeout)
+			}
+		}
+	})
+
+	// The property the two cases above are instances of, checked across the
+	// range rather than at the values that happen to be interesting today. The
+	// default route timeout is 5m and so is Envoy's stream idle default, so
+	// without a margin the two would coincide there and either could fire. An
+	// idle-triggered end reaches the client as a torn stream where the route
+	// timeout reaches it as a 504, and only one of those is diagnosable.
+	t.Run("IdleTimeoutNeverFiresBeforeTheRouteTimeout", func(t *testing.T) {
+		for _, d := range []time.Duration{0, 10 * time.Second, time.Minute, defaultRouteTimeout, 30 * time.Minute} {
+			x := NewXdsServer(0)
+			x.SetRouteTimeout(d) // non-positive keeps the default; see above
+			action := routeAction(t, x)
+			if action.GetIdleTimeout() == nil {
+				t.Fatalf("SetRouteTimeout(%v): no idle timeout set on the workload route", d)
+			}
+			route, idle := action.GetTimeout().AsDuration(), action.GetIdleTimeout().AsDuration()
+			if idle <= route {
+				t.Errorf("SetRouteTimeout(%v): route timeout %v, idle timeout %v; the idle timer must be strictly later or the caller gets a reset instead of a 504", d, route, idle)
 			}
 		}
 	})

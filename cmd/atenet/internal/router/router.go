@@ -297,7 +297,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		readiness:       readiness,
 		delay:           s.cfg.DrainDelay,
 		dataplane:       dataplane,
-		dataplaneWindow: defaultRouteTimeout + drainTimeoutMargin,
+		dataplaneWindow: drainRouteBudget + drainTimeoutMargin,
 		extproc:         extprocGRPC,
 		timeout:         s.cfg.drainTimeout(parkCfg),
 		stopRest: func() {
