@@ -195,12 +195,10 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 	updated.Metadata = proto.Clone(stored.GetMetadata()).(*ateapipb.ResourceMetadata)
 	updated.Status = proto.Clone(stored.GetStatus()).(*ateapipb.WorkerStatus)
 
-	// sandbox_class and labels are the only fields an update may change, so
-	// pinning those two to what is stored leaves any remaining difference on a
-	// field that is immutable after create — including one the request cleared
-	// by omitting it.
+	// labels is the only field an update may change, so pinning it to what is
+	// stored leaves any remaining difference on a field that is immutable after
+	// create — including one the request cleared by omitting it.
 	probe := proto.Clone(updated).(*ateapipb.Worker)
-	probe.SandboxClass = stored.GetSandboxClass()
 	probe.Labels = stored.GetLabels()
 	if !proto.Equal(probe, stored) {
 		return nil, status.Error(codes.InvalidArgument, "update changed a field that is immutable after create")

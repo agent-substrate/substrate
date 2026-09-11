@@ -5662,12 +5662,12 @@ type UpdateWorkerRequest struct {
 	// always empty; Workers are global-scoped.
 	// worker.metadata.version and worker.metadata.uid are required preconditions.
 	//
-	// sandbox_class and labels are the only fields an update may change. Every
-	// other field is replaced with what the request carries, and a field left
-	// unset is cleared — so read the Worker, change what you mean to change, and
-	// send the whole thing back. A request that alters an immutable field, by
-	// changing it or by omitting it, returns INVALID_ARGUMENT naming the field.
-	// status is output-only and whatever it carries is ignored.
+	// labels is the only field an update may change. Every other field is
+	// replaced with what the request carries, and a field left unset is cleared —
+	// so read the Worker, change what you mean to change, and send the whole
+	// thing back. A request that alters an immutable field, by changing it or by
+	// omitting it, returns INVALID_ARGUMENT naming the field. status is
+	// output-only and whatever it carries is ignored.
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
@@ -5959,10 +5959,10 @@ func (x *ListActorsResponse) GetNextPageToken() string {
 // by the control plane and is opaque to clients — never parse it or derive it
 // from anything else; read pod identity from the named fields below.
 //
-// sandbox_class and labels are the only mutable fields; every other field is
-// either immutable after creation or output-only. UpdateWorker replaces the
-// whole resource, so an immutable field that a request changes — including by
-// omitting it, which would clear it — is rejected with INVALID_ARGUMENT.
+// labels is the only mutable field; every other field is either immutable
+// after creation or output-only. UpdateWorker replaces the whole resource, so
+// an immutable field that a request changes — including by omitting it, which
+// would clear it — is rejected with INVALID_ARGUMENT.
 type Worker struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Output-only: name, uid, version and timestamps are all server-assigned.
@@ -5998,10 +5998,11 @@ type Worker struct {
 	// +k8s:immutable
 	Ip string `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
 	// sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-	// CRD's own vocabulary, so it is only bounded, not validated. Mutable.
+	// CRD's own vocabulary, so it is only bounded, not validated.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=63
+	// +k8s:immutable
 	SandboxClass string `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// labels mirror the WorkerPool object's Kubernetes labels, which selectors
 	// match against.

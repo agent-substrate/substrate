@@ -340,7 +340,6 @@ func TestUpdateWorker(t *testing.T) {
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
 		Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
-			w.SandboxClass = "microvm"
 			w.Labels = map[string]string{"tier": "batch"}
 		}),
 	})
@@ -349,7 +348,6 @@ func TestUpdateWorker(t *testing.T) {
 	}
 
 	want := proto.Clone(seeded).(*ateapipb.Worker)
-	want.SandboxClass = "microvm"
 	want.Labels = map[string]string{"tier": "batch"}
 	want.Metadata = got.GetMetadata()
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
@@ -372,15 +370,11 @@ func TestUpdateWorker_OmittedMutableFieldIsCleared(t *testing.T) {
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
 		Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
-			w.SandboxClass = "microvm"
 			w.Labels = nil
 		}),
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorker() failed: %v", err)
-	}
-	if got.GetSandboxClass() != "microvm" {
-		t.Errorf("sandbox_class = %q, want microvm", got.GetSandboxClass())
 	}
 	if len(got.GetLabels()) != 0 {
 		t.Errorf("labels = %v, want them cleared: the request carried none", got.GetLabels())
@@ -398,7 +392,7 @@ func TestUpdateWorker_LeavesStatusAlone(t *testing.T) {
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
 		Worker: updateFrom(assigned, func(w *ateapipb.Worker) {
-			w.SandboxClass = "microvm"
+			w.Labels = map[string]string{"tier": "batch"}
 			// A forged status: drained, and with the Actor released out from
 			// under the workflow that bound it. Neither may land.
 			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
@@ -420,7 +414,7 @@ func TestUpdateWorker_Preconditions(t *testing.T) {
 	update := func(bend func(*ateapipb.ResourceMetadata)) error {
 		_, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
 			Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
-				w.SandboxClass = "microvm"
+				w.Labels = map[string]string{"tier": "batch"}
 				bend(w.Metadata)
 			}),
 		})
@@ -486,6 +480,7 @@ func TestUpdateWorker_Errors(t *testing.T) {
 		{"ip changed", func(w *ateapipb.Worker) { w.Ip = "10.9.9.9" }, codes.InvalidArgument},
 		{"worker_pod changed", func(w *ateapipb.Worker) { w.WorkerPod = "worker-pod-2" }, codes.InvalidArgument},
 		{"node_name changed", func(w *ateapipb.Worker) { w.NodeName = "node-2" }, codes.InvalidArgument},
+		{"sandbox_class changed", func(w *ateapipb.Worker) { w.SandboxClass = "microvm" }, codes.InvalidArgument},
 		// capacity is deliberately absent here: it may change (the pool's actor
 		// ceiling moves, a pod can be resized, a Worker may report its own).
 		// TestUpdateWorker_CapacityChanges covers that.
@@ -493,6 +488,7 @@ func TestUpdateWorker_Errors(t *testing.T) {
 		// And immutable fields dropped, which a replacement update reads as a
 		// request to clear them. Rejected rather than silently applied.
 		{"ip omitted", func(w *ateapipb.Worker) { w.Ip = "" }, codes.InvalidArgument},
+		{"sandbox_class omitted", func(w *ateapipb.Worker) { w.SandboxClass = "" }, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -508,9 +504,9 @@ func TestUpdateWorker_Errors(t *testing.T) {
 	}
 }
 
-// A draining worker can still have everything else about it updated; only its
-// status is frozen.
-func TestUpdateWorker_DrainingWorkerKeepsOtherFieldsMutable(t *testing.T) {
+// A draining worker can still have its labels updated; only its status is
+// frozen.
+func TestUpdateWorker_DrainingWorkerKeepsLabelsMutable(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
@@ -520,13 +516,13 @@ func TestUpdateWorker_DrainingWorkerKeepsOtherFieldsMutable(t *testing.T) {
 	}
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(drained, func(w *ateapipb.Worker) { w.SandboxClass = "microvm" }),
+		Worker: updateFrom(drained, func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorker() failed: %v", err)
 	}
-	if got.GetSandboxClass() != "microvm" {
-		t.Errorf("sandbox_class = %q, want microvm", got.GetSandboxClass())
+	if got.GetLabels()["tier"] != "batch" {
+		t.Errorf("labels = %v, want tier=batch", got.GetLabels())
 	}
 	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("state = %v, want it still %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
