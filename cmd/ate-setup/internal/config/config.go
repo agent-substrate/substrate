@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -38,6 +39,14 @@ const (
 
 	SandboxClassGvisor  = "gvisor"
 	SandboxClassMicrovm = "microvm"
+
+	// The telemetry modes of --observability. Each one supplies the
+	// ate-otel-config ConfigMap from a different file; see
+	// manifests/ate-install/otel/none/ate-otel-config.yaml.
+	ObservabilityNone = "none"
+	ObservabilityOTLP = "otlp"
+	ObservabilityGKE  = "gke"
+	ObservabilityKind = "kind"
 )
 
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
@@ -122,8 +131,14 @@ type Config struct {
 	// AnthropicAPIKey is required only by the claude-code-multiplex demo.
 	AnthropicAPIKey string
 
+	// Observability is the telemetry mode (--observability,
+	// ATE_OBSERVABILITY): none, otlp, gke, or kind. Empty means that no flag
+	// gave a mode, and steps resolves one; see steps.ResolveObservability.
+	Observability string
+
 	// OtlpEndpoint is where the control plane ships telemetry
-	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
+	// (--otlp-endpoint, ATE_OTLP_ENDPOINT), for mode otlp only. Benchmark
+	// actors are pointed at it too.
 	OtlpEndpoint string
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
@@ -146,6 +161,8 @@ type Options struct {
 	PodcertWorkersPerSigner        int
 	ExperimentalUseSDSMint         bool
 	AdditionalEgressExtprocService string
+	Observability                  string
+	OtlpEndpoint                   string
 
 	// Image source selection.
 	ImageRepo string
@@ -228,7 +245,8 @@ func Load(opts Options) (*Config, error) {
 		ExperimentalUseSDSMint:         sdsmint,
 		AdditionalEgressExtprocService: extproc,
 		AnthropicAPIKey:                env["ANTHROPIC_API_KEY"],
-		OtlpEndpoint:                   env["ATE_OTLP_ENDPOINT"],
+		Observability:                  firstNonEmpty(opts.Observability, env["ATE_OBSERVABILITY"]),
+		OtlpEndpoint:                   firstNonEmpty(opts.OtlpEndpoint, env["ATE_OTLP_ENDPOINT"]),
 		BenchmarkActorMemory:           env["BENCHMARK_ACTOR_MEMORY"],
 		shellEnv:                       env,
 	}
@@ -275,6 +293,9 @@ func validate(cfg *Config) error {
 	if cfg.PodcertWorkersPerSigner < 0 {
 		return fmt.Errorf("--podcert-workers-per-signer must be a positive integer, got %d", cfg.PodcertWorkersPerSigner)
 	}
+	if err := validateObservability(cfg); err != nil {
+		return err
+	}
 	if cfg.AdditionalEgressExtprocService != "" {
 		if err := validateExtprocService(cfg.AdditionalEgressExtprocService); err != nil {
 			return err
@@ -285,6 +306,42 @@ func validate(cfg *Config) error {
 		if cfg.Router != RouterEnvoy {
 			return fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-router=envoy")
 		}
+	}
+	return nil
+}
+
+// otlpEndpointPattern is the format of --otlp-endpoint. The set of permitted
+// characters is small on purpose: the value goes into a ConfigMap.
+var otlpEndpointPattern = regexp.MustCompile(`^https?://[A-Za-z0-9._-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$`)
+
+// validateObservability rejects a combination of flags that no install can
+// satisfy. It tests the flags only: a mode that the cluster supplies needs a
+// cluster, thus steps resolves that one.
+func validateObservability(cfg *Config) error {
+	switch cfg.Observability {
+	case "", ObservabilityNone, ObservabilityOTLP, ObservabilityGKE, ObservabilityKind:
+	default:
+		return fmt.Errorf("--observability must be %s, %s, %s, or %s, got %q",
+			ObservabilityNone, ObservabilityOTLP, ObservabilityGKE, ObservabilityKind, cfg.Observability)
+	}
+	if cfg.Observability == ObservabilityOTLP && cfg.OtlpEndpoint == "" {
+		return fmt.Errorf("--observability=%s needs the address of a collector: give --otlp-endpoint, "+
+			"or select --observability=%s or --observability=%s",
+			ObservabilityOTLP, ObservabilityGKE, ObservabilityNone)
+	}
+	if cfg.OtlpEndpoint != "" && cfg.Observability != "" && cfg.Observability != ObservabilityOTLP {
+		return fmt.Errorf("--otlp-endpoint is for --observability=%s, but the mode is %s: remove one of the two flags",
+			ObservabilityOTLP, cfg.Observability)
+	}
+	// The collector of mode kind is the one that a kind install applies, thus
+	// no other install can reach it.
+	if cfg.Observability == ObservabilityKind && !cfg.Kind {
+		return fmt.Errorf("--observability=%s needs --kind: use --observability=%s with the address of your own collector",
+			ObservabilityKind, ObservabilityOTLP)
+	}
+	if cfg.OtlpEndpoint != "" && !otlpEndpointPattern.MatchString(cfg.OtlpEndpoint) {
+		return fmt.Errorf("--otlp-endpoint must be a URL with a scheme, for example "+
+			"http://opentelemetry-collector.otel-system.svc:4317, got %q", cfg.OtlpEndpoint)
 	}
 	return nil
 }

@@ -333,3 +333,141 @@ func TestSetLogLevel(t *testing.T) {
 		t.Errorf("SetLogLevel(\"\") changed the level to %v", got)
 	}
 }
+
+// The tests below cover the export switch. A component must be quiet on a
+// cluster that has no collector: with no endpoint the SDK would fall back to
+// localhost:4317 and log a failed export on each tick.
+
+func TestOTLPExportOff(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		env        map[string]string
+		haveConn   bool
+		wantOff    bool
+		wantReason string
+	}{{
+		name:       "no endpoint at all",
+		wantOff:    true,
+		wantReason: "no collector endpoint configured",
+	}, {
+		name: "the endpoint of the signal",
+		env:  map[string]string{tracesEndpointEnv: "http://collector.otel-system.svc:4317"},
+	}, {
+		name: "the endpoint of each signal",
+		env:  map[string]string{otlpEndpointEnv: "http://collector.otel-system.svc:4317"},
+	}, {
+		name:       "an empty endpoint, which the install writes for mode none",
+		env:        map[string]string{otlpEndpointEnv: ""},
+		wantOff:    true,
+		wantReason: "no collector endpoint configured",
+	}, {
+		name:       "the exporter of the signal is none",
+		env:        map[string]string{otlpEndpointEnv: "http://c.svc:4317", tracesExporterEnv: "none"},
+		wantOff:    true,
+		wantReason: tracesExporterEnv + "=none",
+	}, {
+		name: "the exporter of the signal is otlp",
+		env:  map[string]string{otlpEndpointEnv: "http://c.svc:4317", tracesExporterEnv: "otlp"},
+	}, {
+		name:       "the whole SDK is disabled",
+		env:        map[string]string{otlpEndpointEnv: "http://c.svc:4317", sdkDisabledEnv: "TRUE"},
+		wantOff:    true,
+		wantReason: sdkDisabledEnv + "=true",
+	}, {
+		// An ateom exports over the socket of atelet's relay, thus it needs no
+		// endpoint of its own.
+		name:     "a connection of the caller, with no endpoint",
+		haveConn: true,
+	}, {
+		name:       "a connection of the caller, with the exporter off",
+		env:        map[string]string{tracesExporterEnv: "none"},
+		haveConn:   true,
+		wantOff:    true,
+		wantReason: tracesExporterEnv + "=none",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range []string{sdkDisabledEnv, tracesExporterEnv, otlpEndpointEnv, tracesEndpointEnv} {
+				t.Setenv(key, "")
+			}
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			off, reason := otlpExportOff(tracesExporterEnv, tracesEndpointEnv, tc.haveConn)
+			if off != tc.wantOff {
+				t.Errorf("otlpExportOff off = %v, want %v", off, tc.wantOff)
+			}
+			if reason != tc.wantReason {
+				t.Errorf("otlpExportOff reason = %q, want %q", reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+// clearOTLPEnv turns the export off for one test, the way the ate-otel-config
+// ConfigMap of mode none does.
+func clearOTLPEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		sdkDisabledEnv, tracesExporterEnv, metricsExporterEnv,
+		otlpEndpointEnv, tracesEndpointEnv, metricsEndpointEnv,
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func TestInitTracingWithNoCollector(t *testing.T) {
+	clearOTLPEnv(t)
+	ctx := context.Background()
+	tp, err := InitTracing(ctx, TracingOptions{
+		ServiceName: "test-no-collector",
+		Sampling:    ResolveTraceSampling(ctx, ParentRatioSampling(1.0)),
+	})
+	if err != nil {
+		t.Fatalf("InitTracing: %v", err)
+	}
+
+	// The provider keeps its sampler, thus a span still gets a trace id and the
+	// logs of the component still join to it. Only the exporter is absent.
+	_, span := tp.Tracer("test").Start(ctx, "op")
+	if !span.SpanContext().TraceID().IsValid() {
+		t.Error("a span of a provider with no exporter must still carry a trace id")
+	}
+	span.End()
+
+	// A provider that holds an exporter to localhost:4317 blocks here until the
+	// export times out. One second is far below that timeout and far above the
+	// time that a provider with no exporter needs.
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if err := tp.Shutdown(shutdownCtx); err != nil {
+		t.Errorf("Shutdown with no exporter: %v", err)
+	}
+}
+
+func TestInitMetricsKeepsPrometheusWithNoCollector(t *testing.T) {
+	clearOTLPEnv(t)
+	ctx := context.Background()
+	mp, err := InitMetrics(ctx, "test-no-collector-metrics")
+	if err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		_ = mp.Shutdown(shutdownCtx)
+	})
+
+	ctr, err := mp.Meter("test").Int64Counter("ate.test.nocollector.count")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	ctr.Add(ctx, 1)
+
+	// No collector does not mean no metrics: the pull surface of ateapi, atelet,
+	// and atenet-router stays.
+	rec := httptest.NewRecorder()
+	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), "ate_test_nocollector") {
+		t.Error("the Prometheus surface must stay when the OTLP export is off")
+	}
+}

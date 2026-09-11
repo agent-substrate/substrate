@@ -94,6 +94,10 @@ func init() {
 	f.BoolVar(&opts.ExperimentalUseSDSMint, "experimental-use-sdsmint", false, "Deploy egress gateway with dynamic per-SNI certificate minting")
 	f.StringVar(&opts.AdditionalEgressExtprocService, "experimental-additional-egress-extproc-service", "", "Run an additional ext_proc authorization filter served by NS/SVC:PORT (requires --experimental-use-sdsmint)")
 	f.BoolVar(&opts.NoDevEnv, "no-dev-env", false, "Do not source .ate-dev-env.sh")
+	f.StringVar(&opts.Observability, "observability", "",
+		"Telemetry mode: none (no export), otlp (the collector at --otlp-endpoint), gke (the GKE managed OTel addon), or kind (the collector of a kind install)")
+	f.StringVar(&opts.OtlpEndpoint, "otlp-endpoint", "",
+		"Address of the collector for --observability=otlp (e.g. http://opentelemetry-collector.otel-system.svc:4317)")
 
 	f.StringVar(&opts.ImageRepo, "image-repo", "",
 		"Install pre-built images from this registry path instead of building them from source (e.g. registry.example.com/substrate)")

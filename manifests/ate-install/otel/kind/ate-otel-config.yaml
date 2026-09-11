@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Kind replacement for manifests/ate-install/ate-otel-config.yaml: same name, so
-# the overlay lists this file instead of the base one. Points the control plane
-# at the in-cluster collector deployed by kind/otel-collector.yaml.
+# The ate-otel-config ConfigMap for --observability=kind, which a kind install
+# selects on its own. The ConfigMap has the same name as the one in
+# ../none/ate-otel-config.yaml, thus it replaces it. It sends the control plane
+# to the in-cluster collector of ../../kind/otel-collector.yaml, which the same
+# install applies.
 #
 # OTEL_METRIC_EXPORT_INTERVAL shortens the OTel SDK's 60s metric export tick to
 # 10s. A component is invisible to the collector until its first tick, and the
@@ -34,6 +36,9 @@ kind: ConfigMap
 metadata:
   name: ate-otel-config
   namespace: ate-system
+  annotations:
+    # The mode that applied this ConfigMap; read ../none/ate-otel-config.yaml.
+    ate.dev/observability-mode: kind
 data:
   OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector.otel-system.svc:4317
   OTEL_METRIC_EXPORT_INTERVAL: "10000"

@@ -73,6 +73,10 @@ type Env struct {
 	// suffix; see SubstrateVersion.
 	substrateVersion       string
 	substrateVersionSuffix string
+
+	// observability holds the resolved telemetry mode and what the cluster had
+	// before it; see ResolveObservability.
+	observability observabilityState
 }
 
 // NewEnv connects to the cluster described by cfg.

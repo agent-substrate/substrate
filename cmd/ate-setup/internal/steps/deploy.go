@@ -172,7 +172,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 			return err
 		}
 	}
-	return nil
+	return e.restartOtelConsumers(ctx)
 }
 
 // applyPodcertWorkersOverride sets WORKERS_PER_SIGNER on podcertificate-controller if configured.
@@ -237,7 +237,10 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-api-server", e.Cfg.RolloutTimeout)
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-api-server", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.restartOtelConsumers(ctx)
 }
 
 // DeployAteController redeploys only ate-controller.
@@ -256,7 +259,10 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-controller", e.Cfg.RolloutTimeout)
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-controller", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.restartOtelConsumers(ctx)
 }
 
 // DeployAtelet redeploys only the atelet DaemonSet.
@@ -298,7 +304,10 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, NamespaceAteSystem, ateletName, e.Cfg.RolloutTimeout)
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, NamespaceAteSystem, ateletName, e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.restartOtelConsumers(ctx)
 }
 
 // DeployAtenet redeploys the atenet dataplane: router and egress.
@@ -334,7 +343,7 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return e.restartOtelConsumers(ctx)
 }
 
 // EnsureCRDs installs the CRDs only if they are missing. Component redeploys

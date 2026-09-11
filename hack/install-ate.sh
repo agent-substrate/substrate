@@ -399,16 +399,19 @@ apply_atenet_egress() {
 }
 
 # Apply the ate-otel-config ConfigMap that every control plane component reads
-# via envFrom. The full install gets it through render_ate_system_manifests, but
-# the targeted single-component redeploys below apply raw manifests with no
-# Kustomize, so they have to select the environment's copy themselves. Applying
-# the base file unconditionally would overwrite a kind cluster's ConfigMap with
-# the GKE endpoint and silently break telemetry for every component at once.
+# via envFrom. No Kustomize bundle carries a copy, thus this is the one writer
+# and each install path calls it ahead of the workloads: a container whose
+# envFrom names an absent ConfigMap does not start.
+#
+# The file of the mode is the file that ate-setup applies for the same cluster;
+# see manifests/ate-install/otel/. This script has no --observability flag: a
+# kind install gets the in-cluster collector, and each other install gets the
+# GKE managed one, as before. For the other modes use ate-setup.
 apply_otel_config() {
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-    run_kubectl apply -f manifests/ate-install/kind/ate-otel-config.yaml
+    run_kubectl apply -f manifests/ate-install/otel/kind/ate-otel-config.yaml
   else
-    run_kubectl apply -f manifests/ate-install/ate-otel-config.yaml
+    run_kubectl apply -f manifests/ate-install/otel/gke/ate-otel-config.yaml
   fi
 }
 
@@ -426,10 +429,8 @@ apply_postgres() {
 # this ConfigMap through envFrom, and ate-controller copies the values to the
 # ateom worker pods that it creates. See benchmarking/telemetry/README.md.
 #
-# Call this AFTER every apply. The ate-system bundle contains its own copy of
-# ate-otel-config, thus an apply of the bundle replaces a patch that came
-# before it, and the endpoint returns to the cluster default with no error
-# message.
+# Call this AFTER every apply, because apply_otel_config above replaces a patch
+# that came before it.
 #
 # A change to a ConfigMap starts no rollout, because the pod template stays the
 # same. Thus restart the consumers that read it. Do the restart only when the
@@ -449,13 +450,21 @@ apply_otel_endpoint_override() {
     return 0
   fi
 
+  # The mode annotation goes with the endpoint. ate-setup reads that annotation
+  # back to keep the collector that the cluster has, thus an endpoint on its own
+  # would leave the ConfigMap saying one mode and naming the collector of
+  # another, and the next ate-setup run would put the collector of the
+  # annotation back over this one. The exporter switches go with it for the same
+  # reason: the file of mode none turns them off.
   echo "Overriding OTEL_EXPORTER_OTLP_ENDPOINT with ${ATE_OTLP_ENDPOINT}"
   run_kubectl -n ate-system patch configmap ate-otel-config --type=merge \
-    -p "{\"data\":{\"OTEL_EXPORTER_OTLP_ENDPOINT\":\"${ATE_OTLP_ENDPOINT}\"}}"
+    -p "{\"metadata\":{\"annotations\":{\"ate.dev/observability-mode\":\"otlp\"}},\
+\"data\":{\"OTEL_EXPORTER_OTLP_ENDPOINT\":\"${ATE_OTLP_ENDPOINT}\",\
+\"OTEL_TRACES_EXPORTER\":\"otlp\",\"OTEL_METRICS_EXPORTER\":\"otlp\"}}"
 
   local workload
   for workload in deployment/ate-api-server deployment/ate-controller \
-                  deployment/atenet-router; do
+                  deployment/atenet-router deployment/atenet-egress; do
     if run_kubectl -n ate-system get "${workload}" >/dev/null 2>&1; then
       run_kubectl -n ate-system rollout restart "${workload}"
     fi
@@ -917,10 +926,7 @@ deploy_ate_system() {
 
   # Ahead of the bundle below, for the same reason as the namespace: every
   # workload pulls this ConfigMap in via envFrom, and a container whose envFrom
-  # target is missing will not start. The bundle contains it, but a raw
-  # directory apply orders by filename, so ate-api-server.yaml and
-  # ate-controller.yaml would otherwise be created before it and sit in
-  # CreateContainerConfigError until it caught up.
+  # target is missing will not start. The bundle no longer contains it.
   apply_otel_config
 
   ensure_apiserver_prerequisites

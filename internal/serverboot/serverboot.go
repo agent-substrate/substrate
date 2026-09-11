@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -128,6 +129,51 @@ func relayAttrs(relayCapable bool, conn *grpc.ClientConn) []attribute.KeyValue {
 	return []attribute.KeyValue{ateattr.OTLPRelayKey.String(status)}
 }
 
+// The environment variables that turn an OTLP exporter off. The first three are
+// the standard OTel switches; the endpoints carry the rule that substrate adds
+// below.
+const (
+	sdkDisabledEnv     = "OTEL_SDK_DISABLED"
+	tracesExporterEnv  = "OTEL_TRACES_EXPORTER"
+	metricsExporterEnv = "OTEL_METRICS_EXPORTER"
+	otlpEndpointEnv    = "OTEL_EXPORTER_OTLP_ENDPOINT"
+	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
+	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+)
+
+// otlpExportOff reports whether the environment turns the OTLP exporter of one
+// signal off, with the reason for the log line. exporterEnv and endpointEnv are
+// the two variables of that signal, and haveConn tells that the caller supplies
+// the connection itself.
+//
+// A cluster with no collector must not make the components noisy. The install
+// leaves OTEL_EXPORTER_OTLP_ENDPOINT empty there (--observability=none), and the
+// SDK reads an empty variable as an absent one and falls back to its own default
+// of localhost:4317. Thus each export attempt would fail, once each tick, for
+// the life of the process. An empty endpoint means no collector, and no
+// collector means no exporter.
+//
+// The endpoint has no part in the decision when the caller supplies the
+// connection: an ateom exports over the unix socket of atelet's relay, and it is
+// atelet that holds the address of the collector. The relay makes the same
+// decision for itself; see internal/otlprelay.
+func otlpExportOff(exporterEnv, endpointEnv string, haveConn bool) (bool, string) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv(sdkDisabledEnv)), "true") {
+		return true, sdkDisabledEnv + "=true"
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv(exporterEnv)), "none") {
+		return true, exporterEnv + "=none"
+	}
+	if haveConn {
+		return false, ""
+	}
+	if strings.TrimSpace(os.Getenv(endpointEnv)) == "" &&
+		strings.TrimSpace(os.Getenv(otlpEndpointEnv)) == "" {
+		return true, "no collector endpoint configured"
+	}
+	return false, ""
+}
+
 // TracingOptions configures InitTracing.
 type TracingOptions struct {
 	// ServiceName is required; populates resource.semconv ServiceName.
@@ -176,20 +222,28 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
-	expOpts := []otlptracegrpc.Option{
-		// GKE managed traces doesn't support validating the TLS certs of the collector.
-		otlptracegrpc.WithInsecure(),
+	// The provider stays registered with no exporter when the export is off, and
+	// does not become a no-op one: the spans keep their IDs, thus the logs keep
+	// the trace_id that joins them (internal/contextlogging), and each call site
+	// keeps one code path.
+	if off, reason := otlpExportOff(tracesExporterEnv, tracesEndpointEnv, opts.ExporterConn != nil); off {
+		slog.InfoContext(ctx, "OTLP trace export disabled", slog.String("reason", reason))
+	} else {
+		expOpts := []otlptracegrpc.Option{
+			// GKE managed traces doesn't support validating the TLS certs of the collector.
+			otlptracegrpc.WithInsecure(),
+		}
+		if opts.ExporterConn != nil {
+			// WithGRPCConn takes precedence over endpoint/credential options, so
+			// WithInsecure above is inert on this path.
+			expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
+		}
+		exporter, err := otlptracegrpc.New(ctx, expOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP exporter: %w", err)
+		}
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 	}
-	if opts.ExporterConn != nil {
-		// WithGRPCConn takes precedence over endpoint/credential options, so
-		// WithInsecure above is inert on this path.
-		expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
-	}
-	exporter, err := otlptracegrpc.New(ctx, expOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create OTLP exporter: %w", err)
-	}
-	tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
@@ -244,30 +298,36 @@ func newMeterProvider(ctx context.Context, serviceName string, relayCapable bool
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
-	expOpts := []otlpmetricgrpc.Option{
-		// GKE managed metrics doesn't support validating the TLS certs of the collector.
-		otlpmetricgrpc.WithInsecure(),
-	}
-	if conn != nil {
-		// WithGRPCConn takes precedence over endpoint/credential options, so
-		// WithInsecure above is inert on this path.
-		expOpts = append(expOpts, otlpmetricgrpc.WithGRPCConn(conn))
-	}
-	otlpExporter, err := otlpmetricgrpc.New(ctx, expOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
-	}
 	res, err := newResource(ctx, serviceName, relayAttrs(relayCapable, conn)...)
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
-	readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
-	for _, p := range producers {
-		readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
-	}
-	opts := []sdkmetric.Option{
-		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)),
+	opts := []sdkmetric.Option{sdkmetric.WithResource(res)}
+
+	// With the export off there is no periodic reader, thus the producers push
+	// nowhere. A pull reader in extraReaders is unaffected: ateapi, atelet, and
+	// atenet-router keep their own /metrics endpoint with no collector.
+	if off, reason := otlpExportOff(metricsExporterEnv, metricsEndpointEnv, conn != nil); off {
+		slog.InfoContext(ctx, "OTLP metric export disabled", slog.String("reason", reason))
+	} else {
+		expOpts := []otlpmetricgrpc.Option{
+			// GKE managed metrics doesn't support validating the TLS certs of the collector.
+			otlpmetricgrpc.WithInsecure(),
+		}
+		if conn != nil {
+			// WithGRPCConn takes precedence over endpoint/credential options, so
+			// WithInsecure above is inert on this path.
+			expOpts = append(expOpts, otlpmetricgrpc.WithGRPCConn(conn))
+		}
+		otlpExporter, err := otlpmetricgrpc.New(ctx, expOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
+		}
+		readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
+		for _, p := range producers {
+			readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
+		}
+		opts = append(opts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)))
 	}
 	for _, r := range extraReaders {
 		opts = append(opts, sdkmetric.WithReader(r))
