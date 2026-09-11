@@ -262,7 +262,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 				ateattr.ActorRefLogAttrs(actorRef)...)
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		}
-		contentScope := effectiveContentScope(actorTemplate.GetSnapshotsConfig().GetOnPause())
+		contentScope := actorTemplate.GetSnapshotsConfig().GetOnPause()
 		sandboxClass := ""
 		if worker != nil {
 			sandboxClass = worker.GetSandboxClass()

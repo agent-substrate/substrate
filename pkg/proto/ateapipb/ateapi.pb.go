@@ -40,7 +40,7 @@ const (
 type SnapshotContentScope int32
 
 const (
-	// Defaults to FULL for compatibility with existing snapshot configuration.
+	// Unspecified snapshot content scope.
 	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED SnapshotContentScope = 0
 	// Captures process memory, root filesystem changes, and durable data.
 	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL SnapshotContentScope = 1
@@ -2449,24 +2449,27 @@ func (x *SandboxConfig) GetConfigName() string {
 // +k8s:customValidation # on_commit must be a subset of on_pause
 type SnapshotsConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// on_pause selects what is captured during pause actor. UNSPECIFIED is
-	// tolerated for compatibility and reads as FULL.
+	// on_pause defines the scope of the snapshot captured when an actor
+	// is paused. Defaults to FULL when unset.
 	//
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
 	OnPause SnapshotContentScope `protobuf:"varint,1,opt,name=on_pause,json=onPause,proto3,enum=ateapi.SnapshotContentScope" json:"on_pause,omitempty"`
-	// on_commit selects what captures.
+	// on_commit defines the scope of the actor snapshot captured when an actor
+	// is suspended.
 	// Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+	// Defaults to FULL when unset.
 	//
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
 	OnCommit SnapshotContentScope `protobuf:"varint,2,opt,name=on_commit,json=onCommit,proto3,enum=ateapi.SnapshotContentScope" json:"on_commit,omitempty"`
 	// on_resume selects, per snapshot situation, what supplies the guest state
-	// at resume. Unset means the defaults documented on OnResumeConfig.
+	// at resume. Defaults to the per-field defaults documented on
+	// OnResumeConfig when unset on create.
 	//
-	// +k8s:optional
+	// +k8s:required
 	OnResume *OnResumeConfig `protobuf:"bytes,3,opt,name=on_resume,json=onResume,proto3" json:"on_resume,omitempty"`
 	// storage_location is the base object-storage URI snapshots of actors on
 	// this version are stored under. Required.
@@ -2544,9 +2547,9 @@ func (x *SnapshotsConfig) GetStorageLocation() string {
 type OnResumeConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// from_data applies when the resume uses a DATA-scope snapshot (from
-	// on_pause or on_commit). UNSPECIFIED selects the documented default.
+	// on_pause or on_commit). Defaults to COLD_BOOT when unset.
 	//
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the ResumeSource enum
 	FromData      ResumeSource `protobuf:"varint,1,opt,name=from_data,json=fromData,proto3,enum=ateapi.ResumeSource" json:"from_data,omitempty"`
@@ -2942,9 +2945,9 @@ type ContainerReadyz struct {
 	// +k8s:required
 	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// timeout_seconds bounds how long to poll http_get before failing the
-	// actor start. 0 means the server-applied default (30s).
+	// actor start. Defaults to 30 when unset.
 	//
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=3600
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
@@ -2999,10 +3002,11 @@ func (x *ContainerReadyz) GetTimeoutSeconds() int32 {
 // HTTPGetAction describes an HTTP GET against the container's interior IP.
 type HTTPGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// path defaults to "/readyz". Must be a URL path starting with "/", using
-	// only RFC 3986 path-segment characters, without query or fragment.
+	// path must be a URL path starting with "/", using only RFC 3986
+	// path-segment characters, without query or fragment.
+	// Defaults to "/readyz" when unset.
 	//
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:maxLength=1024
 	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`

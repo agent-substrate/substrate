@@ -113,7 +113,6 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 	}{
 		{"data", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
 		{"full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-		{"unset defaults to full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

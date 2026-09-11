@@ -45,11 +45,13 @@ import (
 )
 
 func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
-	// First scrub any fields that users are not allowed to set.
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	inActor := req.Actor
 	if inActor != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inActor.Metadata)
 		inActor.Status = nil
+		defaultActor(inActor)
 	}
 
 	// Validate the request, including the object within it.
@@ -264,6 +266,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 		// Restore status and metadata from the server.
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
+		defaultActor(toUpdate)
 		return nil
 	})
 	if err != nil {

@@ -27,15 +27,6 @@ func actorSnapshotContentScopeToAtelet(in ateapipb.SnapshotContentScope) ateletp
 	return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 }
 
-// effectiveContentScope normalizes a template snapshot scope for comparisons:
-// UNSPECIFIED means FULL, on both the converted CRD and the stored resource.
-func effectiveContentScope(in ateapipb.SnapshotContentScope) ateapipb.SnapshotContentScope {
-	if in == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
-		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-	}
-	return in
-}
-
 // sandboxClassString renders the proto enum in the CRD's lower-case string
 // form, which the scheduler and the metric labels share.
 func sandboxClassString(in ateapipb.SandboxClass) string {

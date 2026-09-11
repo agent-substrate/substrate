@@ -213,7 +213,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if actorTemplate.GetSnapshotsConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
 		dataOnly := false
 		if actor.GetStatus().GetLocalSnapshotInfo() != nil {
-			dataOnly = effectiveContentScope(actorTemplate.GetSnapshotsConfig().GetOnPause()) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+			dataOnly = actorTemplate.GetSnapshotsConfig().GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		} else if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
 			dataOnly = src.Scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		}
