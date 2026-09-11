@@ -253,6 +253,59 @@ func probeJSON(ctx context.Context, t *testing.T, router *e2e.RouterClient, acto
 	return out
 }
 
+// requireContent fails unless path holds want. Used to verify a mount
+// delivers what the volume behind it should.
+func requireContent(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path, want string) {
+	t.Helper()
+
+	got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+path)
+	if got["error"] != "" {
+		t.Fatalf("reading %s: %s", path, got["error"])
+	}
+	if got["content"] != want {
+		t.Errorf("content at %s = %q, want %q", path, got["content"], want)
+	}
+}
+
+// requireContentAtBoth fails unless both paths hold want, so both mounts must
+// be live and backed by the same volume.
+func requireContentAtBoth(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, pathA, pathB, want string) {
+	t.Helper()
+
+	requireContent(ctx, t, router, actorRef, pathA, want)
+	requireContent(ctx, t, router, actorRef, pathB, want)
+}
+
+// requireUnreadable fails if path can be read.
+func requireUnreadable(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) {
+	t.Helper()
+
+	if got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+path); got["error"] == "" {
+		t.Errorf("%s is readable (%q), want it hidden", path, got["content"])
+	}
+}
+
+// requireWriteRejected fails if path can be written.
+func requireWriteRejected(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) {
+	t.Helper()
+
+	if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+path); got["error"] == "" {
+		t.Errorf("write to %s succeeded, want it rejected as read-only", path)
+	}
+}
+
+// requireSharedWrite writes through writePath and requires the content at both
+// paths: writePath confirms the write persisted, aliasPath that the two mounts
+// reach the same volume.
+func requireSharedWrite(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, writePath, aliasPath string) {
+	t.Helper()
+
+	if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+writePath); got["error"] != "" {
+		t.Fatalf("writing %s: %s", writePath, got["error"])
+	}
+	requireContentAtBoth(ctx, t, router, actorRef, writePath, aliasPath, probeWrittenContent)
+}
+
 func TestImageVolume(t *testing.T) {
 	repo := os.Getenv("KO_DOCKER_REPO")
 	if repo == "" {
@@ -296,76 +349,34 @@ func TestImageVolume(t *testing.T) {
 	payloadPath := mountPath + "/" + payloadName
 
 	t.Run("DeliversImageContents", func(t *testing.T) {
-		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+payloadPath)
-		if got["error"] != "" {
-			t.Fatalf("reading %s: %s", payloadPath, got["error"])
-		}
-		if got["content"] != payloadContent {
-			t.Errorf("content = %q, want %q", got["content"], payloadContent)
-		}
+		requireContent(ctx, t, router, actorRef, payloadPath, payloadContent)
 	})
 
 	t.Run("UpperLayerWins", func(t *testing.T) {
-		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+mountPath+"/"+shadowedName)
-		if got["error"] != "" {
-			t.Fatalf("reading %s: %s", shadowedName, got["error"])
-		}
-		if got["content"] != shadowedContent {
-			t.Errorf("content = %q, want %q from the upper layer", got["content"], shadowedContent)
-		}
+		requireContent(ctx, t, router, actorRef, mountPath+"/"+shadowedName, shadowedContent)
 	})
 
 	t.Run("WhiteoutHidesLowerLayerFile", func(t *testing.T) {
-		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+mountPath+"/"+deletedName)
-		if got["error"] == "" {
-			t.Errorf("%s is readable (%q), want it hidden by the whiteout", deletedName, got["content"])
-		}
+		requireUnreadable(ctx, t, router, actorRef, mountPath+"/"+deletedName)
 	})
 
 	t.Run("MountIsReadOnly", func(t *testing.T) {
-		got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+mountPath+"/should-not-exist")
-		if got["error"] == "" {
-			t.Errorf("write to the image volume succeeded, want it rejected as read-only")
-		}
+		requireWriteRejected(ctx, t, router, actorRef, mountPath+"/should-not-exist")
 	})
 
 	t.Run("SameImageVolumeAtTwoPaths", func(t *testing.T) {
-		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+mountPathAlias+"/"+payloadName)
-		if got["error"] != "" {
-			t.Fatalf("reading %s through the alias mount: %s", payloadName, got["error"])
-		}
-		if got["content"] != payloadContent {
-			t.Errorf("content through alias mount = %q, want %q", got["content"], payloadContent)
-		}
+		requireContentAtBoth(ctx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
 	})
 
 	t.Run("SameDurableVolumeAtTwoPathsSharesWrites", func(t *testing.T) {
-		if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+scratchPathA+"/multi.txt"); got["error"] != "" {
-			t.Fatalf("writing through %s: %s", scratchPathA, got["error"])
-		}
-		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+scratchPathB+"/multi.txt")
-		if got["error"] != "" {
-			t.Fatalf("reading through %s what was written through %s: %s", scratchPathB, scratchPathA, got["error"])
-		}
-		if got["content"] != probeWrittenContent {
-			t.Errorf("content through second mount = %q, want %q", got["content"], probeWrittenContent)
-		}
+		requireSharedWrite(ctx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt")
 	})
 
 	t.Run("SameExternalVolumeAtTwoPathsSharesWrites", func(t *testing.T) {
 		if storageClass == "" {
 			t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
 		}
-		if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+extPathA+"/multi.txt"); got["error"] != "" {
-			t.Fatalf("writing through %s: %s", extPathA, got["error"])
-		}
-		got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+extPathB+"/multi.txt")
-		if got["error"] != "" {
-			t.Fatalf("reading through %s what was written through %s: %s", extPathB, extPathA, got["error"])
-		}
-		if got["content"] != probeWrittenContent {
-			t.Errorf("content through second mount = %q, want %q", got["content"], probeWrittenContent)
-		}
+		requireSharedWrite(ctx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt")
 	})
 
 	t.Run("SurvivesSuspendResume", func(t *testing.T) {
@@ -373,45 +384,20 @@ func TestImageVolume(t *testing.T) {
 			t.Fatalf("SuspendActor: %v", err)
 		}
 
-		// No explicit resume: routing to the actor is what wakes it.
+		// No explicit resume: routing to the actor is what wakes it. Restore
+		// must re-establish all mounts and preserve shared writes across them.
 		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		got := probeJSON(resumeCtx, t, router, actorRef, "/readfile?path="+payloadPath)
-		if got["error"] != "" {
-			t.Fatalf("reading %s after resume: %s", payloadPath, got["error"])
-		}
-		if got["content"] != payloadContent {
-			t.Errorf("content after resume = %q, want %q", got["content"], payloadContent)
-		}
+		requireContentAtBoth(resumeCtx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
+		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", probeWrittenContent)
 
-		// Restore must re-establish all mounts and preserve shared writes across them.
-		got = probeJSON(resumeCtx, t, router, actorRef, "/readfile?path="+mountPathAlias+"/"+payloadName)
-		if got["error"] != "" {
-			t.Fatalf("reading %s through the alias mount after resume: %s", payloadName, got["error"])
-		}
-		if got["content"] != payloadContent {
-			t.Errorf("content through alias mount after resume = %q, want %q", got["content"], payloadContent)
-		}
-
-		got = probeJSON(resumeCtx, t, router, actorRef, "/readfile?path="+scratchPathB+"/multi.txt")
-		if got["error"] != "" {
-			t.Fatalf("reading %s/multi.txt after resume: %s", scratchPathB, got["error"])
-		}
-		if got["content"] != probeWrittenContent {
-			t.Errorf("content through second mount after resume = %q, want %q", got["content"], probeWrittenContent)
-		}
-
-		if storageClass == "" {
-			return
-		}
 		// Suspend detached the external volume; the resume must reattach it
 		// once and restore both of its mounts.
-		got = probeJSON(resumeCtx, t, router, actorRef, "/readfile?path="+extPathB+"/multi.txt")
-		if got["error"] != "" {
-			t.Fatalf("reading %s/multi.txt after resume: %s", extPathB, got["error"])
-		}
-		if got["content"] != probeWrittenContent {
-			t.Errorf("external content through second mount after resume = %q, want %q", got["content"], probeWrittenContent)
-		}
+		t.Run("ExternalVolumeReattached", func(t *testing.T) {
+			if storageClass == "" {
+				t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
+			}
+			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt", probeWrittenContent)
+		})
 	})
 }
