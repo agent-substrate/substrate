@@ -392,6 +392,18 @@ message EgressPolicy {
   repeated EgressRule rules = 2;
 }
 
+// EgressPolicyTemplate defines an initial Actor egress policy without resource
+// metadata. Rules have the same meaning and validation as EgressPolicy.rules.
+message EgressPolicyTemplate {
+  // Rules are evaluated in order, with the same semantics as EgressPolicy.rules.
+  // A request is denied when no rule matches.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=256
+  // +k8s:listType=atomic # rule order matters
+  repeated EgressRule rules = 1;
+}
+
 // EgressRule authorizes a request using exactly one destination matcher.
 message EgressRule {
   // Matches when the request hostname matches any configured pattern. Effects
@@ -767,6 +779,14 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 8;
+
+  // Initial egress policy, copied atomically when an Actor is created from
+  // this template. The policy is named "default" in the Actor's atespace.
+  // Later template changes do not affect existing Actors' policies, which
+  // callers may update or delete independently. If absent, no policy is created.
+  //
+  // +k8s:optional
+  EgressPolicyTemplate default_egress_policy = 9;
 }
 
 message Resources {

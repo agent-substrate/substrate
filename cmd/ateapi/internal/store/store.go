@@ -70,7 +70,10 @@ type Interface interface {
 	// server-assigned metadata (uid, version, timestamps). The input is not
 	// mutated. Returns ErrAlreadyExists if key is taken, or
 	// ErrFailedPrecondition if the actor's atespace does not exist.
-	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
+	// If policy is non-nil, atomically creates the actor's default egress policy
+	// as well, with server-assigned metadata, the actor's atespace, and name
+	// "default". The policy input is not mutated. A nil policy creates no policy.
+	CreateActor(ctx context.Context, actor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error)
 
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
