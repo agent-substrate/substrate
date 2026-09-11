@@ -3555,10 +3555,10 @@ func Validate_GoldenSnapshotStatus(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.GoldenSnapshotStatus) (errs field.ErrorList) {
 
-	{ // field ateapipb.GoldenSnapshotStatus.GoldenSnapshot
+	{ // field ateapipb.GoldenSnapshotStatus.GoldenTag
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.ExternalSnapshot,
+			obj, oldObj *ateapipb.ObjectRef,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -3574,15 +3574,30 @@ func Validate_GoldenSnapshotStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
-			errs = append(errs, Validate_ExternalSnapshot(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.GoldenSnapshotStatus) *ateapipb.ExternalSnapshot {
-				return oldObj.GoldenSnapshot
+			func(oldObj *ateapipb.GoldenSnapshotStatus) *ateapipb.ObjectRef {
+				return oldObj.GoldenTag
 			})
-		errs = append(errs, fn(fldPath.Child("golden_snapshot"), obj.GoldenSnapshot, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("golden_tag"), obj.GoldenTag, oldVal, oldObj != nil)...)
 	}
 
 	// field ateapipb.GoldenSnapshotStatus.TakeGoldenSnapshotAt has no validation

@@ -124,7 +124,7 @@ service Control {
   rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
 
   // Delete an ActorTemplate together with its golden actor and golden
-  // snapshot in the ActorTemplate's namespace.
+  // tag in the reserved ate-golden atespace.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
 }
 
@@ -796,12 +796,11 @@ message Limits {
 }
 
 message GoldenSnapshotStatus {
-  // golden_snapshot is the external snapshot built for this version by
-  // ate-api, taken from the golden Actor in the reserved ate-golden system
-  // atespace. Set once state is READY. The golden Actor owns it.
-  //
+  // golden_tag owns the immutable snapshot built by the template controller.
+  // Set after tagging the snapshot and deleting the temporary golden Actor.
   // +k8s:optional
-  ExternalSnapshot golden_snapshot = 1;
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef golden_tag = 1;
 
   // take_golden_snapshot_at is when the golden-actor warmup ends and the
   // golden snapshot may be taken.

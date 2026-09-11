@@ -2269,12 +2269,11 @@ func (x *Limits) GetQuantity() string {
 
 type GoldenSnapshotStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// golden_snapshot is the external snapshot built for this version by
-	// ate-api, taken from the golden Actor in the reserved ate-golden system
-	// atespace. Set once state is READY. The golden Actor owns it.
-	//
+	// golden_tag owns the immutable snapshot built by the template controller.
+	// Set after tagging the snapshot and deleting the temporary golden Actor.
 	// +k8s:optional
-	GoldenSnapshot *ExternalSnapshot `protobuf:"bytes,1,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
+	// +k8s:subfield(atespace)=+k8s:required
+	GoldenTag *ObjectRef `protobuf:"bytes,1,opt,name=golden_tag,json=goldenTag,proto3" json:"golden_tag,omitempty"`
 	// take_golden_snapshot_at is when the golden-actor warmup ends and the
 	// golden snapshot may be taken.
 	TakeGoldenSnapshotAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=take_golden_snapshot_at,json=takeGoldenSnapshotAt,proto3" json:"take_golden_snapshot_at,omitempty"`
@@ -2313,9 +2312,9 @@ func (*GoldenSnapshotStatus) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{21}
 }
 
-func (x *GoldenSnapshotStatus) GetGoldenSnapshot() *ExternalSnapshot {
+func (x *GoldenSnapshotStatus) GetGoldenTag() *ObjectRef {
 	if x != nil {
-		return x.GoldenSnapshot
+		return x.GoldenTag
 	}
 	return nil
 }
@@ -6872,9 +6871,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xd1\x01\n" +
-	"\x14GoldenSnapshotStatus\x12A\n" +
-	"\x0fgolden_snapshot\x18\x01 \x01(\v2\x18.ateapi.ExternalSnapshotR\x0egoldenSnapshot\x12Q\n" +
+	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xc0\x01\n" +
+	"\x14GoldenSnapshotStatus\x120\n" +
+	"\n" +
+	"golden_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\tgoldenTag\x12Q\n" +
 	"\x17take_golden_snapshot_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x14takeGoldenSnapshotAt\x12#\n" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"i\n" +
 	"\x13ActorTemplateStatus\x12R\n" +
@@ -7352,7 +7352,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	28,  // 37: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
 	31,  // 38: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
 	29,  // 39: ateapi.Resources.limits:type_name -> ateapi.Limits
-	9,   // 40: ateapi.GoldenSnapshotStatus.golden_snapshot:type_name -> ateapi.ExternalSnapshot
+	26,  // 40: ateapi.GoldenSnapshotStatus.golden_tag:type_name -> ateapi.ObjectRef
 	106, // 41: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
 	30,  // 42: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
 	3,   // 43: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
