@@ -210,6 +210,9 @@ func (c *Cache) resync(ctx context.Context) *store.WorkerWatch {
 	return watch
 }
 
+// applyEvent applies one worker event to the cache. Events may arrive out of
+// order or more than once, so a create or update older than what the cache
+// already holds is discarded.
 func (c *Cache) applyEvent(event store.WorkerEvent) {
 	key := workerKey(event.Worker)
 	c.mu.Lock()

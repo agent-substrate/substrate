@@ -88,8 +88,9 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 		return nil, err
 	}
 
+	var payload []byte
 	if worker != nil {
-		payload, err := marshalWorkerEvent(eventType, worker)
+		payload, err = marshalWorkerEvent(eventType, worker)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling worker event: %w", err)
 		}
@@ -100,6 +101,9 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing transaction: %w", err)
+	}
+	if payload != nil {
+		p.publishLocally(ctx, payload)
 	}
 	return worker, nil
 }
@@ -439,7 +443,9 @@ func (p *Persistence) truncateWorkerOutboxDefault(ctx context.Context, q querier
 // to guarantee gap-free delivery. Note that a long-running transaction anywhere
 // in the database will stall delivery.
 //
-// Events are delivered in xid order, so consumers must reconcile worker versions.
+// This process's own writes are published at commit, out of xid order, and again
+// on the poll, so consumers must reconcile versions and tolerate duplicates.
+//
 // If the watcher detects missed events—either by lagging behind retention drops
 // or if a database restart truncates the UNLOGGED partitions—it closes the channel
 // to force the consumer to resync from the primary tables.
@@ -462,8 +468,14 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	}
 
 	ch := make(chan store.WorkerEvent, 128)
+	// Committed writes in this process are published straight onto ch, ahead
+	// of the poll that would carry them.
+	p.addWatcher(ch)
 	go func() {
-		defer close(ch)
+		defer func() {
+			p.removeWatcher(ch)
+			close(ch)
+		}()
 		ticker := time.NewTicker(outboxPollInterval)
 		defer ticker.Stop()
 		// failingSince limits how long consumers serve stale state during an outage.

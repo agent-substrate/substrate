@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -58,6 +59,46 @@ type Persistence struct {
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
 	maintenanceDone       chan struct{}
+	// watchMu guards watchers, the live WatchWorkers channels.
+	watchMu  sync.Mutex
+	watchers map[chan store.WorkerEvent]struct{}
+}
+
+// addWatcher enrolls a WatchWorkers channel to receive locally published events.
+func (p *Persistence) addWatcher(ch chan store.WorkerEvent) {
+	p.watchMu.Lock()
+	defer p.watchMu.Unlock()
+	p.watchers[ch] = struct{}{}
+}
+
+// removeWatcher unenrolls a channel. The caller must call it before closing
+// the channel: once it returns, publishLocally can no longer send on it.
+func (p *Persistence) removeWatcher(ch chan store.WorkerEvent) {
+	p.watchMu.Lock()
+	defer p.watchMu.Unlock()
+	delete(p.watchers, ch)
+}
+
+// publishLocally hands a committed event to this process's watchers a poll
+// interval ahead of the outbox, one copy each. Sends are non-blocking: a
+// watcher with a full buffer is skipped and gets the event from the outbox.
+func (p *Persistence) publishLocally(ctx context.Context, payload []byte) {
+	p.watchMu.Lock()
+	defer p.watchMu.Unlock()
+	if len(p.watchers) == 0 {
+		return
+	}
+	event, err := unmarshalWorkerEvent(payload)
+	if err != nil {
+		slog.ErrorContext(ctx, "decoding locally published worker event failed", slog.Any("err", err))
+		return
+	}
+	for ch := range p.watchers {
+		select {
+		case ch <- store.WorkerEvent{Type: event.Type, Worker: proto.Clone(event.Worker).(*ateapipb.Worker)}:
+		default:
+		}
+	}
 }
 
 var _ store.Interface = (*Persistence)(nil)
@@ -175,7 +216,15 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
-	p := &Persistence{pool: pool, watchPool: watchPool, leaseTTL: defaultLeaseTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	p := &Persistence{
+		pool:                  pool,
+		watchPool:             watchPool,
+		leaseTTL:              defaultLeaseTTL,
+		pollFailureCloseAfter: outboxPollFailureCloseAfter,
+		stopMaintenance:       stopMaintenance,
+		maintenanceDone:       make(chan struct{}),
+		watchers:              make(map[chan store.WorkerEvent]struct{}),
+	}
 	// Cover the partition lead before accepting writes; from then on the
 	// maintenance loop keeps partitions ahead of the clock (and the
 	// DEFAULT partition catches writes if it ever falls behind).
