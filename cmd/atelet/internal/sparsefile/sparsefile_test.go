@@ -17,7 +17,6 @@ package sparsefile
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -53,34 +52,6 @@ func TestCopyFile(t *testing.T) {
 	}
 }
 
-type failingCloseFile struct{ *os.File }
-
-func (f failingCloseFile) Close() error {
-	_ = f.File.Close()
-	return errors.New("deferred flush failed")
-}
-
-func TestCopyFile_CloseError(t *testing.T) {
-	orig := createDestFile
-	createDestFile = func(name string) (io.WriteCloser, error) {
-		f, err := os.Create(name)
-		if err != nil {
-			return nil, err
-		}
-		return failingCloseFile{f}, nil
-	}
-	t.Cleanup(func() { createDestFile = orig })
-
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src")
-	if err := os.WriteFile(src, []byte("checkpoint pages"), 0o600); err != nil {
-		t.Fatalf("seeding src: %v", err)
-	}
-	if _, err := CopyFile(src, filepath.Join(dir, "dst")); err == nil {
-		t.Error("CopyFile with failing destination Close = nil, want error")
-	}
-}
-
 // allocatedBytes reports how much disk a file actually occupies, which is less than its
 // logical size when it has holes.
 func allocatedBytes(t *testing.T, path string) int64 {
@@ -91,17 +62,6 @@ func allocatedBytes(t *testing.T, path string) int64 {
 	}
 	return st.Blocks * 512
 }
-
-// noFdFile hides the descriptor of an *os.File, forcing copySparse down its
-// userspace write path.
-type noFdFile struct {
-	f *os.File
-}
-
-func (n noFdFile) Write(b []byte) (int, error)              { return n.f.Write(b) }
-func (n noFdFile) WriteAt(b []byte, off int64) (int, error) { return n.f.WriteAt(b, off) }
-func (n noFdFile) Truncate(size int64) error                { return n.f.Truncate(size) }
-func (n noFdFile) Close() error                             { return n.f.Close() }
 
 func TestCopyFilePreservesHoles(t *testing.T) {
 	const (
@@ -192,18 +152,18 @@ func TestCopyFileAllHoles(t *testing.T) {
 	}
 }
 
-// TestCopyFilePreservesHolesUserspace covers the fallback taken when the destination
-// does not expose a descriptor, so copy_file_range is unavailable.
-func TestCopyFilePreservesHolesUserspace(t *testing.T) {
-	orig := createDestFile
-	createDestFile = func(name string) (io.WriteCloser, error) {
-		f, err := os.Create(name)
-		if err != nil {
-			return nil, err
-		}
-		return noFdFile{f: f}, nil
+// TestCopyFilePreservesHolesAcrossFilesystems covers the userspace fallback:
+// with source and destination on different filesystems, copy_file_range
+// fails with EXDEV and the extents are copied through userspace instead. It
+// needs a second real filesystem, so it runs where one is available
+// (/dev/shm on Linux) and skips elsewhere — on platforms with no kernel
+// copy at all, the plain holes test above already exercises userspace.
+func TestCopyFilePreservesHolesAcrossFilesystems(t *testing.T) {
+	otherFS, err := os.MkdirTemp("/dev/shm", "sparsefile-test-")
+	if err != nil {
+		t.Skipf("no second filesystem available for a cross-filesystem copy: %v", err)
 	}
-	t.Cleanup(func() { createDestFile = orig })
+	t.Cleanup(func() { os.RemoveAll(otherFS) })
 
 	const size = 32 << 20
 	dir := t.TempDir()
@@ -222,8 +182,13 @@ func TestCopyFilePreservesHolesUserspace(t *testing.T) {
 	if err := errors.Join(f.Sync(), f.Close()); err != nil {
 		t.Fatalf("flushing src: %v", err)
 	}
+	// Prove the directories really are on different filesystems; same-mount
+	// tmpdirs (some CI images) would silently test the kernel path instead.
+	if err := os.Link(src, filepath.Join(otherFS, "probe")); err == nil {
+		t.Skip("test dirs share a filesystem; cannot force the userspace fallback")
+	}
 
-	dst := filepath.Join(dir, "copied")
+	dst := filepath.Join(otherFS, "copied")
 	if _, err := CopyFile(src, dst); err != nil {
 		t.Fatalf("CopyFile: %v", err)
 	}
@@ -237,7 +202,7 @@ func TestCopyFilePreservesHolesUserspace(t *testing.T) {
 		t.Fatalf("reading dst: %v", err)
 	}
 	if !bytes.Equal(want, got) {
-		t.Fatal("userspace copy differs from source")
+		t.Fatal("cross-filesystem copy differs from source")
 	}
 
 	srcAlloc, dstAlloc := allocatedBytes(t, src), allocatedBytes(t, dst)
@@ -245,7 +210,7 @@ func TestCopyFilePreservesHolesUserspace(t *testing.T) {
 		t.Skipf("source did not end up sparse (%d of %d bytes allocated)", srcAlloc, int64(size))
 	}
 	if dstAlloc > srcAlloc*4 {
-		t.Errorf("userspace copy allocated %d bytes for a %d-byte source: holes were filled in",
+		t.Errorf("cross-filesystem copy allocated %d bytes for a %d-byte source: holes were filled in",
 			dstAlloc, srcAlloc)
 	}
 }

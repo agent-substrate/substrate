@@ -26,19 +26,22 @@ import (
 	"time"
 )
 
-// FileFetcher produces a single-file artifact at dstPath (creating the file
-// itself, so it can seek and truncate for sparse output). It runs at most
-// once per key across concurrent GetFileTo callers, detached from their
-// contexts and bounded by the store's fetch timeout. Its error is delivered
-// to every caller waiting on the flight, wrapped with %w so error
-// classification (errors.Is) sees through the store.
+// FileFetcher downloads a single-file artifact to dstPath, creating the file
+// itself so it can seek and truncate for sparse output. The store runs it at
+// most once per key across concurrent callers, detached from their contexts
+// and bounded by the fetch timeout. Its error reaches every waiting caller
+// wrapped with %w, so errors.Is classification sees through the store.
 type FileFetcher func(ctx context.Context, dstPath string) error
 
-// linkRetries bounds the publish-then-link loop in GetFileTo. An entry can
-// be evicted between a flight completing and this caller's link only if it
-// sat unlinked past the store's min age, so a single retry is already an
-// anomaly; more than a few means something is deleting entries out from
-// under the store.
+// serveHit materializes a published cache entry at the caller's destination:
+// (*Store).linkOut serves a hard link, (*Store).copyOut a private copy. It
+// reports false, with no error, on a cache miss.
+type serveHit func(key Key, dst string) (bool, error)
+
+// linkRetries bounds the fetch-then-serve loop. An entry can be evicted
+// between a fetch publishing and this caller's serve only if it sat unused
+// past the store's min age, so a single retry is already an anomaly; more
+// than a few means something else is deleting under the store root.
 const linkRetries = 3
 
 // GetFileTo materializes the artifact identified by key at dst, fetching it
@@ -58,9 +61,9 @@ func (s *Store) GetFileTo(ctx context.Context, key Key, dst string, fetch FileFe
 }
 
 // getTo is the read-through loop shared by GetFileTo and GetFileCopyTo:
-// serve a hit via out (link or copy), else run the singleflight fetch and
-// retry.
-func (s *Store) getTo(ctx context.Context, key Key, dst string, fetch FileFetcher, out func(Key, string) (bool, error)) error {
+// serve a hit, else run the singleflight fetch and retry. serve is the only
+// difference between the two public methods.
+func (s *Store) getTo(ctx context.Context, key Key, dst string, fetch FileFetcher, serve serveHit) error {
 	if key.isZero() {
 		return errors.New("filecache: zero Key (use a Key constructor)")
 	}
@@ -71,7 +74,7 @@ func (s *Store) getTo(ctx context.Context, key Key, dst string, fetch FileFetche
 		return errors.New("filecache: nil FileFetcher")
 	}
 	for attempt := 0; ; attempt++ {
-		served, err := out(key, dst)
+		served, err := serve(key, dst)
 		if err != nil {
 			return err
 		}

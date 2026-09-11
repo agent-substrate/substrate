@@ -23,9 +23,57 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// allocatedSize returns the bytes a file actually occupies on disk
+// (st_blocks), not its logical length. The cache's biggest artifacts are
+// sparse guest memory images, whose logical size can exceed their footprint
+// by orders of magnitude, and every byte figure the store reports is
+// compared against real disk usage (statfs watermarks, byte budgets).
+func allocatedSize(info fs.FileInfo) int64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return st.Blocks * 512
+	}
+	return info.Size()
+}
+
+// TotalBytes sums the allocated (on-disk) bytes of all published entries'
+// regular files. It is the GC driver's usage measure against the store's
+// byte budget.
+func (s *Store) TotalBytes(ctx context.Context) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(s.entriesDir(), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// An entry retired mid-walk is not an error; skip what vanished.
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		total += allocatedSize(info)
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("while sizing entries: %w", err)
+	}
+	return total, nil
+}
 
 // EvictStats reports what an EvictUnused pass did (or, dry-run, would do).
 type EvictStats struct {
@@ -63,11 +111,11 @@ type evictCandidate struct {
 
 // EvictUnused frees cache space until targetBytes of actually-freeable
 // bytes are reclaimed or no eligible entries remain, least-recently-used
-// first. It never removes an entry younger than the store's min age, never
-// races a fetch or a hit (both veto at retire time), and never breaks a
-// consumer: an entry whose data is still hard-linked can be retired — its
-// bytes count as pending, freed by the kernel when the last consumer link
-// goes — so the worst outcome for any caller is a re-download.
+// first. Entries younger than the store's min age are skipped, and a hit or
+// fetch racing the pass vetoes its entry at retire time. Retiring an entry
+// never invalidates files already served from it: a consumer's hard link
+// keeps its bytes (counted as pending until the link goes), so eviction
+// only ever costs the next caller a re-download.
 //
 // With dryRun, nothing is touched and the stats report what a real pass
 // would have chosen. Passes are pressure-driven: the caller decides when
@@ -81,6 +129,15 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 	defer s.evictMu.Unlock()
 
 	var errs []error
+	// A .rm-* dir outlives a pass only when its RemoveAll failed. Retry
+	// those first — only eviction creates them while the store serves, and
+	// evictMu is held, so the retry races nothing — instead of leaving the
+	// bytes to the next restart's SweepDebris.
+	if !dryRun {
+		if err := s.removeRetiredLeftovers(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	candidates, err := s.listCandidates(ctx)
 	if err != nil {
 		// Per-entry listing failures: the pass still works the entries it
@@ -160,6 +217,27 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 		stats.FreedBytes += r.freed
 	}
 	return stats, errors.Join(errs...)
+}
+
+// removeRetiredLeftovers retries the physical removal of .rm-* dirs an
+// earlier pass failed to delete. The freed bytes are not credited to any
+// stats: they were already selected (and possibly counted) by the pass that
+// retired them.
+func (s *Store) removeRetiredLeftovers() error {
+	children, err := os.ReadDir(s.root)
+	if err != nil {
+		return fmt.Errorf("while listing store root: %w", err)
+	}
+	var errs []error
+	for _, child := range children {
+		if !strings.HasPrefix(child.Name(), rmPrefix) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(s.root, child.Name())); err != nil {
+			errs = append(errs, fmt.Errorf("while removing retired leftover %q: %w", child.Name(), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // listCandidates snapshots the published entries. Deliberately lock-free
@@ -246,11 +324,10 @@ func (s *Store) sizeEntry(entryDir string) (size int64, linked bool, err error) 
 
 // retireEntry removes c from the cache's namespace if it is still exactly
 // the entry the pass listed, returning the renamed .rm-* path and whether
-// it retired. It runs inside the key's singleflight — joining an in-flight
-// fetch instead of racing it (the join's shared result leaves retired
-// false) — and takes hitMu exclusively for the final re-check and rename,
-// so a hit can never link out of an entry being retired. A moved last-use
-// clock is a veto, not an error.
+// it retired. It runs inside the key's singleflight (joining any in-flight
+// fetch rather than racing it) and takes hitMu exclusively for the final
+// re-check and rename, so a hit cannot be served from an entry mid-retire.
+// A moved last-use clock is a veto, not an error.
 func (s *Store) retireEntry(c evictCandidate) (string, bool, error) {
 	var rmPath string
 	var retired bool

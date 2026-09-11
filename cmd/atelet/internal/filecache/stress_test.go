@@ -26,20 +26,17 @@ import (
 	"time"
 )
 
-// TestStressGetsAgainstEviction pins the package's core invariant under the
-// race detector: with linkers, copiers, and evictors hammering the same
-// keys, every get succeeds with correct content — eviction may force
-// refetches, but can never fail a caller or corrupt what one received. The
-// store's min age must exceed a get's publish-to-use window (here: generous
-// versus microseconds), which is the same sizing contract production relies
-// on.
+// TestStressGetsAgainstEviction runs linkers, copiers, and evictors against
+// the same keys under the race detector. The invariant: every get succeeds
+// with correct content — eviction may force refetches, never a failure or
+// corruption. The store's min age must exceed a get's publish-to-use
+// window, the same sizing contract production relies on.
 //
-// The storm proves it ran without depending on scheduling luck: two seeded
-// keys stay idle (getters never touch them, so their last-use clocks stay
-// an hour stale), which guarantees the first eviction pass retires
-// something, and a post-storm get of an idle key demonstrates the
-// eviction-forced refetch. The hot keys' evictions remain best-effort —
-// constant hits legitimately keep them young.
+// Two seeded keys stay idle (getters never touch them), so the first
+// eviction pass retires something regardless of scheduling, and a
+// post-storm get of an idle key checks the eviction-forced refetch.
+// Hot-key evictions remain best-effort: constant hits legitimately keep
+// them young.
 func TestStressGetsAgainstEviction(t *testing.T) {
 	s := newTestStore(t, WithMinAge(200*time.Millisecond))
 	const keys = 8

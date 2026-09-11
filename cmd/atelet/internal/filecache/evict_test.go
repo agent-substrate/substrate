@@ -305,6 +305,27 @@ func TestEvictUnusedReportsUnreadableEntries(t *testing.T) {
 	}
 }
 
+// TestEvictUnusedRemovesRetiredLeftovers pins the retry: a .rm-* dir left
+// by a pass whose RemoveAll failed is deleted by the next pass instead of
+// waiting for a restart's SweepDebris.
+func TestEvictUnusedRemovesRetiredLeftovers(t *testing.T) {
+	s := newTestStore(t, WithMinAge(0))
+	leftover := filepath.Join(s.root, rmPrefix+"aaaa-stuck")
+	if err := os.MkdirAll(leftover, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leftover, dataName), []byte("stranded"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.EvictUnused(context.Background(), evictAll, false); err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Errorf("retired leftover still present after a pass: %v", err)
+	}
+}
+
 func TestRetireEntryVetoesWhenLastUseMoved(t *testing.T) {
 	s := newTestStore(t, WithMinAge(0))
 	key := cacheEntry(t, s, "busy", "x", time.Hour, false)

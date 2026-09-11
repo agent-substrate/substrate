@@ -30,16 +30,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// createDestFile is a test seam for CopyFile's destination.
-var createDestFile = func(name string) (io.WriteCloser, error) { return os.Create(name) }
-
-// sparseDest is the part of *os.File a hole-preserving copy needs. Destinations that
-// do not implement it are copied densely instead.
-type sparseDest interface {
-	Truncate(size int64) error
-	WriteAt(b []byte, off int64) (int, error)
-}
-
 // errSparseUnsupported means the source filesystem cannot report holes, so the caller
 // should fall back to a dense copy.
 var errSparseUnsupported = errors.New("filesystem cannot report holes")
@@ -66,7 +56,7 @@ func CopyFile(src, dst string) (int64, error) {
 	}
 	defer source.Close()
 
-	destination, err := createDestFile(dst)
+	destination, err := os.Create(dst)
 	if err != nil {
 		return 0, err
 	}
@@ -103,21 +93,19 @@ func Copy(src, dst *os.File) (int64, error) {
 	return copyTo(src, dst, fi.Size())
 }
 
-// copyTo is the shared engine: a hole-preserving copy when both ends allow
-// it, a dense copy otherwise.
-func copyTo(source *os.File, destination io.Writer, size int64) (int64, error) {
-	if sd, ok := destination.(sparseDest); ok {
-		switch err := copySparse(source, sd, size); {
-		case err == nil:
-			return size, nil
-		case !errors.Is(err, errSparseUnsupported):
-			return 0, err
-		}
-		// Unsupported: nothing has been written yet, but probing moved the read
-		// offset, so rewind before the dense copy below.
-		if _, err := source.Seek(0, io.SeekStart); err != nil {
-			return 0, err
-		}
+// copyTo copies size bytes from source to destination, sparsely when the
+// source filesystem reports holes and densely otherwise.
+func copyTo(source, destination *os.File, size int64) (int64, error) {
+	switch err := copySparse(source, destination, size); {
+	case err == nil:
+		return size, nil
+	case !errors.Is(err, errSparseUnsupported):
+		return 0, err
+	}
+	// Unsupported: nothing has been written yet, but probing moved the read
+	// offset, so rewind before the dense copy below.
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return 0, err
 	}
 	return io.Copy(destination, source)
 }
@@ -130,7 +118,7 @@ func copyTo(source *os.File, destination io.Writer, size int64) (int64, error) {
 // that for free (os.File's ReadFrom uses copy_file_range), so without it a fully
 // populated file — a guest that really did touch all its RAM — would copy slower than
 // before.
-func copySparse(src *os.File, dst sparseDest, size int64) error {
+func copySparse(src, dst *os.File, size int64) error {
 	fd := int(src.Fd())
 
 	// Probe first so an unsupported filesystem falls back with dst untouched. ENXIO
@@ -145,12 +133,10 @@ func copySparse(src *os.File, dst sparseDest, size int64) error {
 		return err
 	}
 
-	// A destination that exposes its descriptor can be written by the kernel; anything
-	// else (the test seam substitutes plain writers) goes through userspace.
-	dstFd := -1
-	if f, ok := dst.(interface{ Fd() uintptr }); ok {
-		dstFd = int(f.Fd())
-	}
+	// The kernel copies extents until it declines (an old kernel, or source
+	// and destination on different filesystems); the rest goes through
+	// userspace.
+	useKernel := true
 	var buf []byte
 
 	for off := int64(0); off < size; {
@@ -177,8 +163,8 @@ func copySparse(src *os.File, dst sparseDest, size int64) error {
 			holeOff = size
 		}
 		for pos := dataOff; pos < holeOff; {
-			if dstFd >= 0 {
-				copied, err := kernelCopyRange(fd, dstFd, pos, holeOff-pos)
+			if useKernel {
+				copied, err := kernelCopyRange(fd, int(dst.Fd()), pos, holeOff-pos)
 				if err == nil {
 					pos += copied
 					continue
@@ -188,7 +174,7 @@ func copySparse(src *os.File, dst sparseDest, size int64) error {
 				}
 				// Give up on the kernel path for the rest of this file, but redo
 				// this chunk below: nothing was copied.
-				dstFd = -1
+				useKernel = false
 			}
 			if buf == nil {
 				buf = make([]byte, 4<<20)

@@ -26,18 +26,14 @@ import (
 )
 
 // GetFileCopyTo materializes the artifact identified by key at dst as a
-// private copy, fetching it with fetch if it is not cached. Unlike
-// GetFileTo's hard link, the result is an inode the caller owns outright
-// (mode 0600): consumers that mutate the staged file in place get one they
-// can safely write, at the cost of data-extent I/O per call — the copy
-// preserves the cached file's holes. dst must be an absolute path that does
-// not exist yet; it may be on any filesystem, a copy is not bound to the
-// cache's mount.
+// private, hole-preserving copy, fetching it with fetch if it is not
+// cached. Unlike GetFileTo's hard link, the caller owns the resulting inode
+// (mode 0600) and may mutate it in place, and dst may be on any filesystem.
+// dst must be an absolute path that does not exist yet.
 //
-// Everything else matches GetFileTo: concurrent calls for one key share a
-// single fetch, and a served copy is immune to eviction — the data is read
-// through a held-open handle, whose bytes the kernel keeps until the copy
-// completes.
+// Concurrent calls for one key share a single fetch, as in GetFileTo. A
+// copy in progress reads a held-open handle, so a concurrent eviction
+// cannot corrupt it.
 func (s *Store) GetFileCopyTo(ctx context.Context, key Key, dst string, fetch FileFetcher) error {
 	return s.getTo(ctx, key, dst, fetch, s.copyOut)
 }
@@ -73,10 +69,10 @@ func (s *Store) copyOut(key Key, dst string) (bool, error) {
 }
 
 // openData opens key's published data under the hit lock and touches the
-// entry's last-use clock, returning (nil, nil) on a miss. Holding the open
-// handle is what protects the caller afterwards: eviction may retire the
-// entry the moment the lock is released, but the inode's bytes outlive its
-// name for as long as the handle stays open.
+// entry's last-use clock, returning (nil, nil) on a miss. The open handle
+// protects the caller afterwards: eviction may retire the entry the moment
+// the lock is released, but the inode's bytes stay readable while the
+// handle is open.
 func (s *Store) openData(key Key) (*os.File, error) {
 	s.hitMu.RLock()
 	defer s.hitMu.RUnlock()
