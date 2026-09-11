@@ -79,32 +79,35 @@ func (p *Plugin) DriverName(ctx context.Context) (string, error) {
 }
 
 // CreateVolume maps to CSI Controller CreateVolume.
-func (p *Plugin) CreateVolume(ctx context.Context, name string, capacity string, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	qty, err := resource.ParseQuantity(capacity)
+func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	qty, err := resource.ParseQuantity(req.Capacity)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to parse capacity %q: %w", capacity, err)
+		return volume.CreateVolumeResponse{}, fmt.Errorf("failed to parse capacity %q: %w", req.Capacity, err)
 	}
 	capBytes := qty.Value()
 
-	req := &csi.CreateVolumeRequest{
-		Name: name,
+	csiReq := &csi.CreateVolumeRequest{
+		Name: req.Name,
 		CapacityRange: &csi.CapacityRange{
 			RequiredBytes: capBytes,
 		},
 		VolumeCapabilities: getStandardCapabilities(),
-		Parameters:         parameters,
+		Parameters:         req.Parameters,
 	}
 
-	resp, err := p.client.CreateVolume(ctx, req)
+	resp, err := p.client.CreateVolume(ctx, csiReq)
 	if err != nil {
-		return "", nil, fmt.Errorf("CSI CreateVolume failed: %w", err)
+		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume failed: %w", err)
 	}
 
 	if resp.GetVolume() == nil {
-		return "", nil, fmt.Errorf("CSI CreateVolume response returned nil volume")
+		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume response returned nil volume")
 	}
 
-	return resp.GetVolume().GetVolumeId(), resp.GetVolume().GetVolumeContext(), nil
+	return volume.CreateVolumeResponse{
+		VolumeID:      resp.GetVolume().GetVolumeId(),
+		VolumeContext: resp.GetVolume().GetVolumeContext(),
+	}, nil
 }
 
 // DeleteVolume maps to CSI Controller DeleteVolume.
@@ -121,35 +124,26 @@ func (p *Plugin) DeleteVolume(ctx context.Context, volumeID string) error {
 }
 
 // AttachVolume maps to CSI Controller ControllerPublishVolume.
-func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string) error {
-	req := &csi.ControllerPublishVolumeRequest{
-		VolumeId:         volumeID,
-		NodeId:           node,
+func (p *Plugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	csiReq := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         req.VolumeID,
+		NodeId:           req.Node,
 		VolumeCapability: getStandardCapabilities()[0], // Use primary capability
 		Readonly:         false,
 	}
 
-	resp, err := p.client.ControllerPublishVolume(ctx, req)
+	resp, err := p.client.ControllerPublishVolume(ctx, csiReq)
 	if err != nil {
 		// TODO: Query CSI driver capabilities ahead of time (e.g. during plugin initialization)
 		// to avoid calling unimplemented methods and generating spammy logs.
 		if status.Code(err) == codes.Unimplemented {
-			slog.WarnContext(ctx, "CSI ControllerPublishVolume is unimplemented by driver; skipping attach", slog.String("volume_id", volumeID), slog.String("node", node))
-			return nil
+			slog.WarnContext(ctx, "CSI ControllerPublishVolume is unimplemented by driver; skipping attach", slog.String("volume_id", req.VolumeID), slog.String("node", req.Node))
+			return volume.AttachVolumeResponse{}, nil
 		}
-		return fmt.Errorf("CSI ControllerPublishVolume failed: %w", err)
+		return volume.AttachVolumeResponse{}, fmt.Errorf("CSI ControllerPublishVolume failed: %w", err)
 	}
 
-	// NOTE: CSI ControllerPublishVolume returns PublishContext (metadata needed for mounting).
-	// Currently, Substrate VolumePlugin interface does not support returning PublishContext.
-	// We might need to store this context if the driver requires it (e.g. AWS EBS attachment info).
-	// TODO: Extend Substrate's VolumePlugin interface to return and propagate
-	// PublishContext if required by the driver for mounting.
-	if resp != nil {
-		_ = resp.GetPublishContext()
-	}
-
-	return nil
+	return volume.AttachVolumeResponse{PublishContext: resp.GetPublishContext()}, nil
 }
 
 // DetachVolume maps to CSI Controller ControllerUnpublishVolume.
@@ -172,24 +166,25 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 
 // MountVolume maps to CSI Node NodePublishVolume.
 // It also handles NodeStageVolume staging if required by the driver.
-func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error {
+func (p *Plugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
 	// 1. Stage the volume
-	stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
+	stagingPath := filepath.Join(p.stagingDirPrefix, req.VolumeID)
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
 		return fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
 	}
 
 	stageReq := &csi.NodeStageVolumeRequest{
-		VolumeId:          volumeID,
+		VolumeId:          req.VolumeID,
 		StagingTargetPath: stagingPath,
 		VolumeCapability:  getStandardCapabilities()[0], // Use primary capability
-		VolumeContext:     volumeContext,
+		VolumeContext:     req.VolumeContext,
+		PublishContext:    req.PublishContext,
 	}
 
 	_, err := p.client.NodeStageVolume(ctx, stageReq)
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
-			slog.WarnContext(ctx, "CSI NodeStageVolume is unimplemented by driver; skipping staging", slog.String("volume_id", volumeID))
+			slog.WarnContext(ctx, "CSI NodeStageVolume is unimplemented by driver; skipping staging", slog.String("volume_id", req.VolumeID))
 			stagingPath = ""
 		} else {
 			return fmt.Errorf("CSI NodeStageVolume failed: %w", err)
@@ -197,18 +192,19 @@ func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath st
 	}
 
 	// 2. Publish (Mount) the volume
-	req := &csi.NodePublishVolumeRequest{
-		VolumeId:         volumeID,
-		TargetPath:       targetPath,
+	publishReq := &csi.NodePublishVolumeRequest{
+		VolumeId:         req.VolumeID,
+		TargetPath:       req.TargetPath,
 		VolumeCapability: getStandardCapabilities()[0],
 		Readonly:         false,
-		VolumeContext:    volumeContext,
+		VolumeContext:    req.VolumeContext,
+		PublishContext:   req.PublishContext,
 	}
 	if stagingPath != "" {
-		req.StagingTargetPath = stagingPath
+		publishReq.StagingTargetPath = stagingPath
 	}
 
-	_, err = p.client.NodePublishVolume(ctx, req)
+	_, err = p.client.NodePublishVolume(ctx, publishReq)
 	if err != nil {
 		return fmt.Errorf("CSI NodePublishVolume failed: %w", err)
 	}

@@ -30,7 +30,7 @@ type fakeWorkerPlugin struct {
 	unmounted  []string
 }
 
-func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, attributes map[string]string) error {
+func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
 	return f.mountErr
 }
 

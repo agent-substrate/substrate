@@ -178,6 +178,10 @@ message ExternalVolumeSource {
   string storage_volume_id = 1;
   string volume_type = 2;
   map<string, string> volume_context = 3;
+
+  // publish_context is the driver's attachment metadata for this node, which
+  // the node plugin needs to complete the mount.
+  map<string, string> publish_context = 4;
 }
 
 message ImageVolumeSource {

@@ -959,8 +959,11 @@ type ExternalVolumeSource struct {
 	StorageVolumeId string                 `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	VolumeType      string                 `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	VolumeContext   map[string]string      `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// publish_context is the driver's attachment metadata for this node, which
+	// the node plugin needs to complete the mount.
+	PublishContext map[string]string `protobuf:"bytes,4,rep,name=publish_context,json=publishContext,proto3" json:"publish_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ExternalVolumeSource) Reset() {
@@ -1010,6 +1013,13 @@ func (x *ExternalVolumeSource) GetVolumeType() string {
 func (x *ExternalVolumeSource) GetVolumeContext() map[string]string {
 	if x != nil {
 		return x.VolumeContext
+	}
+	return nil
+}
+
+func (x *ExternalVolumeSource) GetPublishContext() map[string]string {
+	if x != nil {
+		return x.PublishContext
 	}
 	return nil
 }
@@ -2721,13 +2731,17 @@ const file_atelet_proto_rawDesc = "" +
 	"containers\x18\x01 \x03(\v2\x11.atelet.ContainerR\n" +
 	"containers\x12(\n" +
 	"\avolumes\x18\x03 \x03(\v2\x0e.atelet.VolumeR\avolumesJ\x04\b\x02\x10\x03R\vpause_image\"\x12\n" +
-	"\x10DurableDirVolume\"\xfd\x01\n" +
+	"\x10DurableDirVolume\"\x9b\x03\n" +
 	"\x14ExternalVolumeSource\x12*\n" +
 	"\x11storage_volume_id\x18\x01 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x02 \x01(\tR\n" +
 	"volumeType\x12V\n" +
-	"\x0evolume_context\x18\x03 \x03(\v2/.atelet.ExternalVolumeSource.VolumeContextEntryR\rvolumeContext\x1a@\n" +
+	"\x0evolume_context\x18\x03 \x03(\v2/.atelet.ExternalVolumeSource.VolumeContextEntryR\rvolumeContext\x12Y\n" +
+	"\x0fpublish_context\x18\x04 \x03(\v20.atelet.ExternalVolumeSource.PublishContextEntryR\x0epublishContext\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aA\n" +
+	"\x13PublishContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"1\n" +
 	"\x11ImageVolumeSource\x12\x1c\n" +
@@ -2879,7 +2893,7 @@ func file_atelet_proto_rawDescGZIP() []byte {
 }
 
 var file_atelet_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_atelet_proto_goTypes = []any{
 	(ActorMetadataField)(0),                 // 0: atelet.ActorMetadataField
 	(CheckpointType)(0),                     // 1: atelet.CheckpointType
@@ -2925,10 +2939,11 @@ var file_atelet_proto_goTypes = []any{
 	nil,                                     // 41: atelet.ArchAssets.FilesEntry
 	nil,                                     // 42: atelet.SandboxAssets.AssetsEntry
 	nil,                                     // 43: atelet.ExternalVolumeSource.VolumeContextEntry
-	(*ateapipb.WorkerResources)(nil),        // 44: ateapi.WorkerResources
+	nil,                                     // 44: atelet.ExternalVolumeSource.PublishContextEntry
+	(*ateapipb.WorkerResources)(nil),        // 45: ateapi.WorkerResources
 }
 var file_atelet_proto_depIdxs = []int32{
-	44, // 0: atelet.SetWorkerCapacityRequest.capacity:type_name -> ateapi.WorkerResources
+	45, // 0: atelet.SetWorkerCapacityRequest.capacity:type_name -> ateapi.WorkerResources
 	14, // 1: atelet.TerminateRequest.spec:type_name -> atelet.WorkloadSpec
 	14, // 2: atelet.RunRequest.spec:type_name -> atelet.WorkloadSpec
 	13, // 3: atelet.RunRequest.sandbox_assets:type_name -> atelet.SandboxAssets
@@ -2938,55 +2953,56 @@ var file_atelet_proto_depIdxs = []int32{
 	25, // 7: atelet.WorkloadSpec.containers:type_name -> atelet.Container
 	23, // 8: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
 	43, // 9: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
-	0,  // 10: atelet.ActorMetadataItem.field:type_name -> atelet.ActorMetadataField
-	18, // 11: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
-	19, // 12: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
-	20, // 13: atelet.SystemInfoDataSource.trust_bundle:type_name -> atelet.TrustBundleDataSource
-	21, // 14: atelet.SystemInfoVolume.data_sources:type_name -> atelet.SystemInfoDataSource
-	15, // 15: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolume
-	16, // 16: atelet.Volume.external:type_name -> atelet.ExternalVolumeSource
-	22, // 17: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolume
-	17, // 18: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
-	29, // 19: atelet.Container.env:type_name -> atelet.EnvEntry
-	30, // 20: atelet.Container.readyz:type_name -> atelet.Readyz
-	24, // 21: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
-	26, // 22: atelet.Container.security_context:type_name -> atelet.SecurityContext
-	28, // 23: atelet.Container.resources:type_name -> atelet.ResourceLimits
-	27, // 24: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
-	31, // 25: atelet.Readyz.http_get:type_name -> atelet.HTTPGetAction
-	14, // 26: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
-	1,  // 27: atelet.CheckpointRequest.type:type_name -> atelet.CheckpointType
-	33, // 28: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
-	34, // 29: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
-	2,  // 30: atelet.CheckpointRequest.scope:type_name -> atelet.SnapshotScope
-	2,  // 31: atelet.UploadPausedCheckpointRequest.desired_scope:type_name -> atelet.SnapshotScope
-	14, // 32: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
-	1,  // 33: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
-	33, // 34: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
-	34, // 35: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
-	2,  // 36: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
-	10, // 37: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	11, // 38: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	12, // 39: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	5,  // 40: atelet.CredentialBroker.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 41: atelet.WorkerCapacity.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
-	9,  // 42: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	35, // 43: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	39, // 44: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	37, // 45: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
-	7,  // 46: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	6,  // 47: atelet.CredentialBroker.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	4,  // 48: atelet.WorkerCapacity.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
-	32, // 49: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	36, // 50: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	40, // 51: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	38, // 52: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
-	8,  // 53: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
-	47, // [47:54] is the sub-list for method output_type
-	40, // [40:47] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	44, // 10: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
+	0,  // 11: atelet.ActorMetadataItem.field:type_name -> atelet.ActorMetadataField
+	18, // 12: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
+	19, // 13: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
+	20, // 14: atelet.SystemInfoDataSource.trust_bundle:type_name -> atelet.TrustBundleDataSource
+	21, // 15: atelet.SystemInfoVolume.data_sources:type_name -> atelet.SystemInfoDataSource
+	15, // 16: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolume
+	16, // 17: atelet.Volume.external:type_name -> atelet.ExternalVolumeSource
+	22, // 18: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolume
+	17, // 19: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
+	29, // 20: atelet.Container.env:type_name -> atelet.EnvEntry
+	30, // 21: atelet.Container.readyz:type_name -> atelet.Readyz
+	24, // 22: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
+	26, // 23: atelet.Container.security_context:type_name -> atelet.SecurityContext
+	28, // 24: atelet.Container.resources:type_name -> atelet.ResourceLimits
+	27, // 25: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
+	31, // 26: atelet.Readyz.http_get:type_name -> atelet.HTTPGetAction
+	14, // 27: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
+	1,  // 28: atelet.CheckpointRequest.type:type_name -> atelet.CheckpointType
+	33, // 29: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
+	34, // 30: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
+	2,  // 31: atelet.CheckpointRequest.scope:type_name -> atelet.SnapshotScope
+	2,  // 32: atelet.UploadPausedCheckpointRequest.desired_scope:type_name -> atelet.SnapshotScope
+	14, // 33: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
+	1,  // 34: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
+	33, // 35: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
+	34, // 36: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
+	2,  // 37: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
+	10, // 38: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
+	11, // 39: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	12, // 40: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	5,  // 41: atelet.CredentialBroker.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 42: atelet.WorkerCapacity.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
+	9,  // 43: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
+	35, // 44: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
+	39, // 45: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
+	37, // 46: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
+	7,  // 47: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
+	6,  // 48: atelet.CredentialBroker.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	4,  // 49: atelet.WorkerCapacity.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
+	32, // 50: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
+	36, // 51: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
+	40, // 52: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
+	38, // 53: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
+	8,  // 54: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
+	48, // [48:55] is the sub-list for method output_type
+	41, // [41:48] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }
@@ -3019,7 +3035,7 @@ func file_atelet_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_atelet_proto_rawDesc), len(file_atelet_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   41,
+			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

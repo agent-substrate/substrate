@@ -331,7 +331,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := workloadSpecFromActorTemplate(tt.template, nil)
+			got, err := workloadSpecFromActorTemplate(tt.template, nil, "")
 			if err != nil {
 				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 			}
@@ -359,7 +359,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 				Image: "side",
 			},
 		},
-	}, nil)
+	}, nil, "")
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -423,37 +423,58 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			ActorVolumes: []*ateapipb.ExternalVolume{
 				{
-					VolumeName:      "vol-1",
-					StorageVolumeId: "vol-gce-pd-123",
-					VolumeType:      "pd-standard",
-					VolumeContext:   map[string]string{"foo": "bar"},
+					VolumeName:         "vol-1",
+					StorageVolumeId:    "vol-gce-pd-123",
+					VolumeType:         "pd-standard",
+					VolumeContext:      map[string]string{"foo": "bar"},
+					PublishContext:     map[string]string{"devicePath": "/dev/xvdba"},
+					PublishContextNode: "node-1",
 				},
 			},
 		},
 	}
 
-	workloadSpec := &ateletpb.WorkloadSpec{}
-	if err := appendExternalVolumes(workloadSpec, template, actor); err != nil {
-		t.Fatalf("appendExternalVolumes unexpected error: %v", err)
-	}
+	for _, tt := range []struct {
+		name           string
+		node           string
+		wantPublishCtx map[string]string
+	}{
+		{
+			name:           "matching node",
+			node:           "node-1",
+			wantPublishCtx: map[string]string{"devicePath": "/dev/xvdba"},
+		},
+		{
+			name: "different node",
+			node: "node-2",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workloadSpec := &ateletpb.WorkloadSpec{}
+			if err := appendExternalVolumes(workloadSpec, template, actor, tt.node); err != nil {
+				t.Fatalf("appendExternalVolumes unexpected error: %v", err)
+			}
 
-	want := &ateletpb.WorkloadSpec{
-		Volumes: []*ateletpb.Volume{
-			{
-				Name: "vol-1",
-				Source: &ateletpb.Volume_External{
-					External: &ateletpb.ExternalVolumeSource{
-						StorageVolumeId: "vol-gce-pd-123",
-						VolumeType:      "pd-standard",
-						VolumeContext:   map[string]string{"foo": "bar"},
+			want := &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name: "vol-1",
+						Source: &ateletpb.Volume_External{
+							External: &ateletpb.ExternalVolumeSource{
+								StorageVolumeId: "vol-gce-pd-123",
+								VolumeType:      "pd-standard",
+								VolumeContext:   map[string]string{"foo": "bar"},
+								PublishContext:  tt.wantPublishCtx,
+							},
+						},
 					},
 				},
-			},
-		},
-	}
+			}
 
-	if diff := cmp.Diff(want, workloadSpec, protocmp.Transform()); diff != "" {
-		t.Errorf("appendExternalVolumes mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(want, workloadSpec, protocmp.Transform()); diff != "" {
+				t.Errorf("appendExternalVolumes mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 
 	// Test missing mounted volume returns an error
@@ -464,7 +485,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 		},
 		Status: &ateapipb.ActorStatus{ActorVolumes: []*ateapipb.ExternalVolume{}},
 	}
-	if err := appendExternalVolumes(&ateletpb.WorkloadSpec{}, template, missingActor); err == nil {
+	if err := appendExternalVolumes(&ateletpb.WorkloadSpec{}, template, missingActor, "node-1"); err == nil {
 		t.Errorf("appendExternalVolumes expected error for missing volume, got nil")
 	}
 }
@@ -495,7 +516,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 				SecurityContext: &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{}},
 			},
 		},
-	}, nil)
+	}, nil, "")
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -612,7 +633,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 			},
 			{Name: "unlimited", Image: "main"},
 		},
-	}, nil)
+	}, nil, "")
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
