@@ -45,6 +45,9 @@ const (
 
 	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
 	ActorVethSubnet = "169.254.17.0/30"
+
+	// DNSPort is the only destination port on which actor UDP egress is forwarded.
+	DNSPort = 53
 )
 
 var (
@@ -238,10 +241,12 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	//     listener. REDIRECT preserves SO_ORIGINAL_DST for the CONNECT authority.
 	//   * postrouting: masquerade traffic not handled by the TCP tunnel, notably
 	//     DNS over UDP, so hostname resolution continues to work.
-	//   * forward: accept forwarded packets between the actor veth and pod eth0.
+	//   * forward: drop actor UDP egress to any port but DNS, and accept the rest
+	//     of the packets forwarded between the actor veth and pod eth0.
 	//
-	// TODO: Restrict the compatibility masquerade to DNS traffic sent to the
-	// configured cluster resolver and drop all other non-tunneled actor egress.
+	// TODO: Restrict the DNS exception to the configured cluster resolver
+	// address, and drop the remaining non-tunneled actor egress: protocols other
+	// than TCP and UDP still reach the masquerade.
 	if err := RemoveActorNftablesRules(); err != nil {
 		return err
 	}
@@ -286,6 +291,9 @@ func InstallActorNftablesRules(egressPort uint16) error {
 		Priority: nftables.ChainPriorityFilter,
 		Policy:   &acceptPolicy,
 	})
+	// Order matters: the accept below is a catch-all, so the drop has to precede
+	// it.
+	c.AddRule(ActorNonDNSUDPDropRule(table, forward))
 	c.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: forward,
@@ -344,12 +352,20 @@ func IPPayloadEqual(offset uint32, ip string) []expr.Any {
 }
 
 func TCPProtocol() []expr.Any {
+	return L4ProtocolEqual(unix.IPPROTO_TCP)
+}
+
+func UDPProtocol() []expr.Any {
+	return L4ProtocolEqual(unix.IPPROTO_UDP)
+}
+
+func L4ProtocolEqual(proto byte) []expr.Any {
 	return []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 		&expr.Cmp{
 			Op:       expr.CmpOpEq,
 			Register: 1,
-			Data:     []byte{unix.IPPROTO_TCP},
+			Data:     []byte{proto},
 		},
 	}
 }
@@ -368,6 +384,33 @@ func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port 
 			Data:     binaryutil.BigEndian.PutUint16(port),
 		},
 		&expr.Redir{RegisterProtoMin: 1},
+	)
+	return &nftables.Rule{Table: table, Chain: chain, Exprs: exprs}
+}
+
+// ActorNonDNSUDPDropRule returns the forward-chain rule that drops actor UDP
+// egress to every destination port but [DNSPort].
+//
+// The rule counts what it drops: a workload that legitimately needs UDP shows
+// up as a rising counter in `nft list table ip ateom_actor` rather than as an
+// unexplained timeout.
+func ActorNonDNSUDPDropRule(table *nftables.Table, chain *nftables.Chain) *nftables.Rule {
+	exprs := append(IPSourceEqual(ActorVethIP), UDPProtocol()...)
+	exprs = append(exprs,
+		// Destination port, at offset 2 of the UDP header.
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseTransportHeader,
+			Offset:       2,
+			Len:          2,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(DNSPort),
+		},
+		&expr.Counter{},
+		&expr.Verdict{Kind: expr.VerdictDrop},
 	)
 	return &nftables.Rule{Table: table, Chain: chain, Exprs: exprs}
 }
@@ -491,8 +534,8 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	// Kubernetes-provided eth0 out of the worker pod.
 	//
 	// The nftables rules installed here redirect actor TCP egress to atunnel
-	// when configured and masquerade traffic the TCP tunnel does not handle
-	// (notably DNS over UDP).
+	// when configured, masquerade traffic the TCP tunnel does not handle
+	// (notably DNS over UDP), and drop actor UDP egress to any other port.
 	//
 	// Clean up stale state from a failed prior activation before creating the
 	// next actor-side network. The worker currently runs one actor at a time.
