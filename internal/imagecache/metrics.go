@@ -71,8 +71,10 @@ func (s *Store) recordRequest(ctx context.Context, outcome string, err error) {
 	if outcome == ateattr.ImageCacheOutcomeError {
 		attrs = append(attrs, ateattr.ErrorTypeKey.String(errorType(err)))
 	}
-	// A cancelled lookup still reports: its pull was started and paid for.
-	s.requests.Add(context.WithoutCancel(ctx), 1, metric.WithAttributes(attrs...))
+	// A cancelled lookup still reports: its pull was started and paid for. The
+	// request context is passed as it is; the SDK never checks its error, and
+	// reads only the span from it so an exemplar can point at the trace.
+	s.requests.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 // failureOutcome separates a failed lookup from a caller that gave up.
