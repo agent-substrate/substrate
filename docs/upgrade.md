@@ -38,8 +38,8 @@ kubectl get nodes -L ate.dev/substrate-version --no-headers \
 kubectl get workerpools -A
 ```
 
-Steps 1, 2 and 6 leave no mark you can read back from the cluster.
-They are idempotent, so run them again if you are not sure.
+The commands above do not show whether steps 1, 2 and 6 have run.
+Those steps are idempotent, so run them again if you are not sure.
 
 ## Before you start
 
@@ -173,10 +173,10 @@ later arrives with the old label.
 Each warning comes back at the step where the mistake becomes possible.
 
 > [!WARNING]
-> **Flip the node's version label before deleting its old worker
-> pods.** Otherwise the old pool reschedules replacements onto the same
-> node, and old workers end up next to the new atelet: exactly the
-> version skew the roll exists to prevent. (Step 5)
+> **Do not delete a node's old worker pods before flipping its
+> version label.** Otherwise the old pool reschedules replacements onto
+> the same node, and old workers end up next to the new atelet: exactly
+> the version skew the roll exists to prevent. (Step 5)
 
 > [!WARNING]
 > **Do not edit a serving worker pool, and do not scale it down.** The
@@ -228,7 +228,7 @@ convention says so in its notes. Expect the pools' Deployments to
 roll once here in that case. Every actor is suspended through the
 worker eviction path, loses no state, and resumes on demand. If they
 roll, wait for `READY` to equal `DESIRED` again on every serving pool
-(`kubectl get workerpools -A`) before step 5.
+(`kubectl get workerpools -A`) before step 4.
 
 ### 3. Prepare the new dataplane
 
@@ -337,7 +337,8 @@ service node by node, not because the scheduler prefers the new pool.
 
 ### 5. Roll each node
 
-Repeat for every node, one at a time.
+Repeat for every node, one at a time. On a single-node cluster this
+step is a full stop: every actor is suspended at once.
 
 **a. Drain the node's workers.** Bound actors keep running. Draining
 only stops new placements.
@@ -383,7 +384,7 @@ afterwards. Repeat step b until the `ASSIGNED ACTOR` column reads
 in step a once more right before flipping.
 
 > [!WARNING]
-> d comes before e, always. Deleting the old-pool pods while the node
+> Do not run e before d. Deleting the old-pool pods while the node
 > still carries `$OLD_VERSION` lets the old pool put replacements right
 > back on this node, next to the new atelet (first warning above).
 
@@ -507,22 +508,19 @@ the install, `VERSION` included if the install pinned it.
   sides swapped: drain, get every actor off the node as in b and c,
   flip the label back to `$OLD_VERSION`, and delete the node's
   new-pool pods.
+- Past step 4: once no actor is assigned to a new-pool worker, delete
+  each clone: `kubectl -n $NS delete workerpool $NEW_WORKERPOOL`.
+- Past step 3: once no node carries `$NEW_VERSION`, delete the new
+  DaemonSet: `kubectl delete daemonset -n ate-system -l app=atelet,ate.dev/substrate-version=$NEW_VERSION`.
 - Past step 2: `go run ./cmd/ate-setup deploy ate-controller`.
 
-`kubectl get ds -n ate-system -l app=atelet` must still show two
-DaemonSets afterwards. A third means the old checkout produced a
+`kubectl get ds -n ate-system -l app=atelet` must not show a third
+DaemonSet afterwards. A third means the old checkout produced a
 version other than `$OLD_VERSION`: delete it and check `VERSION`.
 
-To abandon the upgrade entirely, roll every flipped node back, confirm
-no actor is assigned to a new-pool worker, then delete the new objects:
-
-```bash
-kubectl -n $NS delete workerpool $NEW_WORKERPOOL
-kubectl delete daemonset -n ate-system -l app=atelet,ate.dev/substrate-version=$NEW_VERSION
-```
-
-Retiring the old pool (below) is a separate, deliberate step. As
-long as the old objects exist, rollback is one label flip per node.
+Abandoning the upgrade entirely is the whole list, top to bottom.
+Retiring the old pool (below) is a separate, deliberate step. As long
+as the old objects exist, rollback is one label flip per node.
 
 ## Retire the old pool
 

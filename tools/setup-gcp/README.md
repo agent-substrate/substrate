@@ -99,7 +99,7 @@ Filestore CSI driver disabled).
 > **Turn node auto-upgrade off on any node pool that runs workers, and do not
 > use spot or preemptible nodes for them.** When a worker pod is deleted,
 > `SIGTERM` is forwarded into the actor's containers and the control plane keeps
-> accepting a suspend for about 60 seconds. An actor suspended inside that
+> accepting a suspend for 30 minutes. An actor suspended inside that
 > window keeps its state. One still awake when the window closes is moved to
 > `ACTOR_STATE_CRASHED` with its worker assignment cleared, and `CRASHED` is
 > terminal: `resume` and `suspend` are both refused, there is no recover verb,
