@@ -43,6 +43,12 @@ var (
 	ready                    atomic.Bool
 	fileMutex                sync.Mutex
 	sigtermSleepDurationSecs atomic.Int64
+
+	// bootUUID lives only in guest memory: generated before the server
+	// starts and never written to disk, so a response can only carry it if
+	// the serving process's memory descends from the boot that generated it.
+	// A checkpoint restore preserves it; a cold boot regenerates it.
+	bootUUID string
 )
 
 func incrementFileCounter(filePath string) int {
@@ -64,6 +70,7 @@ func incrementFileCounter(filePath string) int {
 }
 
 func main() {
+	bootUUID = rand.Text()
 	sigtermSleepDurationSecs.Store(15)
 	fileCounterDirectory := pflag.String("file-counter-directory", "/home/counter", "Directory for file counter")
 	secondFileCounterDirectory := pflag.String("second-file-counter-directory", "", "Directory for a second file counter; empty disables it. Used to exercise an Actor with more than one durable volume")
@@ -112,7 +119,7 @@ func main() {
 			secondFileCounterStr = fmt.Sprintf(" | preserved second file counter: %d", secondFileCounter)
 		}
 
-		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d%s%s\n", currentIP, memoryCounter, fileCounter, secondFileCounterStr, fileContentStr)
+		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d%s%s | boot uuid: %s\n", currentIP, memoryCounter, fileCounter, secondFileCounterStr, fileContentStr, bootUUID)
 		slog.InfoContext(ctx, "Handled request", slog.String("response", response))
 
 		w.WriteHeader(http.StatusOK)
