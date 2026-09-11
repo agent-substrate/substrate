@@ -109,7 +109,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
 		// Both in-progress checkpoints are set so the assertion covers the
 		// shared crash path, which cannot know which workflow was in flight.
-		a.Status.InProgressSnapshotName = "partial-snapshot"
+		a.Status.InProgressSnapshotUri = someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot")
 		a.Status.InProgressLocalSnapshotName = "partial-local-snapshot"
 		a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last")}
 	})
@@ -136,7 +136,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	}
 	// The durable one is kept: it names the prefix whatever atelet already
 	// uploaded lives under, which the actor's delete needs to collect it.
-	if got.GetStatus().GetInProgressSnapshotName() != "partial-snapshot" {
+	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); got.GetStatus().GetInProgressSnapshotUri() != want {
 		t.Errorf("in-progress external checkpoint not preserved: %v", got.GetStatus())
 	}
 	// The last completed snapshot is what makes the actor resumable, so it stays.
