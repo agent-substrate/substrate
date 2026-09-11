@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
@@ -195,6 +196,71 @@ func TestValidateBootDisk(t *testing.T) {
 				}
 				if err.Error() != tt.wantErr {
 					t.Errorf("got error %q, want %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateClusterLocation(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "compatible default us-west1 and us-west1-c",
+			cfg:  Config{Region: "us-west1", ClusterLocation: "us-west1-c"},
+		},
+		{
+			name: "compatible zone in region",
+			cfg:  Config{Region: "us-central1", ClusterLocation: "us-central1-a"},
+		},
+		{
+			name: "compatible regional cluster location",
+			cfg:  Config{Region: "us-central1", ClusterLocation: "us-central1"},
+		},
+		{
+			name:    "incompatible zone and region",
+			cfg:     Config{Region: "us-central1", ClusterLocation: "us-west1-c"},
+			wantErr: `cluster location "us-west1-c" is not compatible with region "us-central1"`,
+		},
+		{
+			name:    "incompatible regions",
+			cfg:     Config{Region: "us-central1", ClusterLocation: "us-west1"},
+			wantErr: `cluster location "us-west1" is not compatible with region "us-central1"`,
+		},
+		{
+			name:    "similar prefix but different region number",
+			cfg:     Config{Region: "us-central1", ClusterLocation: "us-central2-c"},
+			wantErr: `cluster location "us-central2-c" is not compatible with region "us-central1"`,
+		},
+		{
+			name:    "missing region",
+			cfg:     Config{Region: "", ClusterLocation: "us-central1-c"},
+			wantErr: "--region is required",
+		},
+		{
+			name:    "missing cluster location",
+			cfg:     Config{Region: "us-central1", ClusterLocation: ""},
+			wantErr: "--cluster-location is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgCopy := tt.cfg
+			err := validateClusterLocation(&cfgCopy)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("got error %q, want containing %q", err.Error(), tt.wantErr)
 				}
 				return
 			}

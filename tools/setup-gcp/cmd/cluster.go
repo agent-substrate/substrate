@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -112,6 +113,9 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 }
 
 func createClusterIdempotent(ctx context.Context, cfg *Config) error {
+	if err := validateClusterLocation(cfg); err != nil {
+		return err
+	}
 	if err := validateBootDisk(cfg); err != nil {
 		return err
 	}
@@ -328,6 +332,26 @@ func validateBootDisk(cfg *Config) error {
 	}
 	return nil
 }
+
+// validateClusterLocation ensures ClusterLocation is set and compatible with Region.
+func validateClusterLocation(cfg *Config) error {
+	cfg.Region = strings.TrimSpace(cfg.Region)
+	if cfg.Region == "" {
+		return errors.New("--region is required")
+	}
+
+	cfg.ClusterLocation = strings.TrimSpace(cfg.ClusterLocation)
+	if cfg.ClusterLocation == "" {
+		return errors.New("--cluster-location is required")
+	}
+
+	if cfg.ClusterLocation != cfg.Region && !strings.HasPrefix(cfg.ClusterLocation, cfg.Region+"-") {
+		return fmt.Errorf("cluster location %q is not compatible with region %q: cluster location must be the region itself (for regional clusters) or a zone within that region (e.g. %s-c)", cfg.ClusterLocation, cfg.Region, cfg.Region)
+	}
+
+	return nil
+}
+
 var clusterCmd = &cobra.Command{
 	Use:   "cluster",
 	Short: "Create GKE cluster",

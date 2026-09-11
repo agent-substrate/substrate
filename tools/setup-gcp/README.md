@@ -131,7 +131,7 @@ go run ./tools/setup-gcp create cluster [flags]
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
 | `--name` | Name of the GKE cluster. | `CLUSTER_NAME` | `substrate-poc` |
-| `--location` | Zone or region for the cluster. | `CLUSTER_LOCATION` | `us-west1-c` |
+| `--location` | Zone or region for the cluster (must be compatible with `--region`). | `CLUSTER_LOCATION` | `us-west1-c` |
 | `--version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
@@ -259,7 +259,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
 | `--cluster-name` | Name of the GKE cluster. | `CLUSTER_NAME` | `substrate-poc` |
-| `--cluster-location`| Zone or region for the cluster. | `CLUSTER_LOCATION` | `us-west1-c` |
+| `--cluster-location`| Zone or region for the cluster (must be compatible with `--region`). | `CLUSTER_LOCATION` | `us-west1-c` |
 | `--cluster-version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
