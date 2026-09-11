@@ -156,7 +156,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading servicedns.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	serviceDNSSignerController := signercontroller.New(clock.RealClock{}, servicednssigner.NewImpl(kc, serviceDNSCAPool, clock.RealClock{}), kc, hasher)
+	serviceDNSSignerController := signercontroller.New(clock.RealClock{}, servicednssigner.NewImpl(kc, serviceDNSCAPool), kc, hasher)
 	go serviceDNSSignerController.Run(ctx, *workersPerSigner)
 
 	// Create a signer for podidentity.podcert.ate.dev/identity
@@ -165,7 +165,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading podidentity.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, clock.RealClock{}), kc, hasher)
+	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool), kc, hasher)
 	go podIdentitySignerController.Run(ctx, *workersPerSigner)
 
 	// TODO: Reload when the file changes.

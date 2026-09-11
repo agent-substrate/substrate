@@ -29,7 +29,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 )
 
@@ -40,15 +39,12 @@ const CTBPrefix = "servicedns.podcert.ate.dev:identity:"
 type Impl struct {
 	kc     kubernetes.Interface
 	caPool localca.Pool
-
-	clock clock.PassiveClock
 }
 
-func NewImpl(kc kubernetes.Interface, caPool localca.Pool, clock clock.PassiveClock) *Impl {
+func NewImpl(kc kubernetes.Interface, caPool localca.Pool) *Impl {
 	return &Impl{
 		kc:     kc,
 		caPool: caPool,
-		clock:  clock,
 	}
 }
 
@@ -167,7 +163,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		lifetime = requestedLifetime
 	}
 
-	notBefore := h.clock.Now().Add(-2 * time.Minute)
+	notBefore := time.Now().Add(-2 * time.Minute)
 	notAfter := notBefore.Add(lifetime)
 	beginRefreshAt := notAfter.Add(-30 * time.Minute)
 
@@ -205,7 +201,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 			Status:             metav1.ConditionTrue,
 			Reason:             "Reason",
 			Message:            "Issued",
-			LastTransitionTime: metav1.NewTime(h.clock.Now()),
+			LastTransitionTime: metav1.NewTime(time.Now()),
 		},
 	}
 	pcr.Status.CertificateChain = chainPEM.String()
