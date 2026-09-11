@@ -93,6 +93,26 @@ func TestValidateResourceMetadataCreate(t *testing.T) {
 		name: "unspecified updateTime",
 		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = nil }),
 		want: nil,
+	}, {
+		name: "invalid createTime: seconds out of range",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime = &timestamppb.Timestamp{Seconds: 253402300800} }),
+		want: field.ErrorList{field.Invalid(field.NewPath("create_time"), nil, "")},
+	}, {
+		name: "invalid updateTime: negative nanos",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = &timestamppb.Timestamp{Seconds: 5309, Nanos: -1} }),
+		want: field.ErrorList{field.Invalid(field.NewPath("update_time"), nil, "")},
+	}, {
+		name: "invalid updateTime: precedes createTime",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = &timestamppb.Timestamp{Seconds: 866} }),
+		want: field.ErrorList{field.Invalid(field.NewPath("update_time"), nil, "")},
+	}, {
+		name: "valid updateTime: equals createTime",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = &timestamppb.Timestamp{Seconds: 867} }),
+		want: nil,
+	}, {
+		name: "valid updateTime: set without createTime",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime = nil }),
+		want: nil,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -201,9 +221,14 @@ func TestValidateResourceMetadataUpdate(t *testing.T) {
 		want:   field.ErrorList{field.Invalid(field.NewPath("update_time"), nil, "").WithOrigin("update")},
 	}, {
 		name:   "update_time: changed to valid",
-		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 123 }),
-		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 456 }),
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 1000 }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 6000 }),
 		want:   nil,
+	}, {
+		name:   "update_time: changed to precede create_time",
+		oldObj: valid(),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 866 }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("update_time"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

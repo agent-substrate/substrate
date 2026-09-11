@@ -21,6 +21,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/distribution/reference"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volumepath"
@@ -269,11 +271,21 @@ func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ oper
 	return errs
 }
 
-// validatePinnedImage requires an image reference to include a digest
-// (e.g. "name@sha256:...").
+// validatePinnedImage requires a well-formed OCI image reference pinned by
+// digest (e.g. "name@sha256:..."): changing the image content under a fixed
+// reference invalidates snapshots. It parses with the same grammar the
+// container runtimes use, so a malformed digest is rejected rather than
+// treated as pinned.
 func validatePinnedImage(fldPath *field.Path, value string) field.ErrorList {
-	if !strings.Contains(value, "@") {
-		return field.ErrorList{field.Invalid(fldPath, value, "must include a digest")}
+	if value == "" {
+		return nil // required is enforced by tags
+	}
+	ref, err := reference.ParseNormalizedNamed(value)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
+	}
+	if _, ok := ref.(reference.Digested); !ok {
+		return field.ErrorList{field.Invalid(fldPath, value, "must be pinned by digest (changing the image invalidates snapshots)")}
 	}
 	return nil
 }

@@ -184,7 +184,7 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 	if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
 			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
-			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:abc"}},
+			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
 			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 		},
@@ -313,7 +313,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{{
-				Name: "main", Image: "main@sha256:abc", VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
+				Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
 			Volumes: []*ateapipb.Volume{{
 				Name: "data",
@@ -753,7 +753,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 						Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
 						Containers: []*ateapipb.Container{{
 							Name:         "main",
-							Image:        "example.com/app:v1@sha256:abc",
+							Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 							VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 						}},
 						Volumes:         tmpl.volumes,
@@ -1865,7 +1865,7 @@ func TestResumeActorPassesLiteralEnv(t *testing.T) {
 	createTemplateWithContainers(t, tc, ns, []*ateapipb.Container{
 		{
 			Name:    "main",
-			Image:   "main@sha256:abc",
+			Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 			Command: []string{"/main"},
 			Env: []*ateapipb.EnvVar{
 				{

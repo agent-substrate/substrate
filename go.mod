@@ -18,6 +18,7 @@ require (
 	github.com/aws/smithy-go v1.25.1
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/containerd/ttrpc v1.2.8
+	github.com/distribution/reference v0.6.0
 	github.com/envoyproxy/go-control-plane v0.14.0
 	github.com/envoyproxy/go-control-plane/envoy v1.37.1-0.20260812071801-353463cc7248
 	github.com/fsnotify/fsnotify v1.9.0
@@ -111,7 +112,6 @@ require (
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/cli v29.5.3+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/docker/go-connections v0.7.0 // indirect

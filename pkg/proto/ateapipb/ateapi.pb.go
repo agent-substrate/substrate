@@ -722,6 +722,8 @@ func (x *Selector) GetMatchLabels() map[string]string {
 }
 
 // ResourceMetadata holds the common fields carried by every Substrate resource.
+//
+// +k8s:customValidation # timestamps must be valid, and update_time must not precede create_time
 type ResourceMetadata struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// atespace is the namespace the resource belongs to. Empty for global-scoped
@@ -766,7 +768,6 @@ type ResourceMetadata struct {
 	//
 	// +k8s:optional
 	// +k8s:immutable
-	// TODO: validate that this is a valid timestamp
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	// update_time is the time the resource was last updated.
 	//
@@ -774,8 +775,6 @@ type ResourceMetadata struct {
 	//
 	// +k8s:optional
 	// +k8s:update=NoUnset
-	// TODO: validate that this is a valid timestamp
-	// TODO: validate that UpdateTime >= CreateTime
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2598,12 +2597,13 @@ type Container struct {
 	// +k8s:required
 	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// image is the container image name. Must include a digest
+	// image is the OCI image reference the container runs:
+	// [registry/]repository[:tag]@digest. Must be pinned by digest
 	// (e.g. "name@sha256:...").
 	//
 	// +k8s:required
 	// +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
-	// +k8s:customValidation
+	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
 	// ignored and the process argv is command + args. Unlike Kubernetes,
@@ -3161,7 +3161,7 @@ type ImageVolumeSource struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=512
-	// +k8s:customValidation
+	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

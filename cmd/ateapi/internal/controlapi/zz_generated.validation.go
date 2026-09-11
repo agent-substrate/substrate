@@ -5033,6 +5033,11 @@ func Validate_ResourceMetadata(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.ResourceMetadata) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_ResourceMetadata(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateapipb.ResourceMetadata.Atespace
 		fn := func(
 			fldPath *field.Path,
