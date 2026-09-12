@@ -128,6 +128,7 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 	if inWorker != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inWorker.Metadata)
 		inWorker.Status = nil
+		defaultWorker(inWorker)
 	}
 
 	// Validate the request, including the object within it.
@@ -199,6 +200,9 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorke
 		// Restore status and metadata from the server.
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
+		// Defaults are re-applied to the merged object, so a defaulted field
+		// the request left unset is defaulted again rather than cleared.
+		defaultWorker(toUpdate)
 		return nil
 	})
 }

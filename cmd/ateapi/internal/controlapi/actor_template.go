@@ -35,11 +35,13 @@ import (
 )
 
 func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
-	// First scrub any fields that users are not allowed to set.
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	in := req.GetActorTemplate()
 	if in != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(in.Metadata)
 		in.Status = nil
+		defaultActorTemplate(in)
 	}
 
 	// Validate the request, including the object within it.
@@ -338,9 +340,7 @@ func ValidateCustom_SnapshotsConfig_StorageLocation(_ context.Context, _ operati
 	return nil
 }
 
-// ValidateCustom_SnapshotsConfig requires on_commit to be a
-// subset of on_pause. UNSPECIFIED means FULL, so an unset on_commit over a
-// DATA on_pause is rejected too.
+// ValidateCustom_SnapshotsConfig requires on_commit to be a subset of on_pause.
 func ValidateCustom_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
 	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {

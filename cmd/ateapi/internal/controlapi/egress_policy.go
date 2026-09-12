@@ -34,9 +34,12 @@ import (
 )
 
 func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	policy := req.GetEgressPolicy()
 	if policy != nil {
 		scrubResourceMetadataForCreate(policy.Metadata)
+		defaultEgressPolicy(policy)
 	}
 	if errs := validateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -91,6 +94,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, policy)
 		toUpdate.Metadata = metadata
+		defaultEgressPolicy(toUpdate)
 		return nil
 	})
 }
