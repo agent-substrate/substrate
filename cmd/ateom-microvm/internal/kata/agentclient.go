@@ -146,6 +146,18 @@ func (a *AgentClient) CreateContainer(ctx context.Context, req *agentpb.CreateCo
 	return nil
 }
 
+// ReseedRandomDev feeds fresh entropy into the guest's random device: the agent
+// writes data into /dev/random and reseeds the kernel CRNG. This is how a restored
+// or cloned guest diverges from the entropy state frozen in its snapshot. Mirrors
+// grpc.AgentService/ReseedRandomDev.
+func (a *AgentClient) ReseedRandomDev(ctx context.Context, data []byte) error {
+	req := &agentpb.ReseedRandomDevRequest{Data: data}
+	if err := a.client.Call(ctx, "grpc.AgentService", "ReseedRandomDev", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent ReseedRandomDev: %w", err)
+	}
+	return nil
+}
+
 // StartContainer execs the container's init process (pivots into the rootfs the
 // storages assembled). Mirrors grpc.AgentService/StartContainer.
 func (a *AgentClient) StartContainer(ctx context.Context, containerID string) error {
