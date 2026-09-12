@@ -28,6 +28,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/statusz"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
 )
 
@@ -128,7 +129,9 @@ func TestStatusPortDefaultDisabledAndBindFailure(t *testing.T) {
 
 func TestStatusHTTPRemainsReachableUntilDrainCompletes(t *testing.T) {
 	readiness := &serverboot.Readiness{}
-	handler := statusz.NewHandler(statusz.Config{StartedAt: time.Now()}, readiness.Ready, time.Now)
+	handler := statusz.NewHandler(statusz.Config{StartedAt: time.Now()}, func() ([]*ateapipb.Worker, error) {
+		return nil, nil
+	}, readiness.Ready, nil, nil, time.Now)
 	running, err := startStatusHTTPServer(4040, handler, ephemeralListener)
 	if err != nil {
 		t.Fatalf("startStatusHTTPServer: %v", err)

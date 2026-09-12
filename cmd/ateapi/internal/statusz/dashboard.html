@@ -66,13 +66,20 @@
     .item { display: flex; justify-content: space-between; gap: 1rem; margin: .7rem 0; }
     dt { color: var(--muted); }
     dd { margin: 0; text-align: right; word-break: break-word; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: .75rem .8rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); background: var(--row); font-weight: 600; }
+    .empty { padding: 1.5rem 0; color: var(--muted); text-align: center; }
     .flags { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(130px, 2fr) minmax(150px, 1fr); gap: .1rem .8rem; }
     .flags > div { padding: .55rem .6rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
     .flags .head { color: var(--muted); background: var(--row); font-weight: 600; }
+    .note { color: var(--muted); font-size: .875rem; }
+    td code { overflow-wrap: anywhere; word-break: break-word; }
     @media (max-width: 700px) {
       body { padding: 1rem; }
       header { align-items: flex-start; flex-direction: column; }
-      .grid { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: minmax(0, 1fr); }
       .wide { grid-column: auto; }
       .item { align-items: flex-start; flex-direction: column; gap: .15rem; }
       dd { text-align: left; }
@@ -114,6 +121,81 @@
         <div class="item"><dt>Drain delay</dt><dd>{{.Configuration.Drain.Delay}}</dd></div>
         <div class="item"><dt>Drain timeout</dt><dd>{{.Configuration.Drain.Timeout}}</dd></div>
       </dl>
+    </section>
+
+    <section class="card wide">
+      <h2>Diagnostic sample</h2>
+      <p class="note">Known workers, PostgreSQL pool occupancy, and recent failed Control RPCs share one cached sample. Readiness, process uptime, and configuration are evaluated for this request.</p>
+      <dl>
+        <div class="item"><dt>Sample completed</dt><dd>{{.DiagnosticSample.SampledAt}}</dd></div>
+        <div class="item"><dt>Cache age</dt><dd>{{.DiagnosticSample.Age}}</dd></div>
+        <div class="item"><dt>Refresh in progress</dt><dd>{{if .DiagnosticSample.RefreshInProgress}}Yes{{else}}No{{end}}</dd></div>
+      </dl>
+    </section>
+
+    <section class="card wide">
+      <h2>Known workers</h2>
+      {{if not .Workers.Available}}
+        <div class="empty">Worker cache is temporarily unavailable.</div>
+      {{else if .Workers.Empty}}
+        <div class="empty">The worker cache is ready and contains no workers.</div>
+      {{else}}
+        <p class="note">{{.Workers.TotalWorkers}} workers across {{.Workers.TotalGroups}} namespace/pool groups.{{if .Workers.Truncated}} Showing the first 100 groups.{{end}}</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Namespace</th><th>Pool</th><th>Workers</th></tr></thead>
+            <tbody>
+            {{range .Workers.Groups}}
+              <tr><td>{{.Namespace}}</td><td>{{.Pool}}</td><td>{{.Count}}</td></tr>
+            {{end}}
+            </tbody>
+          </table>
+        </div>
+      {{end}}
+    </section>
+
+    <section class="card wide">
+      <h2>PostgreSQL pool occupancy</h2>
+      <p class="note">{{.PostgreSQLPools.Coverage}}</p>
+      {{if not .PostgreSQLPools.Available}}
+        <div class="empty">PostgreSQL pool occupancy is unavailable.</div>
+      {{else}}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Role</th><th>Acquired</th><th>Idle</th><th>Maximum</th></tr></thead>
+            <tbody>
+            {{range .PostgreSQLPools.Pools}}
+              <tr><td>{{.Role}}</td><td>{{.AcquiredConns}}</td><td>{{.IdleConns}}</td><td>{{.MaxConns}}</td></tr>
+            {{end}}
+            </tbody>
+          </table>
+        </div>
+      {{end}}
+    </section>
+
+    <section class="card wide">
+      <h2>Recent failed Control RPCs</h2>
+      <p class="note">{{.RecentControlFailures.Coverage}} {{.RecentControlFailures.Retention}}</p>
+      {{if .RecentControlFailures.Empty}}
+        <div class="empty">No matching failures are retained on this replica. This does not describe other replicas or calls outside the coverage above.</div>
+      {{else}}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Completed</th><th>Method</th><th>Principal</th><th>Status</th><th>Elapsed</th></tr></thead>
+            <tbody>
+            {{range .RecentControlFailures.Failures}}
+              <tr>
+                <td>{{.CompletedAt}}</td>
+                <td><code>{{.Method}}</code></td>
+                <td>{{.PrincipalKind}}: <code>{{.PrincipalID}}</code></td>
+                <td>{{.Code}}</td>
+                <td>{{.Elapsed}}</td>
+              </tr>
+            {{end}}
+            </tbody>
+          </table>
+        </div>
+      {{end}}
     </section>
 
     <section class="card wide">

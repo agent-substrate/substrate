@@ -37,7 +37,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -252,6 +251,7 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
+	rpcFailures := newRPCFailureRecorder(time.Now)
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -262,12 +262,10 @@ func main() {
 			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
-		grpc.ChainUnaryInterceptor(
+		grpc.ChainUnaryInterceptor(unaryServerInterceptors(
 			ateapiauth.UnaryServerInterceptor(authCfg),
-			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-			ateinterceptors.ServerUnaryInterceptor,
-			ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		),
+			rpcFailures,
+		)...),
 		grpc.ChainStreamInterceptor(
 			ateapiauth.StreamServerInterceptor(authCfg),
 		),
@@ -282,6 +280,21 @@ func main() {
 		EnableHealthz: true,
 	})
 
+	var poolReader statusz.PoolReader
+	if postgresPersistence, ok := persistence.(*atepg.Persistence); ok {
+		poolReader = func() (statusz.PoolCounts, statusz.PoolCounts) {
+			pools := postgresPersistence.PoolSnapshots()
+			return statusz.PoolCounts{
+				AcquiredConns: pools.Operational.AcquiredConns,
+				IdleConns:     pools.Operational.IdleConns,
+				MaxConns:      pools.Operational.MaxConns,
+			}, statusz.PoolCounts{
+				AcquiredConns: pools.Watch.AcquiredConns,
+				IdleConns:     pools.Watch.IdleConns,
+				MaxConns:      pools.Watch.MaxConns,
+			}
+		}
+	}
 	statusMux := http.NewServeMux()
 	statusMux.Handle("/statusz", statusz.NewHandler(statusz.Config{
 		Build:     statusz.Build{Version: version.Version, Revision: version.Commit},
@@ -296,7 +309,7 @@ func main() {
 			Timeout: drainTimeout.String(),
 		},
 		Flags: projectStatusFlags(pflag.CommandLine, statusEnvSources),
-	}, readiness.Ready, time.Now))
+	}, workerCache.Workers, readiness.Ready, poolReader, rpcFailures.Failures, time.Now))
 	statusHTTP, err := startStatusHTTPServer(*statusPort, statusMux, net.Listen)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to start status HTTP server", err)
