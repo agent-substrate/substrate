@@ -52,6 +52,7 @@
       border-bottom: 1px solid var(--border);
     }
     .brand { display: flex; align-items: center; gap: .75rem; }
+    .header-actions { display: flex; align-items: center; gap: 1rem; }
     .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--good); box-shadow: 0 0 10px var(--good); }
     .dot.not-ready { background: var(--bad); box-shadow: 0 0 10px var(--bad); }
     h1 { margin: 0; font-size: 1.75rem; letter-spacing: -.025em; }
@@ -66,13 +67,21 @@
     .item { display: flex; justify-content: space-between; gap: 1rem; margin: .7rem 0; }
     dt { color: var(--muted); }
     dd { margin: 0; text-align: right; word-break: break-word; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: .75rem .8rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); background: var(--row); font-weight: 600; }
+    .empty { padding: 1.5rem 0; color: var(--muted); text-align: center; }
     .flags { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(130px, 2fr) minmax(150px, 1fr); gap: .1rem .8rem; }
     .flags > div { padding: .55rem .6rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
     .flags .head { color: var(--muted); background: var(--row); font-weight: 600; }
+    .note { color: var(--muted); font-size: .875rem; }
+    td code { overflow-wrap: anywhere; word-break: break-word; }
     @media (max-width: 700px) {
       body { padding: 1rem; }
       header { align-items: flex-start; flex-direction: column; }
-      .grid { grid-template-columns: 1fr; }
+      .header-actions { width: 100%; justify-content: space-between; }
+      .grid { grid-template-columns: minmax(0, 1fr); }
       .wide { grid-column: auto; }
       .item { align-items: flex-start; flex-direction: column; gap: .15rem; }
       dd { text-align: left; }
@@ -90,7 +99,15 @@
       <span class="dot {{if not .Readiness.Ready}}not-ready{{end}}"></span>
       <h1>ateapi Status</h1>
     </div>
-    <span class="badge {{if .Readiness.Ready}}ready{{else}}not-ready{{end}}">{{.Readiness.State}}</span>
+    <div class="header-actions">
+      <select id="refresh-interval" onchange="setRefresh()" class="badge" aria-label="Refresh interval">
+        <option value="0">Manual Refresh</option>
+        <option value="5">Refresh: 5s</option>
+        <option value="10" selected>Refresh: 10s</option>
+        <option value="30">Refresh: 30s</option>
+      </select>
+      <span class="badge {{if .Readiness.Ready}}ready{{else}}not-ready{{end}}">{{.Readiness.State}}</span>
+    </div>
   </header>
 
   <div class="grid">
@@ -117,6 +134,60 @@
     </section>
 
     <section class="card wide">
+      <h2>Known workers</h2>
+      {{if not .Workers.Available}}
+        <div class="empty">Worker cache is temporarily unavailable.</div>
+      {{else if .Workers.Empty}}
+        <div class="empty">The worker cache is ready and contains no workers.</div>
+      {{else}}
+        <p class="note">{{.Workers.TotalWorkers}} workers in the local cache.</p>
+      {{end}}
+    </section>
+
+    <section class="card wide">
+      <h2>PostgreSQL pool occupancy</h2>
+      <p class="note">{{.PostgreSQLPools.Coverage}}</p>
+      {{if not .PostgreSQLPools.Available}}
+        <div class="empty">PostgreSQL pool occupancy is unavailable.</div>
+      {{else}}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Role</th><th>Acquired</th><th>Idle</th><th>Maximum</th></tr></thead>
+            <tbody>
+            {{range .PostgreSQLPools.Pools}}
+              <tr><td>{{.Role}}</td><td>{{.AcquiredConns}}</td><td>{{.IdleConns}}</td><td>{{.MaxConns}}</td></tr>
+            {{end}}
+            </tbody>
+          </table>
+        </div>
+      {{end}}
+    </section>
+
+    <section class="card wide">
+      <h2>Recent failed Control RPCs</h2>
+      <p class="note">{{.RecentControlFailures.Coverage}} {{.RecentControlFailures.Retention}}</p>
+      {{if .RecentControlFailures.Empty}}
+        <div class="empty">No matching failures are retained on this replica. This does not describe other replicas or calls outside the coverage above.</div>
+      {{else}}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Completed</th><th>Method</th><th>Status</th><th>Elapsed</th></tr></thead>
+            <tbody>
+            {{range .RecentControlFailures.Failures}}
+              <tr>
+                <td>{{.CompletedAt}}</td>
+                <td><code>{{.Method}}</code></td>
+                <td>{{.Code}}</td>
+                <td>{{.Elapsed}}</td>
+              </tr>
+            {{end}}
+            </tbody>
+          </table>
+        </div>
+      {{end}}
+    </section>
+
+    <section class="card wide">
       <h2>Configuration</h2>
       <div class="flags">
         <div class="head">Flag</div><div class="head">Display value</div><div class="head">Source</div>
@@ -127,5 +198,18 @@
     </section>
   </div>
 </main>
+<script>
+  var refreshTimer;
+  function setRefresh() {
+    clearTimeout(refreshTimer);
+    var val = parseInt(document.getElementById("refresh-interval").value);
+    if (val > 0) {
+      refreshTimer = setTimeout(function() {
+        window.location.reload();
+      }, val * 1000);
+    }
+  }
+  setRefresh();
+</script>
 </body>
 </html>

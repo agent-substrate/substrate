@@ -291,7 +291,3 @@ spec:
     protocol: TCP
     port: 443
     targetPort: grpc
-  - name: status
-    protocol: TCP
-    port: 4040
-    targetPort: status
