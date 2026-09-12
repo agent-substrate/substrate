@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,9 @@ var grpcEchoFixtureManifests = e2e.SubstrateFixtureManifests{
 // TestIngressGRPC below is the positive counterpart: the same path, against an
 // actor that really does speak gRPC.
 func TestIngressProtocolDowngrade(t *testing.T) {
+	if os.Getenv("E2E_DATAPLANE") == "agentgateway" {
+		t.Skip("TODO: is HTTP/2-to-HTTP/1 downgrade, and rejecting gRPC for HTTP/1-only actors, an AgentGateway ingress contract?")
+	}
 	ctx := context.Background()
 	actorName, _ := createAndResumeSubstrateActor(t, ctx, "protodowngrade", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}

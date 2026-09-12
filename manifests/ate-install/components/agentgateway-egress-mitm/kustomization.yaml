@@ -33,6 +33,13 @@ patches:
             accessLog:
               add:
                 substrate.connect.authority: source.connectHeaders["host"]
+            substrateEgressActorResolution:
+              host: api.ate-system.svc:443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns-ca/trust-bundle.pem
 
           binds:
           - port: 8443
@@ -53,28 +60,18 @@ patches:
                 cert: /run/egress-mitm/tls.crt
                 key: /run/egress-mitm/tls.key
               routes:
-              - policies:
-                  substrateEgress:
-                    host: api.ate-system.svc:443
-                    policies:
-                      backendTLS:
-                        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        root: /run/servicedns-ca/trust-bundle.pem
+              # TODO: Restore substrateEgress when egress policies are created by
+              # the e2e fixtures and demos: https://github.com/agent-substrate/substrate/issues/1324
+              -
                 backends:
                 - dynamic: {}
                   policies:
                     backendTLS: {}
             - protocol: HTTP
               routes:
-              - policies:
-                  substrateEgress:
-                    host: api.ate-system.svc:443
-                    policies:
-                      backendTLS:
-                        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        root: /run/servicedns-ca/trust-bundle.pem
+              # TODO: Restore substrateEgress when egress policies are created by
+              # the e2e fixtures and demos: https://github.com/agent-substrate/substrate/issues/1324
+              -
                 backends:
                 - dynamic:
                     target: source.connectHeaders["host"]

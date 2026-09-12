@@ -55,12 +55,12 @@ ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
 ./hack/install-ate-kind.sh --deploy-ate-system
 
 # agentgateway
-./hack/install-ate-kind.sh --deploy-ate-system --atenet-router=agentgateway
+./hack/install-ate-kind.sh --deploy-ate-system --dataplane=agentgateway
 ```
 
 | | Envoy | agentgateway |
 | --- | --- | --- |
-| Select with | `--atenet-router=envoy` (default) | `--atenet-router=agentgateway` |
+| Select with | `--dataplane=envoy` (default) | `--dataplane=agentgateway` |
 | Egress routing | Dynamic forward proxy | Dynamic backend from CONNECT authority |
 | Actor authentication | Co-located atenet `ext_proc` | Built-in `substrateEgress` policy |
 | Configuration | Envoy bootstrap in `atenet-egress.yaml` | Static agentgateway ConfigMap overlay |

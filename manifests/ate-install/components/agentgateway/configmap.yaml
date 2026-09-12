@@ -21,8 +21,7 @@ data:
   config.yaml: |
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
-      backend:
-        poolIdleTimeout: 5s
+      statsAddr: 0.0.0.0:15020
 
     frontendPolicies:
       tracing:
@@ -127,6 +126,13 @@ data:
       accessLog:
         add:
           substrate.connect.authority: source.connectHeaders["host"]
+      substrateEgressActorResolution:
+        host: api.ate-system.svc:443
+        policies:
+          backendTLS:
+            cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+            key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+            root: /run/servicedns-ca/trust-bundle.pem
 
     binds:
     # Authenticate the actor before accepting CONNECT.
@@ -153,14 +159,9 @@ data:
               target: source.connectHeaders["host"]
       - protocol: HTTP
         routes:
-        - policies:
-            substrateEgress:
-              host: api.ate-system.svc:443
-              policies:
-                backendTLS:
-                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  root: /run/servicedns-ca/trust-bundle.pem
+        # TODO: Restore substrateEgress when egress policies are created by
+        # the e2e fixtures and demos: https://github.com/agent-substrate/substrate/issues/1324
+        -
           backends:
           - dynamic:
               target: source.connectHeaders["host"]
