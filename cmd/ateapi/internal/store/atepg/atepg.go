@@ -60,6 +60,44 @@ type Persistence struct {
 	maintenanceDone       chan struct{}
 }
 
+// PoolUsage is an instantaneous snapshot of one PostgreSQL connection pool.
+// It reports occupancy only and does not indicate database connectivity health.
+type PoolUsage struct {
+	AcquiredConns int32
+	IdleConns     int32
+	MaxConns      int32
+}
+
+// PoolSnapshots keeps operational and watch roles separate. The two roles may
+// refer to the same physical pool when Persistence was built by NewPersistence.
+type PoolSnapshots struct {
+	Operational PoolUsage
+	Watch       PoolUsage
+}
+
+// PoolSnapshots returns plain values from the current pgx pool statistics.
+// Reading these values does not acquire a connection or perform database I/O.
+func (p *Persistence) PoolSnapshots() PoolSnapshots {
+	operational := poolUsage(p.pool)
+	watch := operational
+	if p.watchPool != p.pool {
+		watch = poolUsage(p.watchPool)
+	}
+	return PoolSnapshots{
+		Operational: operational,
+		Watch:       watch,
+	}
+}
+
+func poolUsage(pool *pgxpool.Pool) PoolUsage {
+	stat := pool.Stat()
+	return PoolUsage{
+		AcquiredConns: stat.AcquiredConns(),
+		IdleConns:     stat.IdleConns(),
+		MaxConns:      stat.MaxConns(),
+	}
+}
+
 var _ store.Interface = (*Persistence)(nil)
 
 // ErrUnavailable reports that ateapi could not establish the initial
