@@ -220,32 +220,14 @@ func unmarshalStored(b []byte, m proto.Message) error {
 	return proto.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(b, m)
 }
 
-// TODO: EOL this in favor of setCreateMetadata
-func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
-	now := timestamppb.Now()
-	return &ateapipb.ResourceMetadata{
-		Atespace:   atespace,
-		Name:       name,
-		Uid:        uuid.NewString(),
-		Version:    1,
-		CreateTime: now,
-		UpdateTime: now,
-	}
-}
-
+// setCreateMetadata stamps the server-assigned metadata fields on create.
+// Callers of the store have already validated the resource, so metadata is
+// present and carries a name; the store does not re-check or repair it.
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Uid = uuid.NewString()
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
-}
-
-// TODO: EOL this in favor of setUpdateMetadata
-func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
-	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
-	metadata.Version++
-	metadata.UpdateTime = timestamppb.Now()
-	return metadata
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database
@@ -303,10 +285,10 @@ func pgErrConstraint(err error) string {
 func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
 	name := atespace.GetMetadata().GetName()
 
-	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
-	dbAtespace.Metadata = newCreateMetadata("", name)
+	// The atespace is mutated in place: callers pass a dedicated object.
+	setCreateMetadata(atespace.Metadata)
 
-	protoBytes, err := proto.Marshal(dbAtespace)
+	protoBytes, err := proto.Marshal(atespace)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling atespace: %w", err)
 	}
@@ -314,14 +296,14 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	_, err = p.pool.Exec(ctx, `
 		INSERT INTO atespaces (name, uid, version, proto)
 		VALUES ($1, $2, $3, $4)`,
-		name, dbAtespace.GetMetadata().GetUid(), dbAtespace.GetMetadata().GetVersion(), protoBytes)
+		name, atespace.GetMetadata().GetUid(), atespace.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
 		}
 		return nil, fmt.Errorf("inserting atespace %q: %w", name, err)
 	}
-	return dbAtespace, nil
+	return atespace, nil
 }
 
 func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
@@ -415,19 +397,16 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 
 func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
 	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
-	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
-	if dbTemplate.Metadata == nil {
-		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
-	}
-	setCreateMetadata(dbTemplate.Metadata)
-	protoBytes, err := proto.Marshal(dbTemplate)
+	// The template is mutated in place: callers pass a dedicated object.
+	setCreateMetadata(template.Metadata)
+	protoBytes, err := proto.Marshal(template)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
 	}
 	_, err = p.pool.Exec(ctx, `
 		INSERT INTO actor_templates (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
-		atespace, name, dbTemplate.GetMetadata().GetUid(), dbTemplate.GetMetadata().GetVersion(), protoBytes)
+		atespace, name, template.GetMetadata().GetUid(), template.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -437,7 +416,7 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapip
 		}
 		return nil, fmt.Errorf("inserting actor template %s/%s: %w", atespace, name, err)
 	}
-	return dbTemplate, nil
+	return template, nil
 }
 
 func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
@@ -499,9 +478,8 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
 		return nil, err
 	}
-	if dbTemplate.Metadata == nil {
-		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
-	}
+	// The mutation validator rejected any dropped or renamed metadata, so
+	// dbTemplate.Metadata is set.
 	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
 	updatedBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
@@ -620,14 +598,11 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
-	// TODO: doing a full clone here is wasteful - the caller already has to
-	// make modifications to the actor before passing it in, so we can safely
-	// mutate it in place.  This breaks some of the contract tests, so we can
-	// fix it later.
-	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	setCreateMetadata(dbActor.Metadata)
+	// The actor is mutated in place: the caller already builds a dedicated
+	// object to pass in, so a defensive clone is wasted work.
+	setCreateMetadata(actor.Metadata)
 
-	protoBytes, err := proto.Marshal(dbActor)
+	protoBytes, err := proto.Marshal(actor)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
@@ -635,7 +610,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	_, err = p.pool.Exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
-		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
+		atespace, name, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -647,7 +622,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		}
 		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
 	}
-	return dbActor, nil
+	return actor, nil
 }
 
 func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
@@ -878,7 +853,14 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 
 func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.EgressPolicy)
-	dbPolicy.Metadata = newCreateMetadata(actorRef.Atespace, "default")
+	if dbPolicy.Metadata == nil {
+		dbPolicy.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	// The policy is a singleton nested under its actor: its identity comes
+	// from the actor, not from caller-supplied metadata.
+	dbPolicy.Metadata.Atespace = actorRef.Atespace
+	dbPolicy.Metadata.Name = "default"
+	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling egress policy: %w", err)
@@ -1120,7 +1102,7 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 	atespace := tag.GetMetadata().GetAtespace()
 	name := tag.GetMetadata().GetName()
 	dbTag := proto.CloneOf(tag)
-	dbTag.Metadata = newCreateMetadata(atespace, name)
+	setCreateMetadata(dbTag.Metadata)
 	protoBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
@@ -1203,9 +1185,10 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := validateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
 		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
-	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure and derive the next revision from the state this attempt read.
-	dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
+	// Stored server-assigned metadata is authoritative; the next revision is
+	// derived from the state this attempt read. The mutation validator
+	// rejected any dropped or renamed metadata, so dbTag.Metadata is set.
+	setUpdateMetadata(dbTag.Metadata, tagBeforeMutation.GetMetadata())
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {
@@ -1250,13 +1233,10 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*
 // --- Workers ---
 
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	if dbWorker.Metadata == nil {
-		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
-	}
-	setCreateMetadata(dbWorker.Metadata)
+	// The worker is mutated in place: callers pass a dedicated object.
+	setCreateMetadata(worker.Metadata)
 
-	protoBytes, err := proto.Marshal(dbWorker)
+	protoBytes, err := proto.Marshal(worker)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling worker: %w", err)
 	}
@@ -1265,11 +1245,11 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
-			dbWorker.GetMetadata().GetName(), dbWorker.GetMetadata().GetUid(), dbWorker.GetMetadata().GetVersion(), protoBytes)
+			worker.GetMetadata().GetName(), worker.GetMetadata().GetUid(), worker.GetMetadata().GetVersion(), protoBytes)
 		if err != nil {
 			return nil, err
 		}
-		return dbWorker, nil
+		return worker, nil
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -1413,8 +1393,10 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.
 // saveWorker writes back a Worker whose allocation just moved, at the next
 // version. This assumes the caller holds the row lock getWorkerForUpdate took.
 func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapipb.Worker) error {
-	read := worker.GetMetadata()
-	worker.Metadata = newUpdateMetadata(read)
+	// Clone the metadata as read so the optimistic WHERE clause below still
+	// sees the pre-bump version once the worker's own metadata is advanced.
+	read := proto.CloneOf(worker.GetMetadata())
+	setUpdateMetadata(worker.Metadata, read)
 	protoBytes, err := proto.Marshal(worker)
 	if err != nil {
 		return fmt.Errorf("marshaling worker: %w", err)
