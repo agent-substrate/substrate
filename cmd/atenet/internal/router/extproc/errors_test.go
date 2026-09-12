@@ -47,7 +47,7 @@ func TestNewReqError(t *testing.T) {
 func TestImmediateResponseHeaderEncoding(t *testing.T) {
 	t.Parallel()
 
-	resp := ImmediateResponse(envoy_type.StatusCode_ServiceUnavailable, "body")
+	resp := ImmediateResponse(envoy_type.StatusCode_InternalServerError, "body")
 	set := resp.GetImmediateResponse().GetHeaders().GetSetHeaders()
 	if len(set) != 1 {
 		t.Fatalf("SetHeaders count = %d, want 1", len(set))
@@ -58,5 +58,26 @@ func TestImmediateResponseHeaderEncoding(t *testing.T) {
 	}
 	if h.GetValue() != "" {
 		t.Errorf("header uses Value (%q); must use RawValue only", h.GetValue())
+	}
+}
+
+func TestImmediateResponseRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	headers := func(code envoy_type.StatusCode) map[string]string {
+		got := map[string]string{}
+		for _, o := range ImmediateResponse(code, "body").GetImmediateResponse().GetHeaders().GetSetHeaders() {
+			got[o.GetHeader().GetKey()] = string(o.GetHeader().GetRawValue())
+		}
+		return got
+	}
+
+	if v, ok := headers(envoy_type.StatusCode_ServiceUnavailable)["retry-after"]; !ok || v != "1" {
+		t.Errorf("503 retry-after = %q, %v; want \"1\", true", v, ok)
+	}
+	for _, code := range []envoy_type.StatusCode{envoy_type.StatusCode_InternalServerError, envoy_type.StatusCode_GatewayTimeout, envoy_type.StatusCode_Forbidden} {
+		if v, ok := headers(code)["retry-after"]; ok {
+			t.Errorf("%d unexpectedly has retry-after %q", code, v)
+		}
 	}
 }
