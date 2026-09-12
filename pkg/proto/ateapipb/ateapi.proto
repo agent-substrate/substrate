@@ -347,6 +347,11 @@ message ExternalVolume {
 }
 
 message Actor {
+  // Retired field numbers. Rows stored before these fields were removed still
+  // carry them, so reusing a number would decode that old data into whatever
+  // field takes it next.
+  reserved 2, 3;
+
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -528,6 +533,9 @@ enum ActorState {
 }
 
 message ActorStatus {
+  // Retired field numbers. See the note on Actor.
+  reserved 6, 9, 10;
+
   // state is the Actor's current lifecycle state.
   //
   // +k8s:required
@@ -1061,6 +1069,9 @@ message HTTPGetAction {
 }
 
 message Volume {
+  // Retired field number. See the note on Actor.
+  reserved 4;
+
   // name of the volume. Must be a DNS label.
   //
   // +k8s:required
@@ -1830,6 +1841,9 @@ message ListActorsResponse {
 // whole resource, so an immutable field that a request changes — including by
 // omitting it, which would clear it — is rejected with INVALID_ARGUMENT.
 message Worker {
+  // Retired field number. See the note on Actor.
+  reserved 10;
+
   // Output-only: name, uid, version and timestamps are all server-assigned.
   // uid and version are echoed back on UpdateWorker as preconditions.
   //
@@ -1946,6 +1960,9 @@ message WorkerResources {
 // ActorAssignment binds an Actor to a Worker.  This is a subresource of the
 // Worker.
 message ActorAssignment {
+  // Retired field number. See the note on Actor.
+  reserved 1;
+
   // Metadata about the assignment.
   //
   // The atespace field is always empty, since it corresponds to a Worker, and
