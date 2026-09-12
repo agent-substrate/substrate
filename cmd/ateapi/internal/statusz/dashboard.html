@@ -66,15 +66,9 @@
     .item { display: flex; justify-content: space-between; gap: 1rem; margin: .7rem 0; }
     dt { color: var(--muted); }
     dd { margin: 0; text-align: right; word-break: break-word; }
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; text-align: left; }
-    th, td { padding: .75rem .8rem; border-bottom: 1px solid var(--border); }
-    th { color: var(--muted); background: var(--row); font-weight: 600; }
-    .empty { padding: 1.5rem 0; color: var(--muted); text-align: center; }
     .flags { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(130px, 2fr) minmax(150px, 1fr); gap: .1rem .8rem; }
     .flags > div { padding: .55rem .6rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
     .flags .head { color: var(--muted); background: var(--row); font-weight: 600; }
-    .note { color: var(--muted); font-size: .875rem; }
     @media (max-width: 700px) {
       body { padding: 1rem; }
       header { align-items: flex-start; flex-direction: column; }
@@ -120,27 +114,6 @@
         <div class="item"><dt>Drain delay</dt><dd>{{.Configuration.Drain.Delay}}</dd></div>
         <div class="item"><dt>Drain timeout</dt><dd>{{.Configuration.Drain.Timeout}}</dd></div>
       </dl>
-    </section>
-
-    <section class="card wide">
-      <h2>Known workers</h2>
-      {{if not .Workers.Available}}
-        <div class="empty">Worker cache is temporarily unavailable.</div>
-      {{else if .Workers.Empty}}
-        <div class="empty">The worker cache is ready and contains no workers.</div>
-      {{else}}
-        <p class="note">{{.Workers.TotalWorkers}} workers across {{.Workers.TotalGroups}} namespace/pool groups.{{if .Workers.Truncated}} Showing the first 100 groups.{{end}}</p>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Namespace</th><th>Pool</th><th>Workers</th></tr></thead>
-            <tbody>
-            {{range .Workers.Groups}}
-              <tr><td>{{.Namespace}}</td><td>{{.Pool}}</td><td>{{.Count}}</td></tr>
-            {{end}}
-            </tbody>
-          </table>
-        </div>
-      {{end}}
     </section>
 
     <section class="card wide">
