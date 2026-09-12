@@ -140,9 +140,6 @@ spec:
       containers:
       - name: controller
         image: ko://github.com/agent-substrate/substrate/cmd/podcertcontroller
-        resources:
-          requests:
-            cpu: "4"
         args:
         - --in-cluster=true
         - --sharding-pod-namespace=$(POD_NAMESPACE)
