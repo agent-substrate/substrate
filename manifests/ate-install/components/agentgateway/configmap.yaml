@@ -22,8 +22,6 @@ data:
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
       statsAddr: 0.0.0.0:15020
-      backend:
-        poolIdleTimeout: 5s
 
     frontendPolicies:
       tracing:
