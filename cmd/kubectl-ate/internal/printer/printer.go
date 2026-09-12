@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"text/tabwriter"
 	"time"
@@ -41,11 +40,6 @@ var TimeNow = time.Now
 // (e.g. "5m", "3h", "2d").
 func formatAge(ts *timestamppb.Timestamp) string {
 	return duration.HumanDuration(TimeNow().Sub(ts.AsTime()))
-}
-
-// PrintActors prints a slice of actors to stdout in the requested format.
-func PrintActors(actors []*ateapipb.Actor, format string) error {
-	return PrintActorsTo(os.Stdout, actors, format)
 }
 
 func sortActors(actors []*ateapipb.Actor) {
@@ -96,11 +90,6 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}
-}
-
-// PrintWorkers prints a slice of workers to stdout in the requested format.
-func PrintWorkers(workers []*ateapipb.Worker, format string) error {
-	return PrintWorkersTo(os.Stdout, workers, format)
 }
 
 // WorkerOccupancy is how full a Worker is, as a count against its limit. A
@@ -184,6 +173,15 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 	}
 }
 
+// PrintWorkerTo prints a single worker to the provided writer.
+func PrintWorkerTo(out io.Writer, worker *ateapipb.Worker, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(out, worker, format)
+	}
+	// table has no singular/plural distinction, so reuse the list renderer.
+	return PrintWorkersTo(out, []*ateapipb.Worker{worker}, format)
+}
+
 // WorkerTopItem represents real-time hardware resource utilization for a worker pod.
 type WorkerTopItem struct {
 	Pod       string `json:"pod" yaml:"pod"`
@@ -210,11 +208,6 @@ func sortWorkerTopItems(items []*WorkerTopItem) {
 		}
 		return cmp.Compare(a.Pod, b.Pod)
 	})
-}
-
-// PrintWorkerTop prints a slice of worker top items to stdout in the requested format.
-func PrintWorkerTop(items []*WorkerTopItem, format string) error {
-	return PrintWorkerTopTo(os.Stdout, items, format)
 }
 
 // PrintWorkerTopTo prints a slice of worker top items to the provided writer.
@@ -272,15 +265,13 @@ func PrintWorkerTopYAML(out io.Writer, items []*WorkerTopItem) error {
 	return err
 }
 
-// PrintActor prints a single actor in the requested format.
-func PrintActor(actor *ateapipb.Actor, format string) error {
-	return PrintActors([]*ateapipb.Actor{actor}, format)
-}
-
-// PrintActorTemplates prints a slice of actor templates to stdout in the
-// requested format.
-func PrintActorTemplates(templates []*ateapipb.ActorTemplate, format string) error {
-	return PrintActorTemplatesTo(os.Stdout, templates, format)
+// PrintActorTo prints a single actor to the provided writer.
+func PrintActorTo(out io.Writer, actor *ateapipb.Actor, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(out, actor, format)
+	}
+	// table has no singular/plural distinction, so reuse the list renderer.
+	return PrintActorsTo(out, []*ateapipb.Actor{actor}, format)
 }
 
 func sortActorTemplates(templates []*ateapipb.ActorTemplate) {
@@ -320,15 +311,13 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 	}
 }
 
-// PrintActorTemplate prints a single actor template in the requested format.
-func PrintActorTemplate(template *ateapipb.ActorTemplate, format string) error {
-	return PrintActorTemplates([]*ateapipb.ActorTemplate{template}, format)
-}
-
-// PrintTags prints tags to stdout in the requested
-// format.
-func PrintTags(tags []*ateapipb.Tag, format string) error {
-	return PrintTagsTo(os.Stdout, tags, format)
+// PrintActorTemplateTo prints a single actor template to the provided writer.
+func PrintActorTemplateTo(out io.Writer, template *ateapipb.ActorTemplate, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(out, template, format)
+	}
+	// table has no singular/plural distinction, so reuse the list renderer.
+	return PrintActorTemplatesTo(out, []*ateapipb.ActorTemplate{template}, format)
 }
 
 // PrintTagsTo prints a slice of tags to the
@@ -375,17 +364,13 @@ func tagState(tag *ateapipb.Tag) string {
 	return "Ready"
 }
 
-// PrintTag prints a single tag to stdout.
-func PrintTag(tag *ateapipb.Tag, format string) error {
+// PrintTagTo prints a single tag to the provided writer.
+func PrintTagTo(out io.Writer, tag *ateapipb.Tag, format string) error {
 	if format == "json" || format == "yaml" {
-		return printProto(os.Stdout, tag, format)
+		return printProto(out, tag, format)
 	}
-	return PrintTags([]*ateapipb.Tag{tag}, format)
-}
-
-// PrintAtespaces prints a slice of atespaces to stdout in the requested format.
-func PrintAtespaces(atespaces []*ateapipb.Atespace, format string) error {
-	return PrintAtespacesTo(os.Stdout, atespaces, format)
+	// table has no singular/plural distinction, so reuse the list renderer.
+	return PrintTagsTo(out, []*ateapipb.Tag{tag}, format)
 }
 
 func sortAtespaces(atespaces []*ateapipb.Atespace) {
@@ -412,9 +397,13 @@ func PrintAtespacesTo(out io.Writer, atespaces []*ateapipb.Atespace, format stri
 	}
 }
 
-// PrintAtespace prints a single atespace in the requested format.
-func PrintAtespace(atespace *ateapipb.Atespace, format string) error {
-	return PrintAtespaces([]*ateapipb.Atespace{atespace}, format)
+// PrintAtespaceTo prints a single atespace to the provided writer.
+func PrintAtespaceTo(out io.Writer, atespace *ateapipb.Atespace, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(out, atespace, format)
+	}
+	// table has no singular/plural distinction, so reuse the list renderer.
+	return PrintAtespacesTo(out, []*ateapipb.Atespace{atespace}, format)
 }
 
 func printProto(out io.Writer, msg proto.Message, format string) error {

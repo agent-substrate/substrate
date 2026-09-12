@@ -74,6 +74,9 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 			}
 			workers = append(workers, worker)
 		}
+		if len(workers) == 1 {
+			return printer.PrintWorkerTo(r.out, workers[0], r.outputFmt)
+		}
 		return printer.PrintWorkersTo(r.out, workers, r.outputFmt)
 	}
 

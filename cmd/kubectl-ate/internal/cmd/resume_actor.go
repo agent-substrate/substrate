@@ -48,7 +48,7 @@ var resumeActorCmd = &cobra.Command{
 			return fmt.Errorf("failed to resume actor: %w", err)
 		}
 
-		return printer.PrintActor(resp.GetActor(), outputFmt)
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
 	},
 }
 

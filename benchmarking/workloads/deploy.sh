@@ -149,11 +149,11 @@ wait_actortemplate_ready() {
 
   while ((SECONDS < deadline)); do
     if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
-      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
+      snapshot=$(jq -r '.status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
       if [[ -n "${snapshot}" ]]; then
         return 0
       fi
-      error_message=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.errorMessage // empty' <<<"${json}")
+      error_message=$(jq -r '.status.goldenSnapshotStatus.errorMessage // empty' <<<"${json}")
       if [[ -n "${error_message}" ]]; then
         echo "actor template ${atespace}/${template} failed: ${error_message}" >&2
         return 1

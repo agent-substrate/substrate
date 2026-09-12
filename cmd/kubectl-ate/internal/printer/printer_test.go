@@ -233,6 +233,43 @@ func TestPrintActorsTo_Invalid(t *testing.T) {
 	}
 }
 
+func TestPrintActorTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id-1", Version: 2}}
+
+	if err := PrintActorTo(&buf, actor, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "name": "id-1",
+    "version": "2"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintActorTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id-1", Version: 2}}
+
+	if err := PrintActorTo(&buf, actor, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  name: id-1
+  version: "2"
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestPrintWorkersTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)
@@ -346,6 +383,41 @@ func TestPrintWorkersTo_Invalid(t *testing.T) {
 	err := PrintWorkersTo(&buf, nil, "xml")
 	if err == nil {
 		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintWorkerTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	worker := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}}
+
+	if err := PrintWorkerTo(&buf, worker, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "name": "worker-1"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintWorkerTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	worker := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}}
+
+	if err := PrintWorkerTo(&buf, worker, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  name: worker-1
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -474,6 +546,45 @@ func TestPrintActorTemplatesTo_Invalid(t *testing.T) {
 	}
 }
 
+func TestPrintActorTemplateTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	template := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}}
+
+	if err := PrintActorTemplateTo(&buf, template, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "atespace": "team-a",
+    "name": "counter",
+    "version": "1"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintActorTemplateTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	template := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}}
+
+	if err := PrintActorTemplateTo(&buf, template, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  atespace: team-a
+  name: counter
+  version: "1"
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestPrintTagsTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)
@@ -536,6 +647,43 @@ func TestPrintTagsTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
 	if err := PrintTagsTo(&buf, nil, "xml"); err == nil {
 		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintTagTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	tag := &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"}}
+
+	if err := PrintTagTo(&buf, tag, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "atespace": "team-a",
+    "name": "v1"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintTagTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	tag := &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"}}
+
+	if err := PrintTagTo(&buf, tag, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  atespace: team-a
+  name: v1
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -637,6 +785,41 @@ func TestPrintAtespacesTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
 	if err := PrintAtespacesTo(&buf, nil, "xml"); err == nil {
 		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintAtespaceTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}
+
+	if err := PrintAtespaceTo(&buf, atespace, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "name": "team-a"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespaceTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}
+
+	if err := PrintAtespaceTo(&buf, atespace, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  name: team-a
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }
 

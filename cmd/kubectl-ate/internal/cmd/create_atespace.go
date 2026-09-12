@@ -46,7 +46,7 @@ var createAtespaceCmd = &cobra.Command{
 			return fmt.Errorf("failed to create atespace: %w", err)
 		}
 
-		return printer.PrintAtespace(resp, outputFmt)
+		return printer.PrintAtespaceTo(cmd.OutOrStdout(), resp, outputFmt)
 	},
 }
 

@@ -61,8 +61,8 @@ var getTagsCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		var tags []*ateapipb.Tag
 		if len(args) > 0 {
+			tags := make([]*ateapipb.Tag, 0, len(args))
 			for _, name := range args {
 				tag, err := client.GetTag(ctx, &ateapipb.GetTagRequest{
 					Tag: &ateapipb.ObjectRef{Atespace: tagAtespaceFlag, Name: name},
@@ -72,21 +72,26 @@ var getTagsCmd = &cobra.Command{
 				}
 				tags = append(tags, tag)
 			}
-		} else {
-			pageToken := ""
-			for {
-				resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: tagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
-				if err != nil {
-					return fmt.Errorf("failed to list tags: %w", err)
-				}
-				tags = append(tags, resp.GetTags()...)
-				pageToken = resp.GetNextPageToken()
-				if pageToken == "" {
-					break
-				}
+			if len(tags) == 1 {
+				return printer.PrintTagTo(cmd.OutOrStdout(), tags[0], outputFmt)
+			}
+			return printer.PrintTagsTo(cmd.OutOrStdout(), tags, outputFmt)
+		}
+
+		var tags []*ateapipb.Tag
+		pageToken := ""
+		for {
+			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: tagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
+			if err != nil {
+				return fmt.Errorf("failed to list tags: %w", err)
+			}
+			tags = append(tags, resp.GetTags()...)
+			pageToken = resp.GetNextPageToken()
+			if pageToken == "" {
+				break
 			}
 		}
-		return printer.PrintTags(tags, outputFmt)
+		return printer.PrintTagsTo(cmd.OutOrStdout(), tags, outputFmt)
 	},
 }
 
@@ -120,7 +125,7 @@ var createTagCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to create tag: %w", err)
 		}
-		return printer.PrintTag(tag, outputFmt)
+		return printer.PrintTagTo(cmd.OutOrStdout(), tag, outputFmt)
 	},
 }
 
@@ -146,7 +151,7 @@ var updateTagCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return printer.PrintTag(resp, outputFmt)
+		return printer.PrintTagTo(cmd.OutOrStdout(), resp, outputFmt)
 	},
 }
 

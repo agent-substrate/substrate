@@ -44,7 +44,10 @@ var getAtespacesCmd = &cobra.Command{
 				}
 				atespaces = append(atespaces, resp)
 			}
-			return printer.PrintAtespaces(atespaces, outputFmt)
+			if len(atespaces) == 1 {
+				return printer.PrintAtespaceTo(cmd.OutOrStdout(), atespaces[0], outputFmt)
+			}
+			return printer.PrintAtespacesTo(cmd.OutOrStdout(), atespaces, outputFmt)
 		}
 
 		var allAtespaces []*ateapipb.Atespace
@@ -64,7 +67,7 @@ var getAtespacesCmd = &cobra.Command{
 				break
 			}
 		}
-		return printer.PrintAtespaces(allAtespaces, outputFmt)
+		return printer.PrintAtespacesTo(cmd.OutOrStdout(), allAtespaces, outputFmt)
 	},
 }
 

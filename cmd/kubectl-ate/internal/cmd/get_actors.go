@@ -63,7 +63,10 @@ var getActorsCmd = &cobra.Command{
 				}
 				actors = append(actors, resp)
 			}
-			return printer.PrintActors(actors, outputFmt)
+			if len(actors) == 1 {
+				return printer.PrintActorTo(cmd.OutOrStdout(), actors[0], outputFmt)
+			}
+			return printer.PrintActorsTo(cmd.OutOrStdout(), actors, outputFmt)
 		}
 
 		// Listing requires exactly one of --atespace (one atespace) or -A (all
@@ -96,7 +99,7 @@ var getActorsCmd = &cobra.Command{
 			}
 		}
 
-		return printer.PrintActors(allActors, outputFmt)
+		return printer.PrintActorsTo(cmd.OutOrStdout(), allActors, outputFmt)
 	},
 }
 
