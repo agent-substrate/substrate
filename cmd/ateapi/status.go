@@ -35,15 +35,13 @@ var statusEnvByFlag = map[string]string{
 }
 
 var statusValueFlags = map[string]bool{
-	"drain-delay":            true,
-	"drain-timeout":          true,
-	"egress-gateway-address": true,
-	"grpc-listen-addr":       true,
-	"log-level":              true,
-	"metrics-listen-addr":    true,
-	"postgres-schema":        true,
-	"status-port":            true,
-	"version":                true,
+	"drain-delay":         true,
+	"drain-timeout":       true,
+	"grpc-listen-addr":    true,
+	"log-level":           true,
+	"metrics-listen-addr": true,
+	"status-port":         true,
+	"version":             true,
 }
 
 var statusPresenceFlags = map[string]bool{
@@ -98,7 +96,7 @@ func statusListenAddress(port int) string {
 	if port <= 0 {
 		return "disabled"
 	}
-	return ":" + strconv.Itoa(port)
+	return "127.0.0.1:" + strconv.Itoa(port)
 }
 
 type listenerFactory func(network, address string) (net.Listener, error)

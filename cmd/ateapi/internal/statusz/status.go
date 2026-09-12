@@ -23,6 +23,14 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+)
+
+const (
+	poolCoverage = "Connection occupancy read for this request; replica-local and not a connectivity health check."
+	rpcCoverage  = "Completed non-OK authenticated unary Control RPCs retained on this replica and read for this request."
+	rpcRetention = "Newest 100 matching completions; resets on process restart; not an error rate."
 )
 
 // Build identifies the running binary.
@@ -60,12 +68,41 @@ type Config struct {
 	Flags     []Flag
 }
 
+// WorkerList reads the existing worker-cache snapshot.
+type WorkerList func() ([]*ateapipb.Worker, error)
+
+// PoolCounts is the sampled occupancy of one connection pool.
+type PoolCounts struct {
+	AcquiredConns int32
+	IdleConns     int32
+	MaxConns      int32
+}
+
+// PoolReader reads the operational and watch pools, in that order.
+type PoolReader func() (PoolCounts, PoolCounts)
+
+// RPCFailureList reads a detached newest-first failure snapshot.
+type RPCFailureList func() []RPCFailure
+
+// RPCFailure is one completed authenticated unary Control call retained by
+// this process. Its fields are bounded and omit request, response, and error
+// details.
+type RPCFailure struct {
+	CompletedAt string `json:"completed_at"`
+	Method      string `json:"method"`
+	Code        string `json:"code"`
+	Elapsed     string `json:"elapsed"`
+}
+
 // Snapshot is the common response model rendered as JSON or HTML.
 type Snapshot struct {
-	Build         Build                 `json:"build"`
-	Process       ProcessSnapshot       `json:"process"`
-	Configuration ConfigurationSnapshot `json:"configuration"`
-	Readiness     ReadinessSnapshot     `json:"readiness"`
+	Build                 Build                         `json:"build"`
+	Process               ProcessSnapshot               `json:"process"`
+	Configuration         ConfigurationSnapshot         `json:"configuration"`
+	Workers               WorkersSnapshot               `json:"workers"`
+	Readiness             ReadinessSnapshot             `json:"readiness"`
+	PostgreSQLPools       PostgreSQLPoolsSnapshot       `json:"postgresql_pools"`
+	RecentControlFailures RecentControlFailuresSnapshot `json:"recent_control_failures"`
 }
 
 // ProcessSnapshot describes the lifetime of the current process.
@@ -81,23 +118,60 @@ type ConfigurationSnapshot struct {
 	Flags     []Flag    `json:"flags"`
 }
 
+// WorkersSnapshot describes the current worker-cache view. Counts are absent
+// when the cache is unavailable, distinguishing that state from a ready empty
+// cache with explicit zero counts.
+type WorkersSnapshot struct {
+	Available    bool `json:"available"`
+	Empty        bool `json:"empty"`
+	TotalWorkers *int `json:"total_workers,omitempty"`
+}
+
 // ReadinessSnapshot mirrors the existing process readiness predicate.
 type ReadinessSnapshot struct {
 	Ready bool   `json:"ready"`
 	State string `json:"state"`
 }
 
+// PoolSnapshot is one role's sampled connection occupancy.
+type PoolSnapshot struct {
+	Role          string `json:"role"`
+	AcquiredConns int32  `json:"acquired_conns"`
+	IdleConns     int32  `json:"idle_conns"`
+	MaxConns      int32  `json:"max_conns"`
+}
+
+// PostgreSQLPoolsSnapshot distinguishes an unavailable reader from available
+// pools whose occupancy values happen to be zero.
+type PostgreSQLPoolsSnapshot struct {
+	Available bool           `json:"available"`
+	Coverage  string         `json:"coverage"`
+	Pools     []PoolSnapshot `json:"pools"`
+}
+
+// RecentControlFailuresSnapshot describes the recorder's exact local coverage
+// and retention alongside its newest-first events.
+type RecentControlFailuresSnapshot struct {
+	Coverage  string       `json:"coverage"`
+	Retention string       `json:"retention"`
+	Empty     bool         `json:"empty"`
+	Failures  []RPCFailure `json:"failures"`
+}
+
 type handler struct {
-	config Config
-	ready  func() bool
-	now    func() time.Time
+	config   Config
+	workers  WorkerList
+	ready    func() bool
+	pools    PoolReader
+	failures RPCFailureList
+	now      func() time.Time
 }
 
 // NewHandler constructs the status handler from immutable startup config and
-// the existing thread-safe readiness reader.
-func NewHandler(config Config, ready func() bool, now func() time.Time) http.Handler {
+// the existing thread-safe runtime readers.
+func NewHandler(config Config, workers WorkerList, ready func() bool, pools PoolReader, failures RPCFailureList, now func() time.Time) http.Handler {
 	config.Flags = append([]Flag(nil), config.Flags...)
-	return &handler{config: config, ready: ready, now: now}
+	return &handler{config: config, workers: workers, ready: ready, pools: pools, failures: failures, now: now}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -140,8 +214,64 @@ func (h *handler) snapshot() Snapshot {
 			Drain:     h.config.Drain,
 			Flags:     append([]Flag(nil), h.config.Flags...),
 		},
-		Readiness: ReadinessSnapshot{Ready: ready, State: state},
+		Workers:               collectWorkers(h.workers),
+		Readiness:             ReadinessSnapshot{Ready: ready, State: state},
+		PostgreSQLPools:       collectPools(h.pools),
+		RecentControlFailures: collectRPCFailures(h.failures),
 	}
+}
+
+func collectPools(read PoolReader) PostgreSQLPoolsSnapshot {
+	snapshot := PostgreSQLPoolsSnapshot{
+		Coverage: poolCoverage,
+		Pools:    []PoolSnapshot{},
+	}
+	if read == nil {
+		return snapshot
+	}
+	operational, watch := read()
+	snapshot.Available = true
+	snapshot.Pools = []PoolSnapshot{
+		poolSnapshot("Operational", operational),
+		poolSnapshot("Watch", watch),
+	}
+	return snapshot
+}
+
+func poolSnapshot(role string, counts PoolCounts) PoolSnapshot {
+	return PoolSnapshot{
+		Role:          role,
+		AcquiredConns: counts.AcquiredConns,
+		IdleConns:     counts.IdleConns,
+		MaxConns:      counts.MaxConns,
+	}
+}
+
+func collectRPCFailures(list RPCFailureList) RecentControlFailuresSnapshot {
+	failures := []RPCFailure{}
+	if list != nil {
+		failures = append(failures, list()...)
+	}
+	return RecentControlFailuresSnapshot{
+		Coverage:  rpcCoverage,
+		Retention: rpcRetention,
+		Empty:     len(failures) == 0,
+		Failures:  failures,
+	}
+}
+
+func collectWorkers(list WorkerList) WorkersSnapshot {
+	workers, err := list()
+	if err != nil {
+		return WorkersSnapshot{}
+	}
+	totalWorkers := 0
+	for _, worker := range workers {
+		if worker != nil {
+			totalWorkers++
+		}
+	}
+	return WorkersSnapshot{Available: true, Empty: totalWorkers == 0, TotalWorkers: &totalWorkers}
 }
 
 //go:embed dashboard.html

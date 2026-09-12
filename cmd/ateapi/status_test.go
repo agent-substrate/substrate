@@ -21,14 +21,20 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/statusz"
+	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestProjectStatusFlagsRedactsByDefault(t *testing.T) {
@@ -36,6 +42,7 @@ func TestProjectStatusFlagsRedactsByDefault(t *testing.T) {
 	flags.SetOutput(io.Discard)
 	flags.String("postgres-connection-string", "", "")
 	flags.String("postgres-schema", "public", "")
+	flags.String("egress-gateway-address", "", "")
 	flags.String("authentication-config", "", "")
 	flags.String("actor-id-jwt-pool", "", "")
 	flags.String("log-level", "info", "")
@@ -43,6 +50,7 @@ func TestProjectStatusFlagsRedactsByDefault(t *testing.T) {
 	if err := flags.Parse([]string{
 		"--postgres-connection-string=postgres://alice:uri-secret@db.example/app",
 		"--postgres-schema=tenant_a",
+		"--egress-gateway-address=private-egress.internal.example",
 		"--authentication-config=/etc/ateapi/auth.yaml",
 	}); err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -55,7 +63,8 @@ func TestProjectStatusFlagsRedactsByDefault(t *testing.T) {
 		"future-flag":                {Name: "future-flag", Value: "[redacted]", Source: "default"},
 		"log-level":                  {Name: "log-level", Value: "info", Source: "default"},
 		"postgres-connection-string": {Name: "postgres-connection-string", Value: "[redacted]", Source: "command line"},
-		"postgres-schema":            {Name: "postgres-schema", Value: "tenant_a", Source: "command line"},
+		"egress-gateway-address":     {Name: "egress-gateway-address", Value: "[redacted]", Source: "command line"},
+		"postgres-schema":            {Name: "postgres-schema", Value: "[redacted]", Source: "command line"},
 	}
 	if len(projected) != len(want) {
 		t.Fatalf("projected %d flags, want %d: %#v", len(projected), len(want), projected)
@@ -69,7 +78,7 @@ func TestProjectStatusFlagsRedactsByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	for _, secret := range []string{"uri-secret", "/etc/ateapi/auth.yaml", "future-default"} {
+	for _, secret := range []string{"uri-secret", "tenant_a", "private-egress.internal.example", "/etc/ateapi/auth.yaml", "future-default"} {
 		if strings.Contains(string(blob), secret) {
 			t.Errorf("projected flags retain sensitive value %q", secret)
 		}
@@ -104,6 +113,62 @@ func TestProjectStatusFlagsRedactsKeywordDSNAndEnvironmentValues(t *testing.T) {
 	}
 }
 
+func TestStatusHTTPPrivacyProjectionCoversRecorderAndAllFormats(t *testing.T) {
+	recorder := newRPCFailureRecorder(func() time.Time { return time.Date(2026, 9, 18, 1, 2, 3, 0, time.UTC) })
+	for _, identity := range []principal.PrincipalInfo{{Kind: principal.KindJWT, ID: "jwt-private-subject", Issuer: "private-issuer"}, {Kind: principal.KindMTLS, ID: "spiffe://private-subject"}, {Kind: "custom-private-kind", ID: "custom-private-subject"}} {
+		ctx := principal.InjectContext(context.Background(), identity)
+		_, _ = recorder.UnaryServerInterceptor()(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/GetActor"}, func(context.Context, any) (any, error) {
+			return nil, status.Error(codes.NotFound, "private-raw-error")
+		})
+	}
+	flags := pflag.NewFlagSet("status", pflag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.String("postgres-schema", "public", "")
+	flags.String("egress-gateway-address", "", "")
+	if err := flags.Parse([]string{"--postgres-schema=private-schema", "--egress-gateway-address=private-egress.internal.example"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	config := statusz.Config{Flags: projectStatusFlags(flags, nil)}
+	handler := statusz.NewHandler(config, func() ([]*ateapipb.Worker, error) {
+		return []*ateapipb.Worker{{WorkerNamespace: "private-namespace", WorkerPool: "private-pool"}}, nil
+	}, func() bool { return true }, nil, recorder.Failures, func() time.Time { return config.StartedAt })
+	for _, tc := range []struct {
+		name, target, accept string
+	}{
+		{name: "html", target: "/statusz"},
+		{name: "query json", target: "/statusz?format=json"},
+		{name: "accept json", target: "/statusz", accept: "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			req.Header.Set("Accept", tc.accept)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			body := response.Body.String()
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", response.Code, body)
+			}
+			for _, secret := range []string{"jwt-private-subject", "custom-private-kind", "custom-private-subject", "spiffe://private-subject", "private-issuer", "private-raw-error", "principal_id", "principal_kind", "private-namespace", "private-pool", "private-schema", "private-egress.internal.example"} {
+				if strings.Contains(body, secret) {
+					t.Errorf("response leaked %q: %s", secret, body)
+				}
+			}
+			if !strings.Contains(body, "[redacted]") {
+				t.Error("response omitted redacted configuration values")
+			}
+			diagnostic := "total_workers"
+			if tc.name == "html" {
+				diagnostic = "workers in the local cache"
+			}
+			for _, diagnostic := range []string{"/ateapi.Control/GetActor", "NotFound", diagnostic} {
+				if !strings.Contains(body, diagnostic) {
+					t.Errorf("response missing diagnostic %q: %s", diagnostic, body)
+				}
+			}
+		})
+	}
+}
+
 func TestStatusPortDefaultDisabledAndBindFailure(t *testing.T) {
 	if got := pflag.Lookup("status-port"); got == nil || got.DefValue != "4040" {
 		t.Fatalf("status-port default = %v, want 4040", got)
@@ -118,17 +183,24 @@ func TestStatusPortDefaultDisabledAndBindFailure(t *testing.T) {
 	}
 
 	bindErr := errors.New("address already in use")
-	_, err = startStatusHTTPServer(4040, http.NotFoundHandler(), func(_, _ string) (net.Listener, error) {
+	var network, address string
+	_, err = startStatusHTTPServer(4040, http.NotFoundHandler(), func(gotNetwork, gotAddress string) (net.Listener, error) {
+		network, address = gotNetwork, gotAddress
 		return nil, bindErr
 	})
 	if !errors.Is(err, bindErr) || !strings.Contains(err.Error(), "status port 4040") {
 		t.Fatalf("bind error = %v, want wrapped status-port error", err)
 	}
+	if network != "tcp" || address != "127.0.0.1:4040" {
+		t.Fatalf("status listener = (%q, %q), want (tcp, 127.0.0.1:4040)", network, address)
+	}
 }
 
 func TestStatusHTTPRemainsReachableUntilDrainCompletes(t *testing.T) {
 	readiness := &serverboot.Readiness{}
-	handler := statusz.NewHandler(statusz.Config{StartedAt: time.Now()}, readiness.Ready, time.Now)
+	handler := statusz.NewHandler(statusz.Config{StartedAt: time.Now()}, func() ([]*ateapipb.Worker, error) {
+		return nil, nil
+	}, readiness.Ready, nil, nil, time.Now)
 	running, err := startStatusHTTPServer(4040, handler, ephemeralListener)
 	if err != nil {
 		t.Fatalf("startStatusHTTPServer: %v", err)
