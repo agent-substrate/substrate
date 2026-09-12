@@ -86,10 +86,6 @@ spec:
       containers:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
-        resources:
-          requests:
-            cpu: "4"
-            memory: 2Gi
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
