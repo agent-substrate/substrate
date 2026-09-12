@@ -69,7 +69,8 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Root destination (gs://bucket/path or local path)",
     )
-    p.add_argument("--envoy-cpu", required=True, type=int, dest="envoy_cpu")
+    p.add_argument("--dataplane", choices=("envoy", "agentgateway"), default="envoy")
+    p.add_argument("--proxy-cpu", required=True, type=int, dest="proxy_cpu")
     p.add_argument("--actors", type=int, default=100)
     # Event loops and per-loop pools are sized so the client never binds
     # before the router; decoupled from --envoy-cpu.
@@ -203,7 +204,8 @@ def log_run_config(args: argparse.Namespace, prefix: str, logs: TextIO) -> None:
         "==== Run config ====",
         f"  name:                   {args.name}",
         f"  tag:                    {args.tag}",
-        f"  envoy_cpu (router limits + envoy --concurrency): {args.envoy_cpu}",
+        f"  dataplane:              {args.dataplane}",
+        f"  proxy_cpu:              {args.proxy_cpu}",
         f"  client_concurrency (nighthawk event loops): {args.client_concurrency}",
         f"  actors:                 {args.actors}",
         f"  connections/loop:       {args.connections}",
@@ -313,7 +315,8 @@ def main() -> None:
                 )
                 summary = output_mod.capacity_summary(
                     output_dict,
-                    envoy_cpu=args.envoy_cpu,
+                    proxy_cpu=args.proxy_cpu,
+                    dataplane=args.dataplane,
                     actors=args.actors,
                     client_concurrency=args.client_concurrency,
                     tail_latency_slo_ms=(

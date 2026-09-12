@@ -48,14 +48,14 @@ These were treated as contracts and reproduced exactly:
 | Actions per run | many, one per flag, in command-line order | exactly one subcommand |
 | Argument errors | detected when the dispatch loop reaches the flag, after earlier actions already ran | rejected by cobra before anything runs |
 | Value flags | pre-scanned so they could appear anywhere | positional, per-command, standard flag parsing |
-| Configuration | env vars (`ATE_INSTALL_KIND`, `ATE_ATENET_ROUTER`, `KUBECTL_CONTEXT`, …) | flags, with the env vars still honored as defaults |
+| Configuration | env vars (`ATE_INSTALL_KIND`, `ATE_DATAPLANE`, `KUBECTL_CONTEXT`, …) | flags, with the env vars still honored as defaults |
 | Repository root | `git rev-parse --show-toplevel`, then `cd` | walk up for `go.mod`; no `chdir`, all paths absolute |
 
 The one-action-per-run change is the most visible: a line that passed
 `--deploy-ate-system --deploy-demo-counter` becomes two `ate-setup` calls.
 `hack/install-ate.sh` still accepts the combined form.
 
-Invalid input now fails before any cluster mutation. `--atenet-router=nginx`
+Invalid input now fails before any cluster mutation. `--dataplane=nginx`
 used to be caught by a pre-scan validation pass; `--worker-count 0` was not
 caught at all and surfaced from inside `deploy_locust.sh` after the microvm
 dependencies had already been installed.

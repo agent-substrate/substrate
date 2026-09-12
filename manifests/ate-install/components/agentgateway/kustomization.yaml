@@ -42,7 +42,7 @@ patches:
         path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v1.5.0
+          image: ghcr.io/agentgateway/agentgateway:v0.0.0-alpha.9f9744cf
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -99,6 +99,9 @@ patches:
         namespace: ate-system
       spec:
         template:
+          metadata:
+            annotations:
+              prometheus.io/port: "15020"
           spec:
             volumes:
             - name: envoy-config
@@ -115,10 +118,13 @@ patches:
         path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v1.5.0
+          image: ghcr.io/agentgateway/agentgateway:v0.0.0-alpha.9f9744cf
           args:
           - -f
           - /etc/agentgateway/config.yaml
+          env:
+          - name: RUST_LOG
+            value: debug
           ports:
           - name: https
             containerPort: 8443
@@ -170,3 +176,16 @@ patches:
                   matchLabels:
                     podcert.ate.dev/canarying: live
                 path: trust-bundle.pem
+  - target:
+      version: v1
+      kind: Service
+      name: atenet-router
+      namespace: ate-system
+    patch: |-
+      - op: add
+        path: /spec/ports/-
+        value:
+          name: stats
+          port: 15020
+          targetPort: stats
+          protocol: TCP

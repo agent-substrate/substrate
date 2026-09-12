@@ -44,7 +44,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar((*string)(&cfg.Mode), "mode", string(ModeAll), fmt.Sprintf("Traffic direction this instance serves: %q (also runs the ingress control plane — the xDS server — for an Envoy dataplane), %q (ext_proc only, needs no Kubernetes access), or %q for both. The ext_proc mux refuses a direction this instance was not started to serve rather than falling back to the other one", ModeIngress, ModeEgress, ModeAll))
 	cmd.Flags().StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
-	cmd.Flags().StringVar(&cfg.AtenetRouter, "atenet-router", string(atenetRouterEnvoy), "Router dataplane: envoy or agentgateway")
+	cmd.Flags().StringVar(&cfg.AtenetRouter, "dataplane", string(atenetRouterEnvoy), "Ingress and egress dataplane: envoy or agentgateway")
 	cmd.Flags().StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().StringVar(&cfg.AteapiAddr, "ateapi-address", "k8s:///api.ate-system.svc:443", "gRPC dial target for the cluster ateapi Control instance.")
@@ -82,7 +82,7 @@ func NewRouterCmd() *cobra.Command {
 	// must propagate to the Service endpoints before the drain starts.
 	cmd.Flags().DurationVar(&cfg.DrainDelay, "drain-delay", 13*time.Second, "How long to keep serving after SIGTERM before starting the drain, covering readiness-probe detection and Service endpoint propagation")
 	cmd.Flags().DurationVar(&cfg.DrainTimeout, "drain-timeout", 0, "Deadline for the ext_proc drain on shutdown; streams still open past it (parked requests included) are forcefully cancelled. 0 (the default) derives --parked-request-budget + the actor route timeout + margin so parked requests always finish normally. Explicit values must be >= --parked-request-budget")
-	cmd.Flags().StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "localhost:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). Ignored with --atenet-router=agentgateway")
+	cmd.Flags().StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "localhost:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). Ignored with --dataplane=agentgateway")
 	cmd.Flags().StringVar(&cfg.DrainCompleteFile, "drain-complete-file", defaultDrainCompleteFile, "Marker file created (on a pod-shared emptyDir) once the shutdown drain completes; the dataplane container's preStop hook polls for it so the proxy exits as soon as — and no sooner than — the drain is done. Removed at startup to defuse stale markers. Empty disables the handshake")
 
 	return cmd

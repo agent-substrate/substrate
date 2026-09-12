@@ -212,7 +212,7 @@ func (c routerConfig) validate() error {
 	switch c.atenetRouter() {
 	case atenetRouterEnvoy, atenetRouterAgentgateway:
 	default:
-		return fmt.Errorf("--atenet-router must be %q or %q, got %q", atenetRouterEnvoy, atenetRouterAgentgateway, c.AtenetRouter)
+		return fmt.Errorf("--dataplane must be %q or %q, got %q", atenetRouterEnvoy, atenetRouterAgentgateway, c.AtenetRouter)
 	}
 	switch c.Mode {
 	case "", ModeIngress, ModeEgress, ModeAll:
