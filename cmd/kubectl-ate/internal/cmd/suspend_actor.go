@@ -46,7 +46,7 @@ var suspendActorCmd = &cobra.Command{
 			return fmt.Errorf("failed to suspend actor: %w", err)
 		}
 
-		return printer.PrintActor(resp.GetActor(), outputFmt)
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
 	},
 }
 

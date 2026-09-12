@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
@@ -136,12 +135,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		})
 	}
 
-	outWriter := r.out
-	if outWriter == nil {
-		outWriter = os.Stdout
-	}
-
-	return printer.PrintWorkerTopTo(outWriter, items, r.outputFmt)
+	return printer.PrintWorkerTopTo(r.out, items, r.outputFmt)
 }
 
 func extractContainerUsage(pm metricsv1beta1.PodMetrics) (string, string) {
@@ -197,7 +191,7 @@ func runTopWorkers(cmd *cobra.Command, args []string) error {
 		selector:         topWorkerSelectorFlag,
 		sandboxClass:     topWorkerClassFlag,
 		outputFmt:        outputFmt,
-		out:              os.Stdout,
+		out:              cmd.OutOrStdout(),
 	}
 
 	return runner.Run(ctx)

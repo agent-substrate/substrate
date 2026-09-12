@@ -63,7 +63,7 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		if err != nil {
 			return fmt.Errorf("failed to create actor template: %w", err)
 		}
-		return printer.PrintActorTemplate(resp, outputFmt)
+		return printer.PrintActorTemplateTo(cmd.OutOrStdout(), resp, outputFmt)
 	},
 }
 

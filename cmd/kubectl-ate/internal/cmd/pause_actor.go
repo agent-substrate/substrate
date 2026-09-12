@@ -46,7 +46,7 @@ var pauseActorCmd = &cobra.Command{
 			return fmt.Errorf("failed to pause actor: %w", err)
 		}
 
-		return printer.PrintActor(resp.GetActor(), outputFmt)
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
 	},
 }
 

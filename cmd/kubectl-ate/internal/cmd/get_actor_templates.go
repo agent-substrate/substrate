@@ -62,7 +62,10 @@ var getActorTemplatesCmd = &cobra.Command{
 				}
 				templates = append(templates, resp)
 			}
-			return printer.PrintActorTemplates(templates, outputFmt)
+			if len(templates) == 1 {
+				return printer.PrintActorTemplateTo(cmd.OutOrStdout(), templates[0], outputFmt)
+			}
+			return printer.PrintActorTemplatesTo(cmd.OutOrStdout(), templates, outputFmt)
 		}
 
 		// Listing requires exactly one of --atespace (one atespace) or -A (all
@@ -93,7 +96,7 @@ var getActorTemplatesCmd = &cobra.Command{
 			}
 		}
 
-		return printer.PrintActorTemplates(allTemplates, outputFmt)
+		return printer.PrintActorTemplatesTo(cmd.OutOrStdout(), allTemplates, outputFmt)
 	},
 }
 

@@ -49,7 +49,7 @@ var createActorCmd = &cobra.Command{
 			return fmt.Errorf("failed to create actor: %w", err)
 		}
 
-		return printer.PrintActor(resp, outputFmt)
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp, outputFmt)
 	},
 }
 

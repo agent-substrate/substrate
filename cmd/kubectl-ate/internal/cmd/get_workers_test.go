@@ -205,6 +205,33 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 	}
 }
 
+func TestGetWorkersRunner_GetByName_Single(t *testing.T) {
+	getter := &mockWorkerGetter{workers: map[string]*ateapipb.Worker{
+		"worker-1": {Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}},
+	}}
+
+	var buf bytes.Buffer
+	runner := &GetWorkersRunner{
+		workerGetter: getter,
+		names:        []string{"worker-1"},
+		outputFmt:    "json",
+		out:          &buf,
+	}
+	if err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("Run() unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "name": "worker-1"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestGetWorkersRunner_GetByName_Error(t *testing.T) {
 	runner := &GetWorkersRunner{
 		workerGetter: &mockWorkerGetter{err: errors.New("rpc failed")},
