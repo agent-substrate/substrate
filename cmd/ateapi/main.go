@@ -278,7 +278,7 @@ func main() {
 			Timeout: drainTimeout.String(),
 		},
 		Flags: projectStatusFlags(pflag.CommandLine, statusEnvSources),
-	}, workerCache.Workers, readiness.Ready, time.Now))
+	}, readiness.Ready, time.Now))
 	statusHTTP, err := startStatusHTTPServer(*statusPort, statusMux, net.Listen)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to start status HTTP server", err)

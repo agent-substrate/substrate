@@ -22,7 +22,7 @@ Currently, Agent Substrate automatically wraps container output and injects thes
 
 ## Replica-local ateapi status
 
-Each ateapi replica serves an operator status page at `/statusz` on its internal `status` port, 4040 by default. Like the router status page, this endpoint is unauthenticated and only exposed through the cluster-internal Service. Its build, readiness, uptime, resolved configuration, and known-worker data describe the one replica selected by the connection; they are not a cluster-wide view. Configuration values use a closed display policy: credentials and database connection strings are redacted, credential and configuration paths report only whether they are configured, values resolved from environment variables are redacted, and unrecognized flags are redacted.
+Each ateapi replica serves an operator status page at `/statusz` on its internal `status` port, 4040 by default. Like the router status page, this endpoint is unauthenticated and only exposed through the cluster-internal Service. Its build, readiness, uptime, and resolved configuration describe the one replica selected by the connection; they are not a cluster-wide view. Configuration values use a closed display policy: credentials and database connection strings are redacted, credential and configuration paths report only whether they are configured, values resolved from environment variables are redacted, and unrecognized flags are redacted.
 
 Port-forward the `api` Service to inspect a replica:
 

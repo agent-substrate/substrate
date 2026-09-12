@@ -21,14 +21,9 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
-
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
-
-const maxWorkerGroups = 100
 
 // Build identifies the running binary.
 type Build struct {
@@ -65,15 +60,11 @@ type Config struct {
 	Flags     []Flag
 }
 
-// WorkerList reads the existing worker-cache snapshot.
-type WorkerList func() ([]*ateapipb.Worker, error)
-
 // Snapshot is the common response model rendered as JSON or HTML.
 type Snapshot struct {
 	Build         Build                 `json:"build"`
 	Process       ProcessSnapshot       `json:"process"`
 	Configuration ConfigurationSnapshot `json:"configuration"`
-	Workers       WorkersSnapshot       `json:"workers"`
 	Readiness     ReadinessSnapshot     `json:"readiness"`
 }
 
@@ -90,25 +81,6 @@ type ConfigurationSnapshot struct {
 	Flags     []Flag    `json:"flags"`
 }
 
-// WorkerGroup is the number of cached workers in one namespace and pool.
-type WorkerGroup struct {
-	Namespace string `json:"namespace"`
-	Pool      string `json:"pool"`
-	Count     int    `json:"count"`
-}
-
-// WorkersSnapshot describes the current worker-cache view. Counts are absent
-// when the cache is unavailable, distinguishing that state from a ready empty
-// cache with explicit zero counts.
-type WorkersSnapshot struct {
-	Available    bool          `json:"available"`
-	Empty        bool          `json:"empty"`
-	TotalWorkers *int          `json:"total_workers,omitempty"`
-	TotalGroups  *int          `json:"total_groups,omitempty"`
-	Truncated    bool          `json:"truncated"`
-	Groups       []WorkerGroup `json:"groups"`
-}
-
 // ReadinessSnapshot mirrors the existing process readiness predicate.
 type ReadinessSnapshot struct {
 	Ready bool   `json:"ready"`
@@ -116,17 +88,16 @@ type ReadinessSnapshot struct {
 }
 
 type handler struct {
-	config  Config
-	workers WorkerList
-	ready   func() bool
-	now     func() time.Time
+	config Config
+	ready  func() bool
+	now    func() time.Time
 }
 
 // NewHandler constructs the status handler from immutable startup config and
-// the two existing thread-safe runtime readers.
-func NewHandler(config Config, workers WorkerList, ready func() bool, now func() time.Time) http.Handler {
+// the existing thread-safe readiness reader.
+func NewHandler(config Config, ready func() bool, now func() time.Time) http.Handler {
 	config.Flags = append([]Flag(nil), config.Flags...)
-	return &handler{config: config, workers: workers, ready: ready, now: now}
+	return &handler{config: config, ready: ready, now: now}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -169,53 +140,7 @@ func (h *handler) snapshot() Snapshot {
 			Drain:     h.config.Drain,
 			Flags:     append([]Flag(nil), h.config.Flags...),
 		},
-		Workers:   collectWorkers(h.workers),
 		Readiness: ReadinessSnapshot{Ready: ready, State: state},
-	}
-}
-
-func collectWorkers(list WorkerList) WorkersSnapshot {
-	workers, err := list()
-	if err != nil {
-		return WorkersSnapshot{Groups: []WorkerGroup{}}
-	}
-
-	counts := make(map[string]int)
-	groupsByKey := make(map[string]WorkerGroup)
-	for _, worker := range workers {
-		if worker == nil {
-			continue
-		}
-		key := worker.GetWorkerNamespace() + "\x00" + worker.GetWorkerPool()
-		counts[key]++
-		groupsByKey[key] = WorkerGroup{Namespace: worker.GetWorkerNamespace(), Pool: worker.GetWorkerPool()}
-	}
-	groups := make([]WorkerGroup, 0, len(counts))
-	for key, count := range counts {
-		group := groupsByKey[key]
-		group.Count = count
-		groups = append(groups, group)
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Namespace != groups[j].Namespace {
-			return groups[i].Namespace < groups[j].Namespace
-		}
-		return groups[i].Pool < groups[j].Pool
-	})
-
-	totalWorkers := len(workers)
-	totalGroups := len(groups)
-	truncated := totalGroups > maxWorkerGroups
-	if truncated {
-		groups = groups[:maxWorkerGroups]
-	}
-	return WorkersSnapshot{
-		Available:    true,
-		Empty:        totalWorkers == 0,
-		TotalWorkers: &totalWorkers,
-		TotalGroups:  &totalGroups,
-		Truncated:    truncated,
-		Groups:       groups,
 	}
 }
 

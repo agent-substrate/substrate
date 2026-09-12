@@ -16,111 +16,18 @@ package statusz
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
-
-func TestSnapshotGroupsAndBoundsKnownWorkers(t *testing.T) {
-	workers := []*ateapipb.Worker{
-		worker("zeta", "pool-b"),
-		worker("alpha", "pool-a"),
-		worker("alpha", "pool-a"),
-	}
-	for i := range 100 {
-		workers = append(workers, worker("middle", "pool-"+threeDigits(i)))
-	}
-	original := slices.Clone(workers)
-
-	handler := NewHandler(testConfig(), func() ([]*ateapipb.Worker, error) {
-		return workers, nil
-	}, func() bool { return true }, func() time.Time {
-		return testConfig().StartedAt.Add(90 * time.Second)
-	})
-	snapshot := requestJSON(t, handler, "/statusz?format=json", "")
-
-	if !snapshot.Workers.Available {
-		t.Fatal("workers available = false, want true")
-	}
-	if intValue(snapshot.Workers.TotalWorkers) != 103 || intValue(snapshot.Workers.TotalGroups) != 102 {
-		t.Fatalf("worker totals = %v workers in %v groups, want 103 workers in 102 groups", snapshot.Workers.TotalWorkers, snapshot.Workers.TotalGroups)
-	}
-	if len(snapshot.Workers.Groups) != 100 || !snapshot.Workers.Truncated {
-		t.Fatalf("displayed groups = %d, truncated = %t; want 100, true", len(snapshot.Workers.Groups), snapshot.Workers.Truncated)
-	}
-	if got := snapshot.Workers.Groups[0]; got.Namespace != "alpha" || got.Pool != "pool-a" || got.Count != 2 {
-		t.Fatalf("first worker group = %#v, want alpha/pool-a count 2", got)
-	}
-	if !slices.Equal(workers, original) {
-		t.Fatal("snapshot assembly reordered the worker-cache slice")
-	}
-}
-
-func TestSnapshotDistinguishesEmptyAndUnavailableWorkerCache(t *testing.T) {
-	tests := []struct {
-		name      string
-		workers   WorkerList
-		available bool
-	}{
-		{
-			name: "ready and empty",
-			workers: func() ([]*ateapipb.Worker, error) {
-				return []*ateapipb.Worker{}, nil
-			},
-			available: true,
-		},
-		{
-			name: "cache unavailable",
-			workers: func() ([]*ateapipb.Worker, error) {
-				return nil, errors.New("database password must never be rendered")
-			},
-			available: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler(testConfig(), tt.workers, func() bool { return true }, func() time.Time {
-				return testConfig().StartedAt
-			})
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/statusz?format=json", nil))
-			if strings.Contains(recorder.Body.String(), "database password") {
-				t.Fatal("worker-cache error leaked into response")
-			}
-			var snapshot Snapshot
-			if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
-				t.Fatalf("decode JSON: %v", err)
-			}
-			if snapshot.Workers.Available != tt.available {
-				t.Fatalf("workers available = %t, want %t", snapshot.Workers.Available, tt.available)
-			}
-			if tt.available {
-				if snapshot.Workers.TotalWorkers == nil || *snapshot.Workers.TotalWorkers != 0 || snapshot.Workers.TotalGroups == nil || *snapshot.Workers.TotalGroups != 0 {
-					t.Fatalf("ready empty workers = %#v, want explicit zero counts", snapshot.Workers)
-				}
-			} else if snapshot.Workers.TotalWorkers != nil || snapshot.Workers.TotalGroups != nil {
-				t.Fatalf("unavailable workers = %#v, want omitted counts", snapshot.Workers)
-			}
-			if len(snapshot.Workers.Groups) != 0 {
-				t.Fatalf("unpopulated workers = %#v, want no groups", snapshot.Workers)
-			}
-		})
-	}
-}
 
 func TestHandlerFormatsAndEscapesOneSnapshot(t *testing.T) {
 	config := testConfig()
 	config.Flags = []Flag{{Name: "safe", Value: `<script>alert("x")</script>`, Source: "command line"}}
-	handler := NewHandler(config, func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{worker("tenant-a", "general")}, nil
-	}, func() bool { return false }, func() time.Time {
+	handler := NewHandler(config, func() bool { return false }, func() time.Time {
 		return config.StartedAt.Add(2*time.Hour + 3*time.Minute + 4*time.Second)
 	})
 
@@ -155,7 +62,7 @@ func TestHandlerFormatsAndEscapesOneSnapshot(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 	body := recorder.Body.String()
-	for _, want := range []string{"ateapi Status", "v1.2.3", "abc123", "tenant-a", "general", "Not ready", "2h3m4s", "Configuration", "Known workers"} {
+	for _, want := range []string{"ateapi Status", "v1.2.3", "abc123", "Not ready", "2h3m4s", "Configuration"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
 		}
@@ -163,7 +70,7 @@ func TestHandlerFormatsAndEscapesOneSnapshot(t *testing.T) {
 	if strings.Contains(body, "<script>alert") || !strings.Contains(body, "&lt;script&gt;") {
 		t.Fatal("script-shaped flag value was not HTML-escaped")
 	}
-	for _, deferred := range []string{"PostgreSQL diagnostics", "Recent RPC", "Golden activity", "Outbox"} {
+	for _, deferred := range []string{"Known workers", "PostgreSQL diagnostics", "Recent RPC", "Golden activity", "Outbox"} {
 		if strings.Contains(body, deferred) {
 			t.Errorf("HTML contains deferred section %q", deferred)
 		}
@@ -171,7 +78,7 @@ func TestHandlerFormatsAndEscapesOneSnapshot(t *testing.T) {
 }
 
 func TestHandlerSetsNoStoreOnJSON(t *testing.T) {
-	handler := NewHandler(testConfig(), func() ([]*ateapipb.Worker, error) { return nil, nil }, func() bool { return true }, time.Now)
+	handler := NewHandler(testConfig(), func() bool { return true }, time.Now)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/statusz?format=json", nil))
 	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
@@ -185,13 +92,7 @@ func TestHandlerSetsNoStoreOnJSON(t *testing.T) {
 // TestRenderSeededDashboard can also materialize the actual embedded template
 // for local visual review without adding a second rendering path.
 func TestRenderSeededDashboard(t *testing.T) {
-	handler := NewHandler(testConfig(), func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{
-			worker("research", "general"),
-			worker("research", "general"),
-			worker("support", "latency-sensitive"),
-		}, nil
-	}, func() bool { return true }, func() time.Time {
+	handler := NewHandler(testConfig(), func() bool { return true }, func() time.Time {
 		return testConfig().StartedAt.Add(37*time.Minute + 12*time.Second)
 	})
 	recorder := httptest.NewRecorder()
@@ -239,19 +140,4 @@ func testConfig() Config {
 			{Name: "postgres-connection-string", Value: "[redacted]", Source: "environment: ATE_API_POSTGRES_CONNECTION_STRING"},
 		},
 	}
-}
-
-func worker(namespace, pool string) *ateapipb.Worker {
-	return &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool}
-}
-
-func threeDigits(value int) string {
-	return string(rune('0'+value/100)) + string(rune('0'+value/10%10)) + string(rune('0'+value%10))
-}
-
-func intValue(value *int) int {
-	if value == nil {
-		return -1
-	}
-	return *value
 }
