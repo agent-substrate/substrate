@@ -95,6 +95,9 @@ function usage() {
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
   echo "  --cluster-size size0|size10            Cluster size profile (default: size0). \"size10\" assumes a dedicated postgres node"
+  echo "  --cordon-control-plane                 Pin each control plane pod to its own node: assumes a pool labeled and tainted"
+  echo "                                         ate.dev/workloadType=ate-control-plane:NoSchedule with one node per pod (7 at the"
+  echo "                                         shipped replica counts) plus a spare, since rollouts surge a new pod first"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -316,6 +319,66 @@ cluster_size() {
   esac
 }
 
+cordon_control_plane() {
+  local cordon="${ATE_INSTALL_CORDON_CONTROL_PLANE:-false}"
+  case "${cordon}" in
+    true) return 0 ;;
+    false) return 1 ;;
+    *)
+      echo "Error: --cordon-control-plane must be true or false, got '${cordon}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# render_manifests emits the manifests at PATH: a plain file is echoed, a
+# kustomization directory is built, and "-" reads stdin. Under
+# --cordon-control-plane it wraps PATH in a throwaway kustomization that adds
+# the cordon-control-plane component, so the same node pinning reaches every
+# control plane workload whichever apply path delivers it. The component's
+# patch has a name-regex target and kustomize leaves a stream alone when
+# nothing in it matches, so wrapping a stream that carries none of those
+# workloads is harmless.
+render_manifests() {
+  local path="$1"
+  if ! cordon_control_plane; then
+    if [[ "${path}" == "-" ]]; then
+      cat
+    elif [[ -d "${path}" ]]; then
+      kubectl kustomize "${path}" --load-restrictor LoadRestrictionsNone
+    else
+      cat "${path}"
+    fi
+    return
+  fi
+
+  local tmp=""
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '${tmp}'" RETURN
+  # kustomize refuses absolute paths as resource or component roots even
+  # with the load restrictor off, so both are written relative to the
+  # throwaway directory.
+  local resource=""
+  if [[ "${path}" == "-" ]]; then
+    cat > "${tmp}/stdin.yaml"
+    resource="stdin.yaml"
+  else
+    resource="$(realpath --relative-to="${tmp}" "${path}")"
+  fi
+  local component=""
+  component="$(realpath --relative-to="${tmp}" manifests/ate-install/components/cordon-control-plane)"
+  cat > "${tmp}/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ${resource}
+components:
+  - ${component}
+EOF
+  kubectl kustomize "${tmp}" --load-restrictor LoadRestrictionsNone
+}
+
 default_postgres_connection_string() {
   local dsn="postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
   # pgxpool defaults MaxConns to max(4, runtime.NumCPU()), which under-uses
@@ -395,29 +458,28 @@ render_ate_system_manifests() {
     if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
       overlay="manifests/ate-install/kind-agentgateway"
     fi
-    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
+    render_manifests "${overlay}" | run_ko resolve -f - | substitute_version
     return
   fi
 
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     # Build everything resolved with Kustomize for Kind
-    kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
+    render_manifests manifests/ate-install/kind | run_ko resolve -f - | substitute_version
   else
     # Build everything resolved with the base kustomization for GKE. Not the
     # raw directory: that would also re-apply pod-certificate-controller.yaml
     # (reverting the size10 flags and the WORKERS_PER_SIGNER override made
     # earlier in the install), both atenet-egress variants, and the
     # sandboxconfig files, all of which have their own apply steps.
-    kubectl kustomize manifests/ate-install/base --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
+    render_manifests manifests/ate-install/base | run_ko resolve -f - | substitute_version
   fi
 }
 
 render_atenet_router_manifest() {
   if [[ "$(atenet_router)" == "agentgateway" ]]; then
-    kubectl kustomize manifests/ate-install/agentgateway-router \
-      --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    render_manifests manifests/ate-install/agentgateway-router | run_ko resolve -f -
   else
-    run_ko resolve -f manifests/ate-install/atenet-router.yaml
+    render_manifests manifests/ate-install/atenet-router.yaml | run_ko resolve -f -
   fi
 }
 
@@ -449,12 +511,11 @@ render_atenet_egress_manifest() {
     if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]]; then
       agentgateway_egress="manifests/ate-install/agentgateway-egress-mitm"
     fi
-    kubectl kustomize "${agentgateway_egress}" \
-      --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    render_manifests "${agentgateway_egress}" | run_ko resolve -f -
   elif additional_egress_extproc_enabled; then
-    patch_atenet_egress_manifest | run_ko resolve -f -
+    patch_atenet_egress_manifest | render_manifests - | run_ko resolve -f -
   else
-    run_ko resolve -f "$(atenet_egress_manifest)"
+    render_manifests "$(atenet_egress_manifest)" | run_ko resolve -f -
   fi
 }
 
@@ -494,10 +555,9 @@ apply_otel_config() {
 
 apply_postgres() {
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-    kubectl kustomize manifests/ate-install/kind/postgres \
-      --load-restrictor LoadRestrictionsNone | run_kubectl apply -f -
+    render_manifests manifests/ate-install/kind/postgres | run_kubectl apply -f -
   else
-    run_kubectl apply -f manifests/ate-install/postgres/postgres.yaml
+    render_manifests manifests/ate-install/postgres/postgres.yaml | run_kubectl apply -f -
   fi
 }
 
@@ -899,9 +959,11 @@ apply_postgres_size10_overrides() {
     --patch-file manifests/ate-install/postgres-size10/postgres-config-patch.yaml
 
   # Bump the container to fill a dedicated node. Deliberately no CPU
-  # limit: hostname anti-affinity keeps this pod alone on its
-  # ate-control-plane node, so a limit only adds CFS throttling on
-  # checkpoint/autovacuum bursts. Memory request == limit keeps eviction
+  # limit: under --cordon-control-plane the hostname anti-affinity keeps
+  # this pod alone on its ate-control-plane node, so a limit only adds CFS
+  # throttling on checkpoint/autovacuum bursts. Without that flag the pod
+  # shares whatever node fits an 80-CPU request, and the missing limit lets
+  # it contend with its neighbors. Memory request == limit keeps eviction
   # ordering equivalent to a Guaranteed pod, which matters because postgres
   # cannot release shared_buffers under pressure. Applied via JSON patch so
   # the base's cpu limit is actually removed rather than merged.
@@ -1062,10 +1124,9 @@ deploy_ate_system() {
   # `kubectl set env` in apply_podcert_workers_override can't be undone
   # by a second apply reconciling the same base.
   if [[ "$(cluster_size)" == "size10" ]]; then
-    kubectl kustomize manifests/ate-install/podcert-size10 --load-restrictor LoadRestrictionsNone \
-      | run_ko apply -f -
+    render_manifests manifests/ate-install/podcert-size10 | run_ko apply -f -
   else
-    run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+    render_manifests manifests/ate-install/pod-certificate-controller.yaml | run_ko apply -f -
   fi
   apply_podcert_workers_override
   run_kubectl rollout status deployment/podcertificate-controller -n podcertificate-controller-system --timeout=120s
@@ -1154,7 +1215,7 @@ deploy_ate_apiserver() {
   apply_otel_config
   apply_otel_endpoint_override
 
-  run_ko apply -f manifests/ate-install/ate-api-server.yaml
+  render_manifests manifests/ate-install/ate-api-server.yaml | run_ko apply -f -
   reconcile_cloudsql_proxy_sidecar
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
 }
@@ -1618,6 +1679,8 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_INSTALL_CLUSTER_SIZE="${prescan_args[$((i + 1))]}"
       ;;
+    --cordon-control-plane) ATE_INSTALL_CORDON_CONTROL_PLANE=true ;;
+    --cordon-control-plane=*) ATE_INSTALL_CORDON_CONTROL_PLANE="${prescan_args[i]#*=}" ;;
     --rollout-timeout=*) ATE_INSTALL_ROLLOUT_TIMEOUT="${prescan_args[i]#*=}" ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1714,6 +1777,8 @@ while [[ "$#" -gt 0 ]]; do
     --experimental-use-sdsmint) ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --experimental-additional-egress-extproc-service=*) ;;
+    --cordon-control-plane) ;;
+    --cordon-control-plane=*) ;;
     --podcert-workers-per-signer=*) ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${1#*=}" ;;
     --podcert-workers-per-signer)
       shift

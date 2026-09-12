@@ -1,0 +1,67 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Pins each control plane workload to its own dedicated node. Selected by
+# hack/install-ate.sh under --cordon-control-plane, which wraps every
+# control plane apply in a kustomization that includes this component.
+#
+# Assumes a node pool whose nodes carry the label and the taint
+# ate.dev/workloadType=ate-control-plane:NoSchedule. The hostname
+# anti-affinity matches every pod carrying the label, replicas included, so
+# the pool needs one node per pod: 7 at the shipped replica counts (two
+# ate-api-server, one of each other workload), and more if replicas are
+# raised. Keep at least one spare beyond that: the Deployments surge a new
+# pod before removing the old one, and with no free node the new pod stays
+# Pending and the rollout never completes. A pool that is too small leaves
+# pods Pending rather than failing loudly.
+#
+# One patch with a name-regex target rather than one per workload: the
+# install applies these workloads through several different streams (the
+# base bundle, a lone ate-api-server redeploy, the podcert overlay, the
+# postgres file, and the egress variants), and kustomize leaves a stream
+# alone when nothing in it matches, so the same component fits every path.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      kind: Deployment|StatefulSet
+      name: ate-api-server|ate-controller|atenet-router|atenet-egress|podcertificate-controller|postgres
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: overridden-by-target
+      spec:
+        template:
+          metadata:
+            labels:
+              ate.dev/workloadType: ate-control-plane
+          spec:
+            nodeSelector:
+              ate.dev/workloadType: ate-control-plane
+            tolerations:
+            - key: ate.dev/workloadType
+              operator: Equal
+              value: ate-control-plane
+              effect: NoSchedule
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      ate.dev/workloadType: ate-control-plane
+                  namespaceSelector: {}
+                  topologyKey: kubernetes.io/hostname

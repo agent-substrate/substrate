@@ -102,9 +102,6 @@ spec:
       containers:
       - name: ate-controller
         image: ko://github.com/agent-substrate/substrate/cmd/atecontroller
-        resources:
-          requests:
-            cpu: "4"
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
