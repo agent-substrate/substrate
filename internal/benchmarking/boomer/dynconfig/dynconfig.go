@@ -50,8 +50,10 @@ const (
 // Config is the dynamic-mutable subset of boomer's behavior. Holder swaps
 // it atomically so task goroutines read a consistent snapshot.
 type Config struct {
-	MinWait          time.Duration
-	MaxWait          time.Duration
+	MinWait          time.Duration // gap between one actor's suspend and the VU's next resume, lower bound
+	MaxWait          time.Duration // upper bound of the same gap
+	MinLive          time.Duration // time a GluttonUser actor stays resumed between its first ping and suspend, lower bound
+	MaxLive          time.Duration // upper bound of the live window; zero (the default) suspends right after the ping
 	TraceProbability float64
 	DurDirFileSize   int64  // bytes
 	ResumeMode       string // ResumeModeExplicit | ResumeModeImplicit
@@ -61,6 +63,7 @@ type Config struct {
 	MemTarget        string // resident RAM the GluttonUser fills via WriteRAM, suffixed (e.g. "2Gi"); "" disables
 	MemChurn         string // RAM re-randomized in place each cycle via WriteRAM rotate, suffixed (e.g. "64Mi"); "" disables
 	MemRead          string // RAM walked (one byte per page) via ReadRAM after each resume, suffixed (e.g. "1Gi") or "all"; "" disables
+	MaxPingsPerWake  int    // cap on pings a GluttonUser sends during one resume/suspend cycle; values < 1 read as 1
 }
 
 // Holder lets readers Load() the current Config and writers Store() a new
@@ -94,6 +97,8 @@ type payload struct {
 	TraceProbability *float64 `json:"trace_probability"`
 	MinWaitTime      *float64 `json:"min_wait_time"`
 	MaxWaitTime      *float64 `json:"max_wait_time"`
+	MinLiveTime      *float64 `json:"min_live_time"`
+	MaxLiveTime      *float64 `json:"max_live_time"`
 	DurDirFileSize   *float64 `json:"durdir_file_size_bytes"`
 	ResumeMode       *string  `json:"resume_mode"`
 	LifecycleMode    *string  `json:"lifecycle_mode"`
@@ -102,6 +107,7 @@ type payload struct {
 	MemTarget        *string  `json:"mem_target"`
 	MemChurn         *string  `json:"mem_churn"`
 	MemRead          *string  `json:"mem_read"`
+	MaxPingsPerWake  *float64 `json:"max_pings_per_wake"`
 }
 
 // Parse decodes a JSON blob (typically from a CLI flag) and merges its
@@ -159,6 +165,15 @@ func (c Config) Validate() error {
 	if c.MaxWait < c.MinWait {
 		return fmt.Errorf("max_wait_time (%v) cannot be less than min_wait_time (%v)", c.MaxWait, c.MinWait)
 	}
+	if c.MinLive < 0 {
+		return fmt.Errorf("min_live_time cannot be negative: %v", c.MinLive)
+	}
+	if c.MaxLive < 0 {
+		return fmt.Errorf("max_live_time cannot be negative: %v", c.MaxLive)
+	}
+	if c.MaxLive < c.MinLive {
+		return fmt.Errorf("max_live_time (%v) cannot be less than min_live_time (%v)", c.MaxLive, c.MinLive)
+	}
 	if c.TraceProbability < 0 || c.TraceProbability > 1 {
 		return fmt.Errorf("trace_probability must be between 0.0 and 1.0, got: %f", c.TraceProbability)
 	}
@@ -177,6 +192,9 @@ func (c Config) Validate() error {
 	if c.DurDirReadMode != "" && c.DurDirReadMode != ReadModeData && c.DurDirReadMode != ReadModeDigest {
 		return fmt.Errorf("invalid durdir_read_mode %q: must be %q or %q", c.DurDirReadMode, ReadModeData, ReadModeDigest)
 	}
+	// MaxPingsPerWake < 1 is treated as 1 at read time (see iterate() in
+	// glutton/lifecycle.go), so Config's zero value stays usable — no
+	// validate rejection here.
 	// MemTarget, MemChurn, and MemRead are passed to glutton verbatim
 	// (MemRead's "all" excepted, which the driver maps to an empty
 	// whole-array walk), which owns the parse; invalid values fail loudly
@@ -197,6 +215,12 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.MaxWaitTime != nil {
 		out.MaxWait = time.Duration(*p.MaxWaitTime * float64(time.Second))
+	}
+	if p.MinLiveTime != nil {
+		out.MinLive = time.Duration(*p.MinLiveTime * float64(time.Second))
+	}
+	if p.MaxLiveTime != nil {
+		out.MaxLive = time.Duration(*p.MaxLiveTime * float64(time.Second))
 	}
 	if p.DurDirFileSize != nil {
 		out.DurDirFileSize = int64(*p.DurDirFileSize)
@@ -221,6 +245,9 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.MemRead != nil {
 		out.MemRead = *p.MemRead
+	}
+	if p.MaxPingsPerWake != nil {
+		out.MaxPingsPerWake = int(*p.MaxPingsPerWake)
 	}
 	return out
 }
@@ -283,6 +310,8 @@ func StartPoll(
 					slog.Float64("trace_probability", next.TraceProbability),
 					slog.Duration("min_wait", next.MinWait),
 					slog.Duration("max_wait", next.MaxWait),
+					slog.Duration("min_live", next.MinLive),
+					slog.Duration("max_live", next.MaxLive),
 					slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
 					slog.String("resume_mode", next.ResumeMode),
 					slog.String("lifecycle_mode", next.LifecycleMode),
@@ -291,6 +320,7 @@ func StartPoll(
 					slog.String("mem_target", next.MemTarget),
 					slog.String("mem_churn", next.MemChurn),
 					slog.String("mem_read", next.MemRead),
+					slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
 				)
 			}
 		}
@@ -298,28 +328,33 @@ func StartPoll(
 }
 
 // SubscribeSpawn registers a boomer Events handler that fetches `url` on
-// each spawn message (≈ once per test start) and applies the result to
-// `holder` + `sampler`. `onError` is invoked when a fetch fails; production
-// callers typically exit the process there per the "treat as fatal" design.
+// each spawn message and applies the result to `holder` + `sampler`. Locust
+// sends a spawn message for every ramp step, so a long ramp fetches once per
+// second. `onError` is invoked when a fetch fails, with `fetched` true if an
+// earlier spawn fetch succeeded: the holder then still has a value from the
+// master, and the caller can keep running on it. With `fetched` false the
+// worker has only its command-line defaults, and callers typically exit.
 // Returns an error if the event subscription itself fails (handler signature
 // mismatch), which is a programmer error and should be treated as fatal too.
-func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetchTimeout time.Duration, onError func(error)) error {
+func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetchTimeout time.Duration, onError func(err error, fetched bool)) error {
+	var fetched atomic.Bool
 	return boomer.Events.Subscribe("boomer:spawn", func(spawnCount int, spawnRate float64) {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 		defer cancel()
 		next, err := Fetch(ctx, url, holder.Load())
 		if err != nil {
-			slog.Error("dynconfig fetch failed",
-				slog.String("url", url), slog.String("err", err.Error()))
-			onError(err)
+			onError(err, fetched.Load())
 			return
 		}
+		fetched.Store(true)
 		holder.Store(next)
 		sampler.UpdateProbability(next.TraceProbability)
 		slog.Info("dynconfig applied",
 			slog.Float64("trace_probability", next.TraceProbability),
 			slog.Duration("min_wait", next.MinWait),
 			slog.Duration("max_wait", next.MaxWait),
+			slog.Duration("min_live", next.MinLive),
+			slog.Duration("max_live", next.MaxLive),
 			slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
 			slog.String("resume_mode", next.ResumeMode),
 			slog.String("lifecycle_mode", next.LifecycleMode),
@@ -328,6 +363,7 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.String("mem_target", next.MemTarget),
 			slog.String("mem_churn", next.MemChurn),
 			slog.String("mem_read", next.MemRead),
+			slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
 		)
 	})
 }
