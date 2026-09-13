@@ -17,31 +17,23 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
+	"github.com/agent-substrate/substrate/internal/testcert"
 )
 
 func TestFetch(t *testing.T) {
@@ -326,9 +318,8 @@ func webSocketEchoHandler(badSecondResponse bool) http.Handler {
 
 func startIPTLSServer(t *testing.T, handler http.Handler) (*httptest.Server, string) {
 	t.Helper()
-	caCert, caKey := newCertificate(t, true, nil, nil)
-	serverCert, serverKey := newCertificate(t, false, caCert, caKey)
-	cert, err := tls.X509KeyPair(serverCert, serverKey)
+	material := testcert.NewServerTLS(t, net.ParseIP("127.0.0.1"))
+	cert, err := tls.X509KeyPair(material.Certificate, material.PrivateKey)
 	if err != nil {
 		t.Fatalf("loading server certificate: %v", err)
 	}
@@ -341,56 +332,7 @@ func startIPTLSServer(t *testing.T, handler http.Handler) (*httptest.Server, str
 	server.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
 	server.StartTLS()
 	t.Cleanup(server.Close)
-	return server, string(caCert)
-}
-
-func newCertificate(t *testing.T, ca bool, parentPEM, parentKeyPEM []byte) ([]byte, []byte) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generating key: %v", err)
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		t.Fatalf("generating serial: %v", err)
-	}
-	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "egress test"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, BasicConstraintsValid: true}
-	if ca {
-		template.IsCA = true
-		template.KeyUsage |= x509.KeyUsageCertSign
-	} else {
-		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
-		template.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
-	}
-	parent := template
-	var parentKey crypto.Signer = key
-	if parentPEM != nil {
-		block, _ := pem.Decode(parentPEM)
-		parsed, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			t.Fatalf("parsing CA certificate: %v", err)
-		}
-		parent = parsed
-		keyBlock, _ := pem.Decode(parentKeyPEM)
-		parentKey, err = x509.ParseECPrivateKey(keyBlock.Bytes)
-		if err != nil {
-			t.Fatalf("parsing CA key: %v", err)
-		}
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, parentKey)
-	if err != nil {
-		t.Fatalf("creating certificate: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: mustMarshalECKey(t, key)})
-}
-
-func mustMarshalECKey(t *testing.T, key *ecdsa.PrivateKey) []byte {
-	t.Helper()
-	encoded, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshaling key: %v", err)
-	}
-	return encoded
+	return server, string(material.RootCA)
 }
 
 func toWebSocketURL(raw string) string {

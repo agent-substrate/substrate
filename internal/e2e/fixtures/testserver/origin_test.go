@@ -16,15 +16,10 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -33,6 +28,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/agent-substrate/substrate/internal/testcert"
 )
 
 func TestHTTPHandlerDefaultsToEmptyHealthz(t *testing.T) {
@@ -65,42 +62,6 @@ func TestHTTPSTestResponseUsesHTTP11AndVerifiedIdentity(t *testing.T) {
 	if !roots.AppendCertsFromPEM(cert.caPEM) {
 		t.Fatal("adding fixture CA to trust pool")
 	}
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{
-			RootCAs:    roots,
-			ServerName: "127.0.0.1",
-		}},
-	}
-	response, err := client.Get(server.httpsURL + "/healthz")
-	if err != nil {
-		t.Fatalf("GET /healthz over verified TLS: %v", err)
-	}
-	defer response.Body.Close()
-
-	if response.Proto != "HTTP/1.1" {
-		t.Errorf("HTTPS response protocol = %q, want HTTP/1.1", response.Proto)
-	}
-	if response.StatusCode != http.StatusOK {
-		t.Errorf("HTTPS response status = %d, want %d", response.StatusCode, http.StatusOK)
-	}
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatalf("reading HTTPS response: %v", err)
-	}
-	if string(body) != "fixture response" {
-		t.Errorf("HTTPS response body = %q, want %q", body, "fixture response")
-	}
-}
-
-func TestHTTPSOriginStaysHTTP11WhenClientOffersHTTP2(t *testing.T) {
-	cert := writeOriginCertificate(t)
-	server := startOriginServer(t, newHTTPHandler("fixture response"), cert.certFile, cert.keyFile)
-
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(cert.caPEM) {
-		t.Fatal("adding fixture CA to trust pool")
-	}
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
 	protocols.SetHTTP2(true)
@@ -116,12 +77,22 @@ func TestHTTPSOriginStaysHTTP11WhenClientOffersHTTP2(t *testing.T) {
 	}
 	response, err := client.Get(server.httpsURL + "/healthz")
 	if err != nil {
-		t.Fatalf("GET /healthz with an HTTP/2-capable client: %v", err)
+		t.Fatalf("GET /healthz over verified TLS: %v", err)
 	}
 	defer response.Body.Close()
 
 	if response.Proto != "HTTP/1.1" {
 		t.Errorf("HTTPS response protocol with HTTP/2 offered = %q, want HTTP/1.1", response.Proto)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("HTTPS response status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("reading HTTPS response: %v", err)
+	}
+	if string(body) != "fixture response" {
+		t.Errorf("HTTPS response body = %q, want %q", body, "fixture response")
 	}
 }
 
@@ -232,53 +203,17 @@ type originCertificate struct {
 
 func writeOriginCertificate(t *testing.T) originCertificate {
 	t.Helper()
-
-	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate CA key: %v", err)
-	}
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "testserver CA"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create CA certificate: %v", err)
-	}
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-
-	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate server key: %v", err)
-	}
-	serverTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "testserver origin"},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-	}
-	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caTemplate, &serverKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create server certificate: %v", err)
-	}
+	material := testcert.NewServerTLS(t, net.ParseIP("127.0.0.1"))
 
 	certFile := filepath.Join(t.TempDir(), "server.crt")
 	keyFile := filepath.Join(t.TempDir(), "server.key")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}), 0o600); err != nil {
+	if err := os.WriteFile(certFile, material.Certificate, 0o600); err != nil {
 		t.Fatalf("write server certificate: %v", err)
 	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)}), 0o600); err != nil {
+	if err := os.WriteFile(keyFile, material.PrivateKey, 0o600); err != nil {
 		t.Fatalf("write server key: %v", err)
 	}
-	return originCertificate{caPEM: caPEM, certFile: certFile, keyFile: keyFile}
+	return originCertificate{caPEM: material.RootCA, certFile: certFile, keyFile: keyFile}
 }
 
 type originServer struct {

@@ -29,6 +29,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/testcert"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -561,12 +562,11 @@ func TestActorEgressSecureWebSocket(t *testing.T) {
 func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod, encrypted bool) (e2e.Server, string) {
 	t.Helper()
 	spec.Namespace = e2e.CreateNamespace(t).Name
-	logProtocolPodOnFailure(t, spec.Namespace, spec.Name)
 	var reserved e2e.Server
 	var rootCA string
 	if encrypted {
 		reserved = e2e.CreateServerService(t, ctx, spec)
-		material := e2e.NewServerTLS(t, net.ParseIP(reserved.ClusterIP))
+		material := testcert.NewServerTLS(t, net.ParseIP(reserved.ClusterIP))
 		rootCA = string(material.RootCA)
 		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "origin-tls", Namespace: spec.Namespace}, Type: corev1.SecretTypeTLS,
 			Data: map[string][]byte{corev1.TLSCertKey: material.Certificate, corev1.TLSPrivateKeyKey: material.PrivateKey}}
@@ -593,9 +593,7 @@ func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod
 
 func prepareProtocolActor(t *testing.T, ctx context.Context, prefix string) (string, *e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
-	actorName, actor := createAndResumeActor(t, ctx, prefix, e2e.EgressFixture())
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	logProtocolPodOnFailure(t, assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
+	actorName, _ := createAndResumeActor(t, ctx, prefix, e2e.EgressFixture())
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	ref := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -650,33 +648,5 @@ func assertProtocolGateway(t *testing.T, ctx context.Context, since metav1.Time,
 			}
 		}
 		return false, nil
-	})
-}
-
-// logProtocolPodOnFailure runs before resource cleanup, retaining useful
-// origin/worker diagnostics even when the measured exchange fails early.
-func logProtocolPodOnFailure(t *testing.T, namespace, name string) {
-	t.Helper()
-	t.Cleanup(func() {
-		if !t.Failed() {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		pod, err := e2e.GetClients().K8s.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			t.Logf("diagnostic Pod %s/%s: %v", namespace, name, err)
-			return
-		}
-		t.Logf("diagnostic Pod %s/%s phase=%s conditions=%+v", namespace, name, pod.Status.Phase, pod.Status.Conditions)
-		tail := int64(50)
-		for _, container := range pod.Spec.Containers {
-			raw, err := e2e.GetClients().K8s.CoreV1().Pods(namespace).GetLogs(name, &corev1.PodLogOptions{Container: container.Name, TailLines: &tail}).DoRaw(ctx)
-			if err != nil {
-				t.Logf("diagnostic logs %s/%s/%s: %v", namespace, name, container.Name, err)
-				continue
-			}
-			t.Logf("diagnostic logs %s/%s/%s:\n%s", namespace, name, container.Name, raw)
-		}
 	})
 }
