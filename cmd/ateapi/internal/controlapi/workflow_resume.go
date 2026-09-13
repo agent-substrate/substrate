@@ -737,6 +737,14 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			scope = actorSnapshotContentScopeToAtelet(src.Scope)
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
+		// The control plane owns cacheability: a fresh start reads the
+		// template's golden snapshot, which is shared across actors and
+		// immutable once published, while an actor's own snapshot is private
+		// to it. atelet caches only what is declared SHARED.
+		sharing := ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
+		if tele.SnapshotKind == ateattr.SnapshotKindGolden {
+			sharing = ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED
+		}
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -748,6 +756,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
 				ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
 					SnapshotUri: src.SnapshotURI.String(),
+					Sharing:     sharing,
 				},
 			},
 			Scope: scope,
