@@ -207,7 +207,7 @@ spec:
         # down to fit a CI runner.
         resources:
           requests:
-            cpu: "2"
+            cpu: "4"
             memory: "1Gi"
           limits:
             cpu: "16"
