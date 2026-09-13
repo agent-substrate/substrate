@@ -17,16 +17,25 @@
 import re
 import shlex
 import subprocess
+import time
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
-    return subprocess.run(cmd, check=True, **kwargs)
+    start = time.monotonic()
+    try:
+        return subprocess.run(cmd, check=True, **kwargs)
+    finally:
+        print(f"  (took {time.monotonic() - start:.1f}s)", flush=True)
 
 
 def run_no_check(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
-    return subprocess.run(cmd, check=False, **kwargs)
+    start = time.monotonic()
+    try:
+        return subprocess.run(cmd, check=False, **kwargs)
+    finally:
+        print(f"  (took {time.monotonic() - start:.1f}s)", flush=True)
 
 
 def build_and_push(image: str, dockerfile: str) -> str:

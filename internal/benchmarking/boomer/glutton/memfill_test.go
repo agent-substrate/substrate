@@ -24,10 +24,10 @@ import (
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 )
 
-func newTestGluttonUser(t *testing.T, srv *fake.Server, dyn dynconfig.Config) *gluttonUser {
+func newTestGluttonActor(t *testing.T, srv *fake.Server, dyn dynconfig.Config) *gluttonActor {
 	t.Helper()
 	cfg := newTestConfig(t, srv, &userclass.Config{Dyn: dynconfig.NewHolder(dyn)})
-	return &gluttonUser{
+	return &gluttonActor{
 		cfg:       cfg,
 		actorName: "memactor",
 	}
@@ -35,7 +35,7 @@ func newTestGluttonUser(t *testing.T, srv *fake.Server, dyn dynconfig.Config) *g
 
 func TestEnsureRAMFilledRequestsTarget(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "2Gi"})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{MemTarget: "2Gi"})
 
 	u.ensureRAMFilled(context.Background())
 
@@ -56,7 +56,7 @@ func TestEnsureRAMFilledRequestsTarget(t *testing.T) {
 
 func TestEnsureRAMFilledDisabledByDefault(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{})
 
 	u.ensureRAMFilled(context.Background())
 
@@ -70,7 +70,7 @@ func TestEnsureRAMFilledDisabledByDefault(t *testing.T) {
 
 func TestChurnRAMOverwritesEachCycle(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi", MemChurn: "64Mi"})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{MemTarget: "1Gi", MemChurn: "64Mi"})
 	ctx := context.Background()
 
 	// Churn before fill is a no-op: there is nothing to overwrite yet.
@@ -104,7 +104,7 @@ func TestChurnRAMOverwritesEachCycle(t *testing.T) {
 
 func TestChurnRAMDisabledByDefault(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi"})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{MemTarget: "1Gi"})
 	ctx := context.Background()
 
 	u.ensureRAMFilled(ctx)
@@ -116,7 +116,7 @@ func TestChurnRAMDisabledByDefault(t *testing.T) {
 
 func TestReadRAMWalksAfterFill(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi", MemRead: "all"})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{MemTarget: "1Gi", MemRead: "all"})
 	ctx := context.Background()
 
 	// Read before fill is a no-op: there is nothing to walk yet.
@@ -144,7 +144,7 @@ func TestReadRAMWalksAfterFill(t *testing.T) {
 
 func TestReadRAMPassesSizeVerbatim(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi", MemRead: "512Mi"})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{MemTarget: "1Gi", MemRead: "512Mi"})
 	ctx := context.Background()
 
 	u.ensureRAMFilled(ctx)
@@ -158,7 +158,7 @@ func TestReadRAMPassesSizeVerbatim(t *testing.T) {
 
 func TestReadRAMDisabledByDefault(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi"})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{MemTarget: "1Gi"})
 	ctx := context.Background()
 
 	u.ensureRAMFilled(ctx)
@@ -170,7 +170,7 @@ func TestReadRAMDisabledByDefault(t *testing.T) {
 
 func TestEnsureRAMFilledRetriesAfterFailure(t *testing.T) {
 	srv := &fake.Server{Status: 503}
-	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Mi"})
+	u := newTestGluttonActor(t, srv, dynconfig.Config{MemTarget: "1Mi"})
 
 	u.ensureRAMFilled(context.Background())
 	if u.ramFilled {

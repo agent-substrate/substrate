@@ -94,6 +94,20 @@ def parse_args() -> argparse.Namespace:
             "no request on purpose"
         ),
     )
+    # Boomer startup flag; not a locust or dynconfig flag, so runner.py
+    # parses it here (keeping it out of locust_extra, which locust would
+    # reject) and appends it to the boomer command line in run_test().
+    p.add_argument(
+        "--actors-per-user",
+        type=int,
+        default=None,
+        help=(
+            "Number of actors each GluttonUser creates and cycles through in "
+            "round-robin (iteration i targets actor i%%N). Forwarded to "
+            "boomer-glutton as --actors-per-user. Omit to keep boomer's "
+            "default of 1."
+        ),
+    )
     args, extra = p.parse_known_args()
     args.locust_extra = extra
     return args
@@ -293,6 +307,8 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
         cfg_json = build_config_json(args.locust_extra)
         if cfg_json:
             boomer_cmd += ["--config-json", cfg_json]
+        if args.actors_per_user is not None:
+            boomer_cmd += ["--actors-per-user", str(args.actors_per_user)]
         # Read the endpoint again at each spawn message. Thus a value that
         # changes while the run continues, such as the sample rate of a load
         # shape, reaches boomer at the change. boomer's --master-host default
