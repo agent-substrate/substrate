@@ -24,7 +24,6 @@ import (
 	"time"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,6 +43,8 @@ const syncerWorkerCount = 2
 // the pod informer is narrowed by.
 const workerPodLabel = "ate.dev/worker-pool"
 
+// workerPoolIndex maps a WorkerPool namespace/name to the worker Pods labeled
+// as members of that pool.
 const workerPoolIndex = "worker-pool"
 
 // workerKey identifies the pod incarnation a queued event concerns. namespace
@@ -95,17 +96,15 @@ func (k workerKey) logAttrs() []any {
 type WorkerPoolSyncer struct {
 	client             ateapipb.ControlClient
 	workerInformer     cache.SharedIndexInformer
-	workerPoolLister   listersv1alpha1.WorkerPoolLister
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
 		workerInformer:     workerInformer,
-		workerPoolLister:   workerPoolLister,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
 	}
@@ -178,9 +177,7 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 	}()
 }
 
-// enqueueWorkerPool schedules every current pod in pool. Worker records mirror
-// their WorkerPool labels and sandbox class, neither of which causes a Pod
-// event when changed.
+// enqueueWorkerPool schedules every current pod in pool.
 func (s *WorkerPoolSyncer) enqueueWorkerPool(obj interface{}) {
 	pool, ok := obj.(*atev1alpha1.WorkerPool)
 	if !ok {
@@ -273,9 +270,16 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
 	poolName := pod.Labels[workerPodLabel]
-	pool, err := s.workerPoolLister.WorkerPools(key.namespace).Get(poolName)
+	poolObject, exists, err := s.workerPoolInformer.GetIndexer().GetByKey(key.namespace + "/" + poolName)
 	if err != nil {
 		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
+	}
+	if !exists {
+		return fmt.Errorf("getting WorkerPool %s/%s: not found", key.namespace, poolName)
+	}
+	pool, ok := poolObject.(*atev1alpha1.WorkerPool)
+	if !ok {
+		return fmt.Errorf("getting WorkerPool %s/%s: unexpected object type %T", key.namespace, poolName, poolObject)
 	}
 
 	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})

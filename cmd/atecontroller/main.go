@@ -228,13 +228,12 @@ func main() {
 	// controller here too.
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	workerPoolInformer := ateFactory.Api().V1alpha1().WorkerPools()
-	workerPoolLister := workerPoolInformer.Lister()
 	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient)
 
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolLister, workerPoolInformer.Informer()).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())

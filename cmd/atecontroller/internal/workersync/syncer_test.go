@@ -25,7 +25,6 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -99,10 +98,10 @@ func registeredWorker(ns, poolName, podName, uid, ip string) *ateapipb.Worker {
 	}
 }
 
-// poolLister builds the WorkerPool lister the syncer reads, and returns the
-// indexer behind it so a test can seed and mutate pools synchronously rather
+// newWorkerPoolInformer builds the WorkerPool informer the syncer reads, and
+// returns its indexer so a test can seed and mutate pools synchronously rather
 // than starting a factory and waiting for a watch to deliver them.
-func poolLister(t *testing.T, initPools ...*atev1alpha1.WorkerPool) (listersv1alpha1.WorkerPoolLister, cache.Indexer, cache.SharedIndexInformer) {
+func newWorkerPoolInformer(t *testing.T, initPools ...*atev1alpha1.WorkerPool) (cache.SharedIndexInformer, cache.Indexer) {
 	t.Helper()
 	//nolint:staticcheck // NewSimpleClientset is the only available fake clientset for versioned CRDs.
 	pools := externalversions.NewSharedInformerFactory(atefake.NewSimpleClientset(), 0).Api().V1alpha1().WorkerPools()
@@ -112,7 +111,7 @@ func poolLister(t *testing.T, initPools ...*atev1alpha1.WorkerPool) (listersv1al
 			t.Fatalf("seeding WorkerPool %s/%s: %v", pool.Namespace, pool.Name, err)
 		}
 	}
-	return pools.Lister(), indexer, pools.Informer()
+	return pools.Informer(), indexer
 }
 
 // setupSyncerTest wires a running syncer to a fake Control API and a fake
@@ -123,11 +122,11 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
 	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
-	lister, _, poolInformer := poolLister(t, initPools...)
+	workerPoolInformer, _ := newWorkerPoolInformer(t, initPools...)
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, workerInformer, lister, poolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, workerInformer, workerPoolInformer).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -142,9 +141,9 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	_, workerInformer := WorkerPodInformer(fake.NewSimpleClientset())
-	lister, poolIndexer, poolInformer := poolLister(t, initPools...)
+	workerPoolInformer, poolIndexer := newWorkerPoolInformer(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, workerInformer, lister, poolInformer), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
