@@ -1,0 +1,40 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# size10 cluster overlay for podcertificate-controller: raises the client-go
+# rate limits above the built-in 5 QPS / 10 burst so signing keeps up with
+# the request volume the size10 postgres profile enables. Selected by
+# hack/install-ate.sh when --cluster-size=size10.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../pod-certificate-controller.yaml
+
+# JSON-patch style so we only append the two new flags rather than restate
+# the whole args list — keeps the overlay from drifting if the base flags
+# change.
+patches:
+  - target:
+      kind: Deployment
+      name: podcertificate-controller
+      namespace: podcertificate-controller-system
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kube-api-qps=100
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kube-api-burst=200

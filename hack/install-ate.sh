@@ -611,11 +611,32 @@ create_podcertificate_controller_cas() {
 
 wait_for_podcertificate_trust_bundles() {
   echo "Waiting for podcertificate ClusterTrustBundles to be ready..."
-  until run_kubectl get clustertrustbundles podidentity.podcert.ate.dev:identity:primary-bundle >/dev/null 2>&1; do
-    sleep 1
-  done
-  until run_kubectl get clustertrustbundles servicedns.podcert.ate.dev:identity:primary-bundle >/dev/null 2>&1; do
-    sleep 1
+  local timeout_seconds=300
+  local bundles=(
+    podidentity.podcert.ate.dev:identity:primary-bundle
+    servicedns.podcert.ate.dev:identity:primary-bundle
+  )
+  # One shared deadline across both bundles so a slow first one doesn't
+  # eat the full budget of the second, then leave it unbounded.
+  local deadline=$((SECONDS + timeout_seconds))
+  local bundle
+  for bundle in "${bundles[@]}"; do
+    until run_kubectl get clustertrustbundles "${bundle}" >/dev/null 2>&1; do
+      if (( SECONDS >= deadline )); then
+        cat >&2 <<EOF
+Error: ClusterTrustBundle "${bundle}" did not appear within ${timeout_seconds}s.
+The podcertificate-controller pod is likely Ready but not producing bundles
+(missing CA-pool secret, crash-looping after first Ready, RBAC denial, or a
+name mismatch after an upgrade). Investigate with:
+  kubectl get clustertrustbundles -A
+  kubectl -n podcertificate-controller-system logs deploy/podcertificate-controller --tail=200
+  kubectl -n podcertificate-controller-system get pods,secrets,configmaps
+  kubectl -n podcertificate-controller-system get events --sort-by=.lastTimestamp | tail -20
+EOF
+        exit 1
+      fi
+      sleep 1
+    done
   done
 }
 
@@ -1005,8 +1026,19 @@ deploy_ate_system() {
 
   ensure_apiserver_prerequisites
 
-  # Deploy podcertificate-controller first so it starts signing and creating trust bundles immediately
-  run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+  # Deploy podcertificate-controller first so it starts signing and creating trust bundles immediately.
+  # size10 clusters swap in the podcert-size10 kustomize overlay, which appends
+  # --kube-api-qps=100 / --kube-api-burst=200 so the controller can keep up
+  # with the request volume the size10 postgres profile enables. Applying
+  # the overlay instead of a post-apply patch means the subsequent
+  # `kubectl set env` in apply_podcert_workers_override can't be undone
+  # by a second apply reconciling the same base.
+  if [[ "$(cluster_size)" == "size10" ]]; then
+    kubectl kustomize manifests/ate-install/podcert-size10 --load-restrictor LoadRestrictionsNone \
+      | run_ko apply -f -
+  else
+    run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+  fi
   apply_podcert_workers_override
   run_kubectl rollout status deployment/podcertificate-controller -n podcertificate-controller-system --timeout=120s
 
