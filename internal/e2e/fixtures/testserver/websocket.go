@@ -26,53 +26,70 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+func newWebsocketHandler(echo bool) http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Print("upgrade:", err)
+			return
+		}
+		defer c.Close()
+		for {
+			mt, message, err := c.ReadMessage()
+			if err != nil {
+				log.Println("read:", err)
+				break
+			}
+			log.Printf("recv: %s", message)
+
+			var response []byte
+			switch {
+			case echo:
+				response = message
+			case string(message) == "PING":
+				response = []byte("PONG")
+			default:
+				continue
+			}
+			if err := c.WriteMessage(mt, response); err != nil {
+				log.Println("write:", err)
+				break
+			}
+		}
+	})
+	return mux
+}
+
 func newWebsocketCmd() *cobra.Command {
-	var listenAddress string
+	var (
+		listenAddress string
+		certFile      string
+		keyFile       string
+		echo          bool
+	)
 	cmd := &cobra.Command{
 		Use:   "websocket",
 		Short: "Serve a websocket server for e2e tests.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			mux := http.NewServeMux()
-
-			mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("ok"))
-			})
-
-			mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-				c, err := upgrader.Upgrade(w, r, nil)
-				if err != nil {
-					log.Print("upgrade:", err)
-					return
-				}
-				defer c.Close()
-				for {
-					mt, message, err := c.ReadMessage()
-					if err != nil {
-						log.Println("read:", err)
-						break
-					}
-					log.Printf("recv: %s", message)
-
-					if string(message) == "PING" {
-						err = c.WriteMessage(mt, []byte("PONG"))
-						if err != nil {
-							log.Println("write:", err)
-							break
-						}
-					}
-				}
-			})
-
 			server := &http.Server{
 				Addr:    listenAddress,
-				Handler: mux,
+				Handler: newWebsocketHandler(echo),
 			}
 			log.Printf("testserver websocket: listening on %s", listenAddress)
-			return server.ListenAndServe()
+			return serveHTTP(server, certFile, keyFile)
 		},
 	}
 	cmd.Flags().StringVar(&listenAddress, "listen", ":80", "Address the websocket server listens on.")
+	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; enables HTTPS when paired with --tls-key.")
+	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; enables HTTPS when paired with --tls-cert.")
+	cmd.Flags().BoolVar(&echo, "echo", false, "Echo every WebSocket message with its original type and payload.")
 	return cmd
 }
