@@ -15,6 +15,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -22,34 +23,48 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newHTTPCmd is a plain HTTP/1.1 origin an Actor's egress lands on. It exists so
+// newHTTPHandler is the HTTP/1.1 origin an Actor's egress lands on. It exists so
 // a test can assert the destination port is recovered from SO_ORIGINAL_DST
 // rather than defaulted from the URL scheme: the actor fetches its /healthz on a
 // non-standard port, and the gateway's access log is expected to carry that
-// port. There is nothing to serve beyond readiness, so /healthz is all it
-// answers.
+// port. The optional body makes the same fixture useful for assertions about a
+// response inside the egress tunnel.
+func newHTTPHandler(body string) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if body != "" {
+			_, _ = io.WriteString(w, body)
+		}
+	})
+	return mux
+}
+
 func newHTTPCmd() *cobra.Command {
-	var listenAddress string
+	var (
+		listenAddress string
+		certFile      string
+		keyFile       string
+		body          string
+	)
 	cmd := &cobra.Command{
 		Use:   "http",
-		Short: "Serve a plain HTTP/1.1 origin answering /healthz.",
+		Short: "Serve an HTTP/1.1 origin answering /healthz.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			mux := http.NewServeMux()
-			mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			})
-
 			server := &http.Server{
 				Addr:              listenAddress,
-				Handler:           mux,
+				Handler:           newHTTPHandler(body),
 				ReadHeaderTimeout: 10 * time.Second,
 				WriteTimeout:      2 * time.Minute,
 			}
 			log.Printf("testserver http: listening on %s", listenAddress)
-			return server.ListenAndServe()
+			return serveHTTP(server, certFile, keyFile)
 		},
 	}
 	cmd.Flags().StringVar(&listenAddress, "listen", ":8080", "Address the HTTP origin listens on.")
+	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; enables HTTPS when paired with --tls-key.")
+	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; enables HTTPS when paired with --tls-cert.")
+	cmd.Flags().StringVar(&body, "body", "", "Response body for /healthz.")
 	return cmd
 }
