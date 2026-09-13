@@ -248,13 +248,13 @@ func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(contex
 	start := time.Now()
 	var tr metadata.MD
 	err := do(ctx, &tr)
-	clientLatency := time.Since(start)
+	latency := time.Since(start)
 
-	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
-	if source == boomerutil.SourceServer {
-		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
+	// Report wall clock; the server's own elapsed time stays on the span.
+	if serverLatency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, 0); source == boomerutil.SourceServer {
+		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(serverLatency)))
 	}
-	boomerutil.LogSampledTrace(span, name, latency, source, err)
+	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
 	if err != nil {
 		bmetrics.RecordFailure("grpc", name, u.userClass, latency, err.Error())
 		return err

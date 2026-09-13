@@ -43,6 +43,26 @@ def init_wait_time() -> None:
             help="Maximum global wait time in seconds between tasks for all users",
             include_in_web_ui=True
         )
+        # Live window: how long a boomer GluttonUser keeps its actor resumed
+        # between the first ping and the suspend. Distinct from the wait
+        # time, which is the gap between suspend and the next resume. The
+        # default 0-0 suspends right after the ping.
+        parser.add_argument(
+            "--min-live-time",
+            type=float,
+            default=0.0,
+            env_var="LOCUST_MIN_LIVE_TIME",
+            help="Minimum time in seconds a GluttonUser actor stays resumed between its first ping and suspend (boomer only)",
+            include_in_web_ui=True
+        )
+        parser.add_argument(
+            "--max-live-time",
+            type=float,
+            default=0.0,
+            env_var="LOCUST_MAX_LIVE_TIME",
+            help="Maximum time in seconds a GluttonUser actor stays resumed between its first ping and suspend (boomer only)",
+            include_in_web_ui=True
+        )
 
     _initialized = True
 
