@@ -680,6 +680,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
+		sharing := ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
+		if !src.SnapshotURI.OwnedBy(actorSnapshotOwner(actor)) {
+			sharing = ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED
+		}
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -691,6 +695,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
 				ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
 					SnapshotUri: src.SnapshotURI.String(),
+					Sharing:     sharing,
 				},
 			},
 			Scope:         scope,
