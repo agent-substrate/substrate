@@ -23,6 +23,7 @@ import (
 	"maps"
 	"time"
 
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -42,6 +43,8 @@ const syncerWorkerCount = 2
 // also what marks a pod as a worker pod at all, so it doubles as the selector
 // the pod informer is narrowed by.
 const workerPodLabel = "ate.dev/worker-pool"
+
+const workerPoolIndex = "worker-pool"
 
 // workerKey identifies the pod incarnation a queued event concerns. namespace
 // and name locate the pod in the informer, which is indexed by namespace/name
@@ -90,19 +93,21 @@ func (k workerKey) logAttrs() []any {
 // key against the current informer cache state, requeuing with rate-limited
 // backoff on transient failures such as a lost version precondition.
 type WorkerPoolSyncer struct {
-	client           ateapipb.ControlClient
-	workerInformer   cache.SharedIndexInformer
-	workerPoolLister listersv1alpha1.WorkerPoolLister
-	queue            workqueue.TypedRateLimitingInterface[workerKey]
+	client             ateapipb.ControlClient
+	workerInformer     cache.SharedIndexInformer
+	workerPoolLister   listersv1alpha1.WorkerPoolLister
+	workerPoolInformer cache.SharedIndexInformer
+	queue              workqueue.TypedRateLimitingInterface[workerKey]
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
-		client:           client,
-		workerInformer:   workerInformer,
-		workerPoolLister: workerPoolLister,
-		queue:            workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
+		client:             client,
+		workerInformer:     workerInformer,
+		workerPoolLister:   workerPoolLister,
+		workerPoolInformer: workerPoolInformer,
+		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
 	}
 }
 
@@ -146,6 +151,10 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			s.enqueuePod(pod)
 		},
 	})
+	s.workerPoolInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    s.enqueueWorkerPool,
+		UpdateFunc: func(_, obj interface{}) { s.enqueueWorkerPool(obj) },
+	})
 
 	go func() {
 		defer s.queue.ShutDown()
@@ -167,6 +176,25 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 
 		<-ctx.Done()
 	}()
+}
+
+// enqueueWorkerPool schedules every current pod in pool. Worker records mirror
+// their WorkerPool labels and sandbox class, neither of which causes a Pod
+// event when changed.
+func (s *WorkerPoolSyncer) enqueueWorkerPool(obj interface{}) {
+	pool, ok := obj.(*atev1alpha1.WorkerPool)
+	if !ok {
+		slog.Error("Syncer: unexpected WorkerPool informer object", slog.Any("obj", obj))
+		return
+	}
+	pods, err := s.workerInformer.GetIndexer().ByIndex(workerPoolIndex, pool.Namespace+"/"+pool.Name)
+	if err != nil {
+		slog.Error("Syncer: listing pods for WorkerPool update", "workerPool", pool.Namespace+"/"+pool.Name, "err", err)
+		return
+	}
+	for _, obj := range pods {
+		s.enqueuePod(obj.(*corev1.Pod))
+	}
 }
 
 func (s *WorkerPoolSyncer) enqueuePod(pod *corev1.Pod) {

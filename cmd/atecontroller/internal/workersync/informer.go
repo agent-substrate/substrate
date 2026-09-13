@@ -17,6 +17,7 @@ package workersync
 import (
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -33,5 +34,18 @@ func WorkerPodInformer(kc kubernetes.Interface) (informers.SharedInformerFactory
 			options.LabelSelector = workerPodLabel
 		}),
 	)
-	return factory, factory.Core().V1().Pods().Informer()
+	informer := factory.Core().V1().Pods().Informer()
+	if err := informer.AddIndexers(cache.Indexers{workerPoolIndex: workerPoolIndexFunc}); err != nil {
+		panic("adding worker pool pod index: " + err.Error())
+	}
+	return factory, informer
+}
+
+func workerPoolIndexFunc(obj interface{}) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	poolName := pod.Labels[workerPodLabel]
+	if poolName == "" {
+		return nil, nil
+	}
+	return []string{pod.Namespace + "/" + poolName}, nil
 }

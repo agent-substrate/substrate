@@ -102,7 +102,7 @@ func registeredWorker(ns, poolName, podName, uid, ip string) *ateapipb.Worker {
 // poolLister builds the WorkerPool lister the syncer reads, and returns the
 // indexer behind it so a test can seed and mutate pools synchronously rather
 // than starting a factory and waiting for a watch to deliver them.
-func poolLister(t *testing.T, initPools ...*atev1alpha1.WorkerPool) (listersv1alpha1.WorkerPoolLister, cache.Indexer) {
+func poolLister(t *testing.T, initPools ...*atev1alpha1.WorkerPool) (listersv1alpha1.WorkerPoolLister, cache.Indexer, cache.SharedIndexInformer) {
 	t.Helper()
 	//nolint:staticcheck // NewSimpleClientset is the only available fake clientset for versioned CRDs.
 	pools := externalversions.NewSharedInformerFactory(atefake.NewSimpleClientset(), 0).Api().V1alpha1().WorkerPools()
@@ -112,7 +112,7 @@ func poolLister(t *testing.T, initPools ...*atev1alpha1.WorkerPool) (listersv1al
 			t.Fatalf("seeding WorkerPool %s/%s: %v", pool.Namespace, pool.Name, err)
 		}
 	}
-	return pools.Lister(), indexer
+	return pools.Lister(), indexer, pools.Informer()
 }
 
 // setupSyncerTest wires a running syncer to a fake Control API and a fake
@@ -123,11 +123,11 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
 	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
-	lister, _ := poolLister(t, initPools...)
+	lister, _, poolInformer := poolLister(t, initPools...)
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, workerInformer, lister).Start(ctx)
+	NewWorkerPoolSyncer(api, workerInformer, lister, poolInformer).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -142,9 +142,9 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	_, workerInformer := WorkerPodInformer(fake.NewSimpleClientset())
-	lister, poolIndexer := poolLister(t, initPools...)
+	lister, poolIndexer, poolInformer := poolLister(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, workerInformer, lister), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, workerInformer, lister, poolInformer), workerInformer.GetIndexer(), poolIndexer
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -627,6 +627,36 @@ func TestSyncer_RequeueOnMissingWorkerPool(t *testing.T) {
 
 	if got := api.get(testPodUID).GetSandboxClass(); got != "gvisor" {
 		t.Errorf("worker sandbox class = %q, want gvisor", got)
+	}
+}
+
+// TestEnqueueWorkerPool verifies that a WorkerPool change requeues every pod
+// in that pool, so its Worker record receives updated labels promptly.
+func TestEnqueueWorkerPool(t *testing.T) {
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api)
+	pool := workerPool("ns-pool-update", "pool-a", "gvisor", nil)
+
+	first := seedPod(t, pods, workerPod(pool.Namespace, "worker-1", pool.Name, testPodUID, "10.0.0.1"))
+	second := seedPod(t, pods, workerPod(pool.Namespace, "worker-2", pool.Name, otherPodUID, "10.0.0.2"))
+	seedPod(t, pods, workerPod(pool.Namespace, "other-pool-worker", "pool-b", "33333333-3333-3333-3333-333333333333", "10.0.0.3"))
+
+	s.enqueueWorkerPool(pool)
+	if got := s.queue.Len(); got != 2 {
+		t.Fatalf("queued workers = %d, want 2", got)
+	}
+
+	got := map[workerKey]bool{}
+	for range 2 {
+		key, quit := s.queue.Get()
+		if quit {
+			t.Fatal("queue shut down while reading enqueued workers")
+		}
+		got[key] = true
+		s.queue.Done(key)
+	}
+	if !got[first] || !got[second] {
+		t.Errorf("queued workers = %v, want %v and %v", got, first, second)
 	}
 }
 

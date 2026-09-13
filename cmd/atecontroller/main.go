@@ -227,13 +227,14 @@ func main() {
 	// informer, so asking the shared cache for one would impose it on every other
 	// controller here too.
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
+	workerPoolInformer := ateFactory.Api().V1alpha1().WorkerPools()
+	workerPoolLister := workerPoolInformer.Lister()
 	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient)
 
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolLister).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolLister, workerPoolInformer.Informer()).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())
