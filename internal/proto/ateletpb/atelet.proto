@@ -360,6 +360,20 @@ enum SnapshotScope {
   SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
+// SnapshotSharing is how an external snapshot's storage may be consumed, as
+// known by the control plane.
+enum SnapshotSharing {
+  // An older caller that predates the field: treated as PRIVATE.
+  SNAPSHOT_SHARING_UNSPECIFIED = 0;
+  // Read by a single actor and deleted or replaced by its next suspend.
+  // Never cached.
+  SNAPSHOT_SHARING_PRIVATE = 1;
+  // Immutable once published and read by many actors (today: a template's
+  // golden snapshot). atelet may serve its files from the node-local
+  // snapshot cache.
+  SNAPSHOT_SHARING_SHARED = 2;
+}
+
 // ExternalRestoreConfiguration is an external snapshot a restore reads.
 // Split from the checkpoint-side ExternalCheckpointConfiguration (a write
 // destination) so read-side attributes of a restore source have a home.
@@ -369,6 +383,8 @@ message ExternalRestoreConfiguration {
   // one object. Must stay field 1: old peers decode this message as
   // ExternalCheckpointConfiguration.
   string snapshot_uri = 1;
+  // How the snapshot at snapshot_uri may be consumed.
+  SnapshotSharing sharing = 2;
 }
 
 message CheckpointRequest {
