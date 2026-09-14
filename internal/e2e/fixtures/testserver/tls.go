@@ -45,11 +45,13 @@ func configureTLSServer(server *http.Server, certFile, keyFile string) error {
 }
 
 func serveHTTP(server *http.Server, certFile, keyFile string) error {
+	if certFile == "" && keyFile == "" {
+		return server.ListenAndServe()
+	}
+
 	if err := configureTLSServer(server, certFile, keyFile); err != nil {
 		return err
 	}
-	if certFile == "" {
-		return server.ListenAndServe()
-	}
+
 	return server.ListenAndServeTLS("", "")
 }
