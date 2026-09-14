@@ -772,16 +772,13 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status:      &ateapipb.TagStatus{ActorTemplateUid: testTemplateUID, Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/tag-snapshot"}},
 	}
-	for _, scenario := range []string{"completed tag", "actor already deleted", "incomplete tag", "copy failure", "actor deletion failure", "tag deletion failure", "foreign tag"} {
+	for _, scenario := range []string{"completed tag", "actor already deleted", "incomplete tag", "copy failure", "actor deletion failure", "tag deletion failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			control := &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: "gs://bucket/actor-snapshot"}
 			switch scenario {
-			case "completed tag", "actor already deleted", "foreign tag":
+			case "completed tag", "actor already deleted":
 				control.tag = proto.CloneOf(completed)
 				control.exists = scenario != "actor already deleted"
-				if scenario == "foreign tag" {
-					control.tag.Status.ActorTemplateUid = "another-template"
-				}
 			case "incomplete tag", "tag deletion failure":
 				control.tag = proto.CloneOf(completed)
 				control.tag.Status.Snapshot = nil
@@ -797,7 +794,7 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 			r := newTestTemplateReconciler(st, control)
 			defer r.queue.ShutDown()
 			_, err := r.reconcileOne(t.Context(), testTemplateRef)
-			wantErr := strings.Contains(scenario, "failure") || scenario == "foreign tag"
+			wantErr := strings.Contains(scenario, "failure")
 			if (err != nil) != wantErr {
 				t.Fatalf("reconcile = %v, want error %v", err, wantErr)
 			}
@@ -807,9 +804,6 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 				}
 				if !control.exists {
 					t.Fatal("deleted actor after tag failure")
-				}
-				if scenario == "foreign tag" {
-					return
 				}
 				control.tagErr, control.deleteErr, control.deleteTagErr = nil, nil, nil
 				if _, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil {
@@ -837,6 +831,46 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 				if !proto.Equal(req.Tag.SourceActor, ref) || req.Tag.Scope != ateapipb.TagScope_TAG_SCOPE_PUBLISHED || req.Tag.Metadata.Name != ref.Name {
 					t.Fatalf("incorrect golden tag request: %v", req)
 				}
+			}
+		})
+	}
+}
+
+func TestReconcileOne_GoldenTagConflict(t *testing.T) {
+	for _, scenario := range []string{"template", "actor name", "actor atespace"} {
+		t.Run(scenario, func(t *testing.T) {
+			tag := &ateapipb.Tag{
+				SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: testTemplateUID},
+				Status:      &ateapipb.TagStatus{ActorTemplateUid: testTemplateUID},
+			}
+			switch scenario {
+			case "template":
+				tag.Status.ActorTemplateUid = "another-template"
+			case "actor name":
+				tag.SourceActor.Name = "another-actor"
+			case "actor atespace":
+				tag.SourceActor.Atespace = "another-atespace"
+			}
+			control := &fakeGoldenControl{tag: proto.CloneOf(tag), exists: true}
+			st := newFakeTemplateStore(testTemplate())
+			r := newTestTemplateReconciler(st, control)
+			defer r.queue.ShutDown()
+			for range 2 {
+				after, err := r.reconcileOne(t.Context(), testTemplateRef)
+				if err != nil || after != 0 {
+					t.Fatalf("reconcile = (%v, %v), want terminal failure without retry", after, err)
+				}
+				snapshotStatus := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus()
+				if snapshotStatus.GetErrorMessage() != reasonGoldenTagConflict+": golden tag belongs to another actor or template" || snapshotStatus.GetGoldenTag() != nil {
+					t.Fatalf("unexpected golden snapshot status: %v", snapshotStatus)
+				}
+				if !proto.Equal(control.tag, tag) || !control.exists || len(control.tagReqs) != 0 || len(control.deleteReqs) != 0 {
+					t.Fatal("modified golden resources after ownership conflict")
+				}
+			}
+			r.resync(t.Context())
+			if r.queue.Len() != 0 {
+				t.Fatal("resync queued a terminally failed template")
 			}
 		})
 	}

@@ -46,6 +46,7 @@ const (
 )
 
 const (
+	reasonGoldenTagConflict  = "GoldenTagConflict"
 	reasonGoldenActorInvalid = "GoldenActorInvalid"
 	reasonGoldenActorCrashed = "GoldenActorCrashed"
 	reasonUnexpectedState    = "GoldenActorUnexpectedState"
@@ -215,7 +216,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		}
 		if err == nil {
 			if tag.GetStatus().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() || resources.ActorRefFromObjectRef(tag.GetSourceActor()) != resources.ActorRefFromObjectRef(goldenActorRef) {
-				return 0, fmt.Errorf("golden tag belongs to another actor or template")
+				return 0, r.fail(ctx, tmpl, reasonGoldenTagConflict, "golden tag belongs to another actor or template")
 			}
 			if tag.GetStatus().GetSnapshot().GetSnapshotUri() != "" {
 				return 0, r.saveGoldenTag(ctx, tmpl, goldenActorRef)
