@@ -160,7 +160,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		}
 		return nil, err
 	}
-	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend, ateattr.ActorStateSuspending)
+	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 	return storedActor, nil
 }
 
@@ -443,7 +443,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 		return nil, err
 	}
-	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend, ateattr.ActorStateSuspended)
+	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 	return storedActor, nil
 }
 

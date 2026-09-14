@@ -72,13 +72,25 @@ func markSkipped(ctx context.Context, reason string) {
 // logActorStateChanged records an actor state change. The last record for an
 // actor's uid is the state it is in now.
 //
-// Call it after UpdateActor returns, not inside the mutate closure, which can be
-// retried. Every state commit carries a version precondition, so a call that
-// returns is the one that made the change.
+// The state is read off the committed record, never passed in, so a record
+// cannot claim a state the store did not hold. Pass the actor the store returned
+// and call it after UpdateActor returns, not inside the mutate closure, which
+// can be retried. Every state commit carries a version precondition, so a call
+// that returns is the one that made the change.
 //
 // Crashes go through logActorCrashed instead, so read the state off
 // ate.actor.state rather than off the message.
-func logActorStateChanged(ctx context.Context, actor *ateapipb.Actor, opName, state string) {
+func logActorStateChanged(ctx context.Context, actor *ateapipb.Actor, opName string) {
+	logActorState(ctx, actor, opName, ateattr.ActorStateValue(actor.GetStatus().GetState()))
+}
+
+// logActorDeleted records the terminal transition. The row is gone, so there is
+// no committed state left to read and this is the one state named by hand.
+func logActorDeleted(ctx context.Context, actor *ateapipb.Actor, opName string) {
+	logActorState(ctx, actor, opName, ateattr.ActorStateDeleted)
+}
+
+func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state string) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
 	attrs = append(attrs,
 		slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)),

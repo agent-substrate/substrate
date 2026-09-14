@@ -145,6 +145,41 @@ func TestActorStateChangeRecords(t *testing.T) {
 	}
 }
 
+// TestActorCreatedRecord covers creation. An actor created and never resumed
+// makes no other transition, so without this it has no record at all, at any
+// retention.
+func TestActorCreatedRecord(t *testing.T) {
+	ctx := context.Background()
+	records := logRecords(t, "Actor state changed")
+
+	persistence := newTestPersistence(t)
+	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	if err != nil {
+		t.Fatalf("get actor: %v", err)
+	}
+
+	logActorStateChanged(ctx, stored, ateattr.OperationCreate)
+
+	if len(*records) != 1 {
+		t.Fatalf("got %d state records, want 1: %v", len(*records), *records)
+	}
+	got := (*records)[0]
+	if got[string(ateattr.ActorOperationNameKey)] != ateattr.OperationCreate {
+		t.Errorf("operation = %q, want %q", got[string(ateattr.ActorOperationNameKey)], ateattr.OperationCreate)
+	}
+	// A new actor is born suspended, and the record has to say so rather than
+	// inventing a "created" state the store does not have.
+	if got[string(ateattr.ActorStateKey)] != ateattr.ActorStateSuspended {
+		t.Errorf("state = %q, want %q", got[string(ateattr.ActorStateKey)], ateattr.ActorStateSuspended)
+	}
+}
+
 // TestActorDeletedRecord covers the terminal record. Without it "deleting" is
 // the last thing a deleted actor ever reports, and a consumer cannot tell a
 // finished delete from one that is stuck.

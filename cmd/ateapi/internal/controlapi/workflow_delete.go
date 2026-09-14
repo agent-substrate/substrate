@@ -347,7 +347,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		}
 		return nil, fmt.Errorf("while setting actor state to DELETING: %w", err)
 	}
-	logActorStateChanged(ctx, storedActor, ateattr.OperationDelete, ateattr.ActorStateDeleting)
+	logActorStateChanged(ctx, storedActor, ateattr.OperationDelete)
 	return storedActor, nil
 }
 
@@ -455,6 +455,6 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actorRef resources.
 		}
 		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}
-	logActorStateChanged(ctx, deleted, ateattr.OperationDelete, ateattr.ActorStateDeleted)
+	logActorDeleted(ctx, deleted, ateattr.OperationDelete)
 	return deleted, nil
 }

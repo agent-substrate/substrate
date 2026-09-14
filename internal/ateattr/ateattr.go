@@ -95,7 +95,33 @@ const (
 	ActorStateCrashed    = "crashed"
 	ActorStateDeleting   = "deleting"
 	ActorStateDeleted    = "deleted"
+	ActorStateUnknown    = "unknown"
 )
+
+// ActorStateValue maps the committed state onto its label value, so a producer
+// reports the state the store holds rather than one it names by hand.
+func ActorStateValue(state ateapipb.ActorState) string {
+	switch state {
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		return ActorStateResuming
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+		return ActorStateRunning
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+		return ActorStateSuspending
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+		return ActorStateSuspended
+	case ateapipb.ActorState_ACTOR_STATE_PAUSING:
+		return ActorStatePausing
+	case ateapipb.ActorState_ACTOR_STATE_PAUSED:
+		return ActorStatePaused
+	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+		return ActorStateCrashed
+	case ateapipb.ActorState_ACTOR_STATE_DELETING:
+		return ActorStateDeleting
+	default:
+		return ActorStateUnknown
+	}
+}
 
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,
 // each with a small bounded value set. High-cardinality identity (actor

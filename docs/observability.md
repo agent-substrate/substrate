@@ -155,7 +155,9 @@ ateapi's `Actor state changed` is written once per committed actor state transit
 
 `ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` from a suspend and `paused` from a pause, and the two differ in whether the worker was released.
 
-The record goes out after the store commit, never before. Every state commit has a version check, so if two writers race, the one that lost writes nothing. You will never see a state here that the store did not actually hold.
+The record goes out after the store commit, never before, and the state is read straight off the committed record rather than named by the caller. Every state commit has a version check too, so if two writers race, the one that lost writes nothing. You will never see a state here that the store did not actually hold.
+
+Creating an actor counts as a change. A new actor is born suspended, so it gets a record saying so, with `ate.actor.operation.name` set to `create`. Otherwise an actor that is created and never resumed would have no record at all, no matter how long you keep your logs.
 
 `deleted` is the only state with no `ateapipb.ActorState` behind it. It is written once the actor row is gone, so there is nothing left to read back. It is also the last record an actor ever gets. Without it, `deleting` would be the end of the story, and a delete that finished would look just like one that got stuck.
 

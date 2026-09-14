@@ -620,11 +620,40 @@ func TestActorStateValues(t *testing.T) {
 		{ActorStateCrashed, "crashed"},
 		{ActorStateDeleting, "deleting"},
 		{ActorStateDeleted, "deleted"},
+		{ActorStateUnknown, "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			if tt.got != tt.want {
 				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+// TestActorStateValue pins the mapping producers read the state through, so a
+// record reports the state the store holds rather than one named by hand.
+func TestActorStateValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ateapipb.ActorState
+		want  string
+	}{
+		{name: "resuming", state: ateapipb.ActorState_ACTOR_STATE_RESUMING, want: ActorStateResuming},
+		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, want: ActorStateRunning},
+		{name: "suspending", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, want: ActorStateSuspending},
+		{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, want: ActorStateSuspended},
+		{name: "pausing", state: ateapipb.ActorState_ACTOR_STATE_PAUSING, want: ActorStatePausing},
+		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, want: ActorStatePaused},
+		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, want: ActorStateCrashed},
+		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING, want: ActorStateDeleting},
+		{name: "unspecified", state: ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED, want: ActorStateUnknown},
+		{name: "value outside the enum", state: ateapipb.ActorState(9999), want: ActorStateUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ActorStateValue(tt.state); got != tt.want {
+				t.Errorf("ActorStateValue(%v) = %q, want %q", tt.state, got, tt.want)
 			}
 		})
 	}
@@ -638,7 +667,9 @@ func TestActorStateValues(t *testing.T) {
 // is reported, so no enum value can stand for it. A second such value has to be
 // added to this list deliberately.
 func TestActorStateValuesMirrorActorState(t *testing.T) {
-	noEnumCounterpart := map[string]bool{ActorStateDeleted: true}
+	// deleted has no enum value because the row is gone; unknown is the
+	// mapper's fallback for UNSPECIFIED and anything off the enum.
+	noEnumCounterpart := map[string]bool{ActorStateDeleted: true, ActorStateUnknown: true}
 
 	got := map[string]bool{
 		ActorStateResuming:   true,
@@ -650,6 +681,7 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 		ActorStateCrashed:    true,
 		ActorStateDeleting:   true,
 		ActorStateDeleted:    true,
+		ActorStateUnknown:    true,
 	}
 
 	want := map[string]bool{}

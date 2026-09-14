@@ -142,6 +142,10 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
+	// Without this an actor that is created and never resumed has no record at
+	// all, at any retention.
+	logActorStateChanged(ctx, stored, ateattr.OperationCreate)
+
 	return stored, nil
 }
 

@@ -143,7 +143,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 		}
 		return nil, err
 	}
-	logActorStateChanged(ctx, storedActor, ateattr.OperationPause, ateattr.ActorStatePausing)
+	logActorStateChanged(ctx, storedActor, ateattr.OperationPause)
 	return storedActor, nil
 }
 
@@ -294,7 +294,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			recordActorCrash(ctx, crashAttrs)
 		}
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
-			logActorStateChanged(ctx, storedActor, ateattr.OperationPause, ateattr.ActorStatePaused)
+			logActorStateChanged(ctx, storedActor, ateattr.OperationPause)
 		}
 		if err != nil {
 			if errors.Is(err, store.ErrVersionConflict) {
