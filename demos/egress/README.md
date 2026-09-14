@@ -125,22 +125,12 @@ Add `--cleanup` to remove everything the script created.
 
 ### HTTPS and WebSocket E2E tests with Envoy MITM
 
-On a Kind cluster with the Envoy sdsmint gateway already deployed:
-
-```bash
-hack/install-ate-kind.sh --deploy-demo-egress-mitm
-hack/setup-e2e-egress-tls-kind.sh
-E2E_EGRESS_MITM=1 hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
-```
-
-For micro-VM, deploy `--deploy-demo-egress-microvm-mitm` and add
-`E2E_SANDBOX_CLASS=microvm` to the test command. The TLS setup is shared by both lanes.
-
-The setup adds the cluster's service-DNS CA to the test gateway's upstream trust
-while keeping its public roots. It mounts only public certificates. The tests use
-that CA to sign local origin certificates, use Service DNS names for SNI, and let
-the actor use its projected gateway CA. In passthrough mode, the tests use Service
-IPs and send the origin's temporary CA to the actor. Both modes verify TLS.
+For the complete fresh-Kind setup, gateway swap, trust-suite checks, fixture
+deployment, and sequential gVisor/micro-VM commands, see the [MITM egress test
+runbook](../../docs/dev/mitm-egress-test-runbook.md). The TLS setup adds the
+cluster's service-DNS CA to the test gateway's upstream trust while keeping its
+public roots; the tests use that CA for private origin certificates and Service
+DNS SNI, while the actor uses its projected gateway CA.
 
 ## Manual walkthrough
 
