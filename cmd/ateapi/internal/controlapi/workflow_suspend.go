@@ -345,9 +345,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records the in-progress snapshot as the actor's
 // external snapshot, and commits SUSPENDED with the assignment cleared in a
-// single update. It only finalizes SUSPENDING before and after releasing the
-// worker, so an out-of-band transition (e.g. worker deletion crashing the
-// actor) is not overwritten.
+// single update. It checks SUSPENDING and uses that actor version for the
+// final update, so a concurrent transition (e.g. worker deletion crashing
+// the actor) is not overwritten.
 func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
@@ -357,14 +357,13 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// that stalls and then fails still reports where the time went; steps not
 	// reached (or skipped) log zero.
 	start := time.Now()
-	var dGetActor, dReleaseWorker, dRefetchActor, dReleaseSnapshot, dUpdateActor time.Duration
+	var dGetActor, dReleaseWorker, dReleaseSnapshot, dUpdateActor time.Duration
 	defer func() {
 		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
 			slog.Any("actor", actorRef),
 			slog.Duration("total", time.Since(start)),
 			slog.Duration("get_actor", dGetActor),
 			slog.Duration("release_worker", dReleaseWorker),
-			slog.Duration("refetch_actor", dRefetchActor),
 			slog.Duration("release_snapshot", dReleaseSnapshot),
 			slog.Duration("update_actor", dUpdateActor))
 	}()
@@ -386,17 +385,6 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		dReleaseWorker = time.Since(t)
 		if err != nil {
 			return nil, err
-		}
-
-		// Re-fetch the actor now that the worker is freed.
-		t = time.Now()
-		latestActor, err = w.store.GetActor(ctx, actorRef)
-		dRefetchActor = time.Since(t)
-		if err != nil {
-			return nil, err
-		}
-		if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
-			return nil, status.Errorf(codes.FailedPrecondition, "FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 		}
 	}
 

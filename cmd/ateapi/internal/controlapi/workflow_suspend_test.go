@@ -515,8 +515,8 @@ func TestEnsureSuspendedFinalized_WorkerDeleteDuringReleasePreservesCrash(t *tes
 	_, err := w.ensureSuspendedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{
 		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"},
 	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("ensureSuspendedFinalized error = %v, want FailedPrecondition", err)
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("ensureSuspendedFinalized error = %v, want Aborted", err)
 	}
 	got, err := persistence.GetActor(ctx, actorRef)
 	if err != nil {
@@ -524,6 +524,12 @@ func TestEnsureSuspendedFinalized_WorkerDeleteDuringReleasePreservesCrash(t *tes
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Error("worker assignment was restored after deletion")
+	}
+	if got.GetStatus().GetExternalSnapshot() != nil {
+		t.Error("in-progress snapshot was committed after deletion")
 	}
 }
 

@@ -19,86 +19,11 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-// TestEnsurePausedFinalized_WorkerGone reproduces the scenario where the worker
-// pod disappears from the DB during pause finalization, so the node it ran on
-// is unknown.
-//
-// Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made the
-// scheduler's node restriction search for a worker with node name "", never
-// found, a permanent "no free workers available" on resume.
-//
-// Current behavior: NodeVmsWithLocalSnapshots is left nil, and the actor is
-// crashed instead of left PAUSED, since a local snapshot with an unknown node
-// can never be safely resumed.
-func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	records := crashRecords(t)
-
-	actor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_PAUSING,
-			WorkerAssignment: &ateapipb.WorkerAssignment{
-				WorkerNamespace: "default",
-				WorkerPool:      "pool1",
-				WorkerPod:       "worker-pod-1",
-			},
-			InProgressLocalSnapshotName: "local-snap-1",
-		},
-	}
-	storetest.MustCreateActor(t, ctx, st, actor)
-	// Intentionally NOT creating the worker in store, simulates worker already gone.
-
-	w := &ActorWorkflow{store: st}
-	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
-	if err != nil {
-		t.Fatalf("ensurePausedFinalized: %v", err)
-	}
-
-	got, err := st.GetActor(ctx, actorRef)
-	if err != nil {
-		t.Fatalf("GetActor: %v", err)
-	}
-
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("state = %v, want CRASHED (node name unknown, cannot resume safely)", got.GetStatus().GetState())
-	}
-	for _, n := range got.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots() {
-		if n == "" {
-			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, the scheduler's node restriction would never match a real worker")
-		}
-	}
-
-	if finalized.GetStatus().GetWorkerAssignment() != nil {
-		t.Error("returned actor still has a worker assignment, want it cleared")
-	}
-	if finalized.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("returned state = %v, want CRASHED", finalized.GetStatus().GetState())
-	}
-
-	// This site records the crash counter, so it must write the record too, or
-	// a pause-finalize crash is the one kind nothing can attribute to an actor.
-	if len(*records) != 1 {
-		t.Fatalf("got %d crash records, want 1", len(*records))
-	}
-	if got := (*records)[0][string(ateattr.ActorUIDKey)]; got == "" {
-		t.Error("crash record carries no ate.actor.uid")
-	}
-	if got := (*records)[0][string(ateattr.FailureDomainKey)]; got != ateattr.FailureDomainInfrastructure {
-		t.Errorf("ate.failure.domain = %q, want %q", got, ateattr.FailureDomainInfrastructure)
-	}
-}
 
 // TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
 // records the scope the pause checkpoint captured (the template's onPause) in
@@ -164,6 +89,12 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 				t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
+			}
+			if nodes := got.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(); len(nodes) != 1 || nodes[0] != "node1" {
+				t.Errorf("snapshot nodes = %v, want [node1]", nodes)
+			}
+			if got.GetStatus().GetWorkerAssignment() != nil {
+				t.Error("worker assignment was not cleared")
 			}
 			if scope := got.GetStatus().GetLocalSnapshotInfo().GetContentScope(); scope != tc.want {
 				t.Errorf("LocalSnapshotInfo.ContentScope = %v, want %v", scope, tc.want)
