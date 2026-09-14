@@ -885,29 +885,49 @@ func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Contai
 }
 
 func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
+	// Application containers first, the pause (root) container last.
+	names := make([]string, 0, len(containers)+1)
+	for _, ctr := range containers {
+		names = append(names, ctr.GetName())
+	}
+	names = append(names, ocispec.PauseContainer)
+
 	// Check state of all containers to mimic containerd.
-	//
 	// Without this, `runsc delete` occasionally throws an error.
-	if err := r.cmdState(ctx, ocispec.PauseContainer); err != nil {
-		return fmt.Errorf("while checking state of pause container: %w", err)
-	}
-	for _, ctr := range containers {
-		if err := r.cmdState(ctx, ctr.GetName()); err != nil {
-			return fmt.Errorf("while checking state of %q application container: %w", ctr.GetName(), err)
+	present := make([]string, 0, len(names))
+	for _, name := range names {
+		if err := r.cmdState(ctx, name); err != nil {
+			err = fmt.Errorf("while checking state of %q container: %w", name, err)
+			gone, listErr := r.isContainerAlreadyGone(ctx, name)
+			if listErr != nil {
+				return errors.Join(err, listErr)
+			}
+			if gone {
+				slog.InfoContext(ctx, "runsc container already destroyed, skipping its cleanup", slog.String("container", name))
+				continue
+			}
+			return err
 		}
+		present = append(present, name)
 	}
 
-	for _, ctr := range containers {
-		if err := r.cmdDelete(ctx, ctr.GetName()); err != nil {
-			return fmt.Errorf("while deleting %q application container: %w", ctr.GetName(), err)
+	for _, name := range present {
+		if err := r.cmdDelete(ctx, name); err != nil {
+			return fmt.Errorf("while deleting %q container: %w", name, err)
 		}
-	}
-
-	if err := r.cmdDelete(ctx, ocispec.PauseContainer); err != nil {
-		return fmt.Errorf("while deleting pause container: %w", err)
 	}
 
 	return nil
+}
+
+// isContainerAlreadyGone reports whether runsc no longer has a record of the
+// container.
+func (r *runsc) isContainerAlreadyGone(ctx context.Context, name string) (bool, error) {
+	ids, err := r.cmdList(ctx)
+	if err != nil {
+		return false, err
+	}
+	return !slices.Contains(ids, name), nil
 }
 
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
@@ -1138,12 +1158,16 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 		actorUID: actorUID,
 	}
 
+	// Detached from the caller: a deadline mid-`runsc delete` would leave the
+	// container without its record and the actor unrecoverable.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	// Stop the containers before deleting them, to avoid leaving a live container with no bundle on disk. Best-effort: if the containers are already stopped, the delete will succeed anyway.
-	rcmd.stopContainers(ctx, containers)
+	rcmd.stopContainers(cleanupCtx, containers)
 	// Keep this as best-effort cleanup:
 	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
 	// directories after uploading the snapshot.
-	if err := rcmd.cleanupContainers(ctx, containers); err != nil {
+	if err := rcmd.cleanupContainers(cleanupCtx, containers); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
 
