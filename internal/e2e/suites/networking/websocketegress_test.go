@@ -15,10 +15,14 @@
 package networking
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
+	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/gorilla/websocket"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // egressWebSocketResponse mirrors observations returned by the actor. The
@@ -64,4 +68,42 @@ func assertWebSocketExchange(t *testing.T, got egressWebSocketResponse, want []s
 			t.Errorf("WebSocket messages[%d] = %+v, want text %q", i, gotMessage, wantMessage)
 		}
 	}
+}
+
+func TestActorEgressWebSocket(t *testing.T) {
+	ctx := t.Context()
+	target, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+		Name: "ws-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, HealthPath: "/readyz",
+	}, false)
+	actorName, router, actorRef := prepareProtocolActor(t, ctx, "ws")
+	messages := []string{"ws-first", "ws-second", "ws-third"}
+	since := metav1.NewTime(time.Now().Add(-time.Minute))
+	raw := postEgressOnce(t, ctx, router, actorRef, "/websocket", map[string]any{"url": "ws://" + target.Address() + "/ws", "messages": messages})
+	var got egressWebSocketResponse
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decoding WebSocket observation: %v", err)
+	}
+	assertProtocolGateway(t, ctx, since, actorName, target.Address())
+	assertWebSocketExchange(t, got, messages, false)
+}
+
+func TestActorEgressSecureWebSocket(t *testing.T) {
+	ctx := t.Context()
+	target, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+		Name: "wss-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args: []string{"websocket", "--echo"}, Port: 443, TargetPort: 8443, HealthPath: "/readyz",
+	}, true)
+	actorName, router, actorRef := prepareProtocolActor(t, ctx, "wss")
+	messages := []string{"wss-first", "wss-second", "wss-third"}
+	since := metav1.NewTime(time.Now().Add(-time.Minute))
+	raw := postEgressOnce(t, ctx, router, actorRef, "/websocket", map[string]any{
+		"url": "wss://" + target.Address() + "/ws", "rootCA": rootCA, "messages": messages,
+	})
+	var got egressWebSocketResponse
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decoding secure WebSocket observation: %v", err)
+	}
+	assertProtocolGateway(t, ctx, since, actorName, target.Address())
+	assertWebSocketExchange(t, got, messages, true)
 }
