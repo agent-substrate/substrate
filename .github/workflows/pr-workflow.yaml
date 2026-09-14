@@ -169,6 +169,7 @@ jobs:
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress-mitm
         hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm
+        hack/setup-e2e-egress-tls-kind.sh
     - name: Run E2E tests (networking, MITM egress)
       env:
         E2E_EGRESS_MITM: "1"
