@@ -32,13 +32,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/filecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 )
 
@@ -85,4 +90,65 @@ func openSnapshotCache(ctx context.Context, dir string, minAge time.Duration) (*
 		slog.Int("tmp_removed", stats.TmpRemoved),
 		slog.Int("retired_removed", stats.RetiredRemoved))
 	return store, nil
+}
+
+// cacheMode is how a restore may materialize snapshot files from the
+// cache. The mode exists because the fast path — a hard link — shares the
+// cached inode with the consumer, which is only safe when the consumer never
+// writes the staged file in place.
+type cacheMode int
+
+const (
+	// cacheModeOff downloads fresh, bypassing the cache.
+	cacheModeOff cacheMode = iota
+	// cacheModeLink hard-links the cached copy: zero-cost hits, but the
+	// consumer must treat the staged file as read-only.
+	cacheModeLink
+)
+
+// cacheModeFor returns how this sandbox class's restores may use the
+// snapshot cache. ateom-gvisor consumes restore-state strictly read-only,
+// so it gets hard links. ateom-microvm rewrites config.json in place at
+// restore and merges checkpoint deltas into memory-ranges' inode at suspend
+// — either would corrupt a shared inode — so its class downloads fresh
+// until a private-copy mode serves it.
+func cacheModeFor(sandboxClass string) cacheMode {
+	if atev1alpha1.SandboxClass(sandboxClass) == atev1alpha1.SandboxClassGvisor {
+		return cacheModeLink
+	}
+	return cacheModeOff
+}
+
+// externalConfigCacheMode returns the cache mode for the request's external
+// snapshot: classMode when the control plane declared the snapshot shared,
+// cacheModeOff otherwise (private snapshots, and callers that predate the
+// sharing field).
+func externalConfigCacheMode(req *ateletpb.RestoreRequest, classMode cacheMode) cacheMode {
+	if req.GetExternalConfig().GetSharing() == ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED {
+		return classMode
+	}
+	return cacheModeOff
+}
+
+// fetchSnapshotObject stages one snapshot object at local — through the
+// snapshot cache per mode when the cache is enabled, directly from object
+// storage otherwise. A cacheModeLink hit is a hard link, so local stays
+// valid regardless of later eviction. Fetch errors pass through the cache
+// wrapped, keeping ateerrors classification intact.
+func (s *AteomHerder) fetchSnapshotObject(ctx context.Context, objectURI, local string, mode cacheMode) error {
+	if mode == cacheModeOff || s.snapshotCache == nil {
+		return ategcs.FetchLocalFileFromGCSWithZstd(ctx, s.gcsClient, objectURI, local)
+	}
+	err := s.snapshotCache.GetFileTo(ctx, filecache.URIKey("gcs-zstd", objectURI), local, func(ctx context.Context, dst string) error {
+		return ategcs.FetchLocalFileFromGCSWithZstd(ctx, s.gcsClient, objectURI, dst)
+	})
+	if err == nil || !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	// The cache sits on a different mount than the restore dir, so link-out
+	// cannot work. Downloading fresh keeps restores correct; the warning
+	// points at the misconfiguration (see --snapshot-cache-dir).
+	slog.WarnContext(ctx, "Snapshot cache is on a different filesystem than the restore dir; downloading without the cache",
+		slog.String("object", objectURI))
+	return ategcs.FetchLocalFileFromGCSWithZstd(ctx, s.gcsClient, objectURI, local)
 }
