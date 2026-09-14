@@ -1186,9 +1186,16 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			dDownload = time.Since(t)
 			downloadErr = err
 		}()
+		// How cacheable snapshot files may be served depends on the sandbox
+		// class that consumes them (see cacheModeFor): the one the request
+		// resolved, which is what runs the restored workload.
+		classMode := cacheModeFor(runtimeRec.SandboxClass)
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-			if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+			// Cache-eligible only when the control plane declared the
+			// snapshot shared (a tag's snapshot an actor borrowed); an
+			// actor's own snapshot downloads fresh.
+			if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, externalConfigCacheMode(req, classMode)); err != nil {
 				return err
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
@@ -1434,7 +1441,12 @@ func copyRootFile(root *os.Root, src, dst string) (int64, error) {
 	return nBytes, errors.Join(err, destination.Close())
 }
 
-func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string) error {
+// downloadExternalCheckpoint stages files of one snapshot into dstDir. With
+// a mode other than cacheModeOff and the snapshot cache enabled, each file
+// is served from the cache (see fetchSnapshotObject): the caller asserts the
+// snapshot is immutable at its URI. Otherwise the files are downloaded into
+// the restore directory directly.
+func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string, mode cacheMode) error {
 	uri, err := resources.ParseSnapshotURI(snapshotURI)
 	if err != nil {
 		return err
@@ -1445,6 +1457,7 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 	}
 	defer root.Close()
 
+	useCache := mode != cacheModeOff && s.snapshotCache != nil
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		fileName := fileName
@@ -1452,6 +1465,18 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
+			}
+			if useCache {
+				// The cache links or copies by path, outside root, so hold
+				// it to the same rule root enforces: a bare file name
+				// inside the restore directory.
+				if fileName != filepath.Base(fileName) || !filepath.IsLocal(fileName) {
+					return fmt.Errorf("snapshot file %q is not a file name in the restore directory", fileName)
+				}
+				if err := s.fetchSnapshotObject(gCtx, objectURI, filepath.Join(dstDir, fileName), mode); err != nil {
+					return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
+				}
+				return nil
 			}
 			local, err := root.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 			if err != nil {

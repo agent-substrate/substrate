@@ -331,7 +331,7 @@ func TestDownloadExternalCheckpointRejectsSymlinkOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := (&AteomHerder{gcsClient: store}).downloadExternalCheckpoint(
-		context.Background(), testSnapshotURI, restoreDir, []string{"checkpoint.img"})
+		context.Background(), testSnapshotURI, restoreDir, []string{"checkpoint.img"}, cacheModeOff)
 	if err == nil {
 		t.Fatal("downloadExternalCheckpoint() followed a symlink outside the restore directory")
 	}
