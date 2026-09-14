@@ -118,9 +118,15 @@ func TestRequestParking(t *testing.T) {
 			if res.err != nil {
 				t.Fatalf("parked request failed transport-level: %v", res.err)
 			}
-			if res.resp.StatusCode == http.StatusServiceUnavailable &&
-				strings.Contains(res.body, "no free workers available") && attempt < 3 {
-				t.Logf("attempt %d budget-exhausted while the worker was still freeing (503 after %v); retrying", attempt, elapsed)
+			retryableBudgetExhaustion := res.resp.StatusCode == http.StatusServiceUnavailable &&
+				strings.Contains(res.body, "no free workers available")
+			// TODO(keithmattix): align common dataplane contract
+			if os.Getenv("E2E_DATAPLANE") == "agentgateway" {
+				retryableBudgetExhaustion = res.resp.StatusCode == http.StatusGatewayTimeout &&
+					strings.Contains(res.body, "request timed out")
+			}
+			if retryableBudgetExhaustion && attempt < 3 {
+				t.Logf("attempt %d budget-exhausted while the worker was still freeing (HTTP %d after %v); retrying", attempt, res.resp.StatusCode, elapsed)
 				continue
 			}
 			break
@@ -169,6 +175,7 @@ func TestRequestParking(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 
 		wantStatus := http.StatusServiceUnavailable
+		// TODO(keithmattix): align common dataplane contract
 		if os.Getenv("E2E_DATAPLANE") == "agentgateway" {
 			wantStatus = http.StatusGatewayTimeout
 		}
