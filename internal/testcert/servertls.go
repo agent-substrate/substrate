@@ -35,12 +35,19 @@ type ServerTLS struct{ RootCA, Certificate, PrivateKey []byte }
 // Only the public CA is returned; its signing key stays in this process.
 func NewServerTLS(t *testing.T, ip net.IP) ServerTLS {
 	t.Helper()
-	if ip == nil {
-		t.Fatal("origin certificate requires a Service IP")
-	}
 	ca, err := localca.GenerateCA("e2e-origin", localca.KeyTypeECDSAP256, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("generating origin CA: %v", err)
+	}
+	return ServerTLSWithCA(t, ca, ip)
+}
+
+// ServerTLSWithCA issues a Service IP and optional DNS certificate from a CA
+// already trusted by the client or the MITM gateway's upstream TLS connection.
+func ServerTLSWithCA(t *testing.T, ca *localca.CA, ip net.IP, dnsNames ...string) ServerTLS {
+	t.Helper()
+	if ip == nil {
+		t.Fatal("origin certificate requires a Service IP")
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -53,6 +60,7 @@ func NewServerTLS(t *testing.T, ip net.IP) ServerTLS {
 	leaf := &x509.Certificate{
 		SerialNumber: serial,
 		IPAddresses:  []net.IP{ip},
+		DNSNames:     dnsNames,
 		NotBefore:    time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,

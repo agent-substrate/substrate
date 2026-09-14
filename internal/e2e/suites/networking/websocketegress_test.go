@@ -42,7 +42,7 @@ type egressWebSocketMessage struct {
 
 // assertWebSocketExchange checks the outbound handshake and every reply on
 // the same connection. want lists the sent messages in order; wantTLS states
-// whether the actor must have verified the origin certificate.
+// whether the actor must have verified the TLS peer certificate.
 func assertWebSocketExchange(t *testing.T, got egressWebSocketResponse, want []string, wantTLS bool) {
 	t.Helper()
 	if got.Error != "" {
@@ -72,14 +72,14 @@ func assertWebSocketExchange(t *testing.T, got egressWebSocketResponse, want []s
 
 func TestActorEgressWebSocket(t *testing.T) {
 	ctx := t.Context()
-	target, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+	target, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name: "ws-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
 		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, HealthPath: "/readyz",
 	}, false)
 	actorName, router, actorRef := prepareProtocolActor(t, ctx, "ws")
 	messages := []string{"ws-first", "ws-second", "ws-third"}
 	since := metav1.NewTime(time.Now().Add(-time.Minute))
-	raw := postEgressOnce(t, ctx, router, actorRef, "/websocket", map[string]any{"url": "ws://" + target.Address() + "/ws", "messages": messages})
+	raw := postEgressOnce(t, ctx, router, actorRef, "/websocket", map[string]any{"url": "ws://" + address + "/ws", "messages": messages})
 	var got egressWebSocketResponse
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decoding WebSocket observation: %v", err)
@@ -90,7 +90,7 @@ func TestActorEgressWebSocket(t *testing.T) {
 
 func TestActorEgressSecureWebSocket(t *testing.T) {
 	ctx := t.Context()
-	target, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+	target, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name: "wss-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
 		Args: []string{"websocket", "--echo"}, Port: 443, TargetPort: 8443, HealthPath: "/readyz",
 	}, true)
@@ -98,7 +98,7 @@ func TestActorEgressSecureWebSocket(t *testing.T) {
 	messages := []string{"wss-first", "wss-second", "wss-third"}
 	since := metav1.NewTime(time.Now().Add(-time.Minute))
 	raw := postEgressOnce(t, ctx, router, actorRef, "/websocket", map[string]any{
-		"url": "wss://" + target.Address() + "/ws", "rootCA": rootCA, "messages": messages,
+		"url": "wss://" + address + "/ws", "rootCA": rootCA, "messages": messages,
 	})
 	var got egressWebSocketResponse
 	if err := json.Unmarshal(raw, &got); err != nil {
