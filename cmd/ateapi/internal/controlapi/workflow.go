@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -65,6 +67,23 @@ func markSkipped(ctx context.Context, reason string) {
 		attribute.Bool("step.skipped", true),
 		attribute.String("step.skip_reason", reason),
 	)
+}
+
+// logActorStateChanged records an actor state change. The last record for an
+// actor's uid is the state it is in now.
+//
+// Call it after UpdateActor returns, not inside the mutate closure, which can be
+// retried. Every state commit carries a version precondition, so a call that
+// returns is the one that made the change.
+//
+// Crashes go through logActorCrashed instead, so read the state off
+// ate.actor.state rather than off the message.
+func logActorStateChanged(ctx context.Context, actor *ateapipb.Actor, opName, state string) {
+	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
+	attrs = append(attrs,
+		slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)),
+		slog.String(string(ateattr.ActorStateKey), state))
+	slog.LogAttrs(ctx, slog.LevelInfo, "Actor state changed", attrs...)
 }
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.

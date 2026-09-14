@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -158,6 +159,7 @@ func TestKeySpellings(t *testing.T) {
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateAtespaceKey, "ate.template.atespace"},
 		{ActorVersionKey, "ate.actor.version"},
+		{ActorStateKey, "ate.actor.state"},
 		{ActorOperationNameKey, "ate.actor.operation.name"},
 		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
 		{WorkerPoolNameKey, "ate.workerpool.name"},
@@ -600,6 +602,41 @@ func TestSnapshotScopeValue(t *testing.T) {
 				t.Errorf("SnapshotScopeValue(%v) = %q, want %q", tt.scope, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestActorStateValuesMirrorActorState holds the log vocabulary to the control
+// plane's state machine. A state added to the enum without a value here would
+// leave the lifecycle stream unable to name the state an actor is in.
+func TestActorStateValuesMirrorActorState(t *testing.T) {
+	got := map[string]bool{
+		ActorStateResuming:   true,
+		ActorStateRunning:    true,
+		ActorStateSuspending: true,
+		ActorStateSuspended:  true,
+		ActorStatePausing:    true,
+		ActorStatePaused:     true,
+		ActorStateCrashed:    true,
+		ActorStateDeleting:   true,
+	}
+
+	want := map[string]bool{}
+	for value, name := range ateapipb.ActorState_name {
+		if ateapipb.ActorState(value) == ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+			continue
+		}
+		want[strings.ToLower(strings.TrimPrefix(name, "ACTOR_STATE_"))] = true
+	}
+
+	for state := range want {
+		if !got[state] {
+			t.Errorf("ateapipb.ActorState has %q with no ateattr constant", state)
+		}
+	}
+	for state := range got {
+		if !want[state] {
+			t.Errorf("ateattr has state %q that ateapipb.ActorState does not", state)
+		}
 	}
 }
 

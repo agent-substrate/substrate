@@ -141,13 +141,29 @@ The duration keys are the [`ate.actor.restore.duration`](#the-metric-registry) i
 
 This is the record to use for a per-actor wake-up distribution. The histogram cannot answer that question at all, because actor identity is barred from metric labels; traces can, but the data plane is head-sampled at 1%.
 
-ateapi's `Actor crashed` is the other one. It is written once per committed transition into `ACTOR_STATE_CRASHED`, beside the [`ate.actor.crashes`](#the-metric-registry) increment and under the same already-crashed guard, so the two can never disagree about how many crashes happened:
+ateapi's `Actor state changed` is written once per committed actor state transition. ateapi owns the state machine, so this is where an actor's state and the time it reached it come from:
+
+```json
+{"time":"…","level":"INFO","msg":"Actor state changed",
+ "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
+ "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+ "ate.actor.operation.name":"suspend","ate.actor.state":"suspended",
+ "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
+```
+
+`ate.actor.state` takes the `ateapipb.ActorState` values lowercased, so the log vocabulary and the state machine cannot fork. The last record for an actor's uid is the state it is in now, and its timestamp is when that state began. Query it per actor, not in aggregate: neither key is a metric label, because both only ever appear beside actor identity, which [the cardinality rules](#the-metric-registry) keep off metrics entirely.
+
+`ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` from a suspend and `paused` from a pause, and the two differ in whether the worker was released.
+
+The record is written after the store commit, never before, and every state commit carries a version precondition. A losing writer in a concurrent update emits nothing, so no state appears in the stream that the store did not hold.
+
+`Actor crashed` is the exception, and carries the same two keys with `ate.actor.state="crashed"`. It is written once per committed transition into `ACTOR_STATE_CRASHED`, beside the [`ate.actor.crashes`](#the-metric-registry) increment and under the same already-crashed guard, so the two can never disagree about how many crashes happened. A consumer deriving state therefore selects on `ate.actor.state`, not on the message:
 
 ```json
 {"time":"…","level":"ERROR","msg":"Actor crashed",
  "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
  "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
- "ate.actor.operation.name":"resume",
+ "ate.actor.operation.name":"resume","ate.actor.state":"crashed",
  "ate.failure.reason":"WORKER_POD_GONE","ate.failure.domain":"infrastructure",
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```

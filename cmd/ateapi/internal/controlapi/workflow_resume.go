@@ -556,6 +556,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	poolNamespace = assignedWorker.GetWorkerNamespace()
 	pool = assignedWorker.GetWorkerPool()
 	outcome = ateattr.SchedulerOutcomeAssigned
+	logActorStateChanged(ctx, storedActor, ateattr.OperationResume, ateattr.ActorStateResuming)
 	return storedActor, assignedWorker, nil
 }
 
@@ -813,5 +814,6 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		}
 		return nil, err
 	}
+	logActorStateChanged(ctx, storedActor, ateattr.OperationResume, ateattr.ActorStateRunning)
 	return storedActor, nil
 }

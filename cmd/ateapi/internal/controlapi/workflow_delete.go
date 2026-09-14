@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -346,6 +347,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		}
 		return nil, fmt.Errorf("while setting actor state to DELETING: %w", err)
 	}
+	logActorStateChanged(ctx, storedActor, ateattr.OperationDelete, ateattr.ActorStateDeleting)
 	return storedActor, nil
 }
 

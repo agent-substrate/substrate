@@ -580,11 +580,17 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 // logs through the slog default, so this swaps it and the caller cannot be parallel.
 func crashRecords(t *testing.T) *[]map[string]string {
 	t.Helper()
+	return logRecords(t, "Actor crashed")
+}
+
+// logRecords captures the attributes of every record with the given message.
+func logRecords(t *testing.T, msg string) *[]map[string]string {
+	t.Helper()
 
 	var records []map[string]string
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
-		if r.Message != "Actor crashed" {
+		if r.Message != msg {
 			return
 		}
 		fields := map[string]string{}
@@ -648,6 +654,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		string(ateattr.TemplateAtespaceKey):   "demo-ns",
 		string(ateattr.TemplateNameKey):       "counter-template",
 		string(ateattr.ActorOperationNameKey): ateattr.OperationResume,
+		string(ateattr.ActorStateKey):         ateattr.ActorStateCrashed,
 		string(ateattr.FailureReasonKey):      ateattr.ReasonWorkerPodGone,
 		string(ateattr.FailureDomainKey):      ateattr.FailureDomainInfrastructure,
 	}

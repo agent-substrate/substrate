@@ -143,6 +143,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 		}
 		return nil, err
 	}
+	logActorStateChanged(ctx, storedActor, ateattr.OperationPause, ateattr.ActorStatePausing)
 	return storedActor, nil
 }
 
@@ -291,6 +292,9 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
 			logActorCrashed(ctx, latestActor, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 			recordActorCrash(ctx, crashAttrs)
+		}
+		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
+			logActorStateChanged(ctx, storedActor, ateattr.OperationPause, ateattr.ActorStatePaused)
 		}
 		if err != nil {
 			if errors.Is(err, store.ErrVersionConflict) {

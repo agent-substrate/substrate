@@ -116,9 +116,14 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 // logActorCrashed carries the identity ate.actor.crashes cannot: actor identity
 // is barred from metric labels, so this record is the only way to attribute a
 // crash to one agent. Call it beside recordActorCrash, under the same guard.
+//
+// It names ate.actor.state for the same reason ateom's lifecycle records do: a
+// crash is the one transition ateom never observes, so a consumer taking the
+// last state an actor reached has to see this record to reach "crashed" at all.
 func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName, reason string) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
 	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), opName))
+	attrs = append(attrs, slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
 	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
 	slog.LogAttrs(ctx, slog.LevelError, "Actor crashed", attrs...)
 }
