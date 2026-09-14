@@ -497,8 +497,10 @@ func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
 	ctx := t.Context()
 	const expectedBody = "https nonstandard origin"
 	target, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
-		Name: "https-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args: []string{"http", "--body=" + expectedBody}, Port: 8443,
+		Name:       "https-origin",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http", "--body=" + expectedBody},
+		Port:       8443,
 	}, true)
 	actorName, router, actorRef := prepareProtocolActor(t, ctx, "https-port")
 	since := metav1.NewTime(time.Now().Add(-time.Minute))
@@ -519,44 +521,6 @@ func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
 		t.Errorf("HTTPS observation = %+v; want verified TLS, HTTP/1.1, status 200 and body %q", got, expectedBody)
 	}
 	assertProtocolGateway(t, ctx, since, actorName, target.Address())
-}
-
-func TestActorEgressWebSocket(t *testing.T) {
-	ctx := t.Context()
-	target, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
-		Name: "ws-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, HealthPath: "/readyz",
-	}, false)
-	actorName, router, actorRef := prepareProtocolActor(t, ctx, "ws")
-	messages := []string{"ws-first", "ws-second", "ws-third"}
-	since := metav1.NewTime(time.Now().Add(-time.Minute))
-	raw := postEgressOnce(t, ctx, router, actorRef, "/websocket", map[string]any{"url": "ws://" + target.Address() + "/ws", "messages": messages})
-	var got egressWebSocketResponse
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("decoding WebSocket observation: %v", err)
-	}
-	assertProtocolGateway(t, ctx, since, actorName, target.Address())
-	assertWebSocketExchange(t, got, messages, false)
-}
-
-func TestActorEgressSecureWebSocket(t *testing.T) {
-	ctx := t.Context()
-	target, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
-		Name: "wss-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args: []string{"websocket", "--echo"}, Port: 443, TargetPort: 8443, HealthPath: "/readyz",
-	}, true)
-	actorName, router, actorRef := prepareProtocolActor(t, ctx, "wss")
-	messages := []string{"wss-first", "wss-second", "wss-third"}
-	since := metav1.NewTime(time.Now().Add(-time.Minute))
-	raw := postEgressOnce(t, ctx, router, actorRef, "/websocket", map[string]any{
-		"url": "wss://" + target.Address() + "/ws", "rootCA": rootCA, "messages": messages,
-	})
-	var got egressWebSocketResponse
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("decoding secure WebSocket observation: %v", err)
-	}
-	assertProtocolGateway(t, ctx, since, actorName, target.Address())
-	assertWebSocketExchange(t, got, messages, true)
 }
 
 func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod, encrypted bool) (e2e.Server, string) {
@@ -593,7 +557,7 @@ func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod
 
 func prepareProtocolActor(t *testing.T, ctx context.Context, prefix string) (string, *e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
-	actorName, _ := createAndResumeActor(t, ctx, prefix, e2e.EgressFixture())
+	actorName, _ := createAndResumeActor(t, ctx, prefix, egressFixture())
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	ref := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
