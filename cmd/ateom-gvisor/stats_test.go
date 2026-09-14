@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -62,7 +63,7 @@ func newStatsService(t *testing.T, files map[string]string) *AteomService {
 	t.Helper()
 	root := t.TempDir()
 	if files != nil {
-		dir := filepath.Join(root, sandboxCgroupContainer)
+		dir := filepath.Join(root, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer))
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatalf("creating fixture cgroup dir: %v", err)
 		}

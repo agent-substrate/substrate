@@ -40,6 +40,11 @@ type GVisorOptions struct {
 	Size sizing.SandboxSize
 }
 
+// GVisorCgroupLeaf names an actor container's cgroup relative to the pod scope.
+func GVisorCgroupLeaf(actorUID, containerName string) string {
+	return actorUID + "-" + containerName
+}
+
 // ShapeGVisor adds runsc CRI annotations, durable-dir mount hints, host
 // resolv.conf, and per-container cgroups to the spec. It is idempotent.
 func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
@@ -73,7 +78,7 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	}
 	// Set a colon-free default cgroupsPath relative to the pod scope.
 	if spec.Linux.CgroupsPath == "" {
-		spec.Linux.CgroupsPath = "/" + o.ContainerName
+		spec.Linux.CgroupsPath = "/" + GVisorCgroupLeaf(o.ActorUID, o.ContainerName)
 	}
 	o.Size.ApplyToOCISpec(spec)
 }
