@@ -150,7 +150,7 @@ func TestRecordRouteDuration_NormalizesEmptyTemplateDimensions(t *testing.T) {
 	}
 
 	s := NewServer(50051, h, nil)
-	s.recordRouteDuration(context.Background(), 5*time.Millisecond, "", "", classifyOutcome(errors.New("fail")), ateattr.RouterResumeUnattempted)
+	s.recordRouteDuration(context.Background(), 5*time.Millisecond, "", "", classifyOutcome(errors.New("fail")), ateattr.RouterResumeUnknown)
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -162,7 +162,7 @@ func TestRecordRouteDuration_NormalizesEmptyTemplateDimensions(t *testing.T) {
 		"ate.template.atespace": "unknown",
 		"ate.template.name":     "unknown",
 		"ate.router.outcome":    "resume_error",
-		"ate.router.resume":     "unattempted",
+		"ate.router.resume":     "unknown",
 	}
 
 	for k, want := range wantAttrs {
@@ -175,17 +175,17 @@ func TestRecordRouteDuration_NormalizesEmptyTemplateDimensions(t *testing.T) {
 	}
 }
 
-func TestResultResume_DefaultsToUnattempted(t *testing.T) {
+func TestResultResume_DefaultsToUnknown(t *testing.T) {
 	tests := []struct {
 		name   string
 		resume string
 		want   string
 	}{
-		{name: "empty defaults to unattempted", resume: "", want: ateattr.RouterResumeUnattempted},
+		{name: "empty defaults to unknown", resume: "", want: ateattr.RouterResumeUnknown},
 		{name: "none preserved", resume: ateattr.RouterResumeNone, want: ateattr.RouterResumeNone},
 		{name: "triggered preserved", resume: ateattr.RouterResumeTriggered, want: ateattr.RouterResumeTriggered},
 		{name: "joined preserved", resume: ateattr.RouterResumeJoined, want: ateattr.RouterResumeJoined},
-		{name: "unattempted preserved", resume: ateattr.RouterResumeUnattempted, want: ateattr.RouterResumeUnattempted},
+		{name: "unknown preserved", resume: ateattr.RouterResumeUnknown, want: ateattr.RouterResumeUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

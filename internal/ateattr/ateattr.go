@@ -63,7 +63,8 @@ const (
 const TemplateUnknown = "unknown"
 
 // NormalizeTemplateDimension ensures a template dimension (atespace or name) is
-// non-empty, falling back to TemplateUnknown if unset.
+// non-empty, falling back to TemplateUnknown if unset. Only the router calls it
+// today; the other metrics carrying ate.template.* still emit the raw value.
 func NormalizeTemplateDimension(dim string) string {
 	if dim == "" {
 		return TemplateUnknown
@@ -206,15 +207,16 @@ const (
 
 // Values for RouterResumeKey.
 const (
-	// RouterResumeNone indicates the actor was already running (steady-state route).
+	// RouterResumeNone indicates the resume found the actor already running (steady-state route).
 	RouterResumeNone = "none"
-	// RouterResumeTriggered indicates this request won the singleflight lock and initiated cold activation.
+	// RouterResumeTriggered indicates this request won the singleflight lock and completed a cold activation.
 	RouterResumeTriggered = "triggered"
-	// RouterResumeJoined indicates this request parked on an in-flight singleflight resume.
+	// RouterResumeJoined indicates this request parked on another request's singleflight resume, which activated the actor.
 	RouterResumeJoined = "joined"
-	// RouterResumeUnattempted indicates no cold activation was in flight (e.g.
-	// definitive errors before activation, request cancellation, or non-resuming route).
-	RouterResumeUnattempted = "unattempted"
+	// RouterResumeUnknown indicates the resume did not complete, so whether an
+	// activation ran is unknown (a failed or canceled resume, or a direction that
+	// never resumes).
+	RouterResumeUnknown = "unknown"
 )
 
 // Values for ImageCacheOutcomeKey. A hit is a complete image record; a miss

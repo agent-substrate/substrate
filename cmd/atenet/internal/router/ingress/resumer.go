@@ -70,10 +70,10 @@ func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 type ResumeOutcome string
 
 const (
-	ResumeOutcomeNone        ResumeOutcome = ateattr.RouterResumeNone
-	ResumeOutcomeTriggered   ResumeOutcome = ateattr.RouterResumeTriggered
-	ResumeOutcomeJoined      ResumeOutcome = ateattr.RouterResumeJoined
-	ResumeOutcomeUnattempted ResumeOutcome = ateattr.RouterResumeUnattempted
+	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
+	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
+	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
+	ResumeOutcomeUnknown   ResumeOutcome = ateattr.RouterResumeUnknown
 )
 
 type resumeCallResult struct {
@@ -156,18 +156,6 @@ func (r *ActorResumer) retryable(err error) bool {
 		return true
 	case codes.ResourceExhausted, codes.FailedPrecondition, codes.Unavailable:
 		return r.parkEnabled
-	default:
-		return false
-	}
-}
-
-// isDefinitiveResumeError reports whether err represents a failure where no cold
-// activation could be attempted (e.g. the actor does not exist, bad request, or
-// permission denied), as opposed to in-flight capacity or transient failures.
-func isDefinitiveResumeError(err error) bool {
-	switch status.Code(err) {
-	case codes.NotFound, codes.InvalidArgument, codes.PermissionDenied, codes.Unauthenticated:
-		return true
 	default:
 		return false
 	}
@@ -263,25 +251,33 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		}, nil
 	})
 
+	// Disambiguate the singleflight resume outcome. Only a resume that completed
+	// without an error can tell us whether an activation ran, so the three
+	// activation labels are reserved for that case:
+	//   - "none": resumed == false, the actor was already running (warm route).
+	//   - "triggered": resumed == true, this caller led the flight (reqID == leaderID).
+	//   - "joined": resumed == true, this caller waited on another's flight.
+	// Every failed or abandoned resume reports "unknown" instead of guessing from
+	// the gRPC code. A code alone does not say whether an activation ran: a
+	// canceled leader's flight outlives its request and keeps restoring the actor,
+	// and a DeadlineExceeded can land mid-restore.
 	select {
 	case <-ctx.Done():
-		// The caller's request context was canceled before the singleflight resume completed.
-		// Return early with ResumeOutcomeUnattempted ("unattempted")
-		return nil, ResumeOutcomeUnattempted, ctx.Err()
+		// The caller's request context was canceled before the singleflight resume
+		// completed. The flight itself may well continue and activate the actor.
+		return nil, ResumeOutcomeUnknown, ctx.Err()
 	case res := <-ch:
 		callRes, _ := res.Val.(*resumeCallResult)
 		if callRes == nil {
 			if res.Err != nil {
-				return nil, ResumeOutcomeUnattempted, res.Err
+				return nil, ResumeOutcomeUnknown, res.Err
 			}
-			return nil, ResumeOutcomeUnattempted, status.Error(codes.Internal, "resume call returned nil result")
+			return nil, ResumeOutcomeUnknown, status.Error(codes.Internal, "resume call returned nil result")
+		}
+		if callRes.err != nil {
+			return nil, ResumeOutcomeUnknown, callRes.err
 		}
 
-		// Disambiguate singleflight resume outcome:
-		// - ResumeOutcomeNone ("none"): resumed == false and err == nil, actor was already active/running (warm route).
-		// - ResumeOutcomeTriggered ("triggered"): Cold activation leader (resumed == true or in-flight activation errored, caller's reqID == leaderID).
-		// - ResumeOutcomeJoined ("joined"): Cold activation joiner (resumed == true or in-flight activation errored, caller's reqID != leaderID).
-		// - ResumeOutcomeUnattempted ("unattempted"): Definitive non-activation error (e.g. NotFound, InvalidArgument) where no activation was attempted.
 		outcome := ResumeOutcomeNone
 		if callRes.resumed {
 			if callRes.leaderID == reqID {
@@ -289,18 +285,6 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			} else {
 				outcome = ResumeOutcomeJoined
 			}
-		} else if callRes.err != nil {
-			if isDefinitiveResumeError(callRes.err) {
-				outcome = ResumeOutcomeUnattempted
-			} else if callRes.leaderID == reqID {
-				outcome = ResumeOutcomeTriggered
-			} else {
-				outcome = ResumeOutcomeJoined
-			}
-		}
-
-		if callRes.err != nil {
-			return nil, outcome, callRes.err
 		}
 
 		return callRes.actor, outcome, nil

@@ -148,8 +148,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if got := status.Code(err); got != codes.NotFound {
 			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
 		}
-		if outcome != ResumeOutcomeUnattempted {
-			t.Errorf("expected outcome %q on definitive error for leader attempt, got %q", ResumeOutcomeUnattempted, outcome)
+		if outcome != ResumeOutcomeUnknown {
+			t.Errorf("expected outcome %q on a failed resume, got %q", ResumeOutcomeUnknown, outcome)
 		}
 	})
 
@@ -168,12 +168,15 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("expected context.Canceled, got %v", err)
 		}
-		if outcome != ResumeOutcomeUnattempted {
-			t.Errorf("expected outcome %q on context cancellation, got %q", ResumeOutcomeUnattempted, outcome)
+		if outcome != ResumeOutcomeUnknown {
+			t.Errorf("expected outcome %q on context cancellation, got %q", ResumeOutcomeUnknown, outcome)
 		}
 	})
 
-	t.Run("SingleflightDeduplication_ErrorDisambiguation", func(t *testing.T) {
+	// A resume that fails tells no caller whether an activation ran — the leader
+	// no more than the joiners — so every caller on the flight reports "unknown"
+	// rather than being split into triggered and joined.
+	t.Run("SingleflightDeduplication_FailedFlight", func(t *testing.T) {
 		var resumeCalled int
 		var mu sync.Mutex
 		const concurrentRequests = 10
@@ -209,26 +212,19 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 		wg.Wait()
 
-		var triggeredCount, joinedCount int
 		for i := 0; i < concurrentRequests; i++ {
 			if got := status.Code(errs[i]); got != codes.ResourceExhausted {
 				t.Fatalf("request %d expected ResourceExhausted, got %v", i, errs[i])
 			}
-			switch outcomes[i] {
-			case ResumeOutcomeTriggered:
-				triggeredCount++
-			case ResumeOutcomeJoined:
-				joinedCount++
-			default:
-				t.Errorf("unexpected outcome for request %d: %q", i, outcomes[i])
+			if outcomes[i] != ResumeOutcomeUnknown {
+				t.Errorf("request %d: expected outcome %q on a failed flight, got %q", i, ResumeOutcomeUnknown, outcomes[i])
 			}
 		}
 
-		if triggeredCount != 1 {
-			t.Errorf("expected exactly 1 request to have outcome 'triggered', got %d", triggeredCount)
-		}
-		if joinedCount != concurrentRequests-1 {
-			t.Errorf("expected %d requests to have outcome 'joined', got %d", concurrentRequests-1, joinedCount)
+		mu.Lock()
+		defer mu.Unlock()
+		if resumeCalled != 1 {
+			t.Errorf("expected %d requests to share one ResumeActor call, got %d calls", concurrentRequests, resumeCalled)
 		}
 	})
 
