@@ -40,4 +40,10 @@ type Config struct {
 	Dyn *dynconfig.Holder
 	// Tracer anchors sampled spans; falls back to the otel global if nil.
 	Tracer trace.Tracer
+	// ActorsPerUser is the number of actors each VU creates on startup and
+	// cycles through in round-robin (iteration i targets actor
+	// i%ActorsPerUser). Zero or negative is treated as 1 by user classes
+	// that honor this knob; classes that don't honor it treat every VU as
+	// owning exactly one actor.
+	ActorsPerUser int
 }
