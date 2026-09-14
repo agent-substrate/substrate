@@ -57,7 +57,19 @@ jobs:
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
   e2e-test:
+    name: E2E (${{ matrix.dataplane }})
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - dataplane: envoy
+          experimental: false
+        - dataplane: agentgateway
+          experimental: true
+    env:
+      E2E_DATAPLANE: ${{ matrix.dataplane }}
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -86,8 +98,10 @@ jobs:
         sudo udevadm trigger --name-match=kvm
     - name: Create cluster
       run: hack/create-kind-cluster.sh
-    - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system
+    - name: Install Agent Substrate (${{ matrix.dataplane }})
+      # The dataplane selection applies to both the ingress router and egress
+      # gateway.
+      run: hack/install-ate-kind.sh --deploy-ate-system --dataplane=${{ matrix.dataplane }}
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -97,7 +111,10 @@ jobs:
       run: hack/install-ate-kind.sh --setup-csi=nfs
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and deploys the
-      # counter-microvm demo onto the control plane installed above.
+      # counter-microvm demo onto the control plane installed above. The demo
+      # redeploys the control plane, so retain the selected dataplane.
+      env:
+        ATE_DATAPLANE: ${{ matrix.dataplane }}
       run: hack/run-microvm-demo-kind.sh
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
@@ -127,7 +144,7 @@ jobs:
       # Cluster-wide, so it must come AFTER the standard lanes: once egress
       # TLS is intercepted, their passthrough assumptions
       # (TestActorEgressHTTPS's end-to-end TLS with the origin) no longer hold.
-      run: hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint
+      run: hack/install-ate-kind.sh --deploy-atenet --dataplane=${{ matrix.dataplane }} --experimental-use-sdsmint
     - name: Run E2E tests (egress MITM trust)
       # The consumption half of the trust-bundle chain: an actor does TLS with
       # the MITM gateway's minted leaf using ONLY the projected bundle, plus a
@@ -175,98 +192,6 @@ jobs:
         # randomly-named per-test namespaces, which the suites keep on failure.
         # The failing actor runs in one of these, so this is where its ateom logs
         # (and, for a micro-VM worker, the guest console tail) live.
-        kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
-          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
-          | while read -r ns name; do dump "$ns" "$name"; done
-  agentgateway-e2e-test:
-    continue-on-error: true #TODO: Make required once tests show stability
-    runs-on: ubuntu-latest
-    env:
-      E2E_DATAPLANE: agentgateway
-    steps:
-    - name: Checkout
-      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-    - name: Setup Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-      with:
-        go-version-file: 'go.mod'
-    - name: Cache micro-VM assets
-      id: agentgateway-microvm-assets
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: bin/microvm-assets/amd64
-        key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
-    - name: Enable KVM
-      run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
-    - name: Create cluster
-      run: hack/create-kind-cluster.sh
-    - name: Install Agent Substrate with AgentGateway
-      # The dataplane selection applies to both the ingress router and egress
-      # gateway.
-      run: hack/install-ate-kind.sh --deploy-ate-system --dataplane=agentgateway
-    - name: Enable NFS
-      run: |
-        sudo modprobe nfs || true
-        sudo modprobe nfsd || true
-    - name: Install CSI NFS driver
-      run: hack/install-ate-kind.sh --setup-csi=nfs
-    - name: Deploy micro-VM counter demo
-      # run-microvm-demo-kind.sh redeploys the control plane before staging its
-      # assets, so retain the dataplane selection for that nested install.
-      env:
-        ATE_DATAPLANE: agentgateway
-      run: hack/run-microvm-demo-kind.sh
-    - name: Deploy gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter
-    - name: Deploy egress demos
-      run: |
-        hack/install-ate-kind.sh --deploy-demo-egress
-        hack/install-ate-kind.sh --deploy-demo-egress-microvm
-    - name: Run E2E tests (AgentGateway dataplane, gVisor)
-      run: hack/run-e2e-kind.sh -v -args --no-color
-    - name: Run E2E tests (AgentGateway dataplane, micro-VM)
-      env:
-        E2E_SANDBOX_CLASS: microvm
-      run: hack/run-e2e-kind.sh -v -args --no-color
-    - name: Deploy AgentGateway MITM egress (sdsmint)
-      run: hack/install-ate-kind.sh --deploy-atenet --dataplane=agentgateway --experimental-use-sdsmint
-    - name: Run E2E tests (AgentGateway MITM trust)
-      env:
-        E2E_EGRESS_MITM: "1"
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
-    - name: Run E2E tests (AgentGateway MITM trust, micro-VM)
-      env:
-        E2E_EGRESS_MITM: "1"
-        E2E_SANDBOX_CLASS: microvm
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
-    - name: Deploy AgentGateway MITM egress demos
-      run: |
-        hack/install-ate-kind.sh --deploy-demo-egress-mitm
-        hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm
-    - name: Run E2E tests (AgentGateway networking, MITM egress)
-      env:
-        E2E_EGRESS_MITM: "1"
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
-    - name: Run E2E tests (AgentGateway networking, MITM egress, micro-VM)
-      env:
-        E2E_EGRESS_MITM: "1"
-        E2E_SANDBOX_CLASS: microvm
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
-    - name: Dump diagnostics on failure
-      if: failure()
-      run: |
-        kubectl --context kind-kind get workerpool,pods -A -o wide || true
-        dump() {
-          echo "=== logs: $1/$2 ==="
-          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
-        }
-        for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
-          dump ate-system "$p"
-        done
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
