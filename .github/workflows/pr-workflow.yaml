@@ -56,7 +56,7 @@ jobs:
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
-  e2e-test:
+  e2e-test-matrix:
     name: E2E (${{ matrix.dataplane }})
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
@@ -195,3 +195,15 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
+  # Preserve the required-check name while the concrete Envoy and AgentGateway
+  # executions run as entries in the shared matrix above.
+  e2e-test:
+    name: e2e-test
+    needs: e2e-test-matrix
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require E2E matrix success
+      env:
+        MATRIX_RESULT: ${{ needs.e2e-test-matrix.result }}
+      run: test "$MATRIX_RESULT" = success
