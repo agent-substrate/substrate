@@ -31,7 +31,7 @@ type SubstrateTemplate struct {
 	// Manifest is the protojson *.yaml.tmpl path, relative to the repository
 	// root.
 	Manifest string
-	// Ref is the template's (atespace, name) identity.
+	// Ref identifies the ActorTemplate by reference.
 	Ref resources.ActorTemplateRef
 }
 

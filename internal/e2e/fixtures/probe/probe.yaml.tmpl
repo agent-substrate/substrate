@@ -25,6 +25,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: ate-e2e-probe${FIXTURE_SUFFIX}
+  labels:
+    # Lets hack/cleanup-e2e.sh find and delete this namespace when a failed
+    # test leaves the fixture behind for debugging.
+    ate.dev/e2e: "true"
 
 ---
 

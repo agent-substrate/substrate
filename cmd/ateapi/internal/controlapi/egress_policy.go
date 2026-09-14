@@ -202,7 +202,7 @@ func ValidateCustom_EgressRuleEffects_InjectStaticHeaders(_ context.Context, _ o
 	return errs
 }
 
-func ValidateCustom_IPBlockRule_Cidrs(_ context.Context, _ operation.Operation, p *field.Path, cidrs, _ []string) field.ErrorList {
+func ValidateCustom_CIDRRule_Cidrs(_ context.Context, _ operation.Operation, p *field.Path, cidrs, _ []string) field.ErrorList {
 	var errs field.ErrorList
 	for i, cidr := range cidrs {
 		errs = append(errs, validation.IsValidCIDR(p.Index(i), cidr)...)

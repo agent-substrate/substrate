@@ -68,9 +68,9 @@ const statsRPCTimeout = 55 * time.Second
 // ceil(n/statsSweepConcurrency) timeouts instead of n.
 const statsSweepConcurrency = 8
 
-// workerPoolListTimeout bounds the per-sweep pod list that resolves worker
-// pools. Pool labels are enrichment: better one unlabeled tick than a sweep
-// blocked on the apiserver.
+// workerPoolListTimeout bounds the per-sweep pod list that fetches worker
+// pools: pool labels are enrichment, so a slow apiserver must not stall the
+// sweep it is merely enriching.
 const workerPoolListTimeout = 10 * time.Second
 
 // clampActorStatsPollInterval enforces the floor on a nonzero configured
@@ -111,24 +111,36 @@ type statsPoller struct {
 	ateomsDir string
 
 	// dial returns a stats client for one ateom plus the closer that releases
-	// its connection; the probe closes it before returning, so a connection
-	// lives exactly one probe. Deliberately NOT the lifecycle RPCs' cached
-	// AteomDialer: at one probe per ateom per minute over a local unix socket
-	// a cache saves nothing, and sweeping the node's stale sockets through a
-	// shared cache would let telemetry evict connections the lifecycle RPCs
-	// are using.
+	// its connection; a connection lives exactly one probe. Deliberately NOT
+	// the lifecycle RPCs' cached AteomDialer: at one probe per ateom per
+	// minute over a local unix socket a cache saves nothing, and sweeping the
+	// node's stale sockets through a shared cache would let telemetry evict
+	// connections the lifecycle RPCs are using.
 	dial func(ctx context.Context, podUID string) (activeStatsClient, io.Closer, error)
 
-	// workerPools resolves this node's worker pod UIDs to the pool that owns
-	// them, called once per sweep. Nil (or a nil map, or a missing entry)
-	// degrades to samples grouped without pool labels rather than dropped: the
-	// pool is enrichment, the sample is the point. The real resolver lists the
-	// node's pods by the ate.dev/worker-pool label the pool controller stamps
-	// on every worker (see workerpool_apply.go); the ateom directory name IS
-	// the worker pod UID, which is the join key.
-	workerPools func(ctx context.Context) map[string]workerPoolRef
+	// fetchWorkerPools is the raw fetch: one apiserver list mapping this
+	// node's worker pod UIDs to the pool that owns them, called once per
+	// sweep by resolveWorkerPools, which layers cachedPools over it. A nil
+	// return means the fetch failed. The real fetcher lists the node's pods
+	// by workerPoolLabel; the ateom directory name IS the worker pod UID,
+	// which is the join key.
+	fetchWorkerPools func(ctx context.Context) map[string]workerPoolRef
 
 	inst *statsInstruments
+
+	// eventEmitter receives one usage event per sample per sweep -- the
+	// per-actor channel the aggregates deliberately erase identity from.
+	// Nil disables emission; emit is nil-safe.
+	eventEmitter *statsEventEmitter
+
+	// cachedPools carries pool resolutions across sweeps, so one failed pod
+	// list cannot re-home a tick's samples -- and the CPU counter's
+	// increments, which can never be re-attributed -- onto a pool-less label
+	// set. Safe because a pod's pool is immutable for the pod's lifetime: an
+	// entry can be stale, never wrong. Only the sweep loop touches it;
+	// resolveWorkerPools prunes it to the pods whose ateom directories still
+	// exist, the same bound lastCPU keeps.
+	cachedPools map[string]workerPoolRef
 
 	// lastCPU is the previous sweep's cpu_usage_usec per actor uid, the
 	// baseline the next sweep's deltas are computed against. Only the sweep
@@ -140,10 +152,10 @@ type statsPoller struct {
 	lastCPU map[string]uint64
 }
 
-// templateAggregate is one tick's sums for one templateKey group: the bounded
-// label set #174 permits on a TSDB series. Actor and
-// atespace identity deliberately never reach a metric label; per-actor detail
-// is the events channel's job, not this one's.
+// templateAggregate is one tick's sums for one templateKey group: the
+// bounded label set #174 permits on a TSDB series. Actor and atespace
+// identity deliberately never reach a metric label; per-actor detail is the
+// events channel's job, not this one's.
 //
 // The memory fields are point-in-time sums the gauges observe. cpuDeltaUsec is
 // different: cpu_usage_usec is a cumulative per-epoch counter per actor, so
@@ -172,9 +184,9 @@ type templateKey struct {
 	templateName      string
 	sandboxClass      string
 	source            string
-	// workerPool is zero-valued when the pod could not be resolved to a pool
-	// (resolver disabled, list failure, pod already gone): those samples group
-	// together without pool labels rather than vanish.
+	// workerPool is zero-valued when no fetch has resolved the pod yet (see
+	// resolveWorkerPools): those samples group together without pool labels
+	// rather than vanish.
 	workerPool workerPoolRef
 }
 
@@ -198,7 +210,7 @@ func (k templateKey) attrs() metric.MeasurementOption {
 	return metric.WithAttributes(attrs...)
 }
 
-// run polls until ctx is cancelled. The caller has already validated and
+// run polls until ctx is canceled. The caller has already validated and
 // clamped interval.
 func (p *statsPoller) run(ctx context.Context) {
 	slog.InfoContext(ctx, "Actor stats poller starting", slog.Duration("interval", p.interval))
@@ -241,10 +253,13 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 		return nil
 	}
 
-	var pools map[string]workerPoolRef
-	if p.workerPools != nil {
-		pools = p.workerPools(ctx)
+	podUIDs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			podUIDs = append(podUIDs, e.Name())
+		}
 	}
+	pools := p.resolveWorkerPools(ctx, podUIDs)
 
 	var (
 		mu      sync.Mutex
@@ -253,11 +268,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 		g       errgroup.Group
 	)
 	g.SetLimit(statsSweepConcurrency)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		podUID := e.Name()
+	for _, podUID := range podUIDs {
 
 		g.Go(func() error {
 			// One deadline over the whole probe, dial included. The real dial
@@ -286,6 +297,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				// add.
 				return nil
 			}
+			p.eventEmitter.emit(ctx, eventKindPeriodic, sample, pools[podUID])
 
 			key := templateKey{
 				templateNamespace: sample.GetActorTemplateAtespace(),
@@ -377,18 +389,46 @@ func statsSourceLabel(s ateompb.StatsSource) string {
 	}
 }
 
-// nodeWorkerPools returns a resolver that lists nodeName's worker pods once
-// per sweep and maps pod UID to the pool that owns it. One field-selected,
-// label-selected LIST per interval per node is deliberately chosen over a
-// standing informer: at the poll cadence the apiserver cost is negligible,
-// there is no cache to sync before the first sweep, and a failed list
-// degrades to unlabeled samples for one tick instead of blocking anything.
-func nodeWorkerPools(client kubernetes.Interface, nodeName string) func(ctx context.Context) map[string]workerPoolRef {
+// resolveWorkerPools returns this sweep's pod-UID-to-pool map: fresh
+// resolutions win, a failed or partial list falls back to cachedPools, and
+// the result -- rebuilt restricted to the pods whose ateom directories exist
+// -- becomes the new cache, pruning departed pods and bounding its size. The
+// residual unlabeled case is a pod no fetch has resolved yet, whether first
+// seen during an outage or omitted by a list racing the directory scan; it
+// groups without pool labels until a fetch returns it.
+func (p *statsPoller) resolveWorkerPools(ctx context.Context, podUIDs []string) map[string]workerPoolRef {
+	if p.fetchWorkerPools == nil {
+		return nil
+	}
+	if len(podUIDs) == 0 {
+		// Nothing to resolve: skip the fetch and prune the cache to the
+		// empty directory set, as a normal sweep would.
+		p.cachedPools = nil
+		return nil
+	}
+	fresh := p.fetchWorkerPools(ctx)
+	merged := make(map[string]workerPoolRef, len(podUIDs))
+	for _, uid := range podUIDs {
+		if ref, ok := fresh[uid]; ok {
+			merged[uid] = ref
+		} else if ref, ok := p.cachedPools[uid]; ok {
+			merged[uid] = ref
+		}
+	}
+	p.cachedPools = merged
+	return merged
+}
+
+// newWorkerPoolFetcher returns the fetch func behind fetchWorkerPools: one
+// field-selected, label-selected LIST of nodeName's worker pods per call.
+// Deliberately not a standing informer: at the poll cadence the apiserver
+// cost is negligible, there is no informer cache to sync before the first
+// sweep, and resolveWorkerPools already absorbs failed lists.
+func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx context.Context) map[string]workerPoolRef {
 	return func(ctx context.Context) map[string]workerPoolRef {
-		// Bounded so a hung apiserver connection cannot stall the sweep it is
-		// merely enriching: past the deadline, this tick's samples group
-		// without pool labels, which is the same answer as any other failed
-		// list.
+		// Bounded so a hung apiserver cannot stall the sweep: past the
+		// deadline the fetch returns nil and resolveWorkerPools falls back
+		// to the cache.
 		listCtx, cancel := context.WithTimeout(ctx, workerPoolListTimeout)
 		defer cancel()
 		pods, err := client.CoreV1().Pods(metav1.NamespaceAll).List(listCtx, metav1.ListOptions{
@@ -396,14 +436,22 @@ func nodeWorkerPools(client kubernetes.Interface, nodeName string) func(ctx cont
 			LabelSelector: workerPoolLabel,
 		})
 		if err != nil {
-			slog.DebugContext(ctx, "Actor stats sweep: worker pool resolution failed; samples group without pool labels", slog.Any("err", err))
+			slog.DebugContext(ctx, "Actor stats sweep: worker pool list failed; answering from cached resolutions", slog.Any("err", err))
 			return nil
 		}
 		pools := make(map[string]workerPoolRef, len(pods.Items))
 		for _, pod := range pods.Items {
+			name := pod.Labels[workerPoolLabel]
+			if name == "" {
+				// The existence selector also matches empty-valued labels
+				// (a bare key in YAML parses to ""), and half a pair names
+				// no pool: skip it, so absent and unresolvable are the same
+				// unlabeled answer downstream.
+				continue
+			}
 			pools[string(pod.UID)] = workerPoolRef{
 				namespace: pod.Namespace,
-				name:      pod.Labels[workerPoolLabel],
+				name:      name,
 			}
 		}
 		return pools
@@ -516,43 +564,64 @@ func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*tem
 		return
 	}
 	for key, agg := range aggs {
-		// The wire carries microseconds; the metric is seconds, the base unit
-		// CPU time is exported in everywhere else (cAdvisor's
-		// container_cpu_usage_seconds_total, OTel's *.cpu.time), so the
+		// The wire carries microseconds; the metric is seconds -- the base
+		// unit CPU time is exported in everywhere else (cAdvisor's
+		// container_cpu_usage_seconds_total, OTel's *.cpu.time) -- so the
 		// existing rate() idioms read directly as cores.
 		i.cpuUsage.Add(ctx, float64(agg.cpuDeltaUsec)/1e6, key.attrs())
 	}
 }
 
-// startStatsPoller assembles the poller and starts it. Split from main's boot
-// sequence so the sampling subsystem has one obvious entry point.
+// startStatsPoller assembles the sampling subsystem -- the metrics poller and
+// the periodic events channel -- and starts the poller. Split from main's
+// boot sequence so the subsystem has one obvious entry point.
 //
-// The poller dials its own per-probe connections (see statsPoller.dial) and
-// takes no AteomDialer: the isolation from the lifecycle RPCs' connection
-// cache is structural, not just behavioral.
-func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface) {
+// The poller dials its own short-lived connection per probe (see
+// dialAteomStats) and takes no AteomDialer: the isolation from the lifecycle
+// RPCs' connection cache is structural, not just behavioral.
+// logSink is the process's synchronized stdout writer, shared with the
+// runtime logger so the event drain and slog can never tear each other's
+// records.
+func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface, logSink io.Writer) {
+	// Warm the labels-key resolution so the first emit does not pay the
+	// metadata probe either; see defaultLabelsKey.
+	go defaultLabelsKey()
+
 	poller := &statsPoller{
 		interval:  interval,
 		ateomsDir: ateompath.AteomsDir(),
 		dial: func(_ context.Context, podUID string) (activeStatsClient, io.Closer, error) {
-			conn, err := grpc.NewClient(
-				"unix://"+ateompath.AteomSocketPath(podUID),
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
-				grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-			)
+			conn, closer, err := dialAteomStats(podUID)
 			if err != nil {
 				return nil, nil, err
 			}
-			return ateompb.NewAteomClient(conn), conn, nil
+			return ateompb.NewAteomClient(conn), closer, nil
 		},
-		inst: inst,
+		inst:         inst,
+		eventEmitter: newStatsEventEmitter(newAsyncWriter(ctx, logSink, usageEventQueueDepth), defaultLabelsKey),
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
 	if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
-		poller.workerPools = nodeWorkerPools(k8sClient, nodeName)
+		poller.fetchWorkerPools = newWorkerPoolFetcher(k8sClient, nodeName)
 	} else {
 		slog.WarnContext(ctx, "NODE_NAME not set; actor stats will carry no worker pool labels")
 	}
 	go poller.run(ctx)
+}
+
+// dialAteomStats opens the poller's short-lived connection: one per probe,
+// closed by the caller, never the lifecycle RPCs' cached AteomDialer.
+// grpc.NewClient is lazy, so this cannot block; the caller's deadline bounds
+// the actual connect inside the RPC.
+func dialAteomStats(podUID string) (*grpc.ClientConn, io.Closer, error) {
+	conn, err := grpc.NewClient(
+		"unix://"+ateompath.AteomSocketPath(podUID),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, conn, nil
 }

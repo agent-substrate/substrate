@@ -38,7 +38,8 @@ func TestGetCommandArgs(t *testing.T) {
 		{name: "atespaces get", command: getAtespacesCmd, args: []string{"team-a"}},
 		{name: "atespaces get multiple", command: getAtespacesCmd, args: []string{"team-a", "team-b"}},
 		{name: "workers list", command: getWorkersCmd},
-		{name: "workers reject argument", command: getWorkersCmd, args: []string{"worker-1"}, wantErr: true},
+		{name: "workers get", command: getWorkersCmd, args: []string{"worker-1"}},
+		{name: "workers get multiple", command: getWorkersCmd, args: []string{"worker-1", "worker-2"}},
 		{name: "top workers list", command: topWorkersCmd},
 		{name: "top workers reject argument", command: topWorkersCmd, args: []string{"worker-1"}, wantErr: true},
 	}

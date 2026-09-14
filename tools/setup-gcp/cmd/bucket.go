@@ -29,6 +29,10 @@ import (
 )
 
 func createSnapshotBucket(ctx context.Context, cfg *Config) error {
+	if err := resolveProject(ctx, cfg); err != nil {
+		return err
+	}
+
 	client, err := storage.NewClient(ctx)
 	if err != nil {
 		return err
@@ -149,15 +153,19 @@ func hasUnconditionalBinding(policy *iam.Policy, role, member string) bool {
 	return false
 }
 
+func validateBucketFlags(ctx context.Context, cfg *Config) error {
+	if cfg.BucketName == "" {
+		return errors.New("--name is required")
+	}
+	return resolveProject(ctx, cfg)
+}
+
 var bucketCmd = &cobra.Command{
 	Use:   "bucket",
 	Short: "Create GCS bucket",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cfg.ProjectID == "" {
-			return errors.New("--project-id is required")
-		}
-		if cfg.BucketName == "" {
-			return errors.New("--name is required")
+		if err := validateBucketFlags(cmd.Context(), &cfg); err != nil {
+			return err
 		}
 		return createSnapshotBucket(cmd.Context(), &cfg)
 	},

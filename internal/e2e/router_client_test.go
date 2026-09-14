@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -28,11 +29,14 @@ func TestRouterClientPostJSON(t *testing.T) {
 	client := &RouterClient{
 		baseURL: "http://router.test",
 		http: &http.Client{Transport: testRoundTripper(func(request *http.Request) (*http.Response, error) {
+			if got := request.Header.Get(atenet.TargetActorHeader); got != "demo/fetcher" {
+				t.Errorf("target actor = %q, want demo/fetcher", got)
+			}
 			if request.Method != http.MethodPost {
 				t.Errorf("method = %q, want POST", request.Method)
 			}
-			if request.Host != "fetcher.demo.actors.resources.substrate.ate.dev" {
-				t.Errorf("host = %q", request.Host)
+			if request.Host != "router.test" {
+				t.Errorf("host = %q, want router.test", request.Host)
 			}
 			if request.URL.Path != "/fetch" {
 				t.Errorf("path = %q, want /fetch", request.URL.Path)

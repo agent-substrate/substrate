@@ -18,10 +18,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
 
@@ -33,10 +33,9 @@ var (
 )
 
 var getWorkersCmd = &cobra.Command{
-	Use:     "workers",
+	Use:     "workers <worker-name ...>",
 	Aliases: []string{"worker"},
-	Short:   "List all workers",
-	Args:    cobra.NoArgs,
+	Short:   "List all workers or get one or more workers",
 	RunE:    runGetWorkers,
 }
 
@@ -51,7 +50,9 @@ func init() {
 // GetWorkersRunner executes the get workers command logic.
 type GetWorkersRunner struct {
 	workerLister WorkerLister
+	workerGetter WorkerGetter
 	actorLister  ActorLister
+	names        []string
 	namespace    string
 	atespace     string
 	selector     string
@@ -61,6 +62,21 @@ type GetWorkersRunner struct {
 }
 
 func (r *GetWorkersRunner) Run(ctx context.Context) error {
+	if len(r.names) > 0 {
+		if r.namespace != "" || r.atespace != "" || r.selector != "" || r.sandboxClass != "" {
+			return fmt.Errorf("filter flags (--namespace, --atespace, --selector, --sandbox-class) cannot be used when getting workers by name")
+		}
+		workers := make([]*ateapipb.Worker, 0, len(r.names))
+		for _, name := range r.names {
+			worker, err := r.workerGetter.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}})
+			if err != nil {
+				return fmt.Errorf("failed to get worker %q: %w", name, err)
+			}
+			workers = append(workers, worker)
+		}
+		return printer.PrintWorkersTo(r.out, workers, r.outputFmt)
+	}
+
 	workers, err := listAllWorkers(ctx, r.workerLister)
 	if err != nil {
 		return err
@@ -69,12 +85,7 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	outWriter := r.out
-	if outWriter == nil {
-		outWriter = os.Stdout
-	}
-	return printer.PrintWorkersTo(outWriter, filtered, r.outputFmt)
+	return printer.PrintWorkersTo(r.out, filtered, r.outputFmt)
 }
 
 func runGetWorkers(cmd *cobra.Command, args []string) error {
@@ -87,13 +98,15 @@ func runGetWorkers(cmd *cobra.Command, args []string) error {
 
 	runner := &GetWorkersRunner{
 		workerLister: apiClient,
+		workerGetter: apiClient,
 		actorLister:  apiClient,
+		names:        args,
 		namespace:    getWorkerNamespaceFlag,
 		atespace:     getWorkerAtespaceFlag,
 		selector:     getWorkerSelectorFlag,
 		sandboxClass: getWorkerClassFlag,
 		outputFmt:    outputFmt,
-		out:          os.Stdout,
+		out:          cmd.OutOrStdout(),
 	}
 	return runner.Run(ctx)
 }

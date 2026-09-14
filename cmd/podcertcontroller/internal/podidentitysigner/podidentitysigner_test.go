@@ -24,6 +24,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/localca"
@@ -37,20 +38,6 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
 )
-
-// fixedClock is a PassiveClock frozen at a fixed instant.
-type fixedClock struct {
-	now time.Time
-}
-
-func (c fixedClock) Now() time.Time                  { return c.now }
-func (c fixedClock) Since(t time.Time) time.Duration { return c.now.Sub(t) }
-
-// testNow is a whole-second instant so times survive the x509 encoding
-// round-trip (certificates carry 1s precision) and compare exactly. It must
-// stay near wall-clock time because GenerateED25519CA stamps CA validity
-// from time.Now().
-var testNow = time.Now().UTC().Truncate(time.Second)
 
 // makePodAndPCR returns a pod and a matching PodCertificateRequest with no
 // key material set; callers fill in StubPKCS10Request.
@@ -206,101 +193,101 @@ func TestMakeCert(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ca, err := localca.GenerateCA("test-ca", localca.KeyTypeED25519, 365*24*time.Hour)
+				if err != nil {
+					t.Fatalf("while generating CA: %v", err)
+				}
+				caPool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
 
-			ca, err := localca.GenerateCA("test-ca", localca.KeyTypeED25519, 365*24*time.Hour)
-			if err != nil {
-				t.Fatalf("while generating CA: %v", err)
-			}
-			caPool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
+				subjectPub, subjectPriv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatalf("while generating subject key: %v", err)
+				}
 
-			subjectPub, subjectPriv, err := ed25519.GenerateKey(rand.Reader)
-			if err != nil {
-				t.Fatalf("while generating subject key: %v", err)
-			}
+				pod, pcr := makePodAndPCR(tc.namespace, tc.podName, tc.serviceAccount, tc.maxExpirationSeconds)
+				pod.ObjectMeta.Labels = tc.podLabels
+				pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
 
-			pod, pcr := makePodAndPCR(tc.namespace, tc.podName, tc.serviceAccount, tc.maxExpirationSeconds)
-			pod.ObjectMeta.Labels = tc.podLabels
-			pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
+				kc := fake.NewSimpleClientset(pod, pcr)
+				impl := NewImpl(kc, caPool)
 
-			kc := fake.NewSimpleClientset(pod, pcr)
-			impl := NewImpl(kc, caPool, fixedClock{now: testNow})
+				if err := impl.MakeCert(context.Background(), pcr); err != nil {
+					t.Fatalf("MakeCert: %v", err)
+				}
 
-			if err := impl.MakeCert(context.Background(), pcr); err != nil {
-				t.Fatalf("MakeCert: %v", err)
-			}
+				gotPCR, err := kc.CertificatesV1beta1().PodCertificateRequests(tc.namespace).Get(context.Background(), "req-1", metav1.GetOptions{})
+				if err != nil {
+					t.Fatalf("while fetching updated PCR: %v", err)
+				}
+				if len(gotPCR.Status.Conditions) != 1 || gotPCR.Status.Conditions[0].Type != certsv1beta1.PodCertificateRequestConditionTypeIssued {
+					t.Fatalf("PCR status not marked Issued: %+v", gotPCR.Status.Conditions)
+				}
 
-			gotPCR, err := kc.CertificatesV1beta1().PodCertificateRequests(tc.namespace).Get(context.Background(), "req-1", metav1.GetOptions{})
-			if err != nil {
-				t.Fatalf("while fetching updated PCR: %v", err)
-			}
-			if len(gotPCR.Status.Conditions) != 1 || gotPCR.Status.Conditions[0].Type != certsv1beta1.PodCertificateRequestConditionTypeIssued {
-				t.Fatalf("PCR status not marked Issued: %+v", gotPCR.Status.Conditions)
-			}
+				block, rest := pem.Decode([]byte(gotPCR.Status.CertificateChain))
+				if block == nil {
+					t.Fatalf("certificate chain contains no PEM block")
+				}
+				if len(rest) != 0 {
+					t.Errorf("expected exactly one certificate in chain (no intermediates), got trailing data")
+				}
+				leaf, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					t.Fatalf("while parsing leaf certificate: %v", err)
+				}
 
-			block, rest := pem.Decode([]byte(gotPCR.Status.CertificateChain))
-			if block == nil {
-				t.Fatalf("certificate chain contains no PEM block")
-			}
-			if len(rest) != 0 {
-				t.Errorf("expected exactly one certificate in chain (no intermediates), got trailing data")
-			}
-			leaf, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				t.Fatalf("while parsing leaf certificate: %v", err)
-			}
+				roots := x509.NewCertPool()
+				roots.AddCert(ca.RootCertificate)
+				if _, err := leaf.Verify(x509.VerifyOptions{
+					Roots:     roots,
+					KeyUsages: tc.wantEKUs,
+				}); err != nil {
+					t.Errorf("leaf does not verify against CA root: %v", err)
+				}
 
-			roots := x509.NewCertPool()
-			roots.AddCert(ca.RootCertificate)
-			if _, err := leaf.Verify(x509.VerifyOptions{
-				Roots:       roots,
-				CurrentTime: testNow,
-				KeyUsages:   tc.wantEKUs,
-			}); err != nil {
-				t.Errorf("leaf does not verify against CA root: %v", err)
-			}
+				leafPub, ok := leaf.PublicKey.(ed25519.PublicKey)
+				if !ok || !leafPub.Equal(subjectPub) {
+					t.Errorf("leaf public key %v is not the subject key %v", leaf.PublicKey, subjectPub)
+				}
 
-			leafPub, ok := leaf.PublicKey.(ed25519.PublicKey)
-			if !ok || !leafPub.Equal(subjectPub) {
-				t.Errorf("leaf public key %v is not the subject key %v", leaf.PublicKey, subjectPub)
-			}
+				wantNotBefore := time.Now().Add(-2 * time.Minute)
+				wantNotAfter := wantNotBefore.Add(tc.wantLifetime)
+				wantBeginRefreshAt := wantNotAfter.Add(-30 * time.Minute)
+				if !leaf.NotBefore.Equal(wantNotBefore) {
+					t.Errorf("got NotBefore %v, want %v", leaf.NotBefore, wantNotBefore)
+				}
+				if !leaf.NotAfter.Equal(wantNotAfter) {
+					t.Errorf("got NotAfter %v, want %v", leaf.NotAfter, wantNotAfter)
+				}
+				if gotPCR.Status.NotBefore == nil || !gotPCR.Status.NotBefore.Time.Equal(wantNotBefore) {
+					t.Errorf("got status NotBefore %v, want %v", gotPCR.Status.NotBefore, wantNotBefore)
+				}
+				if gotPCR.Status.NotAfter == nil || !gotPCR.Status.NotAfter.Time.Equal(wantNotAfter) {
+					t.Errorf("got status NotAfter %v, want %v", gotPCR.Status.NotAfter, wantNotAfter)
+				}
+				if gotPCR.Status.BeginRefreshAt == nil || !gotPCR.Status.BeginRefreshAt.Time.Equal(wantBeginRefreshAt) {
+					t.Errorf("got status BeginRefreshAt %v, want %v", gotPCR.Status.BeginRefreshAt, wantBeginRefreshAt)
+				}
 
-			wantNotBefore := testNow.Add(-2 * time.Minute)
-			wantNotAfter := wantNotBefore.Add(tc.wantLifetime)
-			wantBeginRefreshAt := wantNotAfter.Add(-30 * time.Minute)
-			if !leaf.NotBefore.Equal(wantNotBefore) {
-				t.Errorf("got NotBefore %v, want %v", leaf.NotBefore, wantNotBefore)
-			}
-			if !leaf.NotAfter.Equal(wantNotAfter) {
-				t.Errorf("got NotAfter %v, want %v", leaf.NotAfter, wantNotAfter)
-			}
-			if gotPCR.Status.NotBefore == nil || !gotPCR.Status.NotBefore.Time.Equal(wantNotBefore) {
-				t.Errorf("got status NotBefore %v, want %v", gotPCR.Status.NotBefore, wantNotBefore)
-			}
-			if gotPCR.Status.NotAfter == nil || !gotPCR.Status.NotAfter.Time.Equal(wantNotAfter) {
-				t.Errorf("got status NotAfter %v, want %v", gotPCR.Status.NotAfter, wantNotAfter)
-			}
-			if gotPCR.Status.BeginRefreshAt == nil || !gotPCR.Status.BeginRefreshAt.Time.Equal(wantBeginRefreshAt) {
-				t.Errorf("got status BeginRefreshAt %v, want %v", gotPCR.Status.BeginRefreshAt, wantBeginRefreshAt)
-			}
+				if len(leaf.URIs) != 1 || leaf.URIs[0].String() != tc.wantURI {
+					t.Errorf("got URIs %v, want [%s]", leaf.URIs, tc.wantURI)
+				}
+				if !slices.Equal(leaf.ExtKeyUsage, tc.wantEKUs) {
+					t.Errorf("got EKUs %v, want %v", leaf.ExtKeyUsage, tc.wantEKUs)
+				}
+				if !bytes.Equal(leaf.AuthorityKeyId, ca.RootCertificate.SubjectKeyId) {
+					t.Errorf("got AuthorityKeyId %x, want CA SubjectKeyId %x", leaf.AuthorityKeyId, ca.RootCertificate.SubjectKeyId)
+				}
 
-			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != tc.wantURI {
-				t.Errorf("got URIs %v, want [%s]", leaf.URIs, tc.wantURI)
-			}
-			if !slices.Equal(leaf.ExtKeyUsage, tc.wantEKUs) {
-				t.Errorf("got EKUs %v, want %v", leaf.ExtKeyUsage, tc.wantEKUs)
-			}
-			if !bytes.Equal(leaf.AuthorityKeyId, ca.RootCertificate.SubjectKeyId) {
-				t.Errorf("got AuthorityKeyId %x, want CA SubjectKeyId %x", leaf.AuthorityKeyId, ca.RootCertificate.SubjectKeyId)
-			}
+				identity, err := substratex509.PodIdentityFromCertificate(leaf)
+				if err != nil {
+					t.Fatalf("while extracting PodIdentity: %v", err)
+				}
+				if *identity != *tc.wantIdentity {
+					t.Errorf("got PodIdentity %+v, want %+v", identity, tc.wantIdentity)
+				}
+			})
 
-			identity, err := substratex509.PodIdentityFromCertificate(leaf)
-			if err != nil {
-				t.Fatalf("while extracting PodIdentity: %v", err)
-			}
-			if *identity != *tc.wantIdentity {
-				t.Errorf("got PodIdentity %+v, want %+v", identity, tc.wantIdentity)
-			}
 		})
 	}
 }
@@ -362,7 +349,7 @@ func TestMakeCertErrors(t *testing.T) {
 					return true, nil, errors.New("injected update failure")
 				})
 			}
-			impl := NewImpl(kc, caPool, fixedClock{now: testNow})
+			impl := NewImpl(kc, caPool)
 
 			if err := impl.MakeCert(context.Background(), pcr); err == nil {
 				t.Fatalf("MakeCert: got nil error, want error")
@@ -389,7 +376,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		t.Fatalf("while generating CA 2: %v", err)
 	}
 	caPool := &localca.ConcretePool{CAs: []*localca.CA{ca1, ca2}}
-	impl := NewImpl(nil, caPool, fixedClock{now: testNow})
+	impl := NewImpl(nil, caPool)
 
 	ctbs, err := impl.DesiredClusterTrustBundles()
 	if err != nil {

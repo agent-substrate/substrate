@@ -15,8 +15,6 @@
 package cmd
 
 import (
-	"errors"
-
 	"github.com/spf13/cobra"
 )
 
@@ -32,10 +30,11 @@ var enableApisCmd = &cobra.Command{
 	Use:   "apis",
 	Short: "Enable required GCP APIs",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cfg.ProjectID == "" {
-			return errors.New("--project-id is required")
+		ctx := cmd.Context()
+		if err := resolveProjectID(ctx, &cfg); err != nil {
+			return err
 		}
-		return enableRequiredAPIs(cmd.Context(), &cfg)
+		return enableRequiredAPIs(ctx, &cfg)
 	},
 }
 

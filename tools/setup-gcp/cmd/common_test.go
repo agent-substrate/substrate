@@ -87,3 +87,34 @@ func TestGetEnv_Bool(t *testing.T) {
 		t.Errorf("getEnv(%q, false) with invalid env = %t; want false", key, got)
 	}
 }
+
+func TestGetEnv_Int32(t *testing.T) {
+	const key = "TEST_ENV_INT32_VAR"
+
+	// Ensure clean environment
+	os.Unsetenv(key)
+	defer os.Unsetenv(key)
+
+	// Test fallback when environment variable is not set
+	if got := getEnv(key, int32(500)); got != int32(500) {
+		t.Errorf("getEnv(%q, %d) = %d; want %d", key, 500, got, 500)
+	}
+
+	// Test when environment variable is set
+	os.Setenv(key, "250")
+	if got := getEnv(key, int32(500)); got != int32(250) {
+		t.Errorf("getEnv(%q, %d) = %d; want %d", key, 500, got, 250)
+	}
+
+	// Test when environment variable is invalid int32 string
+	os.Setenv(key, "invalid")
+	if got := getEnv(key, int32(500)); got != int32(500) {
+		t.Errorf("getEnv(%q, %d) with invalid env = %d; want %d", key, 500, got, 500)
+	}
+
+	// Test when environment variable exceeds int32 range
+	os.Setenv(key, "5000000000")
+	if got := getEnv(key, int32(500)); got != int32(500) {
+		t.Errorf("getEnv(%q, %d) with out-of-range env = %d; want %d", key, 500, got, 500)
+	}
+}

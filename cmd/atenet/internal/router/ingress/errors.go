@@ -32,12 +32,6 @@ func actorNotFoundErr(actorRef resources.ActorRef) error {
 	return extproc.NewReqError(envoy_type.StatusCode_NotFound, "actor %s not found", actorRef)
 }
 
-// invalidHostErr returns a 404 denial explaining why the request host was
-// rejected. The cause is preserved for log inspection via Unwrap.
-func invalidHostErr(host string, cause error) error {
-	return extproc.WrapReqError(envoy_type.StatusCode_NotFound, cause, "invalid host %q: %v", host, cause)
-}
-
 // statusDescription returns the gRPC status description of err, unwrapping
 // any wrapper (e.g. budgetExhaustedError) first. status.Convert on a wrapping
 // error replaces the description with the wrapper's full "rpc error: ..."

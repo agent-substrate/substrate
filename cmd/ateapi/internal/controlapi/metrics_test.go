@@ -400,3 +400,75 @@ func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkerCountEmptyClassWorker covers the workers that CreateWorker accepted
+// with no sandbox class. They report as unknown, not as an empty-string class,
+// and not as capacity of the pool they name: the scheduler puts no actor on
+// them, thus the pool's own series stays at 0 and an idle==0 alert on it still
+// fires.
+func TestWorkerCountEmptyClassWorker(t *testing.T) {
+	const (
+		gvisor  = string(atev1alpha1.SandboxClassGvisor)
+		microvm = string(atev1alpha1.SandboxClassMicroVM)
+	)
+	tests := []struct {
+		name    string
+		pools   []*atev1alpha1.WorkerPool
+		workers []*ateapipb.Worker
+		want    map[series]int64
+	}{
+		{
+			name:  "gvisor pool",
+			pools: []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-empty", "")},
+			workers: []*ateapipb.Worker{
+				worker("ns-1", "pool-empty", "", false),
+				worker("ns-1", "pool-empty", "", false),
+				worker("ns-1", "pool-empty", "", false),
+			},
+			want: map[series]int64{
+				{"ns-1", "pool-empty", ateattr.WorkerStateIdle, gvisor}:                      0,
+				{"ns-1", "pool-empty", ateattr.WorkerStateAssigned, gvisor}:                  0,
+				{"ns-1", "pool-empty", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 3,
+			},
+		},
+		{
+			// No gvisor series shows for a pool that runs no gvisor.
+			name:    "microvm pool",
+			pools:   []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-micro", atev1alpha1.SandboxClassMicroVM)},
+			workers: []*ateapipb.Worker{worker("ns-1", "pool-micro", "", false)},
+			want: map[series]int64{
+				{"ns-1", "pool-micro", ateattr.WorkerStateIdle, microvm}:                     0,
+				{"ns-1", "pool-micro", ateattr.WorkerStateAssigned, microvm}:                 0,
+				{"ns-1", "pool-micro", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
+			},
+		},
+		{
+			// A worker that matches no pool has no class to fall back to.
+			name:    "orphan worker",
+			pools:   nil,
+			workers: []*ateapipb.Worker{worker("ns-1", "pool-orphan", "", false)},
+			want: map[series]int64{
+				{"ns-1", "pool-orphan", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) { return tt.pools, nil }
+			workers := func() ([]*ateapipb.Worker, error) { return tt.workers, nil }
+			reader := newWorkerCountReader(t, workers, pools)
+
+			sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
+			got := seriesCounts(sum)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d series, want %d: %v", len(got), len(tt.want), got)
+			}
+			for k, v := range tt.want {
+				if gv, ok := got[k]; !ok || gv != v {
+					t.Errorf("series %v = %d (present=%v), want %d", k, gv, ok, v)
+				}
+			}
+		})
+	}
+}

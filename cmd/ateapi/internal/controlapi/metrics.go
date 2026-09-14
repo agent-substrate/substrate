@@ -102,7 +102,12 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 			if w.GetStatus().GetAllocated().GetActors() > 0 {
 				state = ateattr.WorkerStateAssigned
 			}
-			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, w.GetSandboxClass()}]++
+			// CreateWorker does not validate the class, thus a worker can have an
+			// empty one. Report it as unknown, not as the pool's class: the
+			// scheduler puts no actor on a worker that offers no class, thus the
+			// pool's series must not count it as free capacity.
+			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
+			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
 		for k, n := range tally {
 			o.ObserveInt64(counter, n, metric.WithAttributes(
@@ -191,7 +196,7 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 	if template != nil {
-		attrs = append(attrs, ateattr.SandboxClassKey.String(sandboxClassString(template.GetSandboxConfig().GetSandboxClass())))
+		attrs = append(attrs, ateattr.SandboxClassAttribute(sandboxClassString(template.GetSandboxConfig().GetSandboxClass())))
 	}
 	if snapshotKind != "" {
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))

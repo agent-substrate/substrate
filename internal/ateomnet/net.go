@@ -168,30 +168,6 @@ func CleanupActorNetwork(ctx context.Context, interiorNetNS netns.NsHandle) erro
 	return cleanupErr
 }
 
-// PodIPv4 resolves the worker pod IPv4 address from the pod namespace's real eth0.
-func PodIPv4() (net.IP, error) {
-	// Resolve the worker pod IPv4 address from the pod namespace's real eth0.
-	// Because eth0 now stays in the pod namespace, this IP remains available for
-	// both normal worker connectivity and the temporary inbound DNAT rule.
-	eth0Link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		return nil, fmt.Errorf("while getting pod eth0: %w", err)
-	}
-	addrs, err := netlink.AddrList(eth0Link, netlink.FAMILY_V4)
-	if err != nil {
-		return nil, fmt.Errorf("while listing pod eth0 addresses: %w", err)
-	}
-	for _, addr := range addrs {
-		if addr.IP == nil {
-			continue
-		}
-		if ip := addr.IP.To4(); ip != nil {
-			return ip, nil
-		}
-	}
-	return nil, fmt.Errorf("pod eth0 has no IPv4 address")
-}
-
 // EnableIPv4Forwarding enables IPv4 forwarding in the current network namespace.
 func EnableIPv4Forwarding() error {
 	// Forwarding is required because actor packets now enter the worker pod via

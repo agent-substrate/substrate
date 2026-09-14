@@ -45,8 +45,8 @@ These flags can be passed to the root command and apply to all subcommands:
 
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
-| `--project-id` | GCP Project ID. | `PROJECT_ID` | None |
-| `--project-number` | GCP Project Number (required for IAM). | `PROJECT_NUMBER` | None |
+| `--project-id` | GCP Project ID. | `PROJECT_ID` | None (Required) |
+| `--project-number` | GCP Project Number (optional, resolved from `--project-id` if needed). | `PROJECT_NUMBER` | None |
 | `--region` | GCP Region for regional resources. | `GCE_REGION` | `us-west1` |
 
 ## Subcommands
@@ -131,11 +131,13 @@ go run ./tools/setup-gcp create cluster [flags]
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
 | `--name` | Name of the GKE cluster. | `CLUSTER_NAME` | `substrate-poc` |
-| `--location` | Zone or region for the cluster. | `CLUSTER_LOCATION` | `us-west1-c` |
+| `--location` | Zone or region for the cluster (must be compatible with `--region`). | `CLUSTER_LOCATION` | `us-west1-c` |
 | `--version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
+| `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 
 **Node version labels:** pool labels are the birth default for every node GKE
 creates later (autoscaling, auto-repair, node upgrades), and `setup-gcp` does
@@ -257,11 +259,13 @@ go run ./tools/setup-gcp bootstrap [flags]
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
 | `--cluster-name` | Name of the GKE cluster. | `CLUSTER_NAME` | `substrate-poc` |
-| `--cluster-location`| Zone or region for the cluster. | `CLUSTER_LOCATION` | `us-west1-c` |
+| `--cluster-location`| Zone or region for the cluster (must be compatible with `--region`). | `CLUSTER_LOCATION` | `us-west1-c` |
 | `--cluster-version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
+| `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
 | `--dashboard-dir` | Directory containing dashboard JSON files. | `DASHBOARD_DIR` | `tools/setup-gcp/dashboards` |
 

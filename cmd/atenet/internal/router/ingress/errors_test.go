@@ -43,27 +43,6 @@ func TestActorNotFoundErr(t *testing.T) {
 	}
 }
 
-func TestInvalidHostErr(t *testing.T) {
-	t.Parallel()
-
-	cause := errors.New("missing suffix")
-	err := invalidHostErr("foo.example.com", cause)
-
-	var reqErr *extproc.ReqError
-	if !errors.As(err, &reqErr) {
-		t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", err)
-	}
-	if reqErr.StatusCode != int(envoy_type.StatusCode_NotFound) {
-		t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, envoy_type.StatusCode_NotFound)
-	}
-	if got, want := err.Error(), `invalid host "foo.example.com": missing suffix`; got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-	if !errors.Is(err, cause) {
-		t.Errorf("errors.Is(err, cause) = false, want true (cause should be wrapped for logging)")
-	}
-}
-
 func TestMapResumeError(t *testing.T) {
 	t.Parallel()
 

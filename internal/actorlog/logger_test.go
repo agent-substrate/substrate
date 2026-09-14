@@ -450,3 +450,14 @@ func mustSpanID(t *testing.T, s string) trace.SpanID {
 	}
 	return id
 }
+
+// TestLabelsKey pins the one place the label group's spelling is chosen: the
+// GCE spelling is the key Cloud Logging promotes into LogEntry.labels.
+func TestLabelsKey(t *testing.T) {
+	if got := LabelsKey(false); got != "labels" {
+		t.Errorf("LabelsKey(false) = %q, want labels", got)
+	}
+	if got := LabelsKey(true); got != "logging.googleapis.com/labels" {
+		t.Errorf("LabelsKey(true) = %q, want logging.googleapis.com/labels", got)
+	}
+}

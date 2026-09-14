@@ -73,7 +73,7 @@ type SandboxConfigSpec struct {
 	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
 	//
 	// +required
-	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
+	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must include a digest"
 	PauseImage string `json:"pauseImage"`
 
 	// Assets is the set of files atelet fetches for this runtime, keyed first by

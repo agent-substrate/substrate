@@ -15,7 +15,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -29,6 +31,10 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
@@ -341,7 +347,7 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 		"uid-unpooled": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
-	p.workerPools = func(context.Context) map[string]workerPoolRef {
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
 		return map[string]workerPoolRef{"uid-pooled": {namespace: "pool-ns", name: "pool-a"}}
 	}
 
@@ -356,6 +362,43 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(templateAggregate{}, templateKey{}, workerPoolRef{})); diff != "" {
 		t.Errorf("collect() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestStatsPollerPeriodicEvents pins the events channel: one event per
+// executing sample per sweep, none for idle or mid-boot ateoms, identity
+// taken from the echo, pool labels from the sweep's own resolution.
+func TestStatsPollerPeriodicEvents(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-2": {resp: noSampleResponse(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	var buf syncBuffer
+	p.eventEmitter = newBufferEmitter(&buf, false)
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
+		return map[string]workerPoolRef{"uid-1": {namespace: "pool-ns", name: "pool-a"}}
+	}
+
+	p.collect(context.Background())
+
+	lines := bytes.Count(bytes.TrimSpace(buf.Bytes()), []byte("\n")) + 1
+	if buf.Len() == 0 {
+		t.Fatal("no periodic event emitted for the executing ateom")
+	}
+	if lines != 1 {
+		t.Fatalf("emitted %d events, want 1 (idle ateoms emit nothing): %q", lines, buf.String())
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := rec["kind"]; got != "periodic" {
+		t.Errorf("kind = %v, want periodic", got)
+	}
+	labels, _ := rec["labels"].(map[string]any)
+	if got := labels["ate.workerpool.name"]; got != "pool-a" {
+		t.Errorf("labels[ate.workerpool.name] = %v, want pool-a", got)
 	}
 }
 
@@ -424,5 +467,163 @@ func TestStatsPollerCPUDeltaSaturatesCorruptCounter(t *testing.T) {
 	got := p.collect(context.Background())[key].cpuDeltaUsec
 	if got != math.MaxInt64 {
 		t.Errorf("corrupt-counter sweep delta = %d, want pinned at MaxInt64", got)
+	}
+}
+
+// TestNewWorkerPoolFetcher pins the fetcher's ingestion rules: a labeled worker
+// maps by pod UID, an empty label value names no pool and never enters the
+// map (the presence-only selector matches it anyway), and unlabeled pods are
+// not workers at all. The fake clientset honors label selectors but not the
+// spec.nodeName field selector, so node scoping is not assertable here.
+func TestNewWorkerPoolFetcher(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-a", Namespace: "pool-ns", UID: "uid-a",
+			Labels: map[string]string{workerPoolLabel: "pool-a"},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-empty", Namespace: "pool-ns", UID: "uid-empty",
+			Labels: map[string]string{workerPoolLabel: ""},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "bystander", Namespace: "other-ns", UID: "uid-bystander",
+		}},
+	)
+
+	got := newWorkerPoolFetcher(client, "node-1")(context.Background())
+
+	want := map[string]workerPoolRef{"uid-a": {namespace: "pool-ns", name: "pool-a"}}
+	if diff := cmp.Diff(want, got, cmp.AllowUnexported(workerPoolRef{})); diff != "" {
+		t.Errorf("newWorkerPoolFetcher mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestStatsPollerPoolCacheSurvivesListFlap pins the fix for the label-set
+// split: a failed list must answer from the cache and keep that tick's
+// samples -- including the CPU increase computed during the flap, the value
+// that feeds the monotonic counter and can never be re-attributed -- on the
+// pooled label set.
+func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
+	resp := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp.GetSample().ActorUid = "uid-a"
+	resp.GetSample().CpuUsageUsec = 1000
+	fake := &fakeStatsAteom{resp: resp}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-1": fake})
+	listOK := true
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
+		if !listOK {
+			return nil // the apiserver list failed this sweep
+		}
+		return map[string]workerPoolRef{"uid-1": {namespace: "pool-ns", name: "pool-a"}}
+	}
+
+	pooled := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup",
+		workerPool: workerPoolRef{namespace: "pool-ns", name: "pool-a"}}
+
+	// Sweep 1 resolves, seeds the pool cache, and baselines the CPU counter.
+	if got := p.collect(context.Background()); got[pooled] == nil {
+		t.Fatalf("sweep 1: no pooled aggregate; got %v", got)
+	}
+
+	// Sweep 2: the list fails AND the actor consumed CPU. Both the sample and
+	// its delta must still group under the pool.
+	listOK = false
+	resp2 := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2.GetSample().ActorUid = "uid-a"
+	resp2.GetSample().CpuUsageUsec = 1600
+	fake.resp = resp2
+	got := p.collect(context.Background())
+	if got[pooled] == nil {
+		t.Fatalf("sweep 2 (list flap): samples left the pooled label set; got %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("sweep 2 (list flap): %d label sets, want 1 (no pool-less split)", len(got))
+	}
+	if got[pooled].cpuDeltaUsec != 600 {
+		t.Errorf("sweep 2 (list flap): pooled cpu delta = %d, want 600 -- the counter increment must land on the pooled series", got[pooled].cpuDeltaUsec)
+	}
+}
+
+// TestStatsPollerPoolCachePrunes: the cache is rebuilt against the pods whose
+// ateom directories exist, so a departed pod's entry does not linger.
+func TestStatsPollerPoolCachePrunes(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: noSampleResponse(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
+		return map[string]workerPoolRef{
+			"uid-1":    {namespace: "pool-ns", name: "pool-a"},
+			"uid-gone": {namespace: "pool-ns", name: "pool-a"}, // no ateom dir
+		}
+	}
+
+	p.collect(context.Background())
+
+	if _, ok := p.cachedPools["uid-1"]; !ok {
+		t.Errorf("cachedPools lost the live pod's entry: %v", p.cachedPools)
+	}
+	if _, ok := p.cachedPools["uid-gone"]; ok {
+		t.Errorf("cachedPools kept an entry with no ateom directory: %v", p.cachedPools)
+	}
+}
+
+// TestStatsPollerPoolCacheMissDuringOutage: a pod first seen while the list
+// is failing has no cache entry to fall back to -- it groups without pool
+// labels (the residual, documented case) and heals on the next good list.
+func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-new": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef { return nil }
+
+	got := p.collect(context.Background())
+
+	bare := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	if got[bare] == nil || len(got) != 1 {
+		t.Errorf("collect() during outage = %v, want the one pool-less group", got)
+	}
+}
+
+// TestStatsPollerPoolCachePartialListFallsBack pins the per-pod half of the
+// promised fallback ("a failed OR PARTIAL list"): a fetch that succeeds but
+// omits a cached pod must not strand that pod's samples. Distinct from the
+// all-nil flap test above -- a whole-map fallback would pass that test and
+// fail this one.
+func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
+	resp := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp.GetSample().ActorUid = "uid-a"
+	resp.GetSample().CpuUsageUsec = 1000
+	fake := &fakeStatsAteom{resp: resp}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-1": fake})
+	full := true
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
+		if !full {
+			// A successful list that no longer contains uid-1 (races between
+			// the pod store and the dir scan look exactly like this).
+			return map[string]workerPoolRef{"uid-other": {namespace: "pool-ns", name: "pool-b"}}
+		}
+		return map[string]workerPoolRef{"uid-1": {namespace: "pool-ns", name: "pool-a"}}
+	}
+
+	pooled := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup",
+		workerPool: workerPoolRef{namespace: "pool-ns", name: "pool-a"}}
+
+	if got := p.collect(context.Background()); got[pooled] == nil {
+		t.Fatalf("sweep 1: no pooled aggregate; got %v", got)
+	}
+
+	full = false
+	resp2 := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2.GetSample().ActorUid = "uid-a"
+	resp2.GetSample().CpuUsageUsec = 1250
+	fake.resp = resp2
+	got := p.collect(context.Background())
+	if got[pooled] == nil || len(got) != 1 {
+		t.Errorf("sweep 2 (partial list): samples left the pooled label set; got %v", got)
+	}
+	if got[pooled] != nil && got[pooled].cpuDeltaUsec != 250 {
+		t.Errorf("sweep 2 (partial list): pooled cpu delta = %d, want 250", got[pooled].cpuDeltaUsec)
 	}
 }

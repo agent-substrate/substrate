@@ -32,14 +32,15 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// timeNow returns the current time. It is a package variable so tests can pin
-// it and make age rendering deterministic.
-var timeNow = time.Now
+// TimeNow returns the current time. It is a package variable, exported so
+// that tests in this package and in cmd can both pin it and make age
+// rendering deterministic.
+var TimeNow = time.Now
 
 // formatAge renders a resource's age from its creation timestamp, kubectl-style
 // (e.g. "5m", "3h", "2d").
 func formatAge(ts *timestamppb.Timestamp) string {
-	return duration.HumanDuration(timeNow().Sub(ts.AsTime()))
+	return duration.HumanDuration(TimeNow().Sub(ts.AsTime()))
 }
 
 // PrintActors prints a slice of actors to stdout in the requested format.
@@ -125,6 +126,38 @@ func sortWorkers(workers []*ateapipb.Worker) {
 	})
 }
 
+// workerActorsColumn renders a Worker's actor count as allocated/capacity
+// (e.g. "3/10").
+func workerActorsColumn(worker *ateapipb.Worker) string {
+	return fmt.Sprintf("%d/%d", worker.GetStatus().GetAllocated().GetActors(), worker.GetStatus().GetCapacity().GetActors())
+}
+
+// resourceLimit returns the quantity of the named limit (e.g. "cpu",
+// "memory"), or "" if it isn't set.
+func resourceLimit(res *ateapipb.Resources, name string) string {
+	for _, limit := range res.GetLimits() {
+		if limit.GetName() == name {
+			return limit.GetQuantity()
+		}
+	}
+	return ""
+}
+
+// workerResourceColumn renders a Worker's named resource limit as
+// allocated/capacity (e.g. "500m/2"). "-" if the Worker has no capacity
+// limit for that resource, since there is then nothing to compare against.
+func workerResourceColumn(worker *ateapipb.Worker, name string) string {
+	capacity := resourceLimit(worker.GetStatus().GetCapacity().GetResources(), name)
+	if capacity == "" {
+		return "-"
+	}
+	allocated := resourceLimit(worker.GetStatus().GetAllocated().GetResources(), name)
+	if allocated == "" {
+		allocated = "0"
+	}
+	return allocated + "/" + capacity
+}
+
 // PrintWorkersTo prints a slice of workers to the provided writer.
 func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) error {
 	sortWorkers(workers)
@@ -133,11 +166,17 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 		return printProto(out, &ateapipb.ListWorkersResponse{Workers: workers}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAMESPACE\tPOOL\tCLASS\tPOD\tSTATUS")
+		fmt.Fprintln(w, "NAME\tPOOL\tSTATE\tACTORS\tCPU\tMEMORY\tPOD\tAGE")
 		for _, worker := range workers {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-				worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetSandboxClass(),
-				worker.GetWorkerPod(), WorkerOccupancy(worker))
+			name := worker.GetMetadata().GetName()
+			pool := worker.GetWorkerPool()
+			state := worker.GetStatus().GetState().String()
+			pod := worker.GetWorkerNamespace() + "/" + worker.GetWorkerPod()
+			age := formatAge(worker.GetMetadata().GetCreateTime())
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				name, pool, state, workerActorsColumn(worker),
+				workerResourceColumn(worker, "cpu"), workerResourceColumn(worker, "memory"),
+				pod, age)
 		}
 		return w.Flush()
 	default:

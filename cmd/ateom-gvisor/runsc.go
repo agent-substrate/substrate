@@ -284,7 +284,6 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		"-image-path", checkpointPath,
 		"-pid-file", ateompath.PIDFilePath(r.actorUID, containerName),
 		"-background",
-		"-direct",
 		"-detach",
 		containerName,
 	)

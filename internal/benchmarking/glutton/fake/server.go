@@ -25,17 +25,18 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/benchmarking/glutton"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"google.golang.org/protobuf/proto"
 )
 
-// Routes the fake serves, mirroring glutton's real HTTP mux. Declared here so
-// the fake depends on nothing; collapses onto one source when glutton's core moves.
+// Routes the fake serves, re-exported from the real server so the stand-in
+// cannot answer a path the actor does not.
 const (
-	WriteDiskRoute = "/writedisk"
-	ReadDiskRoute  = "/readdisk"
-	WriteRAMRoute  = "/writeram"
-	ReadRAMRoute   = "/readram"
+	WriteDiskRoute = glutton.WriteDiskRoute
+	ReadDiskRoute  = glutton.ReadDiskRoute
+	WriteRAMRoute  = glutton.WriteRAMRoute
+	ReadRAMRoute   = glutton.ReadRAMRoute
 )
 
 // Server is an httptest-backed stand-in for a glutton actor holding one file.

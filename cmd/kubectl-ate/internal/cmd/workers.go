@@ -34,6 +34,11 @@ type ActorLister interface {
 	ListActors(ctx context.Context, req *ateapipb.ListActorsRequest, opts ...grpc.CallOption) (*ateapipb.ListActorsResponse, error)
 }
 
+// WorkerGetter abstracts GetWorker RPC calls.
+type WorkerGetter interface {
+	GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
+}
+
 // workersHostingAtespace names the Workers hosting an Actor in atespace. Asked
 // of the Actors, because a Worker listing reports how full each Worker is, not
 // which Actors it holds.

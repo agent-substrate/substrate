@@ -35,6 +35,6 @@ func Execute() error {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.ProjectID, "project-id", getEnv("PROJECT_ID", ""), "GCP Project ID [env: PROJECT_ID]")
-	rootCmd.PersistentFlags().StringVar(&cfg.ProjectNumber, "project-number", getEnv("PROJECT_NUMBER", ""), "GCP Project Number [env: PROJECT_NUMBER]")
+	rootCmd.PersistentFlags().StringVar(&cfg.ProjectNumber, "project-number", getEnv("PROJECT_NUMBER", ""), "GCP Project Number (optional, resolved from --project-id if needed) [env: PROJECT_NUMBER]")
 	rootCmd.PersistentFlags().StringVar(&cfg.Region, "region", getEnv("GCE_REGION", "us-west1"), "GCP Region [env: GCE_REGION]")
 }

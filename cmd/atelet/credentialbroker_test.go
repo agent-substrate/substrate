@@ -24,44 +24,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/protobuf/proto"
 )
-
-type brokerIdentityClient struct {
-	ateapipb.ActorIdentityClient
-	request *ateapipb.MintCertRequest
-}
-
-func (c *brokerIdentityClient) MintCert(_ context.Context, req *ateapipb.MintCertRequest, _ ...grpc.CallOption) (*ateapipb.MintCertResponse, error) {
-	c.request = req
-	return &ateapipb.MintCertResponse{ActorCertificates: [][]byte{{1, 2, 3}}}, nil
-}
-
-func TestCredentialBrokerForwardsAuthenticatedWorkerIdentity(t *testing.T) {
-	identity := &brokerIdentityClient{}
-	broker := &credentialBroker{actorIdentityClient: identity}
-	csr := []byte{4, 5, 6}
-	resp, err := broker.MintActorCertificate(workerContext(t, "worker-uid"), &ateletpb.MintActorCertificateRequest{
-		CertificateSigningRequest: csr,
-		ExpectedActorUid:          "actor-uid",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !proto.Equal(resp, &ateletpb.MintActorCertificateResponse{ActorCertificates: [][]byte{{1, 2, 3}}}) {
-		t.Fatalf("response = %+v", resp)
-	}
-	want := &ateapipb.MintCertRequest{Worker: &ateapipb.ObjectRef{Name: "worker-uid"}, ExpectedActorUid: "actor-uid", CertificateSigningRequest: csr, Purpose: ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL}
-	if !proto.Equal(identity.request, want) {
-		t.Fatalf("MintCert request = %+v, want %+v", identity.request, want)
-	}
-}
 
 func workerContext(t *testing.T, podUID string) context.Context {
 	t.Helper()

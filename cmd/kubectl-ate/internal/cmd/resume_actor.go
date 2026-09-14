@@ -24,7 +24,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var bootFlag bool
 var resumeAtespaceFlag string
 
 var resumeActorCmd = &cobra.Command{
@@ -42,7 +41,6 @@ var resumeActorCmd = &cobra.Command{
 		actorRef := resources.ActorRef{Atespace: resumeAtespaceFlag, Name: args[0]}
 		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
 			Actor: actorRef.ToObjectRef(),
-			Boot:  bootFlag,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resume actor: %w", err)
@@ -53,7 +51,6 @@ var resumeActorCmd = &cobra.Command{
 }
 
 func init() {
-	resumeActorCmd.Flags().BoolVarP(&bootFlag, "boot", "", false, "Skip golden snapshot and boot from scratch.")
 	resumeActorCmd.Flags().StringVarP(&resumeAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = resumeActorCmd.MarkFlagRequired("atespace")
 	resumeCmd.AddCommand(resumeActorCmd)

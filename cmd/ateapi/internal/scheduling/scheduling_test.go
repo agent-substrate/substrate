@@ -652,7 +652,7 @@ func TestSchedule_EligibleWorkersMetric(t *testing.T) {
 		}
 
 		s := New(flt, WithIntn(firstIntn), WithMeter(meter))
-		_, err := s.Schedule(context.Background(), Constraints{SandboxClass: "kata"})
+		_, err := s.Schedule(context.Background(), Constraints{SandboxClass: "microvm"})
 		if !errors.Is(err, ErrNoCapacity) {
 			t.Fatalf("Schedule() error = %v, want ErrNoCapacity", err)
 		}
@@ -670,8 +670,8 @@ func TestSchedule_EligibleWorkersMetric(t *testing.T) {
 						t.Errorf("datapoint sum = %d, want 0", dp.Sum)
 					}
 					class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
-					if class.AsString() != "kata" {
-						t.Errorf("got sandbox class %q, want kata", class.AsString())
+					if class.AsString() != "microvm" {
+						t.Errorf("got sandbox class %q, want microvm", class.AsString())
 					}
 				}
 			}

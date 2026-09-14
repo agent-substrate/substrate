@@ -33,7 +33,6 @@ import (
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 )
 
@@ -43,15 +42,12 @@ const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
 type Impl struct {
 	kc     kubernetes.Interface
 	caPool localca.Pool
-
-	clock clock.PassiveClock
 }
 
-func NewImpl(kc kubernetes.Interface, caPool localca.Pool, clock clock.PassiveClock) *Impl {
+func NewImpl(kc kubernetes.Interface, caPool localca.Pool) *Impl {
 	return &Impl{
 		kc:     kc,
 		caPool: caPool,
-		clock:  clock,
 	}
 }
 
@@ -118,7 +114,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		lifetime = requestedLifetime
 	}
 
-	notBefore := h.clock.Now().Add(-2 * time.Minute)
+	notBefore := time.Now().Add(-2 * time.Minute)
 	notAfter := notBefore.Add(lifetime)
 	beginRefreshAt := notAfter.Add(-30 * time.Minute)
 
@@ -147,7 +143,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		// AuthorityKeyID is automatically set to the SubjectKeyID of the parent
-		// certificate.
+		// certificate, as long as we are not self-signing a root.
 	}
 
 	// Fields are sourced from the PCR spec (attested by kube-apiserver) rather
@@ -188,7 +184,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 			Status:             metav1.ConditionTrue,
 			Reason:             "Reason",
 			Message:            "Issued",
-			LastTransitionTime: metav1.NewTime(h.clock.Now()),
+			LastTransitionTime: metav1.NewTime(time.Now()),
 		},
 	}
 	pcr.Status.CertificateChain = chainPEM.String()

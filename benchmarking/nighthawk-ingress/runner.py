@@ -268,12 +268,10 @@ def main() -> None:
                 log=lambda m: tee(logs, m),
             )
 
-            hosts = [
-                spec_mod.actor_host(n, args.atespace) for n in actor_names
-            ]
             spec_dict = spec_mod.build_spec_dict(
                 uri=f"{args.router_url.rstrip('/')}/ping",
-                hosts=hosts,
+                actor_names=actor_names,
+                atespace=args.atespace,
                 client_concurrency=args.client_concurrency,
                 connections=args.connections,
                 max_pending_requests=args.max_pending,

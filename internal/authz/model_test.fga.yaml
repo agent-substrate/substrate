@@ -1,0 +1,251 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Substrate Authorization Model Tests
+model_file: ./model.fga
+
+tuples:
+  # Cluster Scope
+  - user: user:carol
+    relation: owner
+    object: cluster:root
+  - user: user:frank
+    relation: viewer
+    object: cluster:root
+
+  # Atespace Scope (space-1 linked to cluster:root)
+  - user: cluster:root
+    relation: parent_cluster
+    object: atespace:space-1
+  - user: user:alice
+    relation: owner
+    object: atespace:space-1
+  - user: user:bob
+    relation: editor
+    object: atespace:space-1
+  - user: user:dave
+    relation: viewer
+    object: atespace:space-1
+
+  # Templates
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: actor_template:private-template
+
+  # Physical Topology & Scheduling (Node -> Worker -> Actor)
+  - user: node:node-1
+    relation: host_node
+    object: worker:pod-1
+  - user: node:node-2
+    relation: host_node
+    object: worker:pod-2
+
+  # Actor Instance (actor:runner-1 in atespace:space-1 scheduled on worker:pod-1)
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: actor:runner-1
+  - user: worker:pod-1
+    relation: scheduled_worker
+    object: actor:runner-1
+
+  # Machine identities & ingress permissions
+  - user: user:sa-router
+    relation: can_resume
+    object: actor:runner-1
+  - user: user:sa-runner-1
+    relation: can_suspend
+    object: actor:runner-1
+
+tests:
+  - name: 1. Cluster Superadmin & Viewer Propagation
+    check:
+      # Cluster Owner (Carol)
+      - user: user:carol
+        object: cluster:root
+        assertions:
+          owner: true
+          viewer: true
+          can_create_atespace: true
+          can_get: true
+      - user: user:carol
+        object: atespace:space-1
+        assertions:
+          owner: true
+          editor: true
+          viewer: true
+          can_set_policy: true
+          can_get_policy: true
+          can_create_actor: true
+          can_create_actor_template: true
+          can_get: true
+          can_update: true
+          can_delete: true
+
+      # Cluster Viewer (Frank)
+      - user: user:frank
+        object: cluster:root
+        assertions:
+          owner: false
+          viewer: true
+          can_create_atespace: false
+          can_get: true
+      - user: user:frank
+        object: atespace:space-1
+        assertions:
+          owner: false
+          editor: false
+          viewer: true
+          can_set_policy: false
+          can_get_policy: true
+          can_create_actor: false
+          can_create_actor_template: false
+          can_get: true
+          can_update: false
+          can_delete: false
+
+  - name: 2. Atespace 3-Tier Roles & Governance Isolation
+    check:
+      - user: user:alice # Owner
+        object: atespace:space-1
+        assertions:
+          owner: true
+          editor: true
+          viewer: true
+          can_set_policy: true
+          can_get_policy: true
+          can_create_actor: true
+          can_create_actor_template: true
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:bob # Editor
+        object: atespace:space-1
+        assertions:
+          owner: false
+          editor: true
+          viewer: true
+          can_set_policy: false
+          can_get_policy: true
+          can_create_actor: true
+          can_create_actor_template: true
+          can_get: true
+          can_update: true
+          can_delete: false
+      - user: user:dave # Viewer
+        object: atespace:space-1
+        assertions:
+          owner: false
+          editor: false
+          viewer: true
+          can_set_policy: false
+          can_get_policy: true
+          can_create_actor: false
+          can_create_actor_template: false
+          can_get: true
+          can_update: false
+          can_delete: false
+      - user: user:eve # External / Unauthenticated
+        object: atespace:space-1
+        assertions:
+          owner: false
+          editor: false
+          viewer: false
+          can_get: false
+
+  - name: 3. Actor Template Operations (Inherited from Atespace)
+    check:
+      - user: user:alice # Owner can get, update, delete private template
+        object: actor_template:private-template
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:bob # Editor can get, update, delete private template
+        object: actor_template:private-template
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:dave # Viewer can get, but NOT update or delete
+        object: actor_template:private-template
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+      - user: user:frank # Cluster viewer can get template via parent cluster
+        object: actor_template:private-template
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+      - user: user:eve # External cannot access private template
+        object: actor_template:private-template
+        assertions:
+          can_get: false
+          can_update: false
+          can_delete: false
+
+  - name: 4. Actor Instance Operations (Inherited from Atespace)
+    check:
+      - user: user:alice # Owner
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+          can_resume: true
+          can_suspend: true
+      - user: user:bob # Editor
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+          can_resume: true
+          can_suspend: true
+      - user: user:dave # Viewer
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+          can_resume: false
+          can_suspend: false
+      - user: user:frank # Cluster Viewer
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+          can_resume: false
+          can_suspend: false
+      - user: user:sa-router # Ingress router proxy
+        object: actor:runner-1
+        assertions:
+          can_resume: true
+      - user: user:sa-runner-1 # Workload identity can suspend
+        object: actor:runner-1
+        assertions:
+          can_suspend: true
+
+  - name: 5. Node Restriction (can_mint_ateom_actor_credential)
+    check:
+      - user: node:node-1 # Active host node
+        object: actor:runner-1
+        assertions:
+          can_mint_ateom_actor_credential: true
+      - user: node:node-2 # Other node
+        object: actor:runner-1
+        assertions:
+          can_mint_ateom_actor_credential: false

@@ -35,6 +35,9 @@
 // snapshots (see the SystemInfo semantics in docs/api-guide.md). Regeneration
 // is safe under find-paths migration because atelet rewrites the files at
 // their stable share-relative paths before the share's virtiofsd starts.
+// Trust bundles are also rewritten live at those same paths while virtiofsd
+// serves the share; a stale guest reference to the replaced inode degrades
+// to EIO (--migration-on-error=guest-error) rather than failing a restore.
 
 package main
 

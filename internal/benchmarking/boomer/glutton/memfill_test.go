@@ -28,9 +28,8 @@ func newTestGluttonUser(t *testing.T, srv *fake.Server, dyn dynconfig.Config) *g
 	t.Helper()
 	cfg := newTestConfig(t, srv, &userclass.Config{Dyn: dynconfig.NewHolder(dyn)})
 	return &gluttonUser{
-		cfg:        cfg,
-		actorName:  "memactor",
-		hostHeader: "memactor.benchmark." + actorDomain,
+		cfg:       cfg,
+		actorName: "memactor",
 	}
 }
 

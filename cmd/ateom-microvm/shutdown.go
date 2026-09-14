@@ -34,18 +34,22 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 )
 
+// workloadGracePeriod is the whole budget for draining the worker on shutdown:
+// waiting for an in-flight RPC to release the lock and letting the guest
+// workloads handle SIGTERM both draw on it, and ateom escalates to SIGKILL once
+// it is gone. Matches ateom-gvisor, and is deliberately shorter than the pod's
+// own termination grace period — 3600s, set by
+// workerTerminationGracePeriodSeconds in cmd/atecontroller — so the escalation
+// happens here rather than as a kubelet SIGKILL of ateom itself.
+const workloadGracePeriod = 30 * time.Minute
+
+// workloadKillTimeout bounds the post-SIGKILL wait. The VM teardown that
+// follows is what ultimately guarantees the workload is gone, so a wedged
+// kata-agent must not hold shutdown open past this.
+// A var so tests can shorten it.
+var workloadKillTimeout = 5 * time.Second
+
 const (
-	// workloadGracePeriod is how long a guest workload gets to handle SIGTERM and
-	// exit on its own before ateom escalates to SIGKILL. Matches ateom-gvisor, and
-	// is deliberately shorter than the pod's own termination grace period so the
-	// escalation happens here rather than as a kubelet SIGKILL of ateom itself.
-	workloadGracePeriod = 1 * time.Minute
-
-	// workloadKillTimeout bounds the post-SIGKILL wait. The VM teardown that
-	// follows is what ultimately guarantees the workload is gone, so a wedged
-	// kata-agent must not hold shutdown open past this.
-	workloadKillTimeout = 5 * time.Second
-
 	// signalDeliveryTimeout bounds one SignalProcess round-trip. Delivering a signal
 	// is a local ttrpc call that returns in microseconds; if it has not come back by
 	// now the agent is not answering, and waiting longer will not change that.
@@ -72,12 +76,17 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	// SIGTERM the guest it just produced is strictly worse than aborting it.
 	s.cancelActiveRestoreOrRunRPC()
 
+	// One deadline covers the whole drain. Waiting for the lock and waiting out
+	// SIGTERM below both run against it, so the two phases split a single grace
+	// period rather than each getting one: an RPC that burns most of the budget
+	// leaves the workloads only the remainder, and the total stays bounded by
+	// workloadGracePeriod however the time falls between them.
+	deadline := time.Now().Add(workloadGracePeriod)
+
 	// Wait for whatever still holds lock — a suspend, a resume — to finish, but
-	// only for the grace period. In the worst case that RPC burns nearly all of it
-	// and then fails, and the stop below spends another grace period on top; that
-	// is bounded well inside the pod's own termination grace period, and is the
-	// price of not truncating an RPC that may be saving the actor's state.
-	lockCtx, lockCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	// not past the deadline. Letting it run that long is the price of not
+	// truncating an RPC that may be saving the actor's state.
+	lockCtx, lockCancel := context.WithDeadline(ctx, deadline)
 	defer lockCancel()
 	if !s.lock.LockContext(lockCtx) {
 		slog.ErrorContext(ctx, "Failed to acquire lock during graceful shutdown; another RPC is still running")
@@ -105,9 +114,20 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		return
 	}
 
+	// Drain the actors concurrently, for the same reason their workloads are
+	// drained concurrently below: they share one deadline, so in series the first
+	// actor's wait would come out of every later one's allowance and the last
+	// would be SIGKILLed with no grace at all.
+	var wg sync.WaitGroup
 	for _, t := range targets {
-		gracefullyStopActor(ctx, t)
+		wg.Add(1)
+		go func(t drainTarget) {
+			defer wg.Done()
+			gracefullyStopActor(ctx, t, deadline)
+		}(t)
 	}
+	wg.Wait()
+
 	slog.InfoContext(ctx, "Shutting down")
 }
 
@@ -127,9 +147,18 @@ type drainTarget struct {
 	workloadIDs []string
 }
 
+// guestAgent is the slice of *kata.AgentClient the drain needs: signal a guest
+// process and wait for it to exit. Narrowed to an interface so
+// stopGuestWorkload's SIGTERM-then-SIGKILL escalation can be exercised without a
+// running VM.
+type guestAgent interface {
+	SignalProcess(ctx context.Context, containerID, execID string, signal uint32) error
+	WaitProcess(ctx context.Context, containerID, execID string) (int32, error)
+}
+
 // gracefullyStopActor signals the actor's guest workloads with SIGTERM and waits
-// out the grace period, escalating to SIGKILL.
-func gracefullyStopActor(ctx context.Context, t drainTarget) {
+// until deadline, escalating to SIGKILL.
+func gracefullyStopActor(ctx context.Context, t drainTarget, deadline time.Time) {
 	id := t.id
 
 	// Obtain a kata-agent client to signal the guest: reuse the log-forwarding
@@ -148,15 +177,15 @@ func gracefullyStopActor(ctx context.Context, t drainTarget) {
 		agent, dialed = a, a
 	}
 
-	// Stop the workloads concurrently. Each one is entitled to the full grace
-	// period, so stopping them in series would multiply it by the container
-	// count and overrun the pod's own termination grace period.
+	// Stop the workloads concurrently. They share one deadline, so stopping them
+	// in series would spend the first workload's wait out of every later one's
+	// allowance and leave the last with none.
 	var wg sync.WaitGroup
 	for _, wid := range t.workloadIDs {
 		wg.Add(1)
 		go func(wid string) {
 			defer wg.Done()
-			if err := stopGuestWorkload(ctx, agent, id, wid); err != nil {
+			if err := stopGuestWorkload(ctx, agent, id, wid, deadline); err != nil {
 				slog.WarnContext(ctx, "Failed to stop guest workload during shutdown", slog.String("id", id), slog.String("workload", wid), slog.Any("err", err))
 			}
 		}(wid)
@@ -167,9 +196,11 @@ func gracefullyStopActor(ctx context.Context, t drainTarget) {
 	}
 }
 
-// stopGuestWorkload stops one guest workload, wait out workloadGracePeriod, then
-// escalate to SIGKILL and wait a bounded time for the kill to land.
-func stopGuestWorkload(ctx context.Context, agent *kata.AgentClient, id, wid string) error {
+// stopGuestWorkload stops one guest workload, waits until deadline, then
+// escalates to SIGKILL and waits a bounded time for the kill to land. deadline is
+// the shared drain deadline, so a caller that has already spent most of the grace
+// period elsewhere leaves the workload only what is left of it.
+func stopGuestWorkload(ctx context.Context, agent guestAgent, id, wid string, deadline time.Time) error {
 	// Propagate SIGTERM so the actor can save state and close connections.
 	// An actor that installed no handler terminates immediately.
 	slog.InfoContext(ctx, "Sending SIGTERM to guest workload", slog.String("id", id), slog.String("workload", wid))
@@ -190,7 +221,7 @@ func stopGuestWorkload(ctx context.Context, agent *kata.AgentClient, id, wid str
 		done <- err
 	}()
 
-	termCtx, termCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	termCtx, termCancel := context.WithDeadline(ctx, deadline)
 	defer termCancel()
 	err := waitWorkloadStop(termCtx, done)
 	if err == nil {
@@ -216,7 +247,9 @@ func stopGuestWorkload(ctx context.Context, agent *kata.AgentClient, id, wid str
 		return ctx.Err()
 	}
 
-	slog.WarnContext(ctx, "Grace period expired; killing guest workload", slog.String("id", id), slog.String("workload", wid), slog.Duration("grace", workloadGracePeriod))
+	// The deadline, not the configured grace period: the lock wait may have eaten
+	// part of the budget before the workload ever saw SIGTERM.
+	slog.WarnContext(ctx, "Grace period expired; killing guest workload", slog.String("id", id), slog.String("workload", wid), slog.Time("deadline", deadline))
 	if err := signalWorkload(ctx, agent, wid, syscall.SIGKILL); err != nil {
 		slog.WarnContext(ctx, "Failed to SIGKILL guest workload (it might have already exited)", slog.String("id", id), slog.String("workload", wid), slog.Any("err", err))
 	}
@@ -244,7 +277,7 @@ func stopGuestWorkload(ctx context.Context, agent *kata.AgentClient, id, wid str
 // land mid-drain — leaves the unix socket to CH perfectly healthy while the agent
 // never answers, and an unbounded call there would hang until the kubelet's
 // SIGKILL at the end of the pod's termination grace period.
-func signalWorkload(ctx context.Context, agent *kata.AgentClient, wid string, sig syscall.Signal) error {
+func signalWorkload(ctx context.Context, agent guestAgent, wid string, sig syscall.Signal) error {
 	sigCtx, cancel := context.WithTimeout(ctx, signalDeliveryTimeout)
 	defer cancel()
 	return agent.SignalProcess(sigCtx, wid, wid, uint32(sig))

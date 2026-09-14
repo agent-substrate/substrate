@@ -141,9 +141,10 @@ func TestLocalSnapshotGC(t *testing.T) {
 	// content-addressed asset fetch without a gVisor release tarball.
 	runsc := []byte("runsc binary")
 	s := &AteomHerder{
-		ateomDialer:   newAteomDialer(1),
-		imageCache:    newImageVolumeStore(t),
-		anonGCSClient: fakeObjectStorage{data: runsc},
+		ateomDialer:       newAteomDialer(1),
+		imageCache:        newImageVolumeStore(t),
+		anonGCSClient:     fakeObjectStorage{data: runsc},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",

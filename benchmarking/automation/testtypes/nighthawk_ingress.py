@@ -102,7 +102,7 @@ def validate(test: dict[str, Any]) -> None:
     if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", nh["atespace"]):
         raise ValueError(
             f"nighthawk-ingress test {name!r} atespace {nh['atespace']!r} "
-            f"must be a DNS label (it is routed as a Host-header subdomain)"
+            f"must be a DNS label"
         )
 
 

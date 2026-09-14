@@ -98,7 +98,7 @@ func (o snapshotOp) attrs() []attribute.KeyValue {
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(o.kind))
 	}
 	if o.sandboxClass != "" {
-		attrs = append(attrs, ateattr.SandboxClassKey.String(ateattr.NormalizeSandboxClass(o.sandboxClass)))
+		attrs = append(attrs, ateattr.SandboxClassAttribute(o.sandboxClass))
 	}
 	return attrs
 }

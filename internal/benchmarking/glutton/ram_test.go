@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package glutton
 
 import (
 	"bytes"
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/glutton"
+	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-func newRAMTestService(t *testing.T) *gluttonService {
+func newRAMTestService(t *testing.T) *Service {
 	t.Helper()
-	svc, err := newGluttonService(t.TempDir())
+	svc, err := New(t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create glutton service: %v", err)
 	}
@@ -34,20 +34,20 @@ func newRAMTestService(t *testing.T) *gluttonService {
 	return svc
 }
 
-func fillRAM(t *testing.T, svc *gluttonService, key, size string) {
+func fillRAM(t *testing.T, svc *Service, key, size string) {
 	t.Helper()
-	_, err := svc.WriteRAM(context.Background(), &glutton.WriteRAMRequest{
-		Key: key, Size: size, WriteMode: glutton.WriteMode_WRITE_MODE_TRUNCATE,
+	_, err := svc.WriteRAM(context.Background(), &gluttonpb.WriteRAMRequest{
+		Key: key, Size: size, WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
 	})
 	if err != nil {
 		t.Fatalf("WriteRAM truncate %s (%s): %v", key, size, err)
 	}
 }
 
-func rotateRAM(t *testing.T, svc *gluttonService, key, size string) {
+func rotateRAM(t *testing.T, svc *Service, key, size string) {
 	t.Helper()
-	_, err := svc.WriteRAM(context.Background(), &glutton.WriteRAMRequest{
-		Key: key, Size: size, WriteMode: glutton.WriteMode_WRITE_MODE_OVERWRITE_ROTATE,
+	_, err := svc.WriteRAM(context.Background(), &gluttonpb.WriteRAMRequest{
+		Key: key, Size: size, WriteMode: gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE,
 	})
 	if err != nil {
 		t.Fatalf("WriteRAM rotate %s (%s): %v", key, size, err)
@@ -55,7 +55,7 @@ func rotateRAM(t *testing.T, svc *gluttonService, key, size string) {
 }
 
 // ramCopy snapshots the current bytes of a RAM array for change comparison.
-func ramCopy(svc *gluttonService, key string) []byte {
+func ramCopy(svc *Service, key string) []byte {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 	return append([]byte(nil), svc.ram[key]...)
@@ -66,7 +66,7 @@ func TestReadRAMWalksArray(t *testing.T) {
 	ctx := context.Background()
 	fillRAM(t, svc, "m", "64Ki")
 
-	whole, err := svc.ReadRAM(ctx, &glutton.ReadRAMRequest{Key: "m"})
+	whole, err := svc.ReadRAM(ctx, &gluttonpb.ReadRAMRequest{Key: "m"})
 	if err != nil {
 		t.Fatalf("ReadRAM whole: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestReadRAMWalksArray(t *testing.T) {
 		t.Errorf("whole walk size = %d, want %d", whole.GetSize(), 64<<10)
 	}
 
-	again, err := svc.ReadRAM(ctx, &glutton.ReadRAMRequest{Key: "m"})
+	again, err := svc.ReadRAM(ctx, &gluttonpb.ReadRAMRequest{Key: "m"})
 	if err != nil {
 		t.Fatalf("ReadRAM repeat: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestReadRAMWalksArray(t *testing.T) {
 		t.Errorf("repeat checksum = %d, want %d (walk must be deterministic)", again.GetChecksum(), whole.GetChecksum())
 	}
 
-	partial, err := svc.ReadRAM(ctx, &glutton.ReadRAMRequest{Key: "m", Size: "4Ki"})
+	partial, err := svc.ReadRAM(ctx, &gluttonpb.ReadRAMRequest{Key: "m", Size: "4Ki"})
 	if err != nil {
 		t.Fatalf("ReadRAM partial: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestReadRAMWalksArray(t *testing.T) {
 		t.Errorf("partial walk size = %d, want %d", partial.GetSize(), 4<<10)
 	}
 
-	clamped, err := svc.ReadRAM(ctx, &glutton.ReadRAMRequest{Key: "m", Size: "1Gi"})
+	clamped, err := svc.ReadRAM(ctx, &gluttonpb.ReadRAMRequest{Key: "m", Size: "1Gi"})
 	if err != nil {
 		t.Fatalf("ReadRAM oversized: %v", err)
 	}
@@ -106,13 +106,13 @@ func TestReadRAMErrors(t *testing.T) {
 
 	tests := []struct {
 		name string
-		req  *glutton.ReadRAMRequest
+		req  *gluttonpb.ReadRAMRequest
 		code codes.Code
 	}{
-		{name: "empty key", req: &glutton.ReadRAMRequest{}, code: codes.InvalidArgument},
-		{name: "missing key", req: &glutton.ReadRAMRequest{Key: "nope"}, code: codes.NotFound},
-		{name: "bad size", req: &glutton.ReadRAMRequest{Key: "m", Size: "lots"}, code: codes.InvalidArgument},
-		{name: "negative size", req: &glutton.ReadRAMRequest{Key: "m", Size: "-1"}, code: codes.InvalidArgument},
+		{name: "empty key", req: &gluttonpb.ReadRAMRequest{}, code: codes.InvalidArgument},
+		{name: "missing key", req: &gluttonpb.ReadRAMRequest{Key: "nope"}, code: codes.NotFound},
+		{name: "bad size", req: &gluttonpb.ReadRAMRequest{Key: "m", Size: "lots"}, code: codes.InvalidArgument},
+		{name: "negative size", req: &gluttonpb.ReadRAMRequest{Key: "m", Size: "-1"}, code: codes.InvalidArgument},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -191,8 +191,8 @@ func TestWriteRAMRotateClampsAndKeepsRotating(t *testing.T) {
 
 func TestWriteRAMRotateNeedsExistingArray(t *testing.T) {
 	svc := newRAMTestService(t)
-	_, err := svc.WriteRAM(context.Background(), &glutton.WriteRAMRequest{
-		Key: "nope", Size: "4Ki", WriteMode: glutton.WriteMode_WRITE_MODE_OVERWRITE_ROTATE,
+	_, err := svc.WriteRAM(context.Background(), &gluttonpb.WriteRAMRequest{
+		Key: "nope", Size: "4Ki", WriteMode: gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE,
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("rotate on missing array = %v, want NotFound", err)

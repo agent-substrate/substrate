@@ -75,7 +75,6 @@ func (e *Env) DeleteAtenet(ctx context.Context) error {
 		// other does not.
 		{"atenet-egress.yaml"},
 		{"atenet-egress-with-sdsmint.yaml"},
-		{"atenet-dns.yaml"},
 	} {
 		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest(path...)); err != nil {
 			return err

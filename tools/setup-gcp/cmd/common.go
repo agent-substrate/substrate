@@ -35,6 +35,8 @@ type Config struct {
 	NodePoolName    string
 	NodePoolVersion string
 	MachineType     string
+	BootDiskSizeGB  int32
+	BootDiskType    string
 
 	BucketName string
 
@@ -48,7 +50,7 @@ type Config struct {
 }
 
 type getEnvType interface {
-	string | bool | int64
+	string | bool | int64 | int32
 }
 
 // getEnv retrieves an environment variable by key and parses it into the specified type.
@@ -69,6 +71,10 @@ func getEnv[T getEnvType](key string, fallback T) T {
 		ret, err = strconv.ParseBool(val)
 	case int64:
 		ret, err = strconv.ParseInt(val, 10, 64)
+	case int32:
+		var v int64
+		v, err = strconv.ParseInt(val, 10, 32)
+		ret = int32(v)
 	}
 
 	if err == nil {

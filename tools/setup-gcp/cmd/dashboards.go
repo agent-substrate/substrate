@@ -16,7 +16,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -105,10 +104,11 @@ var dashboardsCmd = &cobra.Command{
 	Use:   "dashboards",
 	Short: "Create Cloud Monitoring dashboards",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cfg.ProjectID == "" {
-			return errors.New("--project-id is required")
+		ctx := cmd.Context()
+		if err := resolveProjectID(ctx, &cfg); err != nil {
+			return err
 		}
-		return createMonitoringDashboards(cmd.Context(), &cfg)
+		return createMonitoringDashboards(ctx, &cfg)
 	},
 }
 

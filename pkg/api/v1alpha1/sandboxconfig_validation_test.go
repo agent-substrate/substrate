@@ -202,7 +202,7 @@ func TestSandboxConfigValidation(t *testing.T) {
 		name:    "unpinned pauseImage",
 		sc:      withPauseImage(sandboxConfig("bad-unpinned-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), "registry.k8s.io/pause:3.10.2"),
 		wantErr: true,
-		errMsg:  "All images must be pinned",
+		errMsg:  "All images must include a digest",
 	}}
 
 	for _, tt := range tests {

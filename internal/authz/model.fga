@@ -1,0 +1,94 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+model
+  schema 1.1
+# Naming Conventions:
+# - Roles and graph edges are nouns (e.g. owner, editor, viewer, parent_cluster, host_node).
+# - Permission checks evaluated at runtime must start with the 'can_' prefix
+#   (e.g. can_get, can_set_policy, can_create_actor).
+
+# Unified Principal Identity (human users, machine service accounts, SPIFFE workload identities)
+type user
+
+# Physical host node running atelet
+type node
+
+# Worker pod running ateom
+type worker
+  relations
+    define host_node: [node]
+
+# Global Cluster Scope (singleton: there will only ever be one instance, e.g. 'cluster:root')
+type cluster
+  relations
+    define owner: [user]
+    define viewer: [user] or owner
+
+    define can_create_atespace: owner
+    define can_get: viewer
+
+type atespace
+  relations
+    define parent_cluster: [cluster]
+
+    # --- 1. Aligned 3-Tier Roles ---
+    # Cluster owner automatically inherits owner without explicit per-atespace tuples
+    define owner: [user] or owner from parent_cluster
+    define editor: [user] or owner
+    define viewer: [user] or editor or viewer from parent_cluster
+
+    # --- 2. Policy Governance (SetPolicy / GetPolicy) ---
+    define can_set_policy: owner
+    define can_get_policy: viewer
+
+    # --- 3. Atespace Lifecycle & Container Operations ---
+    define can_create_actor: editor
+    define can_create_actor_template: editor
+    define can_get: viewer
+    define can_update: editor
+    define can_delete: owner
+
+type actor_template
+  relations
+    define parent_atespace: [atespace]
+
+    # Policy stops at atespace: No direct per-user template bindings
+    define can_get: viewer from parent_atespace
+    define can_update: editor from parent_atespace
+    define can_delete: editor from parent_atespace
+
+type actor
+  relations
+    define parent_atespace: [atespace]
+
+    # --- Dynamic Infrastructure Scheduling Graph ---
+    define scheduled_worker: [worker]
+    define host_node: host_node from scheduled_worker
+
+    # --- User-Facing Operations (Inherited from Atespace) ---
+    define can_get: viewer from parent_atespace
+    define can_update: editor from parent_atespace
+    define can_delete: editor from parent_atespace
+
+    # --- Hardened System & Infrastructure Operations ---
+
+    # Node Restriction: Only the node hosting the scheduled worker can mint ateom actor credentials
+    define can_mint_ateom_actor_credential: host_node
+
+    # Data Plane Ingress: Routers (or editors) can resume
+    define can_resume: [user] or editor from parent_atespace
+
+    # Lifecycle Operations
+    define can_suspend: [user] or editor from parent_atespace

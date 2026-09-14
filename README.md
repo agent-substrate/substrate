@@ -7,7 +7,7 @@ eligible for the [Google Open Source Software Vulnerability Rewards Program](htt
 
 ## What is Agent Substrate?
 
-Agent Substrate delivers a performant, high density runtime environment for large scale agent deployments. The agent substrate control plane provides full lifecycle management for agent sandboxes, delivering sub-second agent resume/suspend operations, and allows heavy multiplexing of agents onto the same computer infrastructure. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
+Agent Substrate is a secure-by-default agent execution runtime engineered to run millions of sandboxes with 10x higher density than standard container runtimes. Purpose-built for the era of autonomous agents, Substrate delivers sub-500ms resume operations at over 500 suspend/resume activations per second with native zero-trust kernel and network isolation. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
 
 At its core, Agent Substrate maps a larger set of “actors” (applications such as agents) onto a smaller set of ready “workers”, relying on the fact that agent-like applications tend to be idle most of the time to achieve heavy multiplexing.  It provides functionality to manage an actor’s lifecycle (e.g. create/destroy, suspend/resume), to assign actors to workers in real time, and to route incoming traffic to them.
 
@@ -113,7 +113,9 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST -H "Host: my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev" -i http://localhost:8000/
+curl -X POST \
+   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
+   -i http://localhost:8000/
 ```
 
 Worker capacity is versioned: the dataplane (the atelet DaemonSet and the
@@ -238,7 +240,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/ateapi`: The core control plane API server exposing gRPC endpoints to manage actor and worker lifecycles.
 * `cmd/atelet`: A node-level DaemonSet that supervises physical worker pods, coordinates snapshotting, and manages state transfers.
 * `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool custom resources.
-* `cmd/atenet`: A combined networking controller providing DNS, Envoy routing, and proxy sidecars.
+* `cmd/atenet`: A combined networking controller providing Envoy routing and proxy sidecars.
 * `cmd/ateom-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
 * `cmd/ateom-microvm`: The micro-VM peer of `ateom-gvisor`, running actors as cloud-hypervisor VMs.
 * `cmd/podcertcontroller`: A "polyfill" that provides Pod Certificate signers that
