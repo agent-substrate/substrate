@@ -62,8 +62,7 @@ patches:
               routes:
               # TODO: Restore substrateEgress when egress policies are created by
               # the e2e fixtures and demos: https://github.com/agent-substrate/substrate/issues/1324
-              -
-                backends:
+              - backends:
                 - dynamic: {}
                   policies:
                     backendTLS: {}
@@ -71,8 +70,7 @@ patches:
               routes:
               # TODO: Restore substrateEgress when egress policies are created by
               # the e2e fixtures and demos: https://github.com/agent-substrate/substrate/issues/1324
-              -
-                backends:
+              - backends:
                 - dynamic:
                     target: source.connectHeaders["host"]
             - protocol: TCP
