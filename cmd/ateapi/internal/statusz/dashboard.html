@@ -52,6 +52,7 @@
       border-bottom: 1px solid var(--border);
     }
     .brand { display: flex; align-items: center; gap: .75rem; }
+    .header-actions { display: flex; align-items: center; gap: 1rem; }
     .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--good); box-shadow: 0 0 10px var(--good); }
     .dot.not-ready { background: var(--bad); box-shadow: 0 0 10px var(--bad); }
     h1 { margin: 0; font-size: 1.75rem; letter-spacing: -.025em; }
@@ -79,6 +80,7 @@
     @media (max-width: 700px) {
       body { padding: 1rem; }
       header { align-items: flex-start; flex-direction: column; }
+      .header-actions { width: 100%; justify-content: space-between; }
       .grid { grid-template-columns: minmax(0, 1fr); }
       .wide { grid-column: auto; }
       .item { align-items: flex-start; flex-direction: column; gap: .15rem; }
@@ -97,7 +99,15 @@
       <span class="dot {{if not .Readiness.Ready}}not-ready{{end}}"></span>
       <h1>ateapi Status</h1>
     </div>
-    <span class="badge {{if .Readiness.Ready}}ready{{else}}not-ready{{end}}">{{.Readiness.State}}</span>
+    <div class="header-actions">
+      <select id="refresh-interval" onchange="setRefresh()" class="badge" aria-label="Refresh interval">
+        <option value="0">Manual Refresh</option>
+        <option value="5">Refresh: 5s</option>
+        <option value="10" selected>Refresh: 10s</option>
+        <option value="30">Refresh: 30s</option>
+      </select>
+      <span class="badge {{if .Readiness.Ready}}ready{{else}}not-ready{{end}}">{{.Readiness.State}}</span>
+    </div>
   </header>
 
   <div class="grid">
@@ -120,16 +130,6 @@
         <div class="item"><dt>Status</dt><dd>{{.Configuration.Listeners.Status}}</dd></div>
         <div class="item"><dt>Drain delay</dt><dd>{{.Configuration.Drain.Delay}}</dd></div>
         <div class="item"><dt>Drain timeout</dt><dd>{{.Configuration.Drain.Timeout}}</dd></div>
-      </dl>
-    </section>
-
-    <section class="card wide">
-      <h2>Diagnostic sample</h2>
-      <p class="note">Known workers, PostgreSQL pool occupancy, and recent failed Control RPCs share one cached sample. Readiness, process uptime, and configuration are evaluated for this request.</p>
-      <dl>
-        <div class="item"><dt>Sample completed</dt><dd>{{.DiagnosticSample.SampledAt}}</dd></div>
-        <div class="item"><dt>Cache age</dt><dd>{{.DiagnosticSample.Age}}</dd></div>
-        <div class="item"><dt>Refresh in progress</dt><dd>{{if .DiagnosticSample.RefreshInProgress}}Yes{{else}}No{{end}}</dd></div>
       </dl>
     </section>
 
@@ -209,5 +209,18 @@
     </section>
   </div>
 </main>
+<script>
+  var refreshTimer;
+  function setRefresh() {
+    clearTimeout(refreshTimer);
+    var val = parseInt(document.getElementById("refresh-interval").value);
+    if (val > 0) {
+      refreshTimer = setTimeout(function() {
+        window.location.reload();
+      }, val * 1000);
+    }
+  }
+  setRefresh();
+</script>
 </body>
 </html>
