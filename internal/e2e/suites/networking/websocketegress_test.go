@@ -57,8 +57,6 @@ func assertWebSocketExchange(t *testing.T, got egressWebSocketResponse, want []s
 	if got.TLS != wantTLS {
 		t.Errorf("WebSocket TLS = %t, want %t", got.TLS, wantTLS)
 	}
-	// Check reply count before indexing; each reply must be a text message
-	// (websocket.TextMessage) with the matching input, in order.
 	if len(got.Messages) != len(want) {
 		t.Fatalf("WebSocket messages = %+v, want %d replies", got.Messages, len(want))
 	}

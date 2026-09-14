@@ -20,10 +20,8 @@ import (
 	"net/http"
 )
 
-// configureTLSServer loads the configured origin credentials and limits TLS
-// negotiation to HTTP/1.1. Loading the pair before serving makes bad mounted
-// credentials a startup error instead of a listener that fails on its first
-// request.
+// configureTLSServer loads the origin certificate and key and offers only
+// HTTP/1.1 over TLS. Invalid credentials fail setup before the listener starts.
 func configureTLSServer(server *http.Server, certFile, keyFile string) error {
 	if certFile == "" && keyFile == "" {
 		return nil
