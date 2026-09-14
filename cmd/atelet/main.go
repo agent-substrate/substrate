@@ -32,6 +32,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/filecache"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/actorlog"
@@ -233,6 +234,14 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
+	if err := validateSnapshotCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot cache flags", err)
+	}
+	snapshotCache, err := openSnapshotCache(ctx, *snapshotCacheDir, *snapshotCacheMinAge)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to open snapshot cache", err)
+	}
+
 	wrappedAnonGCS, err := objectstorage.NewGCSClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
@@ -313,6 +322,7 @@ func main() {
 		wrappedAnonGCS,
 		wrappedGCS,
 		imageCache,
+		snapshotCache,
 		instruments,
 		volPlugins,
 		csiDriverConfigGetter,
@@ -460,8 +470,12 @@ func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverCo
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer           *AteomDialer
-	imageCache            *imagecache.Store
+	ateomDialer *AteomDialer
+	imageCache  *imagecache.Store
+	// snapshotCache dedupes and retains shared snapshot files across
+	// restores. nil means caching is disabled (--snapshot-cache-dir=""):
+	// every restore downloads its snapshot files directly.
+	snapshotCache         *filecache.Store
 	anonGCSClient         objectstorage.ObjectStorage
 	gcsClient             objectstorage.ObjectStorage
 	instruments           *Instruments
@@ -480,6 +494,7 @@ func NewService(
 	anonGCSClient objectstorage.ObjectStorage,
 	gcsClient objectstorage.ObjectStorage,
 	imageCache *imagecache.Store,
+	snapshotCache *filecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigGetter csi.CSIDriverConfigGetter,
@@ -488,6 +503,7 @@ func NewService(
 	wms := &AteomHerder{
 		ateomDialer:           ateomDialer,
 		imageCache:            imageCache,
+		snapshotCache:         snapshotCache,
 		anonGCSClient:         anonGCSClient,
 		gcsClient:             gcsClient,
 		instruments:           instruments,
