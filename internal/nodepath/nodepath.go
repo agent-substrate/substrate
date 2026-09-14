@@ -18,11 +18,29 @@
 // stages runtime binaries.
 package nodepath
 
-import "path/filepath"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 // BasePath is the root shared folder on the host filesystem, mounted at the
 // same path into the atelet and ateom containers.
 const BasePath = "/var/lib/ateom-gvisor"
+
+// UnderBasePath reports whether dir resolves to a directory strictly under
+// BasePath (BasePath itself does not count). A relative dir resolves against
+// the process working directory. Callers use it to detect a cache directory
+// configured off the shared mount, where consequences are theirs to judge:
+// the image cache's GC watermarks then measure a different volume than actor
+// state, and the snapshot cache cannot hard-link hits into restore dirs.
+func UnderBasePath(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = filepath.Clean(dir)
+	}
+	return strings.HasPrefix(abs, BasePath+string(os.PathSeparator))
+}
 
 // ActorsDir is the parent of the per-actor directories atelet prepares.
 var ActorsDir = filepath.Join(BasePath, "actors")
