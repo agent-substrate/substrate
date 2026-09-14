@@ -76,8 +76,8 @@ One Kubernetes Job per `type: nighthawk-ingress` tests.yaml entry, driven by
 
 1. **Pin the router.** The orchestrator patches the `atenet-router`
    Deployment. Envoy tests give both Envoy and its ext_proc sidecar
-   `envoyCpu` and set Envoy `--concurrency`; AgentGateway tests give its
-   single proxy container `agentgatewayCpu`. Waits for rollout; every test
+   `proxyCpu` and set Envoy `--concurrency`; AgentGateway tests give its
+   single proxy container `proxyCpu`. Waits for rollout; every test
    tears substrate down afterwards, so nothing leaks.
 2. **Create + warm actors.** The runner creates one glutton actor per
    WorkerPool worker (the entry's `workerCount`) via ateapi and POSTs
@@ -85,7 +85,7 @@ One Kubernetes Job per `type: nighthawk-ingress` tests.yaml entry, driven by
    answers 200.
 3. **Adaptive search.** Open-loop traffic with the actor routing header rotated
    across all actors; `clientConcurrency` event loops (default 16,
-   decoupled from `envoyCpu`) and large per-loop pools so the harness is
+   decoupled from `proxyCpu`) and large per-loop pools so the harness is
    never the bottleneck. Exponential ramp → binary search → a 60s
    **testing stage** at the converged rate.
 4. **Upload results** (see below). The Job exits 0 only if the session
@@ -105,7 +105,7 @@ runs (`--tests`), e.g.:
   duration: 30m          # job-wait budget only
   workerCount: 50        # also the actor fleet size: one warm actor per worker
   nighthawk-ingress:
-    envoyCpu: 2
+    proxyCpu: 2
     tailLatencySloMs: 25
 
 - name: ingress_routercap_agentgateway_2cpu
@@ -116,7 +116,7 @@ runs (`--tests`), e.g.:
   ateArgs: ["--atenet-router=agentgateway"]
   nighthawk-ingress:
     dataplane: agentgateway
-    agentgatewayCpu: 2
+    proxyCpu: 2
     tailLatencySloMs: 25
 ```
 
@@ -124,8 +124,10 @@ runs (`--tests`), e.g.:
 
 One-time prerequisites: a cluster from the GKE Quickstart in the repo
 README, with nodes big enough for the router, actor fleet, and runner. Envoy
-uses `2 × envoyCpu` CPUs (proxy plus `ext_proc`); AgentGateway uses
-`agentgatewayCpu`; the runner requests `clientConcurrency+1`.
+uses `2 × proxyCpu` CPUs (proxy plus `ext_proc`); AgentGateway uses one
+`proxyCpu` container; the runner requests `clientConcurrency+1`. Therefore,
+`proxyCpu` is a per-container allocation for Envoy, not an equal-total-CPU
+comparison with AgentGateway.
 
 #### Reproducible 2-CPU topology
 
@@ -182,20 +184,21 @@ benchmarking/workloads/deploy.sh --deploy --worker-count 50 --sandbox-class gvis
 Then each benchmark run is one command, ~8–10 min:
 
 ```bash
-./benchmarking/nighthawk-ingress/run-dev.sh --envoy-cpu 2 --runner-node "$RUNNER_NODE"
+./benchmarking/nighthawk-ingress/run-dev.sh --dataplane envoy --proxy-cpu 2 \
+  --runner-node "$RUNNER_NODE"
 ```
 
 [`run-dev.sh`](run-dev.sh) runs only the benchmark layer. One invocation:
 
 1. Verifies the prerequisites above, printing the fix for anything missing.
-2. Pins the router if its current cpu differs from `--envoy-cpu`, so CPU
+2. Pins the router if its current cpu differs from `--proxy-cpu`, so CPU
    sweeps need no redeploy.
 3. Builds the runner image **from your working tree** — uncommitted changes
    included, and such runs are tagged `-dirty`.
 4. Submits the Job, streams its logs, and prints the resulting
    `capacity.json`.
 
-Flags: `--envoy-cpu`, `--proxy-cpu`, `--dataplane`, `--runner-node`, `--actors`,
+Flags: `--proxy-cpu`, `--dataplane`, `--runner-node`, `--actors`,
 `--tail-latency-slo-ms`, `--atespace`, `--dest` (see
 `--help`). It needs a running Docker daemon and gcloud/kubectl credentials.
 
@@ -235,15 +238,14 @@ actors receiving rotated actor-reference header traffic. Everything else lives i
 | Knob | Default | Meaning |
 |---|---|---|
 | `dataplane` | `envoy` | Proxy implementation: `envoy` or `agentgateway`. AgentGateway tests must add `ateArgs: ["--atenet-router=agentgateway"]`. |
-| `envoyCpu` | required for Envoy | cpu `requests=limits` on both router containers, and Envoy's `--concurrency`. |
-| `agentgatewayCpu` | required for AgentGateway | cpu `requests=limits` on AgentGateway's single proxy container. |
+| `proxyCpu` | required | CPU allocation selected by `dataplane`. Envoy applies it to both the proxy and `ext_proc` containers and to Envoy concurrency; AgentGateway applies it to its one proxy container. |
 | `runnerNodeSelector` | `{}` | Optional node selector for the Nighthawk Job. Use it with `runnerTolerations` when the runner node is tainted. |
 | `runnerTolerations` | `[]` | Kubernetes tolerations for the Nighthawk Job. |
 | `atespace` | `ingress-benchmark` | Actor namespace; name it per *experiment*, never per run (atespaces are never auto-deleted). |
 | `tailLatencySloMs` | 0 (disabled) | The SLO: upper bound on latency mean+2σ (~p95 proxy), in ms. |
 | `successRateThreshold` | 0.999 | Minimum 2xx fraction of sent requests. |
 | `sendRateThreshold` | 0.9 | Minimum sent fraction of the paced schedule (open-loop backstop). |
-| `clientConcurrency` | 16 | Nighthawk event loops; the runner Job requests `clientConcurrency+1` CPUs. Deliberately decoupled from `envoyCpu`. |
+| `clientConcurrency` | 16 | Nighthawk event loops; the runner Job requests `clientConcurrency+1` CPUs. Deliberately decoupled from `proxyCpu`. |
 | `connections` | 1000 | Client connections per event loop. |
 | `maxPendingRequests` | 10000 | Client-side queue per event loop. |
 | `initialRps` | 500 | Total starting RPS of the exponential ramp. |

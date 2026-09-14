@@ -140,11 +140,11 @@ def test_stats_records_shape():
 
 def test_capacity_summary_converged():
     summary = output_mod.capacity_summary(
-        SESSION, envoy_cpu=4, actors=100,
+        SESSION, proxy_cpu=4, actors=100,
         client_concurrency=16, tail_latency_slo_ms=25,
     )
     assert summary["converged"] is True
-    assert summary["envoy_cpu"] == 4
+    assert summary["proxy_cpu"] == 4
     assert summary["client_concurrency"] == 16
     assert summary["tail_latency_slo_ms"] == 25
     assert summary["adjusting_stages"] == 2
@@ -178,7 +178,7 @@ def test_failed_thresholds_and_binding():
     assert rows[1]["failed_thresholds"] == ["latency-ns-mean-plus-2stdev"]
     # Threshold fields use short native names, not measurement keys.
     assert rows[2]["failed_thresholds"] == ["send-rate"]
-    summary = output_mod.capacity_summary(session, envoy_cpu=2, actors=100)
+    summary = output_mod.capacity_summary(session, proxy_cpu=2, actors=100)
     assert summary["binding_threshold"] == [
         "latency-ns-mean-plus-2stdev", "send-rate",
     ]
@@ -192,7 +192,7 @@ def test_capacity_summary_no_testing_stage():
         "session_status": {"code": 4, "message": "convergence deadline"},
         "adjusting_stage_results": [benchmark_result(rps=125, http_2xx=100)],
     }
-    summary = output_mod.capacity_summary(session, envoy_cpu=2, actors=10)
+    summary = output_mod.capacity_summary(session, proxy_cpu=2, actors=10)
     assert summary["converged"] is False
     assert "max_total_rps" not in summary
 
@@ -207,7 +207,7 @@ def test_capacity_summary_keeps_boundary_probe_separate():
             failed_metric="latency-ns-mean-plus-2stdev",
         ),
     }
-    summary = output_mod.capacity_summary(session, envoy_cpu=2, actors=10)
+    summary = output_mod.capacity_summary(session, proxy_cpu=2, actors=10)
     assert summary["slo_max_stage"] == "adjusting_000"
     assert summary["testing_failed_thresholds"] == [
         "latency-ns-mean-plus-2stdev"

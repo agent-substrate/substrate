@@ -216,8 +216,7 @@ def session_succeeded(output_dict: dict) -> bool:
 def capacity_summary(
     output_dict: dict,
     *,
-    envoy_cpu: int | None = None,
-    proxy_cpu: int | None = None,
+    proxy_cpu: int,
     dataplane: str = "envoy",
     actors: int,
     client_concurrency: int | None = None,
@@ -235,10 +234,6 @@ def capacity_summary(
     best_clean = max(
         clean, key=lambda r: r[_builtin_key("attempted-rps")], default=None
     )
-    if proxy_cpu is None:
-        proxy_cpu = envoy_cpu
-    if proxy_cpu is None:
-        raise ValueError("proxy_cpu is required")
     summary = {
         "dataplane": dataplane,
         "proxy_cpu": proxy_cpu,
@@ -255,8 +250,6 @@ def capacity_summary(
         "converged": session_succeeded(output_dict) and testing is not None,
         "adjusting_stages": sum(1 for r in rows if r["stage"] != "testing"),
     }
-    if dataplane == "envoy":
-        summary["envoy_cpu"] = proxy_cpu
     if testing:
         summary["testing_failed_thresholds"] = testing["failed_thresholds"]
         for name in ("attempted-rps", "achieved-rps", "send-rate", "success-rate"):

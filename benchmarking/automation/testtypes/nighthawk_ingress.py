@@ -37,7 +37,7 @@ DEFAULTS = {
     # Actor namespace: one atespace per experiment, never per run —
     # nothing deletes atespaces automatically.
     "atespace": "ingress-benchmark",
-    # Client sizing decoupled from envoyCpu so the harness never binds.
+    # Client sizing decoupled from proxyCpu so the harness never binds.
     "clientConcurrency": 16,
     "connections": 1000,
     "maxPendingRequests": 10000,
@@ -76,7 +76,7 @@ def validate(test: dict[str, Any]) -> None:
         raise ValueError(f"nighthawk-ingress test {name!r} missing 'duration'")
     # Unknown knobs are rejected rather than silently merged: a typo (or a
     # knob removed in a schema change) must not run with defaults.
-    allowed = set(DEFAULTS) | {"envoyCpu", "agentgatewayCpu"}
+    allowed = set(DEFAULTS) | {"proxyCpu"}
     unknown = set(test.get("nighthawk-ingress", {})) - allowed
     if unknown:
         raise ValueError(
@@ -90,11 +90,10 @@ def validate(test: dict[str, Any]) -> None:
             f"nighthawk-ingress test {name!r} has invalid dataplane {dataplane!r}; "
             "want 'envoy' or 'agentgateway'"
         )
-    cpu_key = "envoyCpu" if dataplane == "envoy" else "agentgatewayCpu"
-    proxy_cpu = nh.get(cpu_key)
+    proxy_cpu = nh.get("proxyCpu")
     if not isinstance(proxy_cpu, int) or proxy_cpu < 1:
         raise ValueError(
-            f"nighthawk-ingress test {name!r} needs nighthawk-ingress.{cpu_key} "
+            f"nighthawk-ingress test {name!r} needs nighthawk-ingress.proxyCpu "
             "(int >= 1)"
         )
     client_concurrency = nh["clientConcurrency"]
@@ -147,14 +146,13 @@ def build_image(commit: str) -> str:
 def pre_test(test: dict[str, Any]) -> None:
     """Pin atenet-router to the selected proxy CPU allocation.
 
-    Envoy's data plane and ext_proc sidecar each receive envoyCpu, while
-    AgentGateway is a single proxy container and receives agentgatewayCpu.
+    Envoy's data plane and ext_proc sidecar each receive proxyCpu, while
+    AgentGateway is a single proxy container and receives proxyCpu.
     Envoy gets --concurrency equal to its CPU allocation.
     """
     nh = config(test)
     dataplane = nh["dataplane"]
-    cpu_key = "envoyCpu" if dataplane == "envoy" else "agentgatewayCpu"
-    cpu = str(nh[cpu_key])
+    cpu = str(nh["proxyCpu"])
     if dataplane == "agentgateway":
         patch = {
             "spec": {
@@ -232,10 +230,9 @@ def pre_test(test: dict[str, Any]) -> None:
 def job_subs(test: dict[str, Any]) -> dict[str, Any]:
     """Template substitutions specific to the nighthawk runner Job."""
     nh = config(test)
-    cpu_key = "envoyCpu" if nh["dataplane"] == "envoy" else "agentgatewayCpu"
     return {
         "DATAPLANE": nh["dataplane"],
-        "PROXY_CPU": nh[cpu_key],
+        "PROXY_CPU": nh["proxyCpu"],
         "ATESPACE": nh["atespace"],
         # Warm-path-only measurement: one running actor per worker, so
         # the fleet size is the worker count.

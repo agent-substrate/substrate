@@ -21,11 +21,10 @@
 # prints capacity.json. Cluster prerequisites (substrate + workers) are set
 # up by the user — see benchmarking/nighthawk-ingress/README.md.
 #
-#   ./benchmarking/nighthawk-ingress/run-dev.sh --envoy-cpu 2
 #   ./benchmarking/nighthawk-ingress/run-dev.sh --dataplane agentgateway --proxy-cpu 2
 set -euo pipefail
 
-ENVOY_CPU=2
+PROXY_CPU=2
 DATAPLANE="envoy"
 ACTORS=100
 TAIL_LATENCY_SLO_MS=25
@@ -44,8 +43,7 @@ NAMESPACE="benchmarking"
 usage() {
   cat <<EOF
 Usage: $0 [options]
-  --envoy-cpu N             router cpu pin, the independent variable (default: ${ENVOY_CPU})
-  --proxy-cpu N             alias for --envoy-cpu; use with --dataplane agentgateway
+  --proxy-cpu N             selected dataplane CPU allocation (default: ${PROXY_CPU})
   --dataplane NAME          envoy or agentgateway (default: ${DATAPLANE})
   --actors N                actor fleet size; needs that many workers Running (default: ${ACTORS})
   --tail-latency-slo-ms N   SLO bound; 0 disables (default: ${TAIL_LATENCY_SLO_MS})
@@ -62,8 +60,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --envoy-cpu) ENVOY_CPU="$2"; shift 2 ;;
-    --proxy-cpu) ENVOY_CPU="$2"; shift 2 ;;
+    --proxy-cpu) PROXY_CPU="$2"; shift 2 ;;
     --dataplane) DATAPLANE="$2"; shift 2 ;;
     --actors) ACTORS="$2"; shift 2 ;;
     --tail-latency-slo-ms) TAIL_LATENCY_SLO_MS="$2"; shift 2 ;;
@@ -123,7 +120,7 @@ fi
 # router gets pinned.
 echo ">>> run config:"
 echo "      cluster:              ${CLUSTER_NAME} (${CLUSTER_LOCATION})"
-echo "      envoy_cpu:            ${ENVOY_CPU}"
+echo "      proxy_cpu:            ${PROXY_CPU}"
 echo "      dataplane:            ${DATAPLANE}"
 echo "      actors:               ${ACTORS}"
 echo "      workers running:      ${RUNNING_WORKERS}"
@@ -156,13 +153,13 @@ fi
 CONTAINER="${DATAPLANE}"
 CURRENT_CPU="$(kubectl get deployment atenet-router -n ate-system \
   -o jsonpath="{.spec.template.spec.containers[?(@.name==\"${CONTAINER}\")].resources.limits.cpu}")"
-if [[ "${CURRENT_CPU}" != "${ENVOY_CPU}" ]]; then
-  echo ">>> pinning router: ${DATAPLANE} cpu '${CURRENT_CPU:-unset}' -> ${ENVOY_CPU}"
+if [[ "${CURRENT_CPU}" != "${PROXY_CPU}" ]]; then
+  echo ">>> pinning router: ${DATAPLANE} cpu '${CURRENT_CPU:-unset}' -> ${PROXY_CPU}"
   "${PY}" -c "
 import sys
 sys.path.insert(0, 'benchmarking/automation')
 from testtypes import nighthawk_ingress
-nighthawk_ingress.pre_test({'nighthawk-ingress': {'dataplane': '${DATAPLANE}', '${DATAPLANE}Cpu': ${ENVOY_CPU}}})"
+nighthawk_ingress.pre_test({'nighthawk-ingress': {'dataplane': '${DATAPLANE}', 'proxyCpu': ${PROXY_CPU}}})"
 fi
 
 # --- runner image from the working tree ---------------------------------------
@@ -179,9 +176,9 @@ docker build --platform linux/amd64 \
 docker push "${IMAGE}"
 
 # --- render + submit the Job ---------------------------------------------------
-NAME="ingress_routercap_${DATAPLANE}_${ENVOY_CPU}cpu"
-JOB="runner-ingress-routercap-${ENVOY_CPU}cpu-quick-$(date +%H%M%S)"
-export IMAGE JOB NAME DEST TAG ENVOY_CPU DATAPLANE ACTORS TAIL_LATENCY_SLO_MS ATESPACE RUNNER_NODE INITIAL_RPS EXP_FACTOR MEASURING_PERIOD TESTING_STAGE_DURATION
+NAME="ingress_routercap_${DATAPLANE}_${PROXY_CPU}cpu"
+JOB="runner-ingress-routercap-${PROXY_CPU}cpu-quick-$(date +%H%M%S)"
+export IMAGE JOB NAME DEST TAG PROXY_CPU DATAPLANE ACTORS TAIL_LATENCY_SLO_MS ATESPACE RUNNER_NODE INITIAL_RPS EXP_FACTOR MEASURING_PERIOD TESTING_STAGE_DURATION
 "${PY}" - <<'EOF' | kubectl apply -f -
 import os
 import sys
@@ -219,7 +216,7 @@ test = {
         ),
     },
 }
-test["nighthawk-ingress"][f'{os.environ["DATAPLANE"]}Cpu'] = int(os.environ["ENVOY_CPU"])
+test["nighthawk-ingress"]["proxyCpu"] = int(os.environ["PROXY_CPU"])
 orchestrator.validate_and_normalize_tests([test])
 subs = {
     "JOB_NAME": os.environ["JOB"],

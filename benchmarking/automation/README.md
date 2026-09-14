@@ -28,8 +28,8 @@ the router capacity benchmark — see
    For a `nighthawk-ingress` test the orchestrator additionally patches the
    `atenet-router` Deployment right after `deploy_substrate`: the selected
    proxy CPU allocation is the benchmark's independent variable. Envoy tests
-   pin both containers and Envoy's thread count to `envoyCpu`; AgentGateway
-   tests pin its single container to `agentgatewayCpu`, then wait for the
+   pin both containers and Envoy's thread count to `proxyCpu`; AgentGateway
+   tests pin its single container to `proxyCpu`, then wait for the
    rollout before deploying workloads. The teardown after each test redeploys
    substrate, so the pin never outlives its run.
 6. For each test in `tests.yaml`:

@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--proxy-cpu", required=True, type=int, dest="proxy_cpu")
     p.add_argument("--actors", type=int, default=100)
     # Event loops and per-loop pools are sized so the client never binds
-    # before the router; decoupled from --envoy-cpu.
+    # before the router; decoupled from --proxy-cpu.
     p.add_argument(
         "--client-concurrency", type=int, default=16, dest="client_concurrency"
     )
