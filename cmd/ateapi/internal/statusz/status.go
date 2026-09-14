@@ -23,18 +23,16 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 const (
-	maxWorkerGroups         = 100
-	diagnosticCacheInterval = 5 * time.Second
+	maxWorkerGroups = 100
 
-	poolCoverage = "Connection occupancy as of the diagnostic sample; replica-local and not a connectivity health check."
-	rpcCoverage  = "Completed non-OK authenticated unary Control RPCs retained on this replica as of the diagnostic sample."
+	poolCoverage = "Connection occupancy read for this request; replica-local and not a connectivity health check."
+	rpcCoverage  = "Completed non-OK authenticated unary Control RPCs retained on this replica and read for this request."
 	rpcRetention = "Newest 100 matching completions; resets on process restart; not an error rate."
 )
 
@@ -106,19 +104,10 @@ type Snapshot struct {
 	Build                 Build                         `json:"build"`
 	Process               ProcessSnapshot               `json:"process"`
 	Configuration         ConfigurationSnapshot         `json:"configuration"`
-	DiagnosticSample      DiagnosticSampleSnapshot      `json:"diagnostic_sample"`
 	Workers               WorkersSnapshot               `json:"workers"`
 	Readiness             ReadinessSnapshot             `json:"readiness"`
 	PostgreSQLPools       PostgreSQLPoolsSnapshot       `json:"postgresql_pools"`
 	RecentControlFailures RecentControlFailuresSnapshot `json:"recent_control_failures"`
-}
-
-// DiagnosticSampleSnapshot describes the shared cached sample used by the
-// worker, pool, and recent-failure sections.
-type DiagnosticSampleSnapshot struct {
-	SampledAt         string `json:"sampled_at"`
-	Age               string `json:"age"`
-	RefreshInProgress bool   `json:"refresh_in_progress"`
 }
 
 // ProcessSnapshot describes the lifetime of the current process.
@@ -191,17 +180,6 @@ type handler struct {
 	pools    PoolReader
 	failures RPCFailureList
 	now      func() time.Time
-
-	cacheMu    sync.Mutex
-	cached     *cachedDiagnostics
-	refreshing bool
-}
-
-type cachedDiagnostics struct {
-	sampledAt time.Time
-	workers   WorkersSnapshot
-	pools     PostgreSQLPoolsSnapshot
-	failures  RecentControlFailuresSnapshot
 }
 
 // NewHandler constructs the status handler from immutable startup config and
@@ -213,12 +191,7 @@ func NewHandler(config Config, workers WorkerList, ready func() bool, pools Pool
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	snapshot, ok := h.snapshot()
-	if !ok {
-		w.Header().Set("Retry-After", "1")
-		http.Error(w, "diagnostic sample is being collected", http.StatusServiceUnavailable)
-		return
-	}
+	snapshot := h.snapshot()
 	if req.URL.Query().Get("format") == "json" || strings.Contains(req.Header.Get("Accept"), "application/json") {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snapshot)
@@ -234,14 +207,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	_, _ = rendered.WriteTo(w)
 }
 
-func (h *handler) snapshot() (Snapshot, bool) {
-	requestedAt := h.now()
-	diagnostics, sample, ok := h.diagnostics(requestedAt)
-	if !ok {
-		return Snapshot{}, false
-	}
-	liveAt := h.now()
-	uptime := liveAt.Sub(h.config.StartedAt)
+func (h *handler) snapshot() Snapshot {
+	now := h.now()
+	uptime := now.Sub(h.config.StartedAt)
 	if uptime < 0 {
 		uptime = 0
 	}
@@ -261,59 +229,10 @@ func (h *handler) snapshot() (Snapshot, bool) {
 			Drain:     h.config.Drain,
 			Flags:     append([]Flag(nil), h.config.Flags...),
 		},
-		DiagnosticSample:      sample,
-		Workers:               diagnostics.workers,
+		Workers:               collectWorkers(h.workers),
 		Readiness:             ReadinessSnapshot{Ready: ready, State: state},
-		PostgreSQLPools:       diagnostics.pools,
-		RecentControlFailures: diagnostics.failures,
-	}, true
-}
-
-func (h *handler) diagnostics(now time.Time) (cachedDiagnostics, DiagnosticSampleSnapshot, bool) {
-	h.cacheMu.Lock()
-	cached := h.cached
-	refreshing := h.refreshing
-	if cached != nil {
-		age := diagnosticSampleAge(now, cached.sampledAt)
-		if age < diagnosticCacheInterval || refreshing {
-			h.cacheMu.Unlock()
-			return *cached, diagnosticSample(cached.sampledAt, age, refreshing), true
-		}
-	}
-	if refreshing {
-		h.cacheMu.Unlock()
-		return cachedDiagnostics{}, DiagnosticSampleSnapshot{}, false
-	}
-	h.refreshing = true
-	h.cacheMu.Unlock()
-
-	collected := cachedDiagnostics{
-		workers:  collectWorkers(h.workers),
-		pools:    collectPools(h.pools),
-		failures: collectRPCFailures(h.failures),
-	}
-	collected.sampledAt = h.now()
-
-	h.cacheMu.Lock()
-	h.cached = &collected
-	h.refreshing = false
-	h.cacheMu.Unlock()
-	return collected, diagnosticSample(collected.sampledAt, 0, false), true
-}
-
-func diagnosticSampleAge(now, sampledAt time.Time) time.Duration {
-	age := now.Sub(sampledAt)
-	if age < 0 {
-		return 0
-	}
-	return age
-}
-
-func diagnosticSample(sampledAt time.Time, age time.Duration, refreshing bool) DiagnosticSampleSnapshot {
-	return DiagnosticSampleSnapshot{
-		SampledAt:         sampledAt.UTC().Format(time.RFC3339Nano),
-		Age:               age.Truncate(time.Millisecond).String(),
-		RefreshInProgress: refreshing,
+		PostgreSQLPools:       collectPools(h.pools),
+		RecentControlFailures: collectRPCFailures(h.failures),
 	}
 }
 
