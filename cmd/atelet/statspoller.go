@@ -241,9 +241,9 @@ func (p *statsPoller) tick(ctx context.Context) {
 // a debug line. That uniformly handles stale directories left by deleted
 // worker pods (nothing garbage-collects them eagerly), ateoms that have made
 // their directory but not yet listened, and workers torn down mid-sweep. The
-// no-sample reasons are equally routine: NO_WORKLOAD is an idle worker,
-// NOT_MEASURABLE_YET is a boot or restore in progress -- both are skips by the
-// RPC's own contract.
+// no-sample answers are equally routine: an empty samples list is an idle
+// worker, and a pending entry (source UNSPECIFIED) is a boot or restore in
+// progress -- both are skips by the RPC's own contract.
 func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggregate {
 	entries, err := os.ReadDir(p.ateomsDir)
 	if err != nil {
@@ -291,49 +291,58 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				return nil
 			}
 
-			sample := resp.GetSample()
-			if sample == nil {
-				// NO_WORKLOAD or NOT_MEASURABLE_YET: normal answers, nothing to
-				// add.
-				return nil
-			}
-			p.eventEmitter.emit(ctx, eventKindPeriodic, sample, pools[podUID])
-
-			key := templateKey{
-				templateNamespace: sample.GetActorTemplateAtespace(),
-				templateName:      sample.GetActorTemplateName(),
-				sandboxClass:      sandboxClassLabel(sample.GetSandboxClass()),
-				source:            statsSourceLabel(sample.GetSource()),
-				workerPool:        pools[podUID],
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			agg := aggs[key]
-			if agg == nil {
-				agg = &templateAggregate{}
-				aggs[key] = agg
-			}
-			agg.sampledActors++
-			agg.memoryCurrentBytes = addSat(agg.memoryCurrentBytes, sample.GetMemoryCurrentBytes())
-			agg.memoryWorkingSetBytes = addSat(agg.memoryWorkingSetBytes, sample.GetMemoryWorkingSetBytes())
-
-			// The counter increase this sample represents. A decrease means the
-			// epoch reset underneath us (the cgroup source restarts at zero on
-			// restore), so the new value IS the usage since the reset. A sample
-			// with NO baseline charges nothing and only records one: atelet
-			// cannot tell a new actor from its own restart, and charging the
-			// whole epoch-so-far would re-count hours of usage the previous
-			// atelet already counted, as one artificial spike. The bounded
-			// price is that every actor's boot-to-first-poll usage goes
-			// uncounted -- the events channel carries per-actor precision.
-			cpu := sample.GetCpuUsageUsec()
-			seenCPU[sample.GetActorUid()] = cpu
-			if last, ok := p.lastCPU[sample.GetActorUid()]; ok {
-				if last <= cpu {
-					agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu-last)
-				} else {
-					agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu)
+			// One entry per workload the ateom is executing; empty when it is
+			// available. Today that is at most one entry -- multi-actor
+			// workers will grow it, and nothing here assumes otherwise.
+			for _, sample := range resp.GetSamples() {
+				if sample.GetSource() == ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+					// A pending workload: attributed but not measured (boot,
+					// restore, teardown, or a transition underneath the
+					// ateom's read). It contributes nothing anywhere -- not
+					// to the aggregates (sampled_actors keeps meaning
+					// "measured"), not to the CPU baselines, and no event --
+					// exactly as the old no-sample answers behaved.
+					continue
 				}
+				p.eventEmitter.emit(ctx, eventKindPeriodic, sample, pools[podUID])
+
+				key := templateKey{
+					templateNamespace: sample.GetActorTemplateAtespace(),
+					templateName:      sample.GetActorTemplateName(),
+					sandboxClass:      sandboxClassLabel(sample.GetSandboxClass()),
+					source:            statsSourceLabel(sample.GetSource()),
+					workerPool:        pools[podUID],
+				}
+				mu.Lock()
+				agg := aggs[key]
+				if agg == nil {
+					agg = &templateAggregate{}
+					aggs[key] = agg
+				}
+				agg.sampledActors++
+				agg.memoryCurrentBytes = addSat(agg.memoryCurrentBytes, sample.GetMemoryCurrentBytes())
+				agg.memoryWorkingSetBytes = addSat(agg.memoryWorkingSetBytes, sample.GetMemoryWorkingSetBytes())
+
+				// The counter increase this sample represents. A decrease means
+				// the epoch reset underneath us (the cgroup source restarts at
+				// zero on restore), so the new value IS the usage since the
+				// reset. A sample with NO baseline charges nothing and only
+				// records one: atelet cannot tell a new actor from its own
+				// restart, and charging the whole epoch-so-far would re-count
+				// hours of usage the previous atelet already counted, as one
+				// artificial spike. The bounded price is that every actor's
+				// boot-to-first-poll usage goes uncounted -- the events channel
+				// carries per-actor precision.
+				cpu := sample.GetCpuUsageUsec()
+				seenCPU[sample.GetActorUid()] = cpu
+				if last, ok := p.lastCPU[sample.GetActorUid()]; ok {
+					if last <= cpu {
+						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu-last)
+					} else {
+						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu)
+					}
+				}
+				mu.Unlock()
 			}
 			return nil
 		})

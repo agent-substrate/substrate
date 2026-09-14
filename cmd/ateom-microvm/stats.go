@@ -144,7 +144,9 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	active := s.activeActor.Load()
 	if active == nil {
-		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD), nil
+		// "Available" is the empty list, per the proto: a normal answer for a
+		// scraper to get, not an error.
+		return &ateompb.GetActiveWorkloadStatsResponse{}, nil
 	}
 
 	sample, err := s.sampleGuest(ctx, active)
@@ -155,33 +157,49 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 		// Every routine way sampleGuest declines is a workload with no numbers
 		// yet -- boot, restore, teardown in progress, a guest that has stopped
 		// answering -- and for a caller with no prior knowledge each is as
-		// normal a finding as an available ateom. A reason, not an error.
-		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET), nil
+		// normal a finding as an available ateom. It answers as a pending
+		// entry: attribution without measurements, so even a workload that
+		// dies during boot is attributable.
+		return &ateompb.GetActiveWorkloadStatsResponse{
+			Samples: []*ateompb.WorkloadStatsSample{pendingSample(active)},
+		}, nil
 	}
 
 	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
 	// there is no "requested actor" for NOT_FOUND to disown, and a transition
 	// underneath the read just means these numbers cannot be attributed to any
-	// single actor. Report the reason as of now -- the next tick resolves it
+	// single actor. Report the state as of now -- empty if the slot emptied, a
+	// pending entry for the new occupant otherwise; the next tick resolves it
 	// either way.
 	if latest := s.activeActor.Load(); latest != active {
-		reason := ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET
 		if latest == nil {
-			reason = ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD
+			return &ateompb.GetActiveWorkloadStatsResponse{}, nil
 		}
-		return noSample(reason), nil
+		return &ateompb.GetActiveWorkloadStatsResponse{
+			Samples: []*ateompb.WorkloadStatsSample{pendingSample(latest)},
+		}, nil
 	}
 
 	return &ateompb.GetActiveWorkloadStatsResponse{
-		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: sample},
+		Samples: []*ateompb.WorkloadStatsSample{sample},
 	}, nil
 }
 
-// noSample is the discovery read's "nothing to give, and that is normal"
-// answer.
-func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResponse {
-	return &ateompb.GetActiveWorkloadStatsResponse{
-		Result: &ateompb.GetActiveWorkloadStatsResponse_NoSampleReason{NoSampleReason: reason},
+// pendingSample is a workload with no numbers to give yet, as the discovery
+// read reports it: attribution and the runtime family, measurements absent --
+// source stays STATS_SOURCE_UNSPECIFIED, which the sample's contract defines
+// as "not measured" rather than "measured as zero".
+func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSample {
+	return &ateompb.WorkloadStatsSample{
+		Atespace:              active.Ref.Atespace,
+		ActorName:             active.Ref.Name,
+		ActorUid:              active.UID,
+		ActorTemplateAtespace: active.TemplateAtespace,
+		ActorTemplateName:     active.TemplateName,
+
+		SandboxClass: ateompb.SandboxClass_SANDBOX_CLASS_MICROVM,
+
+		ObservedAtUnixNano: time.Now().UnixNano(),
 	}
 }
 
@@ -198,7 +216,7 @@ var errStaleGuestTarget = errors.New("guest agent connection belongs to a differ
 // call offers no error type that separates "gone" from "broken". The
 // exception is errStaleGuestTarget, above. Errors come back raw because the
 // two RPCs express the routine ones differently: an error code for the keyed
-// read, a NoSampleReason for the discovery read. Callers re-check
+// read, a pending entry for the discovery read. Callers re-check
 // s.activeActor against the pointer they loaded after this returns; the read
 // holds no lock.
 func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
