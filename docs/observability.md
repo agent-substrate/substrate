@@ -155,7 +155,11 @@ ateapi's `Actor state changed` is written once per committed actor state transit
 
 `ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` from a suspend and `paused` from a pause, and the two differ in whether the worker was released.
 
-The record is written after the store commit, never before, and every state commit carries a version precondition. A losing writer in a concurrent update emits nothing, so no state appears in the stream that the store did not hold.
+The record goes out after the store commit, never before. Every state commit has a version check, so if two writers race, the one that lost writes nothing. You will never see a state here that the store did not actually hold.
+
+`deleted` is the only state with no `ateapipb.ActorState` behind it. It is written once the actor row is gone, so there is nothing left to read back. It is also the last record an actor ever gets. Without it, `deleting` would be the end of the story, and a delete that finished would look just like one that got stuck.
+
+**What this stream won't tell you.** It only writes when something changes. So an actor that has been sitting in the same state since before your logs roll over has no record, and no state. Ask the control plane what state something is in right now. Use this stream to see how it got there and when. Records can also go missing, like any other log, and a gap looks the same as an actor that just sat still. If you want to count activations, use the router's access log instead.
 
 `Actor crashed` is the exception, and carries the same two keys with `ate.actor.state="crashed"`. It is written once per committed transition into `ACTOR_STATE_CRASHED`, beside the [`ate.actor.crashes`](#the-metric-registry) increment and under the same already-crashed guard, so the two can never disagree about how many crashes happened. A consumer deriving state therefore selects on `ate.actor.state`, not on the message:
 

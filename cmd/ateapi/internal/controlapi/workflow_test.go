@@ -145,6 +145,52 @@ func TestActorStateChangeRecords(t *testing.T) {
 	}
 }
 
+// TestActorDeletedRecord covers the terminal record. Without it "deleting" is
+// the last thing a deleted actor ever reports, and a consumer cannot tell a
+// finished delete from one that is stuck.
+func TestActorDeletedRecord(t *testing.T) {
+	ctx := context.Background()
+	records := logRecords(t, "Actor state changed")
+
+	persistence := newTestPersistence(t)
+	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:        &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: testStorageLocation},
+	}); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_DELETING)
+	actor, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("get actor: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence}
+	if _, err := w.finalizeDeleted(ctx, actorRef); err != nil {
+		t.Fatalf("finalizeDeleted: %v", err)
+	}
+
+	if len(*records) != 1 {
+		t.Fatalf("got %d state records, want 1: %v", len(*records), *records)
+	}
+	got := (*records)[0]
+	if got[string(ateattr.ActorStateKey)] != ateattr.ActorStateDeleted {
+		t.Errorf("state = %q, want %q", got[string(ateattr.ActorStateKey)], ateattr.ActorStateDeleted)
+	}
+	// The identity has to survive the row it described, or the terminal record
+	// cannot be joined to the rest of the actor's history.
+	if got[string(ateattr.ActorUIDKey)] != actor.GetMetadata().GetUid() {
+		t.Errorf("uid = %q, want %q", got[string(ateattr.ActorUIDKey)], actor.GetMetadata().GetUid())
+	}
+
+	if _, err := persistence.GetActor(ctx, actorRef); err == nil {
+		t.Error("actor still readable after finalizeDeleted")
+	}
+}
+
 // TestActorStateChangeRecordSkippedOnConflict pins that a transition which did
 // not commit writes nothing. A losing writer that still logged would put a state
 // in the stream the store never held.

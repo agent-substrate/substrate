@@ -455,5 +455,6 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actorRef resources.
 		}
 		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}
+	logActorStateChanged(ctx, deleted, ateattr.OperationDelete, ateattr.ActorStateDeleted)
 	return deleted, nil
 }

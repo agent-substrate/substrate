@@ -82,7 +82,9 @@ const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 const ActorStateKey = attribute.Key("ate.actor.state")
 
 // Values for ActorStateKey, mirroring ateapipb.ActorState with the
-// ACTOR_STATE_ prefix dropped so the two cannot fork.
+// ACTOR_STATE_ prefix dropped so the two cannot fork. ActorStateDeleted is the
+// exception and has no enum counterpart: the record is gone, so no stored state
+// can stand for it.
 const (
 	ActorStateResuming   = "resuming"
 	ActorStateRunning    = "running"
@@ -92,6 +94,7 @@ const (
 	ActorStatePaused     = "paused"
 	ActorStateCrashed    = "crashed"
 	ActorStateDeleting   = "deleting"
+	ActorStateDeleted    = "deleted"
 )
 
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,

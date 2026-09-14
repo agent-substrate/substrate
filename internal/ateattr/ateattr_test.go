@@ -605,10 +605,41 @@ func TestSnapshotScopeValue(t *testing.T) {
 	}
 }
 
+// TestActorStateValues pins the spelling of every state a record can report.
+func TestActorStateValues(t *testing.T) {
+	tests := []struct {
+		got  string
+		want string
+	}{
+		{ActorStateResuming, "resuming"},
+		{ActorStateRunning, "running"},
+		{ActorStateSuspending, "suspending"},
+		{ActorStateSuspended, "suspended"},
+		{ActorStatePausing, "pausing"},
+		{ActorStatePaused, "paused"},
+		{ActorStateCrashed, "crashed"},
+		{ActorStateDeleting, "deleting"},
+		{ActorStateDeleted, "deleted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 // TestActorStateValuesMirrorActorState holds the log vocabulary to the control
 // plane's state machine. A state added to the enum without a value here would
-// leave the lifecycle stream unable to name the state an actor is in.
+// leave the stream unable to name the state an actor is in.
+//
+// ActorStateDeleted is excluded on purpose: the actor row is gone by the time it
+// is reported, so no enum value can stand for it. A second such value has to be
+// added to this list deliberately.
 func TestActorStateValuesMirrorActorState(t *testing.T) {
+	noEnumCounterpart := map[string]bool{ActorStateDeleted: true}
+
 	got := map[string]bool{
 		ActorStateResuming:   true,
 		ActorStateRunning:    true,
@@ -618,6 +649,7 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 		ActorStatePaused:     true,
 		ActorStateCrashed:    true,
 		ActorStateDeleting:   true,
+		ActorStateDeleted:    true,
 	}
 
 	want := map[string]bool{}
@@ -634,7 +666,7 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 		}
 	}
 	for state := range got {
-		if !want[state] {
+		if !want[state] && !noEnumCounterpart[state] {
 			t.Errorf("ateattr has state %q that ateapipb.ActorState does not", state)
 		}
 	}
