@@ -1452,6 +1452,11 @@ message DeleteActorEgressPolicyRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
 }
 
 message GetTagRequest {
@@ -1651,8 +1656,7 @@ message DeleteTagRequest {
 // state the caller expects. Future delete-specific controls (e.g. dry-run)
 // should be added here.
 //
-// Intended to be reused across every Delete<Type>Request; only
-// DeleteWorkerRequest carries it so far.
+// Intended to be reused across every Delete<Type>Request.
 message DeleteOptions {
   // If non-zero, delete only if the server's current version matches.
   //
