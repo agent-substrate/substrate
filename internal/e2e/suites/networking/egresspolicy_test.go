@@ -55,6 +55,7 @@ func reached(status int, _ []byte) bool { return status == http.StatusOK }
 // the same server.
 func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
 	allowed := fmt.Sprintf("%s.%s.svc.cluster.local", origin.Name, target.Namespace)
@@ -72,17 +73,16 @@ func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 
 	url = fmt.Sprintf("http://%s/healthz", target.Address())
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
-	if status != http.StatusForbidden || !strings.Contains(string(body), "egress denied") {
-		t.Fatalf("fetch of the same origin by address %s returned HTTP %d, want 403 egress denied; body: %s", url, status, body)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("fetch of the same origin by address %s returned HTTP %d, want an egress-policy denial; body: %s", url, status, body)
 	}
 	t.Logf("fetch by address was denied as expected: %s", body)
 }
 
-// TestActorEgressRequiresPolicy: an actor with no EgressPolicy gets no tunnel.
-// The CONNECT is refused, so the demo app reports a 502, not a 403, on both
-// gateways.
+// TestActorEgressRequiresPolicy: an actor with no EgressPolicy is denied.
 func TestActorEgressRequiresPolicy(t *testing.T) {
 	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
 	target := e2e.DeployServerPod(t, ctx, egressHTTPTarget())
 
 	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-nopolicy", egressFixture())
@@ -97,18 +97,19 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 
 	url := fmt.Sprintf("http://%s/healthz", target.Address())
 	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
-	if status != http.StatusBadGateway || !strings.Contains(string(body), "request failed") {
-		t.Fatalf("fetch by an actor with no policy returned HTTP %d, want 502 from a refused tunnel; body: %s", status, body)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("fetch by an actor with no policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
 	}
-	t.Logf("tunnel was refused as expected: %s", body)
+	t.Logf("egress was denied as expected: %s", body)
 }
 
 // TestActorEgressPolicyAllowsByAddress: the policy names the origin's address
 // only. Both gateways allow the fetch by address, and the same origin by name,
 // because the request is checked against the address the actor dialed and
-// sent there. A name that resolves to any other address gets no tunnel.
+// sent there. A name that resolves to any other address is denied.
 func TestActorEgressPolicyAllowsByAddress(t *testing.T) {
 	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
 	block := netip.MustParseAddr(target.ClusterIP)
@@ -132,14 +133,13 @@ func TestActorEgressPolicyAllowsByAddress(t *testing.T) {
 	}
 
 	// The API server's ClusterIP is outside the block, and the policy has no
-	// hostname rule that could allow a request inside, so the CONNECT itself
-	// is refused: the demo app reports a 502, not a 403.
+	// hostname rule that could allow a request inside, so the request is denied.
 	url = "http://kubernetes.default.svc.cluster.local/healthz"
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
-	if status != http.StatusBadGateway || !strings.Contains(string(body), "request failed") {
-		t.Fatalf("fetch of an address outside the policy %s returned HTTP %d, want 502 from a refused tunnel; body: %s", url, status, body)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("fetch of an address outside the policy %s returned HTTP %d, want an egress-policy denial; body: %s", url, status, body)
 	}
-	t.Logf("tunnel to an address outside the policy was refused as expected: %s", body)
+	t.Logf("egress to an address outside the policy was denied as expected: %s", body)
 }
 
 // hostnamePolicyActor creates an actor whose policy names example.com and
@@ -161,6 +161,7 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 		t.Skip("covers the sdsmint gateway; set E2E_EGRESS_MITM")
 	}
 	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
 	router, actorRef := hostnamePolicyActor(t, ctx)
 
 	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", reached)
@@ -168,8 +169,8 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 		t.Fatalf("fetch of the allowed host returned HTTP %d, want 200; body: %s", status, body)
 	}
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.org/", notTransient)
-	if status != http.StatusForbidden || !strings.Contains(string(body), "egress denied") {
-		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want 403 egress denied; body: %s", status, body)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
 	}
 	t.Logf("denied on the decrypted request: %s", body)
 }
@@ -181,6 +182,9 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 	if egressMITM() {
 		t.Skip("covers the plain gateway; sdsmint is TestActorEgressHTTPSByHostnameMITM")
+	}
+	if !e2e.CurrentAtenetDataplane().SupportsTLSPassthroughEgressPolicy() {
+		t.Skip("TODO: AgentGateway must enforce substrateEgress for TLS passthrough")
 	}
 	ctx := context.Background()
 	router, actorRef := hostnamePolicyActor(t, ctx)

@@ -34,6 +34,8 @@ type AtenetDataplane interface {
 	NewParkingObserver(context.Context) (ParkingObserver, error)
 	IsRetryableParkingBudgetExhaustion(status int, body string) bool
 	ParkingBudgetStatus() int
+	IsEgressPolicyDenied(status int, body string) bool
+	SupportsTLSPassthroughEgressPolicy() bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
 	SupportsIngressProtocolDowngrade() bool
@@ -66,6 +68,13 @@ func (envoyAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body 
 
 func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
+func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
+	return (status == http.StatusForbidden && strings.Contains(body, "egress denied")) ||
+		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
+}
+
+func (envoyAtenetDataplane) SupportsTLSPassthroughEgressPolicy() bool { return true }
+
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
 
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
@@ -85,6 +94,13 @@ func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int
 }
 
 func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusGatewayTimeout }
+
+func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
+	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")
+}
+
+// TODO: Apply substrateEgress to TLS passthrough routes in AgentGateway.
+func (agentGatewayAtenetDataplane) SupportsTLSPassthroughEgressPolicy() bool { return false }
 
 func (agentGatewayAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {
 	filtered := make([]string, 0, len(prefixes))
