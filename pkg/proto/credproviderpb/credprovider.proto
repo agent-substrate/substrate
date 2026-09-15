@@ -1,0 +1,56 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package credprovider;
+
+option go_package = "github.com/agent-substrate/substrate/pkg/proto/credproviderpb";
+
+// CredentialProvider is the plugin API a secret backend implements so Substrate
+// infrastructure (e.g. the egress gateway's credential injector) can fetch an
+// external credential without Substrate storing it. A provider interprets the
+// attested request context however is relevant to the store it fronts.
+service CredentialProvider {
+  // RequestSecret resolves a credential URI to its secret material, subject to
+  // whatever authorization the provider applies to the request context.
+  rpc RequestSecret(RequestSecretRequest) returns (RequestSecretResponse) {}
+}
+
+// SecretRequestContext is the attested context Substrate passes with a request.
+// The provider is trusted to have authenticated the caller (mutual TLS); the
+// caller is trusted to have attested the actor identity.
+message SecretRequestContext {
+  // The attested actor identity on whose behalf the secret is fetched. Today
+  // this is the actor's SPIFFE URI as verified by the egress gateway; a
+  // verifiable Actor JWT is the intended future form.
+  string actor_identity = 1;
+}
+
+// RequestSecretRequest asks a provider to resolve one credential URI.
+message RequestSecretRequest {
+  // A substrate-secret:// URI:
+  //   substrate-secret://<provider class>/<provider name>/<provider tail>
+  string uri = 1;
+
+  // The attested context for the request.
+  SecretRequestContext context = 2;
+}
+
+// RequestSecretResponse carries the resolved secret material.
+message RequestSecretResponse {
+  // The raw secret bytes. The caller decides how to use them (e.g. as a bearer
+  // token); the provider does not format them.
+  bytes secret = 1;
+}
