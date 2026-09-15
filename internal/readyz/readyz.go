@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package readyz polls a container's HTTP readiness endpoint from inside an
-// ateom. The intent is to detect the moment a container's HTTP server
+// Package readyz polls a container's HTTP or TCP readiness endpoint from inside an
+// ateom. The intent is to detect the moment a container's server
 // starts accepting connections with single-millisecond latency: while the
 // server is still booting the kernel returns RST in microseconds, so a
-// sub-millisecond poll loop spends almost no time blocked, and once the
-// listen socket is up the next iteration completes the GET on veth-local
+// millisecond poll loop spends almost no time blocked, and once the
+// listen socket is up the next iteration completes the probe on veth-local
 // latency.
 package readyz
 
@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,7 +66,7 @@ var HTTPClient = func() *http.Client {
 	return &http.Client{Transport: tr, Timeout: RequestTimeout}
 }
 
-// WaitAll blocks until every container with a readyz probe set reports 200,
+// WaitAll blocks until every container with a readyz probe set is ready,
 // or returns the first error. Containers without a probe are skipped (their
 // absence means "no readiness gate").
 //
@@ -91,20 +92,43 @@ func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP strin
 	return err
 }
 
-// Wait polls the configured HTTP endpoint until it returns 200, the context
-// is cancelled, or the overall deadline is exceeded.
+// Wait polls until the HTTP endpoint returns 200 or the TCP connection succeeds,
+// the context is cancelled, or the overall deadline is exceeded.
 func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, actorIP string) error {
-	url, err := URL(probe, actorIP)
-	if err != nil {
-		return fmt.Errorf("invalid readyz config for %q: %w", containerName, err)
+	if (probe.GetHttpGet() == nil) == (probe.GetTcpSocket() == nil) {
+		return fmt.Errorf("invalid readyz config for %q: exactly one of httpGet or tcpSocket is required", containerName)
 	}
 
-	client := HTTPClient()
-	defer client.CloseIdleConnections()
+	var endpoint string
+	var attempt func(context.Context) (bool, error)
+	if tcp := probe.GetTcpSocket(); tcp != nil {
+		port := tcp.GetPort()
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("invalid readyz config for %q: invalid port %d", containerName, port)
+		}
+		address := net.JoinHostPort(actorIP, strconv.Itoa(int(port)))
+		endpoint = "tcp://" + address
+		attempt = func(ctx context.Context) (bool, error) {
+			return tryTCP(ctx, address)
+		}
+	} else {
+		url, err := URL(probe, actorIP)
+		if err != nil {
+			return fmt.Errorf("invalid readyz config for %q: %w", containerName, err)
+		}
+		endpoint = url
+		client := HTTPClient()
+		defer client.CloseIdleConnections()
+		attempt = func(ctx context.Context) (bool, error) {
+			return tryOnce(ctx, client, url)
+		}
+	}
 
 	timeout := overallTimeout(probe)
 	start := time.Now()
 	deadline := start.Add(timeout)
+	probeCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	attempts := 0
 	var lastErr error
 	for {
@@ -114,19 +138,19 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 		}
 		if time.Now().After(deadline) {
 			// Tagged only here: the cancellation above is ateom draining, not the actor failing.
-			return fmt.Errorf("%w: readyz for %q never returned 200 within %s (%d attempts, last error: %v)",
+			return fmt.Errorf("%w: readyz for %q did not succeed within %s (%d attempts, last error: %v)",
 				ateerrors.ReasonWorkloadNotReady, containerName, timeout, attempts, lastErr)
 		}
 
 		attempts++
-		ok, err := tryOnce(ctx, client, url)
+		ok, err := attempt(probeCtx)
 		if err != nil {
 			lastErr = err
 		}
-		if ok {
-			slog.InfoContext(ctx, "Readyz reached 200",
+		if ok && probeCtx.Err() == nil {
+			slog.InfoContext(ctx, "Readyz succeeded",
 				slog.String("container", containerName),
-				slog.String("url", url),
+				slog.String("endpoint", endpoint),
 				slog.Duration("elapsed", time.Since(start)),
 				slog.Int("attempts", attempts))
 			return nil
@@ -137,10 +161,20 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 		// tens of µs in the kernel waiting for the RST, so the actual
 		// per-iteration period is somewhat longer than the sleep alone.
 		select {
-		case <-ctx.Done():
+		case <-probeCtx.Done():
 		case <-time.After(PollInterval):
 		}
 	}
+}
+
+func tryTCP(ctx context.Context, address string) (bool, error) {
+	dialer := net.Dialer{Timeout: RequestTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return false, err
+	}
+	conn.Close()
+	return true, nil
 }
 
 // overallTimeout resolves how long Wait polls before giving up. A
@@ -172,8 +206,7 @@ func tryOnce(ctx context.Context, client *http.Client, url string) (bool, error)
 	return true, nil
 }
 
-// URL builds the probe endpoint URL. Exported so callers and tests can
-// validate a probe spec before kicking off a Wait.
+// URL builds an HTTP probe endpoint URL.
 func URL(probe *ateompb.Readyz, actorIP string) (string, error) {
 	hg := probe.GetHttpGet()
 	if hg == nil {

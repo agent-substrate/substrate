@@ -240,6 +240,9 @@ func toAteletReadyz(in *ateapipb.ContainerReadyz) *ateletpb.Readyz {
 			Port: in.GetHttpGet().GetPort(),
 		}
 	}
+	if tcp := in.GetTcpSocket(); tcp != nil {
+		out.TcpSocket = &ateletpb.TCPSocketAction{Port: tcp.GetPort()}
+	}
 	return out
 }
 

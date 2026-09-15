@@ -1545,11 +1545,29 @@ func Validate_Container(
 	return errs
 }
 
+var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_ContainerReadyz_ = validate.NewUnionMembership(validate.NewUnionMember("http_get"), validate.NewUnionMember("tcp_socket"))
+
 // Validate_ContainerReadyz validates an instance of ContainerReadyz according
 // to declarative validation rules in the API schema.
 func Validate_ContainerReadyz(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.ContainerReadyz) (errs field.ErrorList) {
+
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_ContainerReadyz_,
+		func(obj *ateapipb.ContainerReadyz) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.HttpGet != nil
+		},
+		func(obj *ateapipb.ContainerReadyz) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.TcpSocket != nil
+		}); len(e) != 0 {
+		errs = append(errs, e...)
+	}
 
 	{ // field ateapipb.ContainerReadyz.HttpGet
 		fn := func(
@@ -1564,8 +1582,7 @@ func Validate_ContainerReadyz(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -1614,6 +1631,36 @@ func Validate_ContainerReadyz(
 				return &oldObj.TimeoutSeconds
 			})
 		errs = append(errs, fn(fldPath.Child("timeout_seconds"), &obj.TimeoutSeconds, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ContainerReadyz.TcpSocket
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.TCPSocketAction,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_TCPSocketAction(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ContainerReadyz) *ateapipb.TCPSocketAction {
+				return oldObj.TcpSocket
+			})
+		errs = append(errs, fn(fldPath.Child("tcp_socket"), obj.TcpSocket, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -5969,6 +6016,50 @@ func Validate_SystemInfoVolumeSource(
 				return oldObj.DataSources
 			})
 		errs = append(errs, fn(fldPath.Child("data_sources"), obj.DataSources, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_TCPSocketAction validates an instance of TCPSocketAction according
+// to declarative validation rules in the API schema.
+func Validate_TCPSocketAction(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.TCPSocketAction) (errs field.ErrorList) {
+
+	{ // field ateapipb.TCPSocketAction.Port
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 65535); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.TCPSocketAction) *int32 {
+				return &oldObj.Port
+			})
+		errs = append(errs, fn(fldPath.Child("port"), &obj.Port, oldVal, oldObj != nil)...)
 	}
 
 	return errs

@@ -17,9 +17,12 @@ package controlapi
 import (
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -343,7 +346,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 }
 
 func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
-	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
+	template := &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-readyz"},
 		Containers: []*ateapipb.Container{
 			{
@@ -355,11 +358,34 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 				},
 			},
 			{
+				Name: "tcp-probe", Image: "tcp",
+				Readyz: &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 60},
+			},
+			{
 				Name:  "without-probe",
 				Image: "side",
 			},
 		},
-	}, nil)
+	}
+	// Exercise the public JSON form and real template persistence before conversion.
+	jsonData, err := protojson.Marshal(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := &ateapipb.ActorTemplate{}
+	if err := protojson.Unmarshal(jsonData, decoded); err != nil {
+		t.Fatal(err)
+	}
+	persistence := storetest.SetupPostgresPersistence(t)
+	storetest.MustCreateAtespace(t, t.Context(), persistence, "agent-ns")
+	if _, err := persistence.CreateActorTemplate(t.Context(), decoded); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := persistence.GetActorTemplate(t.Context(), resources.ActorTemplateRef{Atespace: "agent-ns", Name: "tmpl-readyz"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := workloadSpecFromActorTemplate(stored, nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -373,6 +399,10 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
+			},
+			{
+				Name: "tcp-probe", Image: "tcp",
+				Readyz: &ateletpb.Readyz{TcpSocket: &ateletpb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 60},
 			},
 			{
 				Name:  "without-probe",

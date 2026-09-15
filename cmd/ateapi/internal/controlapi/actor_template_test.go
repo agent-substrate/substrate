@@ -842,11 +842,53 @@ func TestValidateActorTemplate(t *testing.T) {
 			}
 		},
 	}, {
-		name: "readyz missing http_get",
+		name: "readyz missing probe kind",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TimeoutSeconds: 60}
 		},
-		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get"), "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz"), nil, "one of").WithOrigin("union")},
+	}, {
+		name: "readyz both probe kinds",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:   &ateapipb.HTTPGetAction{Port: 8080},
+				TcpSocket: &ateapipb.TCPSocketAction{Port: 9090},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz"), nil, "one of").WithOrigin("union")},
+	}, {
+		name: "valid TCP readyz",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 9090}}
+		},
+	}, {
+		name: "TCP minimum port",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 1}}
+		},
+	}, {
+		name: "TCP maximum port",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 65535}}
+		},
+	}, {
+		name: "TCP missing port",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 0}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "tcp_socket", "port"), "")},
+	}, {
+		name: "TCP negative port",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: -1}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "tcp_socket", "port"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "TCP port out of range",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 65536}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "tcp_socket", "port"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "readyz timeout_seconds out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

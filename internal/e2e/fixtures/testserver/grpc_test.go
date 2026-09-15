@@ -206,3 +206,13 @@ func TestReadyzAnswersHTTPGet(t *testing.T) {
 		t.Errorf("GET /readyz = %d, want %d", recorder.Code, http.StatusOK)
 	}
 }
+
+func TestGRPCListenDelayCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	cmd := newGRPCCmd()
+	cmd.SetArgs([]string{"--listen=127.0.0.1:0", "--listen-delay=1h"})
+	if err := cmd.ExecuteContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled delayed listener returned %v", err)
+	}
+}

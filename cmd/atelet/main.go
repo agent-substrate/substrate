@@ -1584,6 +1584,9 @@ func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
 			Port: hg.GetPort(),
 		}
 	}
+	if tcp := in.GetTcpSocket(); tcp != nil {
+		out.TcpSocket = &ateompb.TCPSocketAction{Port: tcp.GetPort()}
+	}
 	out.TimeoutSeconds = in.GetTimeoutSeconds()
 	return out
 }
