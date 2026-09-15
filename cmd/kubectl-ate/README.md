@@ -257,6 +257,9 @@ kubectl ate get egress-policy <src-actor> -a <atespace> -o yaml | \
 kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml > policy.yaml
 $EDITOR policy.yaml
 kubectl ate update egress-policy <actor-name> -a <atespace> -f policy.yaml
+
+# Delete an actor's egress policy; the actor keeps running with all egress denied.
+kubectl ate delete egress-policy <actor-name> -a <atespace>
 ```
 
 #### Details

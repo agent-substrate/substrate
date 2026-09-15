@@ -395,6 +395,9 @@ func TestEgressPolicyCommandArgs(t *testing.T) {
 		{name: "update", command: updateEgressPolicyCmd, args: []string{"c1"}},
 		{name: "update requires actor", command: updateEgressPolicyCmd, wantErr: true},
 		{name: "update rejects multiple", command: updateEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
+		{name: "delete", command: deleteEgressPolicyCmd, args: []string{"c1"}},
+		{name: "delete requires actor", command: deleteEgressPolicyCmd, wantErr: true},
+		{name: "delete rejects multiple", command: deleteEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
 	})
 }
 
@@ -854,6 +857,112 @@ func TestRequireEgressPolicyPreconditions(t *testing.T) {
 			}
 			if gotErr != test.wantErr {
 				t.Errorf("requireEgressPolicyPreconditions() error = %q, want %q", gotErr, test.wantErr)
+			}
+		})
+	}
+}
+
+// fakeEgressPolicyDeleter records the requests it received and answers with a
+// configured policy or error. actorReq stays nil unless the runner reads the
+// actor, which it only does after a NotFound.
+type fakeEgressPolicyDeleter struct {
+	req      *ateapipb.DeleteActorEgressPolicyRequest
+	policy   *ateapipb.EgressPolicy
+	err      error
+	actorReq *ateapipb.GetActorRequest
+	actorErr error
+}
+
+func (f *fakeEgressPolicyDeleter) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	f.req = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.policy, nil
+}
+
+func (f *fakeEgressPolicyDeleter) GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.actorReq = req
+	if f.actorErr != nil {
+		return nil, f.actorErr
+	}
+	return &ateapipb.Actor{}, nil
+}
+
+func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
+	t.Parallel()
+
+	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
+	deleted := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1},
+		Rules:    []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}},
+	}
+	wantReq := &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor}
+	wantActorReq := &ateapipb.GetActorRequest{Actor: actor}
+	policyNotFound := status.Error(codes.NotFound, "EgressPolicy not found")
+
+	tests := []struct {
+		name         string
+		deleter      *fakeEgressPolicyDeleter
+		wantActorReq *ateapipb.GetActorRequest
+		wantOut      string
+		wantErr      string
+	}{
+		{
+			name:    "sends actor ref and prints confirmation",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			wantOut: "egress policy for actor \"c1\" in atespace \"team-a\" deleted\n",
+		},
+		{
+			name:         "missing policy on an existing actor fails",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound},
+			wantActorReq: wantActorReq,
+			wantErr:      `actor "c1" in atespace "team-a" has no egress policy`,
+		},
+		{
+			name:         "missing actor fails",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")},
+			wantActorReq: wantActorReq,
+			wantErr:      `actor "c1" in atespace "team-a" not found`,
+		},
+		{
+			name:         "actor lookup error wraps",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.PermissionDenied, "denied")},
+			wantActorReq: wantActorReq,
+			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
+		},
+		{
+			name:    "unavailable wraps",
+			deleter: &fakeEgressPolicyDeleter{err: status.Error(codes.Unavailable, "api-server down")},
+			wantErr: `failed to delete egress policy for actor "c1" in atespace "team-a": rpc error: code = Unavailable desc = api-server down`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout bytes.Buffer
+			runner := &deleteEgressPolicyRunner{
+				deleter: test.deleter,
+				actor:   actor,
+				stdout:  &stdout,
+			}
+			err := runner.Run(context.Background())
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != test.wantErr {
+				t.Fatalf("Run() error = %q, want %q", gotErr, test.wantErr)
+			}
+			if diff := cmp.Diff(wantReq, test.deleter.req, protocmp.Transform()); diff != "" {
+				t.Errorf("request mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.wantActorReq, test.deleter.actorReq, protocmp.Transform()); diff != "" {
+				t.Errorf("actor request mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.wantOut, stdout.String()); diff != "" {
+				t.Errorf("stdout mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
