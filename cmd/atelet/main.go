@@ -594,6 +594,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	attribution := resources.ActorAttribution{
+		Ref:              actorRef,
+		UID:              actorUID,
+		TemplateAtespace: req.GetActorTemplateAtespace(),
+		TemplateName:     req.GetActorTemplateName(),
+	}
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed. Phases left at zero never ran.
@@ -606,11 +612,15 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
 	}
 	defer func() {
-		s.instruments.recordCheckpoint(ctx, op, err,
-			phase{ateattr.SnapshotPhaseSandboxAssets, dAssets},
-			phase{ateattr.SnapshotPhaseAteomCheckpoint, dAteom},
-			phase{ateattr.SnapshotPhasePersist, dPersist},
-			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
+		phases := []phase{
+			{ateattr.SnapshotPhaseSandboxAssets, dAssets},
+			{ateattr.SnapshotPhaseAteomCheckpoint, dAteom},
+			{ateattr.SnapshotPhasePersist, dPersist},
+			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
+		}
+		s.instruments.recordCheckpoint(ctx, op, err, phases...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Checkpoint timing breakdown",
+			snapshotLogAttrs(attribution, op, checkpointDurationMetric, err, phases)...)
 	}()
 
 	// Checkpoint requests no longer carry the sandbox config; recover the
@@ -836,6 +846,12 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	attribution := resources.ActorAttribution{
+		Ref:              resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		UID:              req.GetActorUid(),
+		TemplateAtespace: req.GetActorTemplateAtespace(),
+		TemplateName:     req.GetActorTemplateName(),
+	}
 	tStart := time.Now()
 	var dPersist time.Duration
 	op := snapshotOp{
@@ -847,9 +863,13 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		scope: ateattr.SnapshotScopeValue(req.GetDesiredScope()),
 	}
 	defer func() {
-		s.instruments.recordCheckpoint(ctx, op, err,
-			phase{ateattr.SnapshotPhasePersist, dPersist},
-			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
+		phases := []phase{
+			{ateattr.SnapshotPhasePersist, dPersist},
+			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
+		}
+		s.instruments.recordCheckpoint(ctx, op, err, phases...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Checkpoint timing breakdown",
+			snapshotLogAttrs(attribution, op, checkpointDurationMetric, err, phases)...)
 	}()
 
 	uri, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri())

@@ -93,6 +93,30 @@ func wantAbsent(t *testing.T, rec map[string]any, keys ...string) {
 	}
 }
 
+func TestSnapshotLogAttrsCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	op := snapshotOp{
+		templateNamespace: testTemplateNamespace,
+		templateName:      testTemplateName,
+		kind:              ateattr.SnapshotKindLatest,
+		scope:             ateattr.SnapshotScopeFull,
+		sandboxClass:      "gvisor",
+	}
+	attrs := snapshotLogAttrs(testAttribution(), op, checkpointDurationMetric, nil,
+		[]phase{
+			{ateattr.SnapshotPhaseAteomCheckpoint, 125 * time.Millisecond},
+			{ateattr.SnapshotPhasePersist, 375 * time.Millisecond},
+			{ateattr.SnapshotPhaseTotal, 500 * time.Millisecond},
+		})
+
+	rec := renderRecord(t, attrs)
+	wantNumber(t, rec, "ate.actor.checkpoint.duration.ateom_checkpoint", 0.125)
+	wantNumber(t, rec, "ate.actor.checkpoint.duration.persist", 0.375)
+	wantNumber(t, rec, "ate.actor.checkpoint.duration.total", 0.5)
+	wantAbsent(t, rec, "ate.actor.restore.duration.total")
+}
+
 // TestSnapshotLogAttrsSeconds is the point of the record: the key is named after
 // an instrument that declares unit s, so the value has to be seconds. slog.Duration
 // would have written 2500000000 here, and a dashboard reading it as seconds would
