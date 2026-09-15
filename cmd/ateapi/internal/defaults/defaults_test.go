@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package controlapi
+package defaults
 
 import (
 	"testing"
@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-func TestDefaultActorTemplate(t *testing.T) {
+func TestApplyActorTemplateDefaults(t *testing.T) {
 	const (
 		scopeFull = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 		scopeData = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
@@ -120,14 +120,14 @@ func TestDefaultActorTemplate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := proto.CloneOf(tt.in)
-			defaultActorTemplate(got)
+			ApplyActorTemplateDefaults(got)
 			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
-				t.Fatalf("defaultActorTemplate mismatch (-want +got):\n%s", diff)
+				t.Fatalf("ApplyActorTemplateDefaults mismatch (-want +got):\n%s", diff)
 			}
 			again := proto.CloneOf(got)
-			defaultActorTemplate(again)
+			ApplyActorTemplateDefaults(again)
 			if diff := cmp.Diff(got, again, protocmp.Transform()); diff != "" {
-				t.Errorf("defaultActorTemplate is not idempotent (-once +twice):\n%s", diff)
+				t.Errorf("ApplyActorTemplateDefaults is not idempotent (-once +twice):\n%s", diff)
 			}
 		})
 	}

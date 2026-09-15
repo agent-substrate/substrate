@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -42,7 +43,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 	if inTag != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inTag.Metadata)
 		inTag.Status = nil
-		defaultTag(inTag)
+		defaults.ApplyTagDefaults(inTag)
 	}
 
 	if errs := validateCreateTagRequest(ctx, req); len(errs) > 0 {
@@ -170,7 +171,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 		// Restore the server-owned fields, discarding whatever the request
 		// carried in them.
 		toUpdate.Metadata, toUpdate.Status = metadata, tagStatus
-		defaultTag(toUpdate)
+		defaults.ApplyTagDefaults(toUpdate)
 		return nil
 	})
 	if err != nil {
