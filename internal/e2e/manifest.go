@@ -82,12 +82,24 @@ func yamlListBlock[T any](t *testing.T, key string, items []T, indent int) strin
 	if len(items) == 0 {
 		return ""
 	}
+	pad := strings.Repeat(" ", indent)
+	return pad + key + ":\n" + yamlItemsBlock(t, items, indent)
+}
+
+// yamlItemsBlock is yamlListBlock without the `key:` line, for a block
+// placeholder that extends a list the template has already opened — where the
+// key is spelled in the template beside the entries that are always there.
+func yamlItemsBlock[T any](t *testing.T, items []T, indent int) string {
+	t.Helper()
+	if len(items) == 0 {
+		return ""
+	}
 	raw, err := yaml.Marshal(items)
 	if err != nil {
-		t.Fatalf("marshaling %s for the manifest: %v", key, err)
+		t.Fatalf("marshaling manifest list entries: %v", err)
 	}
 	pad := strings.Repeat(" ", indent)
-	out := []string{pad + key + ":"}
+	var out []string
 	for line := range strings.SplitSeq(strings.TrimRight(string(raw), "\n"), "\n") {
 		out = append(out, pad+line)
 	}

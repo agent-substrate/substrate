@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // serverPodTemplate is the one manifest every ServerPod is rendered from.
@@ -59,6 +60,20 @@ type ServerPod struct {
 	// publish a port the container -- uid 65532, every capability dropped --
 	// cannot bind, such as 80; the Service maps Port down to it.
 	TargetPort int
+	// UDPPorts are Service ports published over UDP alongside the TCP port
+	// above, every one of them mapped to the same UDPTargetPort. Several
+	// published ports onto one listener is the point: a caller that expects a
+	// datagram to arrive on one port and not another can then attribute the
+	// difference to the port, not to two servers behaving differently.
+	//
+	// A port here can be one the container could never bind, 53 included: the
+	// Service maps it down to UDPTargetPort, and kube-proxy does that in the
+	// host netns, after whatever the sender's own netns did with the datagram.
+	UDPPorts []int
+	// UDPTargetPort is the UDP port the binary listens on, defaulting to the
+	// TCP target port -- which is where a server that takes one --listen flag
+	// for both protocols ends up.
+	UDPTargetPort int
 	// Namespace deploys into an existing namespace instead of a fresh one, for
 	// a suite that has to populate that namespace first: credentials the pod
 	// mounts have to exist before it is scheduled, and DeployServerPod cannot
@@ -92,7 +107,15 @@ type Server struct {
 
 // Address is the host:port to dial the server at.
 func (s Server) Address() string {
-	return net.JoinHostPort(s.ClusterIP, strconv.Itoa(s.Port))
+	return s.AddressOnPort(s.Port)
+}
+
+// AddressOnPort is the host:port to dial one of the server's other published
+// ports at -- a ServerPod.UDPPorts entry, say. The port is not checked against
+// what was published: an address for a port the Service does not carry is
+// exactly what a test asserting unreachability wants.
+func (s Server) AddressOnPort(port int) string {
+	return net.JoinHostPort(s.ClusterIP, strconv.Itoa(port))
 }
 
 // DeployServerPod builds spec's image, applies the shared server manifest, waits
@@ -144,6 +167,7 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		"${PORT}":        strconv.Itoa(spec.Port),
 		"${TARGET_PORT}": targetPortStr,
 	}
+	servicePorts, containerPorts := serverUDPPorts(t, spec, targetPort)
 	blocks := map[string]string{
 		"${ARGS}":            serverArgs(spec, targetPortStr),
 		"${READINESS_PROBE}": serverReadinessProbe(spec, targetPortStr),
@@ -151,6 +175,10 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		// a pod one. An empty list takes its whole line, key included.
 		"${VOLUME_MOUNTS}": yamlListBlock(t, "volumeMounts", spec.VolumeMounts, 4),
 		"${VOLUMES}":       yamlListBlock(t, "volumes", spec.Volumes, 2),
+		// Extensions of the two `ports:` lists the template already opens, so
+		// these carry no key of their own.
+		"${UDP_SERVICE_PORTS}":   servicePorts,
+		"${UDP_CONTAINER_PORTS}": containerPorts,
 	}
 	return renderManifest(t, serverPodTemplate, inline, blocks)
 }
@@ -166,6 +194,38 @@ func serverArgs(spec ServerPod, targetPort string) string {
 	}
 	out = append(out, fmt.Sprintf("%s- %q", pad, "--listen=:"+targetPort))
 	return strings.Join(out, "\n")
+}
+
+// serverUDPPorts renders spec's UDP ports as fragments extending the Service's
+// and the container's `ports:` lists. Every published port maps to the one
+// listener, so the container side is a single entry however many the Service
+// publishes.
+func serverUDPPorts(t *testing.T, spec ServerPod, tcpTargetPort int) (service, container string) {
+	t.Helper()
+	if len(spec.UDPPorts) == 0 {
+		return "", ""
+	}
+	target := spec.UDPTargetPort
+	if target == 0 {
+		target = tcpTargetPort
+	}
+
+	servicePorts := make([]corev1.ServicePort, 0, len(spec.UDPPorts))
+	for _, port := range spec.UDPPorts {
+		servicePorts = append(servicePorts, corev1.ServicePort{
+			// Named because a Service with more than one port requires it.
+			Name:       fmt.Sprintf("udp-%d", port),
+			Protocol:   corev1.ProtocolUDP,
+			Port:       int32(port),
+			TargetPort: intstr.FromInt32(int32(target)),
+		})
+	}
+	containerPorts := []corev1.ContainerPort{{
+		Name:          "serve-udp",
+		ContainerPort: int32(target),
+		Protocol:      corev1.ProtocolUDP,
+	}}
+	return yamlItemsBlock(t, servicePorts, 2), yamlItemsBlock(t, containerPorts, 4)
 }
 
 // serverReadinessProbe renders the probe fragment for spec, indented to sit

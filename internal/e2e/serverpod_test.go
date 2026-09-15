@@ -216,6 +216,98 @@ func TestRenderServerPod(t *testing.T) {
 	}
 }
 
+// TestRenderServerPod_UDPPorts covers the shape the UDP-egress test deploys:
+// several published UDP ports onto one listener, beside the TCP port that
+// carries readiness. The assertion that matters is that the published ports
+// stay distinct while every target port is the same, since a test that reads a
+// missing datagram as policy depends on all of them reaching one server.
+func TestRenderServerPod_UDPPorts(t *testing.T) {
+	pod, service := renderServerPodDocs(t, ServerPod{
+		Name:       "udpecho",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"udpecho"},
+		Port:       8053,
+		UDPPorts:   []int{53, 443, 9999},
+	})
+
+	// The TCP port keeps its place at the head of both lists: the readiness
+	// probe and anything dialing Address() still address it.
+	ports := service.Spec.Ports
+	if len(ports) != 4 {
+		t.Fatalf("rendered %d service ports, want the TCP one plus three UDP: %+v", len(ports), ports)
+	}
+	if got := ports[0].Port; got != 8053 || ports[0].Protocol == corev1.ProtocolUDP {
+		t.Errorf("first service port = %+v, want TCP 8053", ports[0])
+	}
+	names := map[string]bool{}
+	for _, port := range ports[1:] {
+		if port.Protocol != corev1.ProtocolUDP {
+			t.Errorf("service port %+v is not UDP", port)
+		}
+		if got := port.TargetPort.IntValue(); got != 8053 {
+			t.Errorf("service port %d targets %d, want the one listener on 8053", port.Port, got)
+		}
+		// Kubernetes requires a name once a Service carries more than one
+		// port, and rejects a duplicate.
+		if port.Name == "" || names[port.Name] {
+			t.Errorf("service port %d has an empty or duplicate name %q", port.Port, port.Name)
+		}
+		names[port.Name] = true
+	}
+	if got := []int32{ports[1].Port, ports[2].Port, ports[3].Port}; !slices.Equal(got, []int32{53, 443, 9999}) {
+		t.Errorf("published UDP ports = %v, want [53 443 9999]", got)
+	}
+
+	// One container port for the one listener, however many the Service
+	// publishes onto it.
+	containerPorts := pod.Spec.Containers[0].Ports
+	if len(containerPorts) != 2 {
+		t.Fatalf("rendered %d container ports, want the TCP one plus one UDP: %+v", len(containerPorts), containerPorts)
+	}
+	udp := containerPorts[1]
+	if udp.Protocol != corev1.ProtocolUDP || udp.ContainerPort != 8053 {
+		t.Errorf("UDP container port = %+v, want UDP 8053", udp)
+	}
+}
+
+// TestRenderServerPod_NoUDPPorts pins the default: a server that asked for no
+// UDP gets neither list extended, and in particular no bare entry left behind
+// by the placeholder's own line.
+func TestRenderServerPod_NoUDPPorts(t *testing.T) {
+	pod, service := renderServerPodDocs(t, ServerPod{
+		Name:       "httporigin",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       8080,
+	})
+
+	if got := len(service.Spec.Ports); got != 1 {
+		t.Errorf("rendered %d service ports, want only the TCP one: %+v", got, service.Spec.Ports)
+	}
+	if got := len(pod.Spec.Containers[0].Ports); got != 1 {
+		t.Errorf("rendered %d container ports, want only the TCP one: %+v", got, pod.Spec.Containers[0].Ports)
+	}
+}
+
+// TestRenderServerPod_UDPTargetPort covers a listener that is not the TCP one.
+func TestRenderServerPod_UDPTargetPort(t *testing.T) {
+	pod, service := renderServerPodDocs(t, ServerPod{
+		Name:          "udpecho",
+		ImportPath:    "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:          []string{"udpecho"},
+		Port:          8080,
+		UDPPorts:      []int{53},
+		UDPTargetPort: 9053,
+	})
+
+	if got := service.Spec.Ports[1].TargetPort.IntValue(); got != 9053 {
+		t.Errorf("service targetPort for UDP 53 = %d, want the UDP listener on 9053", got)
+	}
+	if got := pod.Spec.Containers[0].Ports[1].ContainerPort; got != 9053 {
+		t.Errorf("UDP containerPort = %d, want 9053", got)
+	}
+}
+
 // TestRenderServerPod_Volumes covers the credential-carrying shape the sdsmint
 // suite deploys, with both volume kinds it needs: a plain Secret and a
 // projection. A projection is the interesting one — it nests three levels, so
