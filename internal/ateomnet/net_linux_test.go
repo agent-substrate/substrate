@@ -22,10 +22,12 @@ import (
 	"net"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/roottest"
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/google/nftables/userdata"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
@@ -260,9 +262,11 @@ func addForwardingTarget(t *testing.T, cidr string) {
 	}
 }
 
-// droppedUDPPackets reads the packet count off the forward chain's counted
-// rule, which [actorNonDNSUDPDropRule] is.
-func droppedUDPPackets(t *testing.T) uint64 {
+// droppedPackets reads the packet count off the forward-chain drop rule
+// carrying comment, the same string `nft list table ip ateom_actor` prints. The
+// chain holds more than one counted rule, so the comment rather than the
+// position is what tells them apart.
+func droppedPackets(t *testing.T, comment string) uint64 {
 	t.Helper()
 	c := &nftables.Conn{}
 	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
@@ -278,13 +282,17 @@ func droppedUDPPackets(t *testing.T) uint64 {
 			t.Fatalf("listing forward chain rules: %v", err)
 		}
 		for _, rule := range rules {
+			if got, ok := userdata.GetString(rule.UserData, userdata.TypeComment); !ok || got != comment {
+				continue
+			}
 			for _, e := range rule.Exprs {
 				if counter, ok := e.(*expr.Counter); ok {
 					return counter.Packets
 				}
 			}
+			t.Fatalf("forward chain rule %q has no counter", comment)
 		}
-		t.Fatalf("forward chain has no counted rule, got %d rules", len(rules))
+		t.Fatalf("forward chain has no rule commented %q, got %d rules", comment, len(rules))
 	}
 	t.Fatalf("nftables table %q is missing", ActorNftTableName)
 	return 0
@@ -305,10 +313,48 @@ func sendUDP(t *testing.T, addr string) {
 	}
 }
 
+// icmpEchoRequest returns one ICMP echo request: an 8-byte header, no payload.
+// The checksum is filled in because a real ping carries one, not because the
+// forward hook the test watches would look at it.
+func icmpEchoRequest() []byte {
+	msg := []byte{
+		8, 0, // type 8 (echo request), code 0
+		0, 0, // checksum, computed below
+		0, 1, // identifier
+		0, 1, // sequence number
+	}
+	var sum uint32
+	for i := 0; i < len(msg); i += 2 {
+		sum += uint32(msg[i])<<8 | uint32(msg[i+1])
+	}
+	for sum>>16 != 0 {
+		sum = sum&0xffff + sum>>16
+	}
+	checksum := ^uint16(sum)
+	msg[2], msg[3] = byte(checksum>>8), byte(checksum)
+	return msg
+}
+
+// sendICMPEcho sends one echo request to ip and reports whether the local send
+// succeeded. Like UDP, it says nothing about delivery: the drop is observed
+// through the nftables counter instead.
+func sendICMPEcho(t *testing.T, ip string) {
+	t.Helper()
+	conn, err := net.Dial("ip4:icmp", ip)
+	if err != nil {
+		t.Fatalf("dialing ICMP to %s: %v", ip, err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write(icmpEchoRequest()); err != nil {
+		t.Fatalf("sending an echo request to %s: %v", ip, err)
+	}
+}
+
 // TestActorNonDNSUDPIsDropped covers the forward-chain rule behaviorally: only
 // TCP is redirected into atunnel, so UDP on any port but 53 must not reach the
 // masquerade, and DNS must still get through or the sandbox cannot resolve
-// anything.
+// anything. It also pins what the rule must NOT claim: ICMP is dropped too, but
+// by the rule beside it.
 func TestActorNonDNSUDPIsDropped(t *testing.T) {
 	roottest.Require(t, "creating network namespaces, veth pairs, and nftables rules")
 	ctx := context.Background()
@@ -322,14 +368,14 @@ func TestActorNonDNSUDPIsDropped(t *testing.T) {
 			t.Fatalf("SetupActorNetwork: %v", err)
 		}
 
-		before := droppedUDPPackets(t)
+		before := droppedPackets(t, nonDNSUDPDropComment)
 		if err := NetNSDo(ctx, interior, func(context.Context) error {
 			sendUDP(t, net.JoinHostPort(target, "53"))
 			return nil
 		}); err != nil {
 			t.Fatalf("sending DNS from the interior netns: %v", err)
 		}
-		if got := droppedUDPPackets(t); got != before {
+		if got := droppedPackets(t, nonDNSUDPDropComment); got != before {
 			t.Errorf("DNS datagram was dropped: counter went from %d to %d", before, got)
 		}
 
@@ -340,8 +386,81 @@ func TestActorNonDNSUDPIsDropped(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("sending non-DNS UDP from the interior netns: %v", err)
 		}
-		if got := droppedUDPPackets(t); got != before+2 {
+		if got := droppedPackets(t, nonDNSUDPDropComment); got != before+2 {
 			t.Errorf("dropped packets = %d, want %d: non-DNS UDP reached the masquerade", got, before+2)
+		}
+
+		// ICMP is dropped as well, by the rule beside this one, and must not be
+		// counted here. The two counters are what an operator reads to tell which
+		// traffic a workload is losing, so each has to mean the protocol its
+		// comment names -- and an assertion that a packet was dropped proves
+		// nothing about which rule dropped it unless the other counters hold still.
+		before = droppedPackets(t, nonDNSUDPDropComment)
+		if err := NetNSDo(ctx, interior, func(context.Context) error {
+			sendICMPEcho(t, target)
+			return nil
+		}); err != nil {
+			t.Fatalf("sending an echo request from the interior netns: %v", err)
+		}
+		if got := droppedPackets(t, nonDNSUDPDropComment); got != before {
+			t.Errorf("ICMP was counted as non-DNS UDP: counter went from %d to %d", before, got)
+		}
+	})
+}
+
+// sendTCPSYN opens a connection to addr and reports nothing about the outcome:
+// the destination is a dummy device that answers nothing, so the dial always
+// fails. All the test needs is for the SYN to traverse the forward chain.
+func sendTCPSYN(t *testing.T, addr string) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp4", addr, 100*time.Millisecond)
+	if err == nil {
+		conn.Close()
+	}
+}
+
+// TestActorNonTCPUDPEgressIsDropped covers the second forward-chain drop: TCP
+// is redirected into atunnel and UDP is confined to DNS, so anything else --
+// ICMP being the one every sandbox has a client for -- must not reach the
+// masquerade, where it would leave with no CONNECT authority, no access log and
+// no policy hook.
+func TestActorNonTCPUDPEgressIsDropped(t *testing.T) {
+	roottest.Require(t, "creating network namespaces, veth pairs, and nftables rules")
+	ctx := context.Background()
+
+	withTestNetNS(t, func(interior netns.NsHandle) {
+		requireNftables(t)
+
+		const target = "192.0.2.1"
+		addForwardingTarget(t, "192.0.2.254/24")
+		if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
+			t.Fatalf("SetupActorNetwork: %v", err)
+		}
+
+		before := droppedPackets(t, nonTCPUDPDropComment)
+		if err := NetNSDo(ctx, interior, func(context.Context) error {
+			sendICMPEcho(t, target)
+			return nil
+		}); err != nil {
+			t.Fatalf("sending an echo request from the interior netns: %v", err)
+		}
+		if got := droppedPackets(t, nonTCPUDPDropComment); got != before+1 {
+			t.Errorf("dropped packets = %d, want %d: actor ICMP reached the masquerade", got, before+1)
+		}
+
+		// The rule names the protocols it spares rather than the ones it drops, so
+		// the traffic the other rules govern has to stay out of its counter --
+		// otherwise a rule that matched everything would pass the assertion above.
+		before = droppedPackets(t, nonTCPUDPDropComment)
+		if err := NetNSDo(ctx, interior, func(context.Context) error {
+			sendTCPSYN(t, net.JoinHostPort(target, "443"))
+			sendUDP(t, net.JoinHostPort(target, "53"))
+			return nil
+		}); err != nil {
+			t.Fatalf("sending TCP and DNS from the interior netns: %v", err)
+		}
+		if got := droppedPackets(t, nonTCPUDPDropComment); got != before {
+			t.Errorf("TCP or DNS hit the non-TCP/UDP drop: counter went from %d to %d", before, got)
 		}
 	})
 }
