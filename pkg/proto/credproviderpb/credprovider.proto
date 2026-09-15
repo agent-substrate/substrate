@@ -28,39 +28,33 @@ service CredentialProvider {
   rpc RequestSecret(RequestSecretRequest) returns (RequestSecretResponse) {}
 }
 
-// SecretRequestContext is the attested context Substrate passes with a request.
-// The provider is trusted to have authenticated the caller (mutual TLS); the
-// caller is trusted to have attested the actor identity.
-message SecretRequestContext {
-  // The attested actor identity on whose behalf the secret is fetched. Today
-  // this is the actor's SPIFFE URI as verified by the egress gateway; a
-  // verifiable Actor JWT is the intended future form.
-  string actor_identity = 1;
-
-  // The destination hostname the matched egress policy rule authorized, i.e.
+// HttpRequestContext is the attested context Substrate passes with a http request.
+message HttpRequestContext {
+  // The destination authority the matched egress policy rule authorized, i.e.
   // where the credential will be sent.
-  string hostname = 2;
+  string authority = 1;
 
   // The request header the credential will be injected into (e.g.
   // "authorization"), from the matched policy rule.
-  string header = 3;
+  string header = 2;
 }
 
 // RequestSecretRequest asks a provider to resolve one credential URI.
 message RequestSecretRequest {
   // A substrate-secret:// URI:
-  //   substrate-secret://<provider class>/<provider name>/<provider tail>
+  //   substrate-secret://<provider name>/<provider tail>
   string uri = 1;
 
-  // The attested context for the request.
-  SecretRequestContext context = 2;
+  // The attested actor identity on whose behalf the secret is fetched. Today
+  // this is the actor's SPIFFE URI as verified by the egress gateway.
+  string actor_identity = 2;
+
+  // The attested context for http request.
+  HttpRequestContext context = 3;
 }
 
-// RequestSecretResponse carries the resolved credential. The credential members
-// form a union — exactly one is set — expressed as sibling fields per the API
-// style guide, so it can grow other credential shapes (e.g. an mTLS keypair or a
-//  signing key) without breaking callers. Today the only member is a bearer token.
+// RequestSecretResponse carries the resolved credential.
 message RequestSecretResponse {
-  // The raw bearer-token bytes.
-  optional bytes bearer_token = 1;
+  // The raw bytes contains the secret.
+  optional bytes opaque_bytes = 1;
 }

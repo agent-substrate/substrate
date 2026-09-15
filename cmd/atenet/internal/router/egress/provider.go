@@ -14,9 +14,9 @@
 
 // This file connects the egress gateway to the credential provider it resolves
 // egress credential injections through: dialing it, reducing the configured
-// provider name to the class the handler enforces, and the small validators the
-// injection path shares. The gateway's atenet router wires DialProvider and
-// ProviderClass in when it builds the egress handler (see
+// provider prefix to the provider name the handler enforces, and the small
+// validators the injection path shares. The gateway's atenet router wires
+// DialProvider and ProviderName in when it builds the egress handler (see
 // cmd/atenet/internal/router).
 
 package egress
@@ -81,22 +81,23 @@ func DialProvider(ctx context.Context, cfg ProviderDialConfig) (*grpc.ClientConn
 	return grpc.NewClient(cfg.Address, append(dialOpts, statsOpt)...)
 }
 
-// ProviderClass reduces a provider name — a substrate-secret:// class prefix such
-// as substrate-secret://kubernetes.io — to the class the handler compares
-// credential URIs against, so a URI of another class fails closed. An empty name
-// returns an empty class, which disables the check (dev only).
-func ProviderClass(name string) (string, error) {
+// ProviderName reduces a configured provider — a substrate-secret:// prefix such
+// as substrate-secret://kubernetes.io — to the provider name (the URI host) the
+// handler compares credential URIs against, so a URI naming another provider
+// fails closed. An empty input returns an empty name, which disables the check
+// (dev only).
+func ProviderName(name string) (string, error) {
 	if name == "" {
 		return "", nil
 	}
-	return credentialURIClass(name)
+	return providerNameFromURI(name)
 }
 
-// credentialURIClass returns the provider class of a substrate-secret:// URI —
+// providerNameFromURI returns the provider name of a substrate-secret:// URI —
 // the URI host, e.g. "kubernetes.io" in
-// substrate-secret://kubernetes.io/<provider>/<namespace>/<secret>. The gateway
-// uses it to confirm a URI targets the provider class it is configured to serve.
-func credentialURIClass(raw string) (string, error) {
+// substrate-secret://kubernetes.io/<namespace>/<secret>. The gateway uses it to
+// confirm a URI targets the provider it is configured to serve.
+func providerNameFromURI(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("parsing credential URI %q: %w", raw, err)
@@ -105,7 +106,7 @@ func credentialURIClass(raw string) (string, error) {
 		return "", fmt.Errorf("credential URI %q: scheme is %q, want %q", raw, u.Scheme, credentialURIScheme)
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("credential URI %q: missing provider class", raw)
+		return "", fmt.Errorf("credential URI %q: missing provider name", raw)
 	}
 	return u.Host, nil
 }

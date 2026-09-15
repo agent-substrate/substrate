@@ -98,7 +98,7 @@ function usage() {
   echo "                                         the gateway is deployed (e.g. with --deploy-atenet); the credential provider"
   echo "                                         itself is deployed separately. Implies --experimental-use-sdsmint; requires"
   echo "                                         --atenet-dataplane=envoy. (experimental)"
-  echo "  --credential-provider-name NAME        Provider the injector serves, as a substrate-secret:// class prefix"
+  echo "  --credential-provider-name NAME        Provider the injector serves, as a substrate-secret:// prefix"
   echo "                                         (default substrate-secret://kubernetes.io). Only meaningful with"
   echo "                                         --experimental-egress-credential-injection. (experimental)"
   echo "  --credential-provider-address HOST:PORT"

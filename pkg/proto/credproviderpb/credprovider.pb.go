@@ -35,39 +35,33 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SecretRequestContext is the attested context Substrate passes with a request.
-// The provider is trusted to have authenticated the caller (mutual TLS); the
-// caller is trusted to have attested the actor identity.
-type SecretRequestContext struct {
+// HttpRequestContext is the attested context Substrate passes with a http request.
+type HttpRequestContext struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The attested actor identity on whose behalf the secret is fetched. Today
-	// this is the actor's SPIFFE URI as verified by the egress gateway; a
-	// verifiable Actor JWT is the intended future form.
-	ActorIdentity string `protobuf:"bytes,1,opt,name=actor_identity,json=actorIdentity,proto3" json:"actor_identity,omitempty"`
-	// The destination hostname the matched egress policy rule authorized, i.e.
+	// The destination authority the matched egress policy rule authorized, i.e.
 	// where the credential will be sent.
-	Hostname string `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Authority string `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
 	// The request header the credential will be injected into (e.g.
 	// "authorization"), from the matched policy rule.
-	Header        string `protobuf:"bytes,3,opt,name=header,proto3" json:"header,omitempty"`
+	Header        string `protobuf:"bytes,2,opt,name=header,proto3" json:"header,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SecretRequestContext) Reset() {
-	*x = SecretRequestContext{}
+func (x *HttpRequestContext) Reset() {
+	*x = HttpRequestContext{}
 	mi := &file_credprovider_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SecretRequestContext) String() string {
+func (x *HttpRequestContext) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SecretRequestContext) ProtoMessage() {}
+func (*HttpRequestContext) ProtoMessage() {}
 
-func (x *SecretRequestContext) ProtoReflect() protoreflect.Message {
+func (x *HttpRequestContext) ProtoReflect() protoreflect.Message {
 	mi := &file_credprovider_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -79,26 +73,19 @@ func (x *SecretRequestContext) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SecretRequestContext.ProtoReflect.Descriptor instead.
-func (*SecretRequestContext) Descriptor() ([]byte, []int) {
+// Deprecated: Use HttpRequestContext.ProtoReflect.Descriptor instead.
+func (*HttpRequestContext) Descriptor() ([]byte, []int) {
 	return file_credprovider_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *SecretRequestContext) GetActorIdentity() string {
+func (x *HttpRequestContext) GetAuthority() string {
 	if x != nil {
-		return x.ActorIdentity
+		return x.Authority
 	}
 	return ""
 }
 
-func (x *SecretRequestContext) GetHostname() string {
-	if x != nil {
-		return x.Hostname
-	}
-	return ""
-}
-
-func (x *SecretRequestContext) GetHeader() string {
+func (x *HttpRequestContext) GetHeader() string {
 	if x != nil {
 		return x.Header
 	}
@@ -109,10 +96,13 @@ func (x *SecretRequestContext) GetHeader() string {
 type RequestSecretRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// A substrate-secret:// URI:
-	//   substrate-secret://<provider class>/<provider name>/<provider tail>
+	//   substrate-secret://<provider name>/<provider tail>
 	Uri string `protobuf:"bytes,1,opt,name=uri,proto3" json:"uri,omitempty"`
-	// The attested context for the request.
-	Context       *SecretRequestContext `protobuf:"bytes,2,opt,name=context,proto3" json:"context,omitempty"`
+	// The attested actor identity on whose behalf the secret is fetched. Today
+	// this is the actor's SPIFFE URI as verified by the egress gateway.
+	ActorIdentity string `protobuf:"bytes,2,opt,name=actor_identity,json=actorIdentity,proto3" json:"actor_identity,omitempty"`
+	// The attested context for http request.
+	Context       *HttpRequestContext `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -154,22 +144,25 @@ func (x *RequestSecretRequest) GetUri() string {
 	return ""
 }
 
-func (x *RequestSecretRequest) GetContext() *SecretRequestContext {
+func (x *RequestSecretRequest) GetActorIdentity() string {
+	if x != nil {
+		return x.ActorIdentity
+	}
+	return ""
+}
+
+func (x *RequestSecretRequest) GetContext() *HttpRequestContext {
 	if x != nil {
 		return x.Context
 	}
 	return nil
 }
 
-// RequestSecretResponse carries the resolved credential. The credential members
-// form a union — exactly one is set — expressed as sibling fields per the API
-// style guide, so it can grow other credential shapes (e.g. an mTLS keypair or a
-//
-//	signing key) without breaking callers. Today the only member is a bearer token.
+// RequestSecretResponse carries the resolved credential.
 type RequestSecretResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The raw bearer-token bytes.
-	BearerToken   []byte `protobuf:"bytes,1,opt,name=bearer_token,json=bearerToken,proto3,oneof" json:"bearer_token,omitempty"`
+	// The raw bytes contains the secret.
+	OpaqueBytes   []byte `protobuf:"bytes,1,opt,name=opaque_bytes,json=opaqueBytes,proto3,oneof" json:"opaque_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -204,9 +197,9 @@ func (*RequestSecretResponse) Descriptor() ([]byte, []int) {
 	return file_credprovider_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *RequestSecretResponse) GetBearerToken() []byte {
+func (x *RequestSecretResponse) GetOpaqueBytes() []byte {
 	if x != nil {
-		return x.BearerToken
+		return x.OpaqueBytes
 	}
 	return nil
 }
@@ -215,17 +208,17 @@ var File_credprovider_proto protoreflect.FileDescriptor
 
 const file_credprovider_proto_rawDesc = "" +
 	"\n" +
-	"\x12credprovider.proto\x12\fcredprovider\"q\n" +
-	"\x14SecretRequestContext\x12%\n" +
-	"\x0eactor_identity\x18\x01 \x01(\tR\ractorIdentity\x12\x1a\n" +
-	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x16\n" +
-	"\x06header\x18\x03 \x01(\tR\x06header\"f\n" +
+	"\x12credprovider.proto\x12\fcredprovider\"J\n" +
+	"\x12HttpRequestContext\x12\x1c\n" +
+	"\tauthority\x18\x01 \x01(\tR\tauthority\x12\x16\n" +
+	"\x06header\x18\x02 \x01(\tR\x06header\"\x8b\x01\n" +
 	"\x14RequestSecretRequest\x12\x10\n" +
-	"\x03uri\x18\x01 \x01(\tR\x03uri\x12<\n" +
-	"\acontext\x18\x02 \x01(\v2\".credprovider.SecretRequestContextR\acontext\"P\n" +
+	"\x03uri\x18\x01 \x01(\tR\x03uri\x12%\n" +
+	"\x0eactor_identity\x18\x02 \x01(\tR\ractorIdentity\x12:\n" +
+	"\acontext\x18\x03 \x01(\v2 .credprovider.HttpRequestContextR\acontext\"P\n" +
 	"\x15RequestSecretResponse\x12&\n" +
-	"\fbearer_token\x18\x01 \x01(\fH\x00R\vbearerToken\x88\x01\x01B\x0f\n" +
-	"\r_bearer_token2p\n" +
+	"\fopaque_bytes\x18\x01 \x01(\fH\x00R\vopaqueBytes\x88\x01\x01B\x0f\n" +
+	"\r_opaque_bytes2p\n" +
 	"\x12CredentialProvider\x12Z\n" +
 	"\rRequestSecret\x12\".credprovider.RequestSecretRequest\x1a#.credprovider.RequestSecretResponse\"\x00B?Z=github.com/agent-substrate/substrate/pkg/proto/credproviderpbb\x06proto3"
 
@@ -243,12 +236,12 @@ func file_credprovider_proto_rawDescGZIP() []byte {
 
 var file_credprovider_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_credprovider_proto_goTypes = []any{
-	(*SecretRequestContext)(nil),  // 0: credprovider.SecretRequestContext
+	(*HttpRequestContext)(nil),    // 0: credprovider.HttpRequestContext
 	(*RequestSecretRequest)(nil),  // 1: credprovider.RequestSecretRequest
 	(*RequestSecretResponse)(nil), // 2: credprovider.RequestSecretResponse
 }
 var file_credprovider_proto_depIdxs = []int32{
-	0, // 0: credprovider.RequestSecretRequest.context:type_name -> credprovider.SecretRequestContext
+	0, // 0: credprovider.RequestSecretRequest.context:type_name -> credprovider.HttpRequestContext
 	1, // 1: credprovider.CredentialProvider.RequestSecret:input_type -> credprovider.RequestSecretRequest
 	2, // 2: credprovider.CredentialProvider.RequestSecret:output_type -> credprovider.RequestSecretResponse
 	2, // [2:3] is the sub-list for method output_type

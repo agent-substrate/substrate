@@ -34,7 +34,7 @@ egress_credential_injection_enabled() {
 
 # Arguments:
 #
-# $1 = credential-provider name (substrate-secret:// class prefix)
+# $1 = credential-provider name (substrate-secret:// prefix)
 # $2 = credential-provider gRPC address
 # $3 = credential-provider serving-cert SAN to pin
 emit_egress_inject_flags() {

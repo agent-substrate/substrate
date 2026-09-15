@@ -30,8 +30,8 @@ import (
 )
 
 // credentialInjectionPolicySample injects "authorization: Bearer <secret>" from
-// substrate-secret://k8s/default/token, so the provider class under test is "k8s".
-const injectionProviderClass = "k8s"
+// substrate-secret://k8s/default/token, so the provider name under test is "k8s".
+const injectionProviderName = "k8s"
 
 // fakeProvider is a stub CredentialProviderClient recording the last request.
 type fakeProvider struct {
@@ -46,16 +46,16 @@ func (f *fakeProvider) RequestSecret(_ context.Context, req *credproviderpb.Requ
 }
 
 // bearerTokenResponse is a RequestSecretResponse carrying a bearer-token
-// credential.
+// credential as its opaque secret bytes.
 func bearerTokenResponse(token string) *credproviderpb.RequestSecretResponse {
-	return &credproviderpb.RequestSecretResponse{BearerToken: []byte(token)}
+	return &credproviderpb.RequestSecretResponse{OpaqueBytes: []byte(token)}
 }
 
 // injectionHandler builds a handler whose actor's policy injects a credential
 // for api.example.com, with provider as the credential provider (nil leaves
 // injection off).
-func injectionHandler(provider credproviderpb.CredentialProviderClient, providerClass string) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("api.example.com")}, nil, 0, provider, providerClass)
+func injectionHandler(provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+	return New(&egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("api.example.com")}, nil, 0, provider, providerName)
 }
 
 // On the TLS-terminated MITM leg an allowed rule's credential is resolved and
@@ -63,7 +63,7 @@ func injectionHandler(provider credproviderpb.CredentialProviderClient, provider
 // URI with the actor's SPIFFE identity as context.
 func TestInjectionOnTLSLeg(t *testing.T) {
 	provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t\n")}
-	h := injectionHandler(provider, injectionProviderClass)
+	h := injectionHandler(provider, injectionProviderName)
 
 	res, err := h.HandleRequestHeaders(context.Background(),
 		innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
@@ -88,8 +88,14 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 	if got := provider.got.GetUri(); got != "substrate-secret://k8s/default/token" {
 		t.Errorf("provider URI = %q", got)
 	}
-	if got := provider.got.GetContext().GetActorIdentity(); got != testActorSPIFFEID {
+	if got := provider.got.GetActorIdentity(); got != testActorSPIFFEID {
 		t.Errorf("actor identity = %q, want %q", got, testActorSPIFFEID)
+	}
+	if got := provider.got.GetContext().GetAuthority(); got != "api.example.com" {
+		t.Errorf("context authority = %q, want api.example.com", got)
+	}
+	if got := provider.got.GetContext().GetHeader(); got != "authorization" {
+		t.Errorf("context header = %q, want authorization", got)
 	}
 }
 
@@ -118,9 +124,9 @@ func TestInjectionSkippedAndPassedThrough(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var h *Handler
 			if tc.provider == nil {
-				h = injectionHandler(nil, injectionProviderClass)
+				h = injectionHandler(nil, injectionProviderName)
 			} else {
-				h = injectionHandler(tc.provider, injectionProviderClass)
+				h = injectionHandler(tc.provider, injectionProviderName)
 			}
 			res, err := h.HandleRequestHeaders(context.Background(),
 				innerMetadata(tc.leg, "GET", "api.example.com", nil))
@@ -142,61 +148,61 @@ func TestInjectionSkippedAndPassedThrough(t *testing.T) {
 // request without it.
 func TestInjectionDenials(t *testing.T) {
 	tests := []struct {
-		name          string
-		provider      *fakeProvider
-		providerClass string
-		leg           string
-		want          envoy_type.StatusCode
+		name         string
+		provider     *fakeProvider
+		providerName string
+		leg          string
+		want         envoy_type.StatusCode
 	}{
 		{
-			name:          "wrong provider class is refused",
-			provider:      &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
-			providerClass: "vault", // policy URI is substrate-secret://k8s/...
-			leg:           extproc.EgressTLSMITMFilterChainName,
-			want:          envoy_type.StatusCode_InternalServerError,
+			name:         "credential URI for another provider is refused",
+			provider:     &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
+			providerName: "vault", // policy URI is substrate-secret://k8s/...
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_InternalServerError,
 		},
 		{
 			// A transient provider failure is retryable.
-			name:          "provider unavailable fails closed as retryable",
-			provider:      &fakeProvider{err: status.Error(codes.Unavailable, "provider down")},
-			providerClass: injectionProviderClass,
-			leg:           extproc.EgressTLSMITMFilterChainName,
-			want:          envoy_type.StatusCode_ServiceUnavailable,
+			name:         "provider unavailable fails closed as retryable",
+			provider:     &fakeProvider{err: status.Error(codes.Unavailable, "provider down")},
+			providerName: injectionProviderName,
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_ServiceUnavailable,
 		},
 		{
 			// A secret the provider does not hold cannot appear on retry.
-			name:          "secret not found denies as non-retryable",
-			provider:      &fakeProvider{err: status.Error(codes.NotFound, "no such secret")},
-			providerClass: injectionProviderClass,
-			leg:           extproc.EgressTLSMITMFilterChainName,
-			want:          envoy_type.StatusCode_Forbidden,
+			name:         "secret not found denies as non-retryable",
+			provider:     &fakeProvider{err: status.Error(codes.NotFound, "no such secret")},
+			providerName: injectionProviderName,
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name:          "provider refuses the actor denies as non-retryable",
-			provider:      &fakeProvider{err: status.Error(codes.PermissionDenied, "atespace not allowed")},
-			providerClass: injectionProviderClass,
-			leg:           extproc.EgressTLSMITMFilterChainName,
-			want:          envoy_type.StatusCode_Forbidden,
+			name:         "provider refuses the actor denies as non-retryable",
+			provider:     &fakeProvider{err: status.Error(codes.PermissionDenied, "atespace not allowed")},
+			providerName: injectionProviderName,
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
 			// An unclassified error denies rather than inviting retries.
-			name:          "unexpected provider error denies",
-			provider:      &fakeProvider{err: errors.New("provider down")},
-			providerClass: injectionProviderClass,
-			leg:           extproc.EgressTLSMITMFilterChainName,
-			want:          envoy_type.StatusCode_Forbidden,
+			name:         "unexpected provider error denies",
+			provider:     &fakeProvider{err: errors.New("provider down")},
+			providerName: injectionProviderName,
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name:          "empty secret fails closed",
-			provider:      &fakeProvider{resp: bearerTokenResponse("")},
-			providerClass: injectionProviderClass,
-			leg:           extproc.EgressTLSMITMFilterChainName,
-			want:          envoy_type.StatusCode_ServiceUnavailable,
+			name:         "empty secret fails closed",
+			provider:     &fakeProvider{resp: bearerTokenResponse("")},
+			providerName: injectionProviderName,
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_ServiceUnavailable,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := injectionHandler(tc.provider, tc.providerClass)
+			h := injectionHandler(tc.provider, tc.providerName)
 			_, err := h.HandleRequestHeaders(context.Background(),
 				innerMetadata(tc.leg, "GET", "api.example.com", nil))
 			wantStatus(t, err, tc.want)

@@ -223,9 +223,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		// With no address the handler gets no provider, so an
 		// injection-requiring rule is skipped (see egress.applyEffects).
 		var provider credproviderpb.CredentialProviderClient
-		var providerClass string
+		var providerName string
 		if s.cfg.CredentialProvider.Address != "" {
-			providerClass, err = egress.ProviderClass(s.cfg.CredentialProvider.Name)
+			providerName, err = egress.ProviderName(s.cfg.CredentialProvider.Name)
 			if err != nil {
 				return fmt.Errorf("--credential-provider-name: %w", err)
 			}
@@ -246,7 +246,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				slog.String("provider_name", s.cfg.CredentialProvider.Name))
 		}
 
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerClass)
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

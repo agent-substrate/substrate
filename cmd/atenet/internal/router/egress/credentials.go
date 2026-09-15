@@ -90,31 +90,31 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 			return nil, extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, deniedBody)
 		}
 
-		// Confirm the credential URI targets the provider class this gateway
-		// serves before dialing: the configured provider fronts one class, so a
-		// URI of another class cannot be resolved here and must fail closed rather
-		// than be sent to the wrong provider.
-		if h.providerClass != "" {
-			class, err := credentialURIClass(inj.GetCredentialUri())
+		// Confirm the credential URI names the provider this gateway serves
+		// before dialing: the configured connection fronts one provider, so a URI
+		// naming another cannot be resolved here and must fail closed rather than
+		// be sent to the wrong provider.
+		if h.providerName != "" {
+			name, err := providerNameFromURI(inj.GetCredentialUri())
 			if err != nil {
 				slog.ErrorContext(ctx, "egress denied: policy names an unparseable credential URI",
 					slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", inj.GetCredentialUri()), slog.Any("err", err))
 				return nil, extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, deniedBody)
 			}
-			if class != h.providerClass {
-				slog.ErrorContext(ctx, "egress denied: credential URI targets an unserved provider class",
+			if name != h.providerName {
+				slog.ErrorContext(ctx, "egress denied: credential URI names a provider this gateway does not serve",
 					slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", inj.GetCredentialUri()),
-					slog.String("class", class), slog.String("serves", h.providerClass))
+					slog.String("provider", name), slog.String("serves", h.providerName))
 				return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
 			}
 		}
 
 		resp, err := h.provider.RequestSecret(ctx, &credproviderpb.RequestSecretRequest{
-			Uri: inj.GetCredentialUri(),
-			Context: &credproviderpb.SecretRequestContext{
-				ActorIdentity: actorIdentity,
-				Hostname:      dest.Hostname,
-				Header:        inj.GetHeader(),
+			Uri:           inj.GetCredentialUri(),
+			ActorIdentity: actorIdentity,
+			Context: &credproviderpb.HttpRequestContext{
+				Authority: dest.Hostname,
+				Header:    inj.GetHeader(),
 			},
 		})
 		if err != nil {
@@ -124,7 +124,7 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", inj.GetCredentialUri()), slog.Any("err", err))
 			return nil, mapCredentialProviderError(err)
 		}
-		secret, err := sanitizeSecret(resp.GetBearerToken())
+		secret, err := sanitizeSecret(resp.GetOpaqueBytes())
 		if err != nil {
 			slog.ErrorContext(ctx, "egress denied: unusable credential",
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", inj.GetCredentialUri()), slog.Any("err", err))
