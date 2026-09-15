@@ -56,6 +56,8 @@ OTLP_ENDPOINT=""
 # The timeout, in whole seconds, for waiting for the ateom worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
+WORKER_NODE_SELECTOR="{}"
+WORKER_TOLERATIONS="[]"
 
 usage() {
   echo "Usage: $0 [options]"
@@ -72,6 +74,8 @@ usage() {
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
   echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --node-selector KEY=VALUE  Require worker pods on nodes with this label (repeatable)"
+  echo "  --toleration KEY=VALUE:EFFECT  Tolerate a matching worker-node taint (repeatable)"
   echo "  -h, --help                  Show this help message"
 }
 
@@ -133,6 +137,8 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${WORKER_NODE_SELECTOR}|${WORKER_NODE_SELECTOR}|g" \
+      -e "s|\${WORKER_TOLERATIONS}|${WORKER_TOLERATIONS}|g" \
       "${manifest}"
 }
 
@@ -276,6 +282,70 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --wait-timeout=*)
       WAIT_TIMEOUT_SECS="${1#*=}"
+      ;;
+    --node-selector)
+      shift
+      selector="$1"
+      if [[ ! "${selector}" =~ ^[^=[:space:]]+=[^=[:space:]]+$ ]]; then
+        echo "Error: --node-selector must be KEY=VALUE, got '${selector}'" >&2
+        exit 1
+      fi
+      selector_key="${selector%%=*}"
+      selector_value="${selector#*=}"
+      if [[ "${WORKER_NODE_SELECTOR}" == "{}" ]]; then
+        WORKER_NODE_SELECTOR="{\"${selector_key}\":\"${selector_value}\"}"
+      else
+        WORKER_NODE_SELECTOR="${WORKER_NODE_SELECTOR%\}} ,\"${selector_key}\":\"${selector_value}\"}"
+      fi
+      ;;
+    --node-selector=*)
+      selector="${1#*=}"
+      if [[ ! "${selector}" =~ ^[^=[:space:]]+=[^=[:space:]]+$ ]]; then
+        echo "Error: --node-selector must be KEY=VALUE, got '${selector}'" >&2
+        exit 1
+      fi
+      selector_key="${selector%%=*}"
+      selector_value="${selector#*=}"
+      if [[ "${WORKER_NODE_SELECTOR}" == "{}" ]]; then
+        WORKER_NODE_SELECTOR="{\"${selector_key}\":\"${selector_value}\"}"
+      else
+        WORKER_NODE_SELECTOR="${WORKER_NODE_SELECTOR%\}} ,\"${selector_key}\":\"${selector_value}\"}"
+      fi
+      ;;
+    --toleration)
+      shift
+      toleration="$1"
+      if [[ ! "${toleration}" =~ ^[^=[:space:]]+=[^:[:space:]]+:(NoSchedule|PreferNoSchedule|NoExecute)$ ]]; then
+        echo "Error: --toleration must be KEY=VALUE:EFFECT, got '${toleration}'" >&2
+        exit 1
+      fi
+      toleration_key="${toleration%%=*}"
+      toleration_value_effect="${toleration#*=}"
+      toleration_value="${toleration_value_effect%%:*}"
+      toleration_effect="${toleration_value_effect#*:}"
+      entry="{\"key\":\"${toleration_key}\",\"operator\":\"Equal\",\"value\":\"${toleration_value}\",\"effect\":\"${toleration_effect}\"}"
+      if [[ "${WORKER_TOLERATIONS}" == "[]" ]]; then
+        WORKER_TOLERATIONS="[${entry}]"
+      else
+        WORKER_TOLERATIONS="${WORKER_TOLERATIONS%]} ,${entry}]"
+      fi
+      ;;
+    --toleration=*)
+      toleration="${1#*=}"
+      if [[ ! "${toleration}" =~ ^[^=[:space:]]+=[^:[:space:]]+:(NoSchedule|PreferNoSchedule|NoExecute)$ ]]; then
+        echo "Error: --toleration must be KEY=VALUE:EFFECT, got '${toleration}'" >&2
+        exit 1
+      fi
+      toleration_key="${toleration%%=*}"
+      toleration_value_effect="${toleration#*=}"
+      toleration_value="${toleration_value_effect%%:*}"
+      toleration_effect="${toleration_value_effect#*:}"
+      entry="{\"key\":\"${toleration_key}\",\"operator\":\"Equal\",\"value\":\"${toleration_value}\",\"effect\":\"${toleration_effect}\"}"
+      if [[ "${WORKER_TOLERATIONS}" == "[]" ]]; then
+        WORKER_TOLERATIONS="[${entry}]"
+      else
+        WORKER_TOLERATIONS="${WORKER_TOLERATIONS%]} ,${entry}]"
+      fi
       ;;
     -h|--help)
       usage
