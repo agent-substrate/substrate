@@ -87,9 +87,9 @@ rejects that option with agentgateway rather than silently omitting it.
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
   atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.
 - **Egress policy** — the gateway denies by default, so the demo Actor needs an `EgressPolicy`
-  (created through the `CreateActorEgressPolicy` API against the Actor) before its fetches
-  succeed. `kubectl ate` has no verb for it yet; the e2e suites create theirs with
-  `e2e.EnsureEgressPolicy`, and an `all` rule reproduces the pre-policy behavior.
+  before its fetches succeed. `kubectl ate create egress-policy` creates one from a manifest
+  (step 3 below) and `kubectl ate get egress-policy` reads it back; the e2e suites create theirs
+  with `e2e.EnsureEgressPolicy`. An `all` rule reproduces the pre-policy behavior.
 - **Actor-identity trust** — the gateway mounts the `actor-id-ca-certs` Secret, a cert-only copy of
   the actor-identity CA root that `hack/install-ate.sh` derives from `actor-id-ca-pool` (which also
   holds the CA signing key and is deliberately *not* mounted here).
@@ -147,7 +147,15 @@ TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterI
 kubectl ate create actor egress-demo -a ate-demo-egress --template egress
 kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
 
-# 3. Drive the Actor's egress through the ingress gateway.
+# 3. Allow the Actor's egress; without a policy the gateway denies everything.
+kubectl ate create egress-policy egress-demo -a ate-demo-egress -f - <<'EOF'
+rules:
+- all: {}
+EOF
+
+# 4. Drive the Actor's egress through the ingress gateway. The gateway caches a
+#    missing policy as deny for 10s (--egress-policy-cache-ttl), so a fetch tried
+#    before step 3 keeps failing for up to that long after the policy appears.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
 curl -s -X POST http://localhost:8000/ \
   -H 'ate-target-actor: ate-demo-egress/egress-demo' \
@@ -224,8 +232,6 @@ from the cluster, works for a manual run.
   destinations against the Actor's `EgressPolicy`. Injecting upstream credentials/tokens is a
   follow-up in the same `ext_proc`; a policy rule that declares an injection is denied (501)
   until it lands.
-- `test-egress.sh` creates and resumes the Actor but cannot create its `EgressPolicy` (no CLI
-  verb yet), so its positive fetch needs the policy created out of band first.
 - Identity comes entirely from the actor certificate: the atespace, actor name, and UID are read
   out of the `ActorIdentity` extension and the UID is matched against the live actor, so a
   certificate cannot survive its actor being deleted and recreated under the same name. Nothing
