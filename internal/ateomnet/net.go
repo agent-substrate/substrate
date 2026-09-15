@@ -29,6 +29,7 @@ import (
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
+	"github.com/google/nftables/userdata"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
@@ -45,6 +46,9 @@ const (
 
 	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
 	ActorVethSubnet = "169.254.17.0/30"
+
+	nonDNSUDPDropComment = "actor UDP egress to any port but DNS"
+	nonTCPUDPDropComment = "actor egress that is neither TCP nor UDP"
 )
 
 var (
@@ -214,8 +218,9 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	//     listener. REDIRECT preserves SO_ORIGINAL_DST for the CONNECT authority.
 	//   * postrouting: masquerade traffic not handled by the TCP tunnel, notably
 	//     DNS over UDP, so hostname resolution continues to work.
-	//   * forward: drop actor UDP egress to any port but DNS, and accept the rest
-	//     of the packets forwarded between the actor veth and pod eth0.
+	//   * forward: drop actor UDP egress to any port but DNS, drop actor egress
+	//     that is neither TCP nor UDP, and accept the rest of the packets
+	//     forwarded between the actor veth and pod eth0.
 	if err := RemoveActorNftablesRules(); err != nil {
 		return err
 	}
@@ -260,9 +265,11 @@ func InstallActorNftablesRules(egressPort uint16) error {
 		Priority: nftables.ChainPriorityFilter,
 		Policy:   &acceptPolicy,
 	})
-	// Order matters: the accept below is a catch-all, so the drop has to precede
-	// it.
+	// Order matters: the accept below is a catch-all, so the drops have to
+	// precede it. The two drops match disjoint sets of packets, so their order
+	// relative to each other does not.
 	c.AddRule(actorNonDNSUDPDropRule(table, forward))
+	c.AddRule(actorNonTCPUDPDropRule(table, forward))
 	c.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: forward,
@@ -331,6 +338,30 @@ func l4ProtocolEqual(proto byte) []expr.Any {
 	}
 }
 
+// l4ProtocolNotIn matches packets whose L4 protocol is none of protos. Every
+// comparison reads the register the meta expression loads, and a rule's
+// expressions are a conjunction, so only a packet that differs from all of them
+// reaches the verdict.
+func l4ProtocolNotIn(protos ...byte) []expr.Any {
+	exprs := []expr.Any{&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1}}
+	for _, proto := range protos {
+		exprs = append(exprs, &expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     []byte{proto},
+		})
+	}
+	return exprs
+}
+
+// ruleComment returns nftables userdata carrying comment, which `nft list table
+// ip ateom_actor` prints beside the rule. The forward chain holds more than one
+// counted drop, and an operator reading a rising counter needs to know which
+// traffic it stands for without decoding the expressions.
+func ruleComment(comment string) []byte {
+	return userdata.AppendString(nil, userdata.TypeComment, comment)
+}
+
 // ActorEgressRedirectRule returns the prerouting rule that redirects actor TCP
 // egress to the local atunnel egress listener on port, or nil when port is zero
 // (tunneled egress disabled, so actor egress stays on the masquerade path).
@@ -376,7 +407,32 @@ func actorNonDNSUDPDropRule(table *nftables.Table, chain *nftables.Chain) *nftab
 		&expr.Counter{},
 		&expr.Verdict{Kind: expr.VerdictDrop},
 	)
-	return &nftables.Rule{Table: table, Chain: chain, Exprs: exprs}
+	return &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		Exprs:    exprs,
+		UserData: ruleComment(nonDNSUDPDropComment),
+	}
+}
+
+// actorNonTCPUDPDropRule returns the forward-chain rule that drops actor egress
+// that is neither TCP nor UDP.
+//
+// This rule counts what it drops, so a workload that legitimately needs another
+// protocol shows up as a rising counter in `nft list table ip ateom_actor`
+// rather than as an unexplained timeout.
+func actorNonTCPUDPDropRule(table *nftables.Table, chain *nftables.Chain) *nftables.Rule {
+	exprs := append(IPSourceEqual(ActorVethIP), l4ProtocolNotIn(unix.IPPROTO_TCP, unix.IPPROTO_UDP)...)
+	exprs = append(exprs,
+		&expr.Counter{},
+		&expr.Verdict{Kind: expr.VerdictDrop},
+	)
+	return &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		Exprs:    exprs,
+		UserData: ruleComment(nonTCPUDPDropComment),
+	}
 }
 
 // CreateNetNSWithoutSwitching creates a named netns and returns its handle,
@@ -499,7 +555,8 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	//
 	// The nftables rules installed here redirect actor TCP egress to atunnel
 	// when configured, masquerade traffic the TCP tunnel does not handle
-	// (notably DNS over UDP), and drop actor UDP egress to any other port.
+	// (notably DNS over UDP), and drop the rest of actor egress: UDP to any
+	// other port, and anything that is neither TCP nor UDP.
 	//
 	// Clean up stale state from a failed prior activation before creating the
 	// next actor-side network. The worker currently runs one actor at a time.
