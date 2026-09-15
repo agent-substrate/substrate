@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
 	grpcCodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
@@ -170,12 +171,22 @@ type actorWorkflowStore interface {
 // does from the other side: releasing the Actor bound to a Worker stays
 // in-process because there is no bind/release RPC.
 type WorkerWorkflow struct {
-	store workerWorkflowStore
+	store  workerWorkflowStore
+	dialer ateletNodeDialer
 }
 
-// NewWorkerWorkflow creates a new WorkerWorkflow.
-func NewWorkerWorkflow(store workerWorkflowStore) *WorkerWorkflow {
-	return &WorkerWorkflow{store: store}
+// ateletNodeDialer reaches the atelet on a named node. Narrower than the
+// *AteletDialer the actor workflows hold, because a Worker being deleted has
+// lost its pod: the by-pod lookup those use cannot resolve, and the node is
+// the only handle left on the atelet still holding the actor's state.
+type ateletNodeDialer interface {
+	DialForAteletOnNode(nodeName string) (*grpc.ClientConn, error)
+}
+
+// NewWorkerWorkflow creates a new WorkerWorkflow. A nil dialer disables the
+// node-state reclaim step (tests that assert only on store transitions).
+func NewWorkerWorkflow(store workerWorkflowStore, dialer ateletNodeDialer) *WorkerWorkflow {
+	return &WorkerWorkflow{store: store, dialer: dialer}
 }
 
 // workerWorkflowStore enumerates the exact storage methods needed by
