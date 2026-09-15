@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -42,6 +43,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
 // dataPlaneTraceRatio is the default root sampling fraction for parentless
@@ -216,7 +218,35 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				return fmt.Errorf("loading --actor-identity-ca-file %q: %w", s.cfg.ActorIdentityCAFile, err)
 			}
 		}
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL)
+		// Enable egress credential injection when a credential provider address
+		// is set: dial the provider over mTLS and hand the client to the handler.
+		// With no address the handler gets no provider, so an
+		// injection-requiring rule is skipped (see egress.applyEffects).
+		var provider credproviderpb.CredentialProviderClient
+		var providerName string
+		if s.cfg.CredentialProvider.Address != "" {
+			providerName, err = egress.ProviderName(s.cfg.CredentialProvider.Name)
+			if err != nil {
+				return fmt.Errorf("--credential-provider-name: %w", err)
+			}
+			providerConn, err := egress.DialProvider(ctx, egress.ProviderDialConfig{
+				Address:    s.cfg.CredentialProvider.Address,
+				CAFile:     s.cfg.CredentialProvider.CAFile,
+				ClientCert: s.cfg.CredentialProvider.ClientCert,
+				ServerName: s.cfg.CredentialProvider.ServerName,
+				Insecure:   s.cfg.CredentialProvider.Insecure,
+			})
+			if err != nil {
+				return fmt.Errorf("dial credential provider: %w", err)
+			}
+			defer providerConn.Close()
+			provider = credproviderpb.NewCredentialProviderClient(providerConn)
+			slog.InfoContext(ctx, "egress credential injection enabled",
+				slog.String("provider", s.cfg.CredentialProvider.Address),
+				slog.String("provider_name", s.cfg.CredentialProvider.Name))
+		}
+
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 
@@ -250,10 +280,18 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// cancel: ext_proc is failClosed, so it must outlive the dataplane's drain.
 	extprocGRPC := s.extprocSrv.NewGRPCServer()
 	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting ExtProc Server", slog.Int("port", s.cfg.ExtprocPort))
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.ExtprocPort))
+		// Bind the address the dataplane dials the ext_proc server on, which
+		// defaults to loopback (--extproc-address 127.0.0.1). The dataplane is
+		// co-located in the same pod and always dials over loopback, so binding
+		// loopback keeps the ext_proc server unreachable from other pods on the
+		// flat pod network, where nothing authenticates the caller. Readiness is
+		// probed via /readyz on the metrics port, not this one, so a loopback bind
+		// does not break it. An empty address binds every interface.
+		extprocListenAddr := net.JoinHostPort(s.cfg.ExtprocAddr, strconv.Itoa(s.cfg.ExtprocPort))
+		slog.InfoContext(ctx, "Starting ExtProc Server", slog.String("address", extprocListenAddr))
+		lis, err := net.Listen("tcp", extprocListenAddr)
 		if err != nil {
-			return fmt.Errorf("failed to listen on extproc port %d: %w", s.cfg.ExtprocPort, err)
+			return fmt.Errorf("failed to listen on extproc address %q: %w", extprocListenAddr, err)
 		}
 		defer lis.Close()
 
