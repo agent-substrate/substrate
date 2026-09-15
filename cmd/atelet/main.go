@@ -352,6 +352,18 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
 	}
 
+	// Started here because the sweep is scoped by node, and the node name is
+	// what the atelet's own certificate asserts — the same identity the
+	// control plane authenticates it by. Only the pod-identity signer can mint
+	// it, so it cannot disagree with where this atelet actually runs.
+	if err := validateActorGCFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid actor GC flags", err)
+	}
+	go newActorGC(
+		ateompath.ActorsDir,
+		&controlPlaneActors{client: ateapipb.NewControlClient(ateapiConn), nodeName: ateletIdentity.NodeName},
+		systemInfoVolumes.RegisteredActorUIDs,
+	).Run(ctx)
 	ateomFacingTLS := tlsCfg.Clone()
 	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
 	if err := os.Remove(ateompath.AteomSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
