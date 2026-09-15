@@ -151,6 +151,6 @@ func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, c
 	defer conn.Close()
 	callCtx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateletpb.NewWorkerCapacityClient(conn).SetWorkerCapacity(callCtx, capacity)
+	_, err = ateletpb.NewAteomSupportClient(conn).SetWorkerCapacity(callCtx, capacity)
 	return err
 }
