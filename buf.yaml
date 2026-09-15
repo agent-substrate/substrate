@@ -1,0 +1,51 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: v2
+
+# One module rooted at the repository, so a proto's import path is its path
+# from the root. That is what hack/update/codegen.sh compiles with
+# (`protoc -I "${ROOT}"`), and what internal/proto/ateletpb/atelet.proto
+# already relies on when it imports "pkg/proto/ateapipb/ateapi.proto".
+modules:
+  - path: .
+    excludes:
+      # Build output, not source.
+      - bin
+      # Python virtualenvs live here (benchmarking/locust/venv and three
+      # siblings). They are gitignored, so they exist only on a machine that
+      # has run the load tests -- but buf walks the working tree, not the
+      # index, and site-packages carries thousands of .proto files that do not
+      # compile out of context. Excluding the tree rather than each venv keeps
+      # a new one from breaking the check. No first-party proto lives here;
+      # the Python client is generated into it from pkg/proto.
+      - benchmarking
+      # Third-party protos. Their compatibility is upstream's to manage, and
+      # a breaking change there arrives as a dependency bump we cannot fix by
+      # editing the file.
+      - vendor
+      - cmd/ateom-microvm/internal/third_party
+
+breaking:
+  # WIRE, not WIRE_JSON or FILE.
+  #
+  # The control plane persists resources as binary protobuf in bytea columns
+  # (cmd/ateapi/internal/store/atepg/atepg.go), and binary protobuf keys every
+  # field on its field number alone. WIRE is therefore exactly the boundary
+  # that protects data already in the database: it rejects renumbering a
+  # field, reusing a retired number, deleting a field without reserving it,
+  # and changing a field's type or cardinality, while permitting the renames
+  # that cost stored rows nothing.
+  use:
+    - WIRE

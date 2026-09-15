@@ -118,6 +118,10 @@ message TerminateWorkloadResponse {
 }
 
 message RunWorkloadRequest {
+  // Retired field number. A skewed peer may still send it, so reusing the
+  // number would decode that value into whatever field takes it next.
+  reserved 9;
+
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
@@ -295,6 +299,9 @@ message CheckpointWorkloadResponse {
 }
 
 message RestoreWorkloadRequest {
+  // Retired field number. See the note on RunWorkloadRequest.
+  reserved 11;
+
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
