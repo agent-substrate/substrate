@@ -29,9 +29,9 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"google.golang.org/grpc"
 )
 
 func TestURL(t *testing.T) {
@@ -272,10 +272,10 @@ func pickFreePort(t *testing.T) int {
 	return port
 }
 
-// WaitAll is an ateom RPC boundary, so the reason has to reach atelet as an
-// ErrorInfo detail. A %w-wrapped Reason does not: errors.As cannot cross a
-// process, and the interceptor flattens a statusless error to a bare
-// codes.Internal, which reads back as UNKNOWN.
+// WaitAll's callers are ateom RPC handlers, so the reason has to reach atelet
+// as an ErrorInfo detail. A %w-wrapped Reason cannot cross a process on its
+// own; the server interceptor is what surfaces it, so run the error through
+// the real one.
 func TestWaitAll_ReasonSurvivesTheRPCBoundary(t *testing.T) {
 	port := pickFreePort(t)
 	containers := []*ateompb.Container{{
@@ -291,18 +291,12 @@ func TestWaitAll_ReasonSurvivesTheRPCBoundary(t *testing.T) {
 	}
 
 	// What the interceptor does to a handler error, then what atelet reads.
-	overWire := fmt.Errorf("while calling ateom.RunWorkload: %w", asHandlerReturns(err))
+	handler := func(ctx context.Context, req any) (any, error) {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
+	}
+	_, rpcErr := ateinterceptors.InternalServerUnaryInterceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test.Service/RunWorkload"}, handler)
+	overWire := fmt.Errorf("while calling ateom.RunWorkload: %w", rpcErr)
 	if got := ateattr.FailureReason(overWire); got != string(ateerrors.ReasonWorkloadNotReady) {
 		t.Errorf("after the RPC hop FailureReason = %q, want %q", got, ateerrors.ReasonWorkloadNotReady)
 	}
-}
-
-// asHandlerReturns mimics ateinterceptors: a status error in the chain is
-// forwarded whole, anything else collapses to codes.Internal with only a message.
-func asHandlerReturns(err error) error {
-	var statusErr interface{ GRPCStatus() *status.Status }
-	if errors.As(err, &statusErr) {
-		return statusErr.GRPCStatus().Err()
-	}
-	return status.Error(codes.Internal, err.Error())
 }

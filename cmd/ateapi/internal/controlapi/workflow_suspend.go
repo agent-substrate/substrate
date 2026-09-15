@@ -264,7 +264,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	_, err = client.Checkpoint(ctx, req)
-	return wireSnapshotScope, maybeCrashActor(ctx, w.store, actorRef, err, "while checkpointing workload", ateattr.OperationSuspend)
+	return wireSnapshotScope, crashActorOnError(ctx, w.store, actorRef, err, ateattr.OperationSuspend)
 }
 
 // ensurePausedSnapshotUploaded suspends a PAUSED actor by telling the atelet
@@ -316,7 +316,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 
 	_, err = client.UploadPausedCheckpoint(ctx, req)
-	return wireSnapshotScope, maybeCrashActor(ctx, w.store, actorRef, err, "while uploading paused snapshot", ateattr.OperationSuspend)
+	return wireSnapshotScope, crashActorOnError(ctx, w.store, actorRef, err, ateattr.OperationSuspend)
 }
 
 // inProgressSnapshotURI is where the snapshot an actor is currently taking is
