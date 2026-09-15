@@ -233,7 +233,7 @@ rules:
 	}
 }
 
-func TestFillEgressPolicyMetadata(t *testing.T) {
+func TestOverrideEgressPolicyMetadata(t *testing.T) {
 	t.Parallel()
 
 	rules := []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
@@ -281,15 +281,15 @@ func TestFillEgressPolicyMetadata(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := fillEgressPolicyMetadata(test.policy, "team-a")
+			err := overrideEgressPolicyMetadata(test.policy, "team-a")
 			if test.wantErrContains != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErrContains) {
-					t.Fatalf("fillEgressPolicyMetadata() error = %v, want it to contain %q", err, test.wantErrContains)
+					t.Fatalf("overrideEgressPolicyMetadata() error = %v, want it to contain %q", err, test.wantErrContains)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("fillEgressPolicyMetadata() error = %v, want nil", err)
+				t.Fatalf("overrideEgressPolicyMetadata() error = %v, want nil", err)
 			}
 			if diff := cmp.Diff(test.want, test.policy, protocmp.Transform()); diff != "" {
 				t.Errorf("policy mismatch (-want +got):\n%s", diff)
@@ -342,6 +342,9 @@ func TestEgressPolicyCommandArgs(t *testing.T) {
 		{name: "get", command: getEgressPolicyCmd, args: []string{"c1"}},
 		{name: "get requires actor", command: getEgressPolicyCmd, wantErr: true},
 		{name: "get rejects multiple", command: getEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
+		{name: "create", command: createEgressPolicyCmd, args: []string{"c1"}},
+		{name: "create requires actor", command: createEgressPolicyCmd, wantErr: true},
+		{name: "create rejects multiple", command: createEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
 	})
 }
 
@@ -454,6 +457,119 @@ rules:
 			}
 			if diff := cmp.Diff(test.wantErrOut, stderr.String()); diff != "" {
 				t.Errorf("stderr mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// fakeEgressPolicyCreator records the request it received and answers with a
+// configured policy or error.
+type fakeEgressPolicyCreator struct {
+	req    *ateapipb.CreateActorEgressPolicyRequest
+	policy *ateapipb.EgressPolicy
+	err    error
+}
+
+func (f *fakeEgressPolicyCreator) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	f.req = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.policy, nil
+}
+
+func TestCreateEgressPolicyRunner_Run(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinTime(t, now)
+
+	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
+	rules := []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}}
+	// A manifest cloned from another actor still carries that actor's
+	// server-managed fields; the CLI sends them as is and the server scrubs them.
+	manifest := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "old-uid", Version: 7},
+		Rules:    rules,
+	}
+	created := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace:   "team-a",
+			Name:       "default",
+			Uid:        "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d",
+			Version:    1,
+			CreateTime: timestamppb.New(now),
+		},
+		Rules: rules,
+	}
+	wantReq := &ateapipb.CreateActorEgressPolicyRequest{Actor: actor, EgressPolicy: manifest}
+
+	tests := []struct {
+		name      string
+		outputFmt string
+		creator   *fakeEgressPolicyCreator
+		wantOut   string
+		wantErr   string
+	}{
+		{
+			name:      "table by default",
+			outputFmt: "table",
+			creator:   &fakeEgressPolicyCreator{policy: created},
+			wantOut: `ATESPACE   ACTOR   RULES   VERSION   AGE
+team-a     c1      1       1         0s
+`,
+		},
+		{
+			name:      "yaml prints the created policy",
+			outputFmt: "yaml",
+			creator:   &fakeEgressPolicyCreator{policy: created},
+			wantOut: `metadata:
+  atespace: team-a
+  createTime: "2026-01-01T12:00:00Z"
+  name: default
+  uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
+  version: "1"
+rules:
+- hostnames:
+    patterns:
+    - api.example.com
+`,
+		},
+		{
+			name:      "already exists wraps",
+			outputFmt: "table",
+			creator:   &fakeEgressPolicyCreator{err: status.Error(codes.AlreadyExists, "EgressPolicy already exists")},
+			wantErr:   `failed to create egress policy for actor "c1" in atespace "team-a": rpc error: code = AlreadyExists desc = EgressPolicy already exists`,
+		},
+		{
+			name:      "missing actor wraps",
+			outputFmt: "table",
+			creator:   &fakeEgressPolicyCreator{err: status.Error(codes.FailedPrecondition, "parent Actor does not exist")},
+			wantErr:   `failed to create egress policy for actor "c1" in atespace "team-a": rpc error: code = FailedPrecondition desc = parent Actor does not exist`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			runner := &createEgressPolicyRunner{
+				creator:   test.creator,
+				actor:     actor,
+				policy:    manifest,
+				outputFmt: test.outputFmt,
+				stdout:    &stdout,
+			}
+			err := runner.Run(context.Background())
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != test.wantErr {
+				t.Fatalf("Run() error = %q, want %q", gotErr, test.wantErr)
+			}
+			if diff := cmp.Diff(wantReq, test.creator.req, protocmp.Transform()); diff != "" {
+				t.Errorf("request mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.wantOut, stdout.String()); diff != "" {
+				t.Errorf("stdout mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

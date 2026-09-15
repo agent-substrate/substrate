@@ -34,6 +34,34 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+var (
+	getEgressPolicyAtespaceFlag    string
+	createEgressPolicyAtespaceFlag string
+	createEgressPolicyFilenameFlag string
+)
+
+var getEgressPolicyCmd = &cobra.Command{
+	Use:     "egress-policy <actor-name>",
+	Aliases: []string{"egress-policies"},
+	Short:   "Get the egress policy of an actor",
+	// TODO(#1550): accept several actors and print a list document.
+	Args: cobra.ExactArgs(1),
+	RunE: runGetEgressPolicy,
+}
+
+var createEgressPolicyCmd = &cobra.Command{
+	Use:     "egress-policy <actor-name> -f <manifest>",
+	Aliases: []string{"egress-policies"},
+	Short:   "Create an actor's egress policy from a manifest",
+	Long: `Create the egress policy of an actor from a manifest file.
+
+The manifest is a YAML or JSON EgressPolicy, as printed by
+"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+Its metadata may be omitted.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runCreateEgressPolicy,
+}
+
 // egressPolicyFromManifest parses a single protojson-shaped YAML or JSON
 // document into an EgressPolicy. Parsing is strict: unknown fields are an
 // error.
@@ -85,10 +113,10 @@ func manifestToJSON(data []byte) ([]byte, error) {
 // policyName is the fixed name of an actor's egress policy.
 const policyName = "default"
 
-// fillEgressPolicyMetadata sets metadata.atespace to atespace and
+// overrideEgressPolicyMetadata sets metadata.atespace to atespace and
 // metadata.name to policyName when the manifest omits them. A manifest that
 // names another atespace or name is rejected, not retargeted.
-func fillEgressPolicyMetadata(policy *ateapipb.EgressPolicy, atespace string) error {
+func overrideEgressPolicyMetadata(policy *ateapipb.EgressPolicy, atespace string) error {
 	if policy.Metadata == nil {
 		policy.Metadata = &ateapipb.ResourceMetadata{}
 	}
@@ -107,17 +135,6 @@ func fillEgressPolicyMetadata(policy *ateapipb.EgressPolicy, atespace string) er
 		return fmt.Errorf("manifest metadata.name %q must be %q", policy.Metadata.Name, policyName)
 	}
 	return nil
-}
-
-var getEgressPolicyAtespaceFlag string
-
-var getEgressPolicyCmd = &cobra.Command{
-	Use:     "egress-policy <actor-name>",
-	Aliases: []string{"egress-policies"},
-	Short:   "Get the egress policy of an actor",
-	// TODO(#1550): accept several actors and print a list document.
-	Args: cobra.ExactArgs(1),
-	RunE: runGetEgressPolicy,
 }
 
 // egressPolicyGetter abstracts GetActorEgressPolicy RPC calls.
@@ -168,8 +185,66 @@ func runGetEgressPolicy(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx)
 }
 
+// egressPolicyCreator abstracts CreateActorEgressPolicy RPC calls.
+type egressPolicyCreator interface {
+	CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error)
+}
+
+// createEgressPolicyRunner executes the create egress-policy command logic.
+type createEgressPolicyRunner struct {
+	creator   egressPolicyCreator
+	actor     *ateapipb.ObjectRef
+	policy    *ateapipb.EgressPolicy
+	outputFmt string
+	stdout    io.Writer
+}
+
+func (r *createEgressPolicyRunner) Run(ctx context.Context) error {
+	created, err := r.creator.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{Actor: r.actor, EgressPolicy: r.policy})
+	if err != nil {
+		return fmt.Errorf("failed to create egress policy for actor %q in atespace %q: %w", r.actor.GetName(), r.actor.GetAtespace(), err)
+	}
+	return printer.PrintEgressPolicyTo(r.stdout, r.actor.GetName(), created, r.outputFmt)
+}
+
+func runCreateEgressPolicy(cmd *cobra.Command, args []string) error {
+	data, err := readFileOrStdin(cmd.InOrStdin(), createEgressPolicyFilenameFlag)
+	if err != nil {
+		return err
+	}
+	policy, err := egressPolicyFromManifest(data)
+	if err != nil {
+		return fmt.Errorf("failed to parse egress policy manifest %q: %w", createEgressPolicyFilenameFlag, err)
+	}
+	if err := overrideEgressPolicyMetadata(policy, createEgressPolicyAtespaceFlag); err != nil {
+		return err
+	}
+
+	ctx := cmd.Context()
+	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+	}
+	defer apiClient.Close()
+
+	runner := &createEgressPolicyRunner{
+		creator:   apiClient,
+		actor:     &ateapipb.ObjectRef{Atespace: createEgressPolicyAtespaceFlag, Name: args[0]},
+		policy:    policy,
+		outputFmt: outputFmt,
+		stdout:    cmd.OutOrStdout(),
+	}
+	return runner.Run(ctx)
+}
+
 func init() {
 	getEgressPolicyCmd.Flags().StringVarP(&getEgressPolicyAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in (required)")
 	_ = getEgressPolicyCmd.MarkFlagRequired("atespace")
 	getCmd.AddCommand(getEgressPolicyCmd)
+
+	createEgressPolicyCmd.Flags().StringVarP(&createEgressPolicyAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in (required)")
+	createEgressPolicyCmd.Flags().StringVarP(&createEgressPolicyFilenameFlag, "filename", "f", "", "Manifest file holding one EgressPolicy; use - for stdin (required)")
+	_ = createEgressPolicyCmd.MarkFlagRequired("atespace")
+	_ = createEgressPolicyCmd.MarkFlagRequired("filename")
+	createCmd.AddCommand(createEgressPolicyCmd)
 }

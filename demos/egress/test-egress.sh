@@ -93,10 +93,11 @@ ${K} -n "${TARGET_NS}" rollout status deployment/whoami --timeout=120s
 TARGET_IP=$(${K} -n "${TARGET_NS}" get svc whoami -o jsonpath='{.spec.clusterIP}')
 info "target = ${TARGET_IP}:${TARGET_PORT}"
 
-log "create + resume Actor ${ATESPACE}/${ACTOR}"
+log "create + resume Actor ${ATESPACE}/${ACTOR}, allow all its egress"
 ${KATE} create atespace "${ATESPACE}" >/dev/null 2>&1 || true
 ${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 ${KATE} resume actor "${ACTOR}" -a "${ATESPACE}" >/dev/null 2>&1 || true
+printf 'rules:\n- all: {}\n' | ${KATE} create egress-policy "${ACTOR}" -a "${ATESPACE}" -f - >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do
   ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "ACTOR_STATE_RUNNING" && break
   sleep 3
