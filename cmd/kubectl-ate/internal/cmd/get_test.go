@@ -40,6 +40,9 @@ func TestGetCommandArgs(t *testing.T) {
 		{name: "workers list", command: getWorkersCmd},
 		{name: "workers get", command: getWorkersCmd, args: []string{"worker-1"}},
 		{name: "workers get multiple", command: getWorkersCmd, args: []string{"worker-1", "worker-2"}},
+		{name: "egress-policy get", command: getEgressPolicyCmd, args: []string{"c1"}},
+		{name: "egress-policy requires actor", command: getEgressPolicyCmd, wantErr: true},
+		{name: "egress-policy rejects multiple", command: getEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
 		{name: "top workers list", command: topWorkersCmd},
 		{name: "top workers reject argument", command: topWorkersCmd, args: []string{"worker-1"}, wantErr: true},
 	}
