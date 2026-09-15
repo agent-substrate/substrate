@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"log/slog"
 	"os"
 	"strconv"
 )
@@ -47,6 +48,18 @@ type Config struct {
 	CloudSQLGSAName   string
 
 	DashboardDir string
+}
+
+var defaultMachineType = resolveMachineTypeDefault()
+
+func resolveMachineTypeDefault() string {
+	if _, ok := os.LookupEnv("NODE_MACHINE_TYPE"); !ok {
+		if v, ok := os.LookupEnv("GVISOR_NODE_MACHINE_TYPE"); ok {
+			slog.Warn("GVISOR_NODE_MACHINE_TYPE is deprecated; use NODE_MACHINE_TYPE instead")
+			return v
+		}
+	}
+	return getEnv("NODE_MACHINE_TYPE", "c3-standard-4")
 }
 
 type getEnvType interface {

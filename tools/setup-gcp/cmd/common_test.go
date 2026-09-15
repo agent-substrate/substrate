@@ -19,6 +19,58 @@ import (
 	"testing"
 )
 
+func TestResolveMachineTypeDefault(t *testing.T) {
+	tests := []struct {
+		name   string
+		newVal string
+		oldVal string
+		want   string
+	}{
+		{
+			name: "neither set",
+			want: "c3-standard-4",
+		},
+		{
+			name:   "new name set",
+			newVal: "n4-standard-8",
+			want:   "n4-standard-8",
+		},
+		{
+			name:   "old name still honored",
+			oldVal: "n2-standard-8",
+			want:   "n2-standard-8",
+		},
+		{
+			name:   "new name wins over old",
+			newVal: "n4-standard-8",
+			oldVal: "n2-standard-8",
+			want:   "n4-standard-8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setOrUnset(t, "NODE_MACHINE_TYPE", tt.newVal)
+			setOrUnset(t, "GVISOR_NODE_MACHINE_TYPE", tt.oldVal)
+
+			if got := resolveMachineTypeDefault(); got != tt.want {
+				t.Errorf("resolveMachineTypeDefault() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// setOrUnset sets key to val, or removes key from the environment when val is
+// empty. t.Setenv registers the restore either way, including for a key that
+// started out unset.
+func setOrUnset(t *testing.T, key, val string) {
+	t.Helper()
+	t.Setenv(key, val)
+	if val == "" {
+		os.Unsetenv(key)
+	}
+}
+
 func TestGetEnv_String(t *testing.T) {
 	const key = "TEST_ENV_STRING_VAR"
 

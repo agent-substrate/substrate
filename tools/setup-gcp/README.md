@@ -135,9 +135,12 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
-| `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
+
+`NODE_MACHINE_TYPE` was named `GVISOR_NODE_MACHINE_TYPE`. The old name still
+works and warns; rename it in your `.ate-dev-env.sh`.
 
 **Node version labels:** pool labels are the birth default for every node GKE
 creates later (autoscaling, auto-repair, node upgrades), and `setup-gcp` does
@@ -263,7 +266,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--cluster-version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
-| `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
