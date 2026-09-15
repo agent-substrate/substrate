@@ -85,12 +85,14 @@ service Ateom {
   // answered about a specific actor.
   //
   // Every state a blind caller can find is a normal answer here, never an
-  // error: the response is either a sample or the NoSampleReason there is
-  // none -- nothing to measure ("available"), or nothing to measure YET (a
-  // poll landing in a boot or a restore). Error codes are reserved for real
-  // failures reading a sandbox that should be measurable. This is deliberately
-  // unlike GetWorkloadStats, whose caller asserts knowledge the codes then
-  // answer.
+  // error: an "available" ateom answers an empty samples list, and a workload
+  // with nothing to measure YET (a poll landing in a boot or a restore)
+  // appears as a sample carrying its attribution with
+  // source = STATS_SOURCE_UNSPECIFIED -- "not measured", per the sample's own
+  // contract -- so even a workload that dies during boot is attributable, not
+  // anonymous. Error codes are reserved for real failures reading a sandbox
+  // that should be measurable. This is deliberately unlike GetWorkloadStats,
+  // whose caller asserts knowledge the codes then answer.
   //
   // Consumers MUST attribute each sample solely from the identity echoed
   // inside it, never from a mapping they hold: without an asserted uid, the
@@ -431,27 +433,14 @@ message GetWorkloadStatsResponse {
 message GetActiveWorkloadStatsRequest {
 }
 
-// NoSampleReason is why the discovery read has no sample to give -- every
-// value is a normal state a caller with no prior knowledge routinely finds,
-// never an error.
-enum NoSampleReason {
-  NO_SAMPLE_REASON_UNSPECIFIED = 0;
-  // Nothing is executing: the ateom is "available".
-  NO_SAMPLE_REASON_NO_WORKLOAD = 1;
-  // A workload is executing but there are no numbers to give yet: a poll
-  // landing in a boot or a restore, a teardown in progress, or a lifecycle
-  // transition underneath the read. Transient -- take the next sample.
-  NO_SAMPLE_REASON_NOT_MEASURABLE_YET = 2;
-}
-
 message GetActiveWorkloadStatsResponse {
-  // Exactly one of the two is set: either a measurement, or the reason there
-  // is none. An ateom serves one actor at a time, so the sample slot is
-  // singular; the sample is self-describing (see the attribution rule on the
-  // rpc), and a sample being present is itself the statement that a workload
-  // is executing.
-  oneof result {
-    WorkloadStatsSample sample = 1;
-    NoSampleReason no_sample_reason = 2;
-  }
+  // One entry per workload this ateom is executing; empty when it is
+  // "available". Each sample is self-describing (see the attribution rule on
+  // the rpc); an entry with source = STATS_SOURCE_UNSPECIFIED is a workload
+  // with no numbers to give yet (boot, restore, teardown, or a lifecycle
+  // transition underneath the read) -- skip its measurements and take the
+  // next sample. An ateom serves one actor at a time today, so the list holds
+  // at most one entry until multi-actor workers land; consumers must not
+  // assume that.
+  repeated WorkloadStatsSample samples = 1;
 }
