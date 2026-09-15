@@ -360,6 +360,17 @@ enum SnapshotScope {
   SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
+// ExternalRestoreConfiguration is an external snapshot a restore reads.
+// Split from the checkpoint-side ExternalCheckpointConfiguration (a write
+// destination) so read-side attributes of a restore source have a home.
+message ExternalRestoreConfiguration {
+  // The object storage URI of the snapshot to read. Object names are
+  // appended to it, so it addresses the snapshot as a whole rather than any
+  // one object. Must stay field 1: old peers decode this message as
+  // ExternalCheckpointConfiguration.
+  string snapshot_uri = 1;
+}
+
 message CheckpointRequest {
   string target_ateom_uid = 1;
 
@@ -437,18 +448,16 @@ message RestoreRequest {
   // The checkpoint configuration, depending on the type.
   oneof config {
     LocalCheckpointConfiguration local_config = 9;
-    ExternalCheckpointConfiguration external_config = 10;
+    ExternalRestoreConfiguration external_config = 10;
   }
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
 
-  // The object storage URI of the ActorTemplate's golden snapshot.
-  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
-  // the golden snapshot (memory + full fs delta) with the durable data in
-  // the snapshot referenced by `config`. A top-level field rather than part
-  // of the `config` oneof: the actor's snapshot may be local (a pause
-  // checkpoint) while the golden snapshot is always external.
+  // Superseded by base_config. During the transition callers set both and
+  // atelet prefers base_config, so ateapi and atelet can roll in either
+  // order; removed (and reserved) in a follow-up once both sides have
+  // rolled.
   string golden_snapshot_uri = 12;
 
   // When absent, actor traffic uses direct egress instead of atunnel.
@@ -460,6 +469,11 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.
+
+  // The base guest state (memory + rootfs delta) combined with `config`'s
+  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Supersedes
+  // golden_snapshot_uri.
+  ExternalRestoreConfiguration base_config = 16;
 }
 
 message RestoreResponse {
