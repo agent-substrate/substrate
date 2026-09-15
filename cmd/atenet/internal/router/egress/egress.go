@@ -50,6 +50,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
 const (
@@ -86,17 +87,33 @@ type Handler struct {
 	actorIdentityRoots *x509.CertPool
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
+	// provider resolves an egress policy's credential injections. Nil means
+	// credential injection is not configured, and injection will be skipped.
+	provider credproviderpb.CredentialProviderClient
+	// providerClass, when set, is the substrate-secret://
+	// class this gateway serves; a credential URI of another class is refused.
+	providerClass string
 }
 
 // New builds the egress handler. actorIdentityRoots is the egress listener's
 // trusted_ca; see verifyActorCertificate for why it is checked again here.
-// policyCacheTTL of 0 fetches the policy on every callout.
+// policyCacheTTL of 0 fetches the policy on every callout. Credential injection
+// is off until WithCredentialProvider is called.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration) *Handler {
 	return &Handler{
 		apiClient:          apiClient,
 		actorIdentityRoots: actorIdentityRoots,
 		policies:           newPolicyCache(apiClient, policyCacheTTL),
 	}
+}
+
+// WithCredentialProvider enables egress credential injection: the handler
+// resolves an allowed rule's InjectStaticHeaders through provider and injects
+// them on the TLS-terminated MITM leg.
+func (h *Handler) WithCredentialProvider(provider credproviderpb.CredentialProviderClient, providerClass string) *Handler {
+	h.provider = provider
+	h.providerClass = providerClass
+	return h
 }
 
 func (h *Handler) Direction() extproc.Direction { return extproc.DirectionEgress }

@@ -42,6 +42,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
 // dataPlaneTraceRatio is the default root sampling fraction for parentless
@@ -217,6 +218,30 @@ func (s *RouterServer) Run(ctx context.Context) error {
 			}
 		}
 		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL)
+
+		// Enabled egress credential injection when credential provider address is set, the gateway
+		// dials the provider over mTLS to get the credential.
+		if s.cfg.CredentialProvider.Address != "" {
+			providerClass, err := egress.ProviderClass(s.cfg.CredentialProvider.Name)
+			if err != nil {
+				return fmt.Errorf("--credential-provider-name: %w", err)
+			}
+			providerConn, err := egress.DialProvider(ctx, egress.ProviderDialConfig{
+				Address:    s.cfg.CredentialProvider.Address,
+				CAFile:     s.cfg.CredentialProvider.CAFile,
+				ClientCert: s.cfg.CredentialProvider.ClientCert,
+				ServerName: s.cfg.CredentialProvider.ServerName,
+			})
+			if err != nil {
+				return fmt.Errorf("dial credential provider: %w", err)
+			}
+			defer providerConn.Close()
+			egressHandler.WithCredentialProvider(credproviderpb.NewCredentialProviderClient(providerConn), providerClass)
+			slog.InfoContext(ctx, "egress credential injection enabled",
+				slog.String("provider", s.cfg.CredentialProvider.Address),
+				slog.String("provider_name", s.cfg.CredentialProvider.Name))
+		}
+
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

@@ -199,7 +199,11 @@ func TestRequestLegDecidesHostAndDialedAddress(t *testing.T) {
 		{name: "dialed address without a port", policy: allowAllPolicy(), authority: "api.example.com", dialed: "93.184.216.34", want: envoy_type.StatusCode_Forbidden},
 		{name: "unparseable host", policy: allowAllPolicy(), authority: "exa mple.com", want: envoy_type.StatusCode_Forbidden},
 		{name: "empty host", policy: allowAllPolicy(), authority: "", want: envoy_type.StatusCode_Forbidden},
-		{name: "matching rule requires injection", policy: credentialInjectionPolicySample("api.example.com"), authority: "api.example.com", want: envoy_type.StatusCode_NotImplemented},
+		// On the cleartext leg a rule that requires injection is let through
+		// without the credential, not denied: the secret is never re-originated in
+		// the clear, and blocking allowed egress is worse than an unauthenticated
+		// request. See the dedicated injection tests for the TLS leg.
+		{name: "cleartext rule requires injection passes through uninjected", policy: credentialInjectionPolicySample("api.example.com"), authority: "api.example.com", dial: extproc.EgressDialName},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

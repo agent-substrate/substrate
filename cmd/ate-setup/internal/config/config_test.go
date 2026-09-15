@@ -40,6 +40,9 @@ func loadEnv(t *testing.T) {
 	for _, name := range []string{
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_CREDENTIAL_INJECTION_ENABLED",
+		"ATE_CREDENTIAL_PROVIDER_ADDRESS",
+		"ATE_CREDENTIAL_PROVIDER_NAME",
 		"ATE_API_POSTGRES_CONNECTION_STRING",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_ATENET_DATAPLANE",
@@ -214,6 +217,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"extproc missing sdsmint", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
 		{"extproc invalid format", Options{ExperimentalUseSDSMint: true, AdditionalEgressExtprocService: "extproc:50051"}},
 		{"extproc agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"injection missing sdsmint", Options{ExperimentalEgressCredentialInjection: true}},
+		{"injection agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, ExperimentalEgressCredentialInjection: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {

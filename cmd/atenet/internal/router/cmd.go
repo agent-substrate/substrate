@@ -64,6 +64,15 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")
 	cmd.Flags().StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
 	cmd.Flags().DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
+	// Egress credential injection (MITM leg). Only the egress gateway sets these,
+	// and only when injection is enabled: an empty --credential-provider-address
+	// leaves injection off, so an EgressPolicy rule requiring it is skipped and
+	// the request passes through without the credential.
+	cmd.Flags().StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as a substrate-secret:// class prefix (e.g. substrate-secret://kubernetes.io); a policy credential URI of any other class is refused. Empty disables the check (dev only)")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; empty dials the provider plaintext (dev only)")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.ServerName, "credential-provider-server-name", "", "SAN/SNI expected on the credential provider's serving certificate")
 	// Envoy learns the collector over xDS rather than from its own environment,
 	// so the router has to carry the address for it. Defaulting to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — the same variable the router's own exporter
