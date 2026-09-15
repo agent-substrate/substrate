@@ -77,6 +77,7 @@ function usage() {
   echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
+  echo "  --keep-node-state                      Leave /var/lib/ateom-gvisor in place when deleting (default: wipe it on every node)"
   echo "  --atenet-dataplane=envoy|agentgateway  Select the atenet ingress and egress dataplane (default: envoy)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
@@ -1347,6 +1348,84 @@ delete_ate_system() {
   run_kubectl delete --ignore-not-found -f manifests/ate-install/postgres/postgres.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
   run_kubectl label nodes -l ate.dev/substrate-version ate.dev/substrate-version-
+  # Last, and only now: the wipe below needs every atelet stopped, and the
+  # deletes above are what stop them.
+  delete_node_state
+}
+
+# delete_node_state empties the hostPath the install writes to on every node.
+#
+# Deleting the control plane does not touch it -- the data outlives the
+# software, so "uninstall" otherwise leaves tens of GB per node behind
+# (measured: 55.22 GB across 3 nodes survived --delete-all and a reinstall,
+# and fresh atelets started on top of it). Only replacing the node reclaimed
+# it.
+#
+# Runs as a DaemonSet because the state is per-node and there is no other way
+# to reach a node's filesystem: atelet is distroless and, by this point,
+# deleted. The pod tolerates everything so no node is missed, and lives in
+# default rather than ate-system, which this teardown removes.
+delete_node_state() {
+  if [[ "${ATE_KEEP_NODE_STATE:-false}" == "true" ]]; then
+    log_step "delete_node_state (skipped: --keep-node-state)"
+    return 0
+  fi
+  log_step "delete_node_state"
+
+  local name="ate-node-state-cleanup"
+  # Contents, not the directory: it is the pod's own mount point, so removing
+  # it would fail as busy. What matters is the bytes.
+  run_kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ${name}
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: ${name}
+  template:
+    metadata:
+      labels:
+        app: ${name}
+    spec:
+      tolerations:
+      - operator: Exists
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: cleanup
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -eu
+          rm -rf /host-state/..?* /host-state/.[!.]* /host-state/* 2>/dev/null || true
+          touch /tmp/done
+          # Stay up so the rollout can observe readiness; the delete below
+          # ends it as soon as every node has reported.
+          sleep 3600
+        readinessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "test -f /tmp/done"]
+          initialDelaySeconds: 1
+          periodSeconds: 2
+        volumeMounts:
+        - name: node-state
+          mountPath: /host-state
+      volumes:
+      - name: node-state
+        hostPath:
+          path: /var/lib/ateom-gvisor
+          type: DirectoryOrCreate
+EOF
+  # Readiness is the wipe having finished, so the rollout completing means
+  # every node is clean. A node that cannot be reached is reported rather
+  # than silently skipped.
+  if ! run_kubectl rollout status daemonset/"${name}" -n default --timeout=10m; then
+    echo "warning: node state cleanup did not complete on every node; check daemonset/${name}" >&2
+  fi
+  run_kubectl delete --ignore-not-found daemonset/"${name}" -n default
 }
 
 delete_atenet() {
@@ -1441,6 +1520,9 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ATE_ATENET_DATAPLANE="${prescan_args[$((i + 1))]}"
       ;;
     --experimental-use-sdsmint) ATE_EXPERIMENTAL_USE_SDSMINT=true ;;
+    # A modifier on the delete actions, pre-scanned so it can be passed on
+    # either side of the --delete-* flag it applies to.
+    --keep-node-state) ATE_KEEP_NODE_STATE=true ;;
     --experimental-additional-egress-extproc-service=*)
       ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE="${prescan_args[i]#*=}"
       ;;
@@ -1591,6 +1673,9 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
+    # Captured in the pre-scan above; consumed here so the unknown-option
+    # branch does not reject it.
+    --keep-node-state) ;;
 
     --deploy-atelet) deploy_atelet ;;
     --deploy-ate-apiserver) deploy_ate_apiserver ;;
