@@ -31,10 +31,96 @@ groups:
   # Attribute groups
   # ---------------------------------------------------------------------------
 
+  - id: registry.ate.atespace
+    type: attribute_group
+    brief: >
+      The tenant and isolation boundary. It is shared by every resource type,
+      thus it stays at the top level and does not nest under one of them.
+    attributes:
+      - id: ate.atespace
+        stability: development
+        type: string
+        brief: The atespace of the subject of the signal.
+        note: >
+          Logs and spans only. The cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml forbids it as a metric label: the number
+          of values is not bounded at the target of 1 billion actors.
+        examples: [ate-demo-counter]
+
   - id: registry.ate.actor
     type: attribute_group
     brief: The labels of an actor.
     attributes:
+      - id: ate.actor.name
+        stability: development
+        type: string
+        brief: The name of the actor, which addresses it within its atespace.
+        note: >
+          Logs and spans only, by the cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml. A name is free after a delete, thus a
+          query that spans a delete groups by ate.actor.uid and not by this.
+        examples: [counter-1]
+      - id: ate.actor.uid
+        stability: development
+        type: string
+        brief: The server-assigned unique key of the actor.
+        note: >
+          Logs and spans only, by the cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml. It separates two actors that held the
+          same name at different times.
+        examples: [8f2a1c4e6b0d47f1]
+      - id: ate.actor.state
+        stability: development
+        brief: The state the actor is in now.
+        note: >
+          Logs only. It is bounded, but it is only ever recorded beside actor
+          identity, which no metric may carry. The values mirror
+          ateapipb.ActorState with the ACTOR_STATE_ prefix dropped, so the log
+          vocabulary and the state machine cannot fork.
+        type:
+          members:
+            - id: resuming
+              stability: development
+              value: resuming
+              brief: ateapi is putting the actor on a worker.
+            - id: running
+              stability: development
+              value: running
+              brief: The actor runs on a worker.
+            - id: suspending
+              stability: development
+              value: suspending
+              brief: ateapi is writing the durable snapshot.
+            - id: suspended
+              stability: development
+              value: suspended
+              brief: The actor has a durable snapshot and holds no worker.
+            - id: pausing
+              stability: development
+              value: pausing
+              brief: ateapi is writing the node-local snapshot.
+            - id: paused
+              stability: development
+              value: paused
+              brief: The actor has a node-local snapshot.
+            - id: crashed
+              stability: development
+              value: crashed
+              brief: The actor is lost. ate.failure.reason says why.
+            - id: deleting
+              stability: development
+              value: deleting
+              brief: ateapi is removing the actor.
+            - id: deleted
+              stability: development
+              value: deleted
+              brief: >
+                The actor record is gone. It has no enum counterpart: no stored
+                state can stand for a record that no longer exists.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: The state is not in this list. This is the default value.
       - id: ate.actor.operation.name
         stability: development
         brief: The actor lifecycle operation that ateapi did.

@@ -24,5 +24,5 @@
 # project publishes this registry later.
 
 name: substrate
-description: The metric semantic conventions of Agent Substrate.
+description: The metric and event semantic conventions of Agent Substrate.
 schema_url: https://ate.dev/schemas/substrate/1.0.0

@@ -121,6 +121,18 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
+	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
+		ServiceName: "ateapi",
+		Exporter:    serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize logging", err)
+	}
+	// Nil when the exporter is none.
+	if lp != nil {
+		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
+	}
+
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
 	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)

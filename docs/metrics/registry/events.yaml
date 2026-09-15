@@ -1,0 +1,102 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The log events that Substrate emits over OTLP. Weaver reads this file with
+# metrics.yaml, which holds every attribute the groups below refer to.
+#
+# An event name promises a fixed set of attributes. The list in each group is
+# the reviewable form of the Keys field on the matching internal/actorevent
+# Event, and a test in that package holds the two in step.
+#
+# Metrics cannot answer what state an actor is in: the cardinality rule
+# no-actor-identity bars actor identity from metric labels. These events carry
+# the identity, thus they are the only per-actor state answer.
+
+groups:
+  - id: event.ate.actor.state_changed
+    type: event
+    name: ate.actor.state_changed
+    stability: development
+    brief: An actor reached a new state.
+    note: >
+      ateapi writes one record for each committed transition, including the
+      first, when the actor is made, and the last, when the record is deleted.
+      The most recent record for an ate.actor.uid gives the state the actor is
+      in now, and its timestamp gives when that state began.
+
+      A crash is the event ate.actor.crashed instead, because it carries the
+      failure keys and a higher severity. Both events set ate.actor.state, thus
+      a consumer that reads the state off the attribute sees every transition
+      and needs no map from a name to a state.
+
+      Never sample or filter this stream. A consumer takes the last record for
+      an actor, thus one dropped record reports a stale state with no sign that
+      anything is missing.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        code_anchor: cmd/ateapi/internal/controlapi/workflow.go
+        cuj: What state is this actor in, and since when?
+    attributes:
+      - ref: ate.atespace
+        requirement_level: required
+      - ref: ate.actor.name
+        requirement_level: required
+      - ref: ate.actor.uid
+        requirement_level: required
+      - ref: ate.template.atespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.actor.operation.name
+        requirement_level: required
+      - ref: ate.actor.state
+        requirement_level: required
+
+  - id: event.ate.actor.crashed
+    type: event
+    name: ate.actor.crashed
+    stability: development
+    brief: An actor was lost.
+    note: >
+      ateapi writes this beside the ate.actor.crashes counter, under the same
+      guard, thus the event and the counter cannot disagree. The counter gives
+      the rate; this event names which actor, which no metric label may.
+
+      ate.actor.state is always crashed. It is set so a consumer reading the
+      state off one attribute reaches crashed without special-casing the name.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        code_anchor: cmd/ateapi/internal/controlapi/crash.go
+        cuj: Which actor was lost, and why?
+    attributes:
+      - ref: ate.atespace
+        requirement_level: required
+      - ref: ate.actor.name
+        requirement_level: required
+      - ref: ate.actor.uid
+        requirement_level: required
+      - ref: ate.template.atespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.actor.operation.name
+        requirement_level: required
+      - ref: ate.actor.state
+        requirement_level: required
+      - ref: ate.failure.reason
+        requirement_level: required
+      - ref: ate.failure.domain
+        requirement_level: required
