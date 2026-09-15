@@ -128,14 +128,15 @@ done
 
 # --- Observers ---------------------------------------------------------------
 
-POD="$(run_kubectl get pods -n "${ROUTER_NS}" -l app=atenet-router --no-headers | awk '$3=="Running"{print $1}')"
-# wc -w pads its output on macOS; compare numerically.
-(( $(wc -w <<<"${POD}") == 1 )) || fail "expected exactly 1 running router pod, got: ${POD:-none}"
+# Pin every observer to one pod: with several replicas the Service would spread
+# the parked request and the probes across pods that are not being deleted.
+POD="$(run_kubectl get pods -n "${ROUTER_NS}" -l app=atenet-router --no-headers | awk '$3=="Running"{print $1; exit}')"
+[[ -n "${POD}" ]] || fail "no running router pod"
 log_step "router pod under test: ${POD}"
 
 run_kubectl logs -n "${ROUTER_NS}" "${POD}" -c atenet-router -f > "${LOG_FILE}" 2>&1 &
 BG_PIDS+=($!)
-run_kubectl port-forward -n "${ROUTER_NS}" svc/atenet-router "${LOCAL_HTTP_PORT}:80" >/dev/null 2>&1 &
+run_kubectl port-forward -n "${ROUTER_NS}" "${POD}" "${LOCAL_HTTP_PORT}:8080" >/dev/null 2>&1 &
 BG_PIDS+=($!)
 run_kubectl port-forward -n "${ROUTER_NS}" "${POD}" "${LOCAL_METRICS_PORT}:9090" >/dev/null 2>&1 &
 BG_PIDS+=($!)
