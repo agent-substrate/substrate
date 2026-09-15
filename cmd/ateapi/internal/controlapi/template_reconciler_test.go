@@ -772,29 +772,40 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status:      &ateapipb.TagStatus{ActorTemplateUid: testTemplateUID, Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/tag-snapshot"}},
 	}
-	for _, scenario := range []string{"completed tag", "actor already deleted", "incomplete tag", "copy failure", "actor deletion failure", "tag deletion failure"} {
-		t.Run(scenario, func(t *testing.T) {
-			control := &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: "gs://bucket/actor-snapshot"}
-			switch scenario {
-			case "completed tag", "actor already deleted":
-				control.tag = proto.CloneOf(completed)
-				control.exists = scenario != "actor already deleted"
-			case "incomplete tag", "tag deletion failure":
-				control.tag = proto.CloneOf(completed)
-				control.tag.Status.Snapshot = nil
-				if scenario == "tag deletion failure" {
-					control.deleteTagErr = errors.New("storage unavailable")
-				}
-			case "copy failure":
-				control.tagErr = errors.New("copy interrupted")
-			case "actor deletion failure":
-				control.deleteErr = errors.New("storage unavailable")
+	incomplete := proto.CloneOf(completed)
+	incomplete.Status.Snapshot = nil
+	tests := []struct {
+		name string
+		// tag is the golden tag an earlier pass left behind, if any.
+		tag *ateapipb.Tag
+		// actorDeleted seeds a pass that died after deleting the golden actor.
+		actorDeleted bool
+		// These errors fail one step of the first pass; the retry succeeds.
+		createTagErr   error
+		deleteActorErr error
+		deleteTagErr   error
+		// wantCreateTags counts copy attempts across both passes.
+		wantCreateTags int
+	}{
+		{name: "completed tag", tag: completed, wantCreateTags: 0},
+		{name: "actor already deleted", tag: completed, actorDeleted: true, wantCreateTags: 0},
+		{name: "incomplete tag", tag: incomplete, wantCreateTags: 1},
+		{name: "copy failure", createTagErr: errors.New("copy interrupted"), wantCreateTags: 2},
+		{name: "actor deletion failure", deleteActorErr: errors.New("storage unavailable"), wantCreateTags: 1},
+		{name: "tag deletion failure", tag: incomplete, deleteTagErr: errors.New("storage unavailable"), wantCreateTags: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			control := &fakeGoldenControl{
+				tag: proto.CloneOf(tt.tag), exists: !tt.actorDeleted,
+				goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: "gs://bucket/actor-snapshot",
+				tagErr: tt.createTagErr, deleteErr: tt.deleteActorErr, deleteTagErr: tt.deleteTagErr,
 			}
 			st := newFakeTemplateStore(testTemplate())
 			r := newTestTemplateReconciler(st, control)
 			defer r.queue.ShutDown()
 			_, err := r.reconcileOne(t.Context(), testTemplateRef)
-			wantErr := strings.Contains(scenario, "failure")
+			wantErr := tt.createTagErr != nil || tt.deleteActorErr != nil || tt.deleteTagErr != nil
 			if (err != nil) != wantErr {
 				t.Fatalf("reconcile = %v, want error %v", err, wantErr)
 			}
@@ -822,10 +833,8 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 			if len(control.createReqs) != 0 || len(control.resumeReqs) != 0 || len(control.suspendReqs) != 0 {
 				t.Fatal("repeated golden actor warmup")
 			}
-			if scenario == "completed tag" || scenario == "actor already deleted" {
-				if len(control.tagReqs) != 0 {
-					t.Fatal("recreated completed tag")
-				}
+			if got := len(control.tagReqs); got != tt.wantCreateTags {
+				t.Fatalf("CreateTag calls = %d, want %d", got, tt.wantCreateTags)
 			}
 			for _, req := range control.tagReqs {
 				if !proto.Equal(req.Tag.SourceActor, ref) || req.Tag.Scope != ateapipb.TagScope_TAG_SCOPE_PUBLISHED || req.Tag.Metadata.Name != ref.Name {
@@ -837,19 +846,20 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 }
 
 func TestReconcileOne_GoldenTagConflict(t *testing.T) {
-	for _, scenario := range []string{"template", "actor name", "actor atespace"} {
-		t.Run(scenario, func(t *testing.T) {
+	tests := []struct {
+		name        string
+		templateUID string
+		sourceActor *ateapipb.ObjectRef
+	}{
+		{name: "template", templateUID: "another-template", sourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: testTemplateUID}},
+		{name: "actor name", templateUID: testTemplateUID, sourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: "another-actor"}},
+		{name: "actor atespace", templateUID: testTemplateUID, sourceActor: &ateapipb.ObjectRef{Atespace: "another-atespace", Name: testTemplateUID}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			tag := &ateapipb.Tag{
-				SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: testTemplateUID},
-				Status:      &ateapipb.TagStatus{ActorTemplateUid: testTemplateUID},
-			}
-			switch scenario {
-			case "template":
-				tag.Status.ActorTemplateUid = "another-template"
-			case "actor name":
-				tag.SourceActor.Name = "another-actor"
-			case "actor atespace":
-				tag.SourceActor.Atespace = "another-atespace"
+				SourceActor: tt.sourceActor,
+				Status:      &ateapipb.TagStatus{ActorTemplateUid: tt.templateUID},
 			}
 			control := &fakeGoldenControl{tag: proto.CloneOf(tag), exists: true}
 			st := newFakeTemplateStore(testTemplate())
