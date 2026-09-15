@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -305,4 +306,139 @@ func asHandlerReturns(err error) error {
 		return statusErr.GRPCStatus().Err()
 	}
 	return status.Error(codes.Internal, err.Error())
+}
+
+func TestWait_TCPConnectsAndCloses(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	probe := &ateompb.Readyz{TcpSocket: &ateompb.TCPSocketAction{Port: int32(listener.Addr().(*net.TCPAddr).Port)}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := Wait(ctx, "tcp", probe, "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := listener.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(conn)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("probe must close without sending data: data=%q, err=%v", data, err)
+	}
+}
+
+func TestWaitAll_MixedProbes(t *testing.T) {
+	for _, first := range []string{"http", "tcp"} {
+		t.Run(first+" ready first", func(t *testing.T) {
+			var httpReady atomic.Bool
+			httpReady.Store(first == "http")
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if !httpReady.Load() {
+					w.WriteHeader(http.StatusServiceUnavailable)
+				}
+			}))
+			defer srv.Close()
+			ip, httpPort := splitHostPort(t, srv.URL)
+			tcpPort := pickFreePort(t)
+			startTCP := func() {
+				listener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(tcpPort)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { listener.Close() })
+			}
+			if first == "tcp" {
+				startTCP()
+			}
+			containers := []*ateompb.Container{
+				{Name: "http", Readyz: &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: int32(httpPort)}}},
+				{Name: "tcp", Readyz: &ateompb.Readyz{TcpSocket: &ateompb.TCPSocketAction{Port: int32(tcpPort)}}},
+				{Name: "no-probe"},
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- WaitAll(ctx, containers, ip) }()
+			select {
+			case err := <-done:
+				t.Fatalf("returned before both listeners were ready: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			if first == "http" {
+				startTCP()
+			} else {
+				httpReady.Store(true)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestWait_TCPRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+		cancel bool
+		want   error
+	}{
+		{name: "probe timeout", budget: 5 * time.Second, want: ateerrors.ReasonWorkloadNotReady},
+		{name: "parent deadline", budget: 50 * time.Millisecond, want: context.DeadlineExceeded},
+		{name: "parent cancellation", budget: time.Second, cancel: true, want: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := &ateompb.Readyz{TcpSocket: &ateompb.TCPSocketAction{Port: int32(pickFreePort(t))}, TimeoutSeconds: 1}
+			ctx, cancel := context.WithTimeout(t.Context(), tc.budget)
+			defer cancel()
+			if tc.cancel {
+				timer := time.AfterFunc(30*time.Millisecond, cancel)
+				defer timer.Stop()
+			}
+			start := time.Now()
+			err := Wait(ctx, "tcp", probe, "127.0.0.1")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Wait = %v, want %v", err, tc.want)
+			}
+			if tc.want != ateerrors.ReasonWorkloadNotReady && errors.Is(err, ateerrors.ReasonWorkloadNotReady) {
+				t.Fatalf("parent cancellation tagged as workload failure: %v", err)
+			}
+			if tc.want == ateerrors.ReasonWorkloadNotReady && time.Since(start) < time.Second {
+				t.Fatal("probe failed before configured timeout")
+			}
+			if time.Since(start) > 2*time.Second {
+				t.Fatal("Wait ignored its deadline/cancellation")
+			}
+		})
+	}
+}
+
+func TestWait_InvalidProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		probe *ateompb.Readyz
+	}{
+		{"nil", nil},
+		{"empty", &ateompb.Readyz{}},
+		{"both", &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: 80}, TcpSocket: &ateompb.TCPSocketAction{Port: 80}}},
+		{"tcp zero port", &ateompb.Readyz{TcpSocket: &ateompb.TCPSocketAction{}}},
+		{"tcp negative port", &ateompb.Readyz{TcpSocket: &ateompb.TCPSocketAction{Port: -1}}},
+		{"tcp port too large", &ateompb.Readyz{TcpSocket: &ateompb.TCPSocketAction{Port: 65536}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := Wait(t.Context(), "invalid", tc.probe, "127.0.0.1"); err == nil {
+				t.Fatal("invalid probe succeeded")
+			}
+		})
+	}
 }

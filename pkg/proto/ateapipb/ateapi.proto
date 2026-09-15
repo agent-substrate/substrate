@@ -1026,19 +1026,27 @@ message EnvVar {
 }
 
 // ContainerReadyz configures the readiness signal for a container.
+// Exactly one of http_get / tcp_socket must be set.
 message ContainerReadyz {
-  // http_get specifies the HTTP request to perform. Required.
+  // http_get specifies the HTTP request to perform.
   //
-  // +k8s:required
+  // +k8s:optional
+  // +k8s:unionMember
   HTTPGetAction http_get = 1;
 
-  // timeout_seconds bounds how long to poll http_get before failing the
+  // timeout_seconds bounds how long to probe before failing the
   // actor start. 0 means the server-applied default (30s).
   //
   // +k8s:optional
   // +k8s:minimum=1
   // +k8s:maximum=3600
   int32 timeout_seconds = 2;
+
+  // tcp_socket specifies the TCP connection to attempt.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  TCPSocketAction tcp_socket = 3;
 }
 
 // HTTPGetAction describes an HTTP GET against the container's interior IP.
@@ -1055,6 +1063,15 @@ message HTTPGetAction {
   // +k8s:minimum=1
   // +k8s:maximum=65535
   int32 port = 2;
+}
+
+// TCPSocketAction connects to a port on the container's interior IP.
+// A successful connection signals readiness; no application data is exchanged.
+message TCPSocketAction {
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=65535
+  int32 port = 1;
 }
 
 message Volume {

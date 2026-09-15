@@ -212,3 +212,19 @@ func TestReadFileOrStdin(t *testing.T) {
 		t.Fatal("readFileOrStdin on a missing file succeeded")
 	}
 }
+
+func TestActorTemplateFromManifest_TCPReadyz(t *testing.T) {
+	for _, field := range []string{"tcpSocket", "tcp_socket"} {
+		t.Run(field, func(t *testing.T) {
+			manifest := strings.Replace(counterTemplateManifest, "httpGet:\n      path: /readyz\n      port: 80", field+":\n      port: 9090\n    timeoutSeconds: 60", 1)
+			tmpl, err := actorTemplateFromManifest([]byte(manifest))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 60}
+			if diff := cmp.Diff(want, tmpl.GetContainers()[0].GetReadyz(), protocmp.Transform()); diff != "" {
+				t.Errorf("TCP probe (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
