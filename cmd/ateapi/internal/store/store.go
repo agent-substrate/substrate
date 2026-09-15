@@ -111,8 +111,10 @@ type Interface interface {
 	// Transactionally updates an Actor's policy when its current UID and version
 	// match the precondition.
 	UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error)
-	// Deletes and returns an Actor's policy subresource.
-	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
+	// Deletes and returns an Actor's policy subresource. Returns ErrNotFound
+	// if missing, or ErrUIDConflict/ErrVersionConflict if pre does not
+	// describe the policy the caller observed.
+	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, pre DeletePreconditions) (*ateapipb.EgressPolicy, error)
 
 	// CreateTag creates an immutable tag to an actor snapshot.
 	//

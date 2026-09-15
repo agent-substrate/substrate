@@ -266,12 +266,67 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		if err != nil || updated.GetMetadata().GetAtespace() != testAtespace || updated.GetMetadata().GetName() != "default" || updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
 			t.Fatalf("UpdateEgressPolicy = %v, %v; want version 2", updated, err)
 		}
-		deleted, err := s.DeleteEgressPolicy(ctx, actorRef)
+		deleted, err := s.DeleteEgressPolicy(ctx, actorRef, store.DeletePreconditions{})
 		if err != nil || !proto.Equal(deleted, updated) {
 			t.Fatalf("DeleteEgressPolicy = %v, %v; want %v", deleted, err, updated)
 		}
 		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("GetEgressPolicy after delete error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("EgressPolicy_DeleteNotFound", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actor, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "session-1"},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actorRef := resources.ActorRefFromActor(actor)
+
+		for _, pre := range []store.DeletePreconditions{{}, {Version: 7}, {UID: "replacement-uid"}} {
+			if _, err := s.DeleteEgressPolicy(ctx, actorRef, pre); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("DeleteEgressPolicy(%+v) of a missing policy error = %v, want ErrNotFound", pre, err)
+			}
+		}
+	})
+
+	t.Run("EgressPolicy_DeletePreconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actor, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "session-1"},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actorRef := resources.ActorRefFromActor(actor)
+
+		created, err := s.CreateEgressPolicy(ctx, actorRef, &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}})
+		if err != nil {
+			t.Fatalf("CreateEgressPolicy failed: %v", err)
+		}
+		uid, version := created.GetMetadata().GetUid(), created.GetMetadata().GetVersion()
+
+		if _, err := s.DeleteEgressPolicy(ctx, actorRef, store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("DeleteEgressPolicy with a stale version error = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.DeleteEgressPolicy(ctx, actorRef, store.DeletePreconditions{UID: "replacement-uid"}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("DeleteEgressPolicy with a foreign uid error = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetEgressPolicy(ctx, actorRef); err != nil {
+			t.Fatalf("a rejected delete removed the policy anyway: %v", err)
+		}
+
+		deleted, err := s.DeleteEgressPolicy(ctx, actorRef, store.DeletePreconditions{UID: uid, Version: version})
+		if err != nil || !proto.Equal(deleted, created) {
+			t.Errorf("DeleteEgressPolicy with matching preconditions = %v, %v; want %v", deleted, err, created)
 		}
 	})
 
@@ -2883,7 +2938,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "UpdateEgressPolicy", created, updated)
 
-		deleted, err := s.DeleteEgressPolicy(ctx, ref)
+		deleted, err := s.DeleteEgressPolicy(ctx, ref, store.DeletePreconditions{})
 		if err != nil {
 			t.Fatalf("DeleteEgressPolicy failed: %v", err)
 		}
