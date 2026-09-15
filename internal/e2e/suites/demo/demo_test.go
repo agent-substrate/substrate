@@ -489,6 +489,92 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	}
 }
 
+func TestExternalVolume_NodeMigration(t *testing.T) {
+	if e2e.IsMicroVM() {
+		t.Skip("Skipping TestExternalVolume_NodeMigration for microVM environment")
+	}
+
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	nsObj := e2e.CreateNamespace(t)
+
+	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+
+	actorName := "extvol-migration-" + nsObj.Name
+
+	t.Logf("Creating Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}}); err != nil {
+		t.Fatalf("failed to create Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	t.Logf("Resuming Actor %q...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor on initial worker: %v", err)
+	}
+	validateCounterResponse(t, resp, "initial run", 1, 1)
+
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("failed to get actor: %v", err)
+	}
+	initialWorkerPod := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
+	initialWorkerNS := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
+
+	t.Logf("Suspending Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to suspend Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	// Delete initial worker pod to force migration onto another worker upon resume
+	if initialWorkerPod != "" && initialWorkerNS != "" {
+		t.Logf("Evicting initial worker pod %s/%s to force migration...", initialWorkerNS, initialWorkerPod)
+		_ = clients.K8s.CoreV1().Pods(initialWorkerNS).Delete(ctx, initialWorkerPod, metav1.DeleteOptions{})
+	}
+
+	t.Logf("Resuming Actor %q after worker pod eviction...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor after migration: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after migration: %v", err)
+	}
+	validateCounterResponse(t, resp, "after migration", 1, 2)
+
+	// Clean up by deleting the actor
+	t.Logf("Deleting Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		AnyState: true,
+	}); err != nil {
+		t.Fatalf("failed to delete Actor: %v", err)
+	}
+}
+
 // Verify that file and memory counters behavior after pause and suspend, for different snapshot scopes.
 // Test case:
 //  1. Create actor.
