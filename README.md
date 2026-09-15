@@ -226,6 +226,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Integration Repositories](docs/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 * [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
+* [Actor Egress Policy](docs/egress-policy.md): The three egress rule types, the order they are evaluated in, and how the policy composes with an additional external processor.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
 * [Rolling Upgrade Runbook](docs/upgrade.md): Upgrade a running substrate node by node without losing actor state.
