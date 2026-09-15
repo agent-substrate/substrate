@@ -54,7 +54,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.ConnectTLSPort, "port-connect-tls", 8444, "TCP port for CONNECT-tunneled traffic entering through the router dataplane over TLS. --port-https also defaults to 8443, and both listeners are commonly enabled at once, so --port-connect-tls defaults to a different port (8444) rather than colliding with it")
 	cmd.Flags().IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
 	cmd.Flags().IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the External Processing (ext_proc) server the dataplane calls")
-	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Host IP or address of the External Processing (ext_proc) server")
+	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Address of the External Processing (ext_proc) server: both the address it binds and the address the co-located dataplane is told to dial. Defaults to loopback, which keeps it unreachable from other pods; readiness is probed via /readyz on the metrics port, not this one. Empty binds every interface")
 	cmd.Flags().IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")

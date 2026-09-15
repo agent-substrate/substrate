@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -275,10 +276,18 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// cancel: ext_proc is failClosed, so it must outlive the dataplane's drain.
 	extprocGRPC := s.extprocSrv.NewGRPCServer()
 	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting ExtProc Server", slog.Int("port", s.cfg.ExtprocPort))
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.ExtprocPort))
+		// Bind the address the dataplane dials the ext_proc server on, which
+		// defaults to loopback (--extproc-address 127.0.0.1). The dataplane is
+		// co-located in the same pod and always dials over loopback, so binding
+		// loopback keeps the ext_proc server unreachable from other pods on the
+		// flat pod network, where nothing authenticates the caller. Readiness is
+		// probed via /readyz on the metrics port, not this one, so a loopback bind
+		// does not break it. An empty address binds every interface.
+		extprocListenAddr := net.JoinHostPort(s.cfg.ExtprocAddr, strconv.Itoa(s.cfg.ExtprocPort))
+		slog.InfoContext(ctx, "Starting ExtProc Server", slog.String("address", extprocListenAddr))
+		lis, err := net.Listen("tcp", extprocListenAddr)
 		if err != nil {
-			return fmt.Errorf("failed to listen on extproc port %d: %w", s.cfg.ExtprocPort, err)
+			return fmt.Errorf("failed to listen on extproc address %q: %w", extprocListenAddr, err)
 		}
 		defer lis.Close()
 
