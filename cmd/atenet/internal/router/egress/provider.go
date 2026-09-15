@@ -24,20 +24,16 @@ package egress
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 )
 
 // credentialURIScheme is the only scheme a credential URI may carry.
@@ -48,39 +44,41 @@ const credentialURIScheme = "substrate-secret"
 type ProviderDialConfig struct {
 	// Address is the provider's gRPC dial target.
 	Address string
-	// CAFile is the CA the provider's serving certificate must chain to. Empty
-	// dials the provider plaintext (dev only).
+	// CAFile is the CA the provider's serving certificate must chain to.
+	// Required unless Insecure is set.
 	CAFile string
-	// ClientCert is the credential bundle presented to the provider. Empty omits
-	// a client certificate.
+	// ClientCert is the credential bundle presented to the provider as the
+	// client certificate. Required unless Insecure is set.
 	ClientCert string
 	// ServerName is the SAN/SNI expected on the provider's serving certificate.
 	ServerName string
+	// Insecure dials the provider without TLS. Explicit opt-in for development
+	// only: secrets would cross the network in the clear. Without it, a missing
+	// CAFile or ClientCert is an error rather than a silent downgrade.
+	Insecure bool
 }
 
-// DialProvider dials the credential provider, with mTLS when a CA is configured
-// and plaintext otherwise (dev only). The caller owns the returned connection.
+// DialProvider dials the credential provider over mTLS, with the same client
+// auth the rest of atenet uses for ateapi. Plaintext requires the explicit
+// Insecure opt-in; a missing CA or client credential bundle is otherwise an
+// error. The caller owns the returned connection.
 func DialProvider(ctx context.Context, cfg ProviderDialConfig) (*grpc.ClientConn, error) {
 	statsOpt := grpc.WithStatsHandler(otelgrpc.NewClientHandler())
 
-	if cfg.CAFile == "" {
-		slog.WarnContext(ctx, "no credential-provider CA set; dialing credential provider plaintext (dev only)")
+	if cfg.Insecure {
+		slog.WarnContext(ctx, "dialing credential provider WITHOUT TLS (--credential-provider-insecure); development only")
 		return grpc.NewClient(cfg.Address, grpc.WithTransportCredentials(insecure.NewCredentials()), statsOpt)
 	}
 
-	pool, err := loadCAPool(cfg.CAFile)
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		CAFile:           cfg.CAFile,
+		ServerName:       cfg.ServerName,
+		ClientCredBundle: cfg.ClientCert,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("credential-provider CA: %w", err)
+		return nil, fmt.Errorf("building credential-provider dial options: %w", err)
 	}
-	tlsCfg := &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		RootCAs:    pool,
-		ServerName: cfg.ServerName,
-	}
-	if cfg.ClientCert != "" {
-		tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCert)
-	}
-	return grpc.NewClient(cfg.Address, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), statsOpt)
+	return grpc.NewClient(cfg.Address, append(dialOpts, statsOpt)...)
 }
 
 // ProviderClass reduces a provider name — a substrate-secret:// class prefix such
@@ -142,16 +140,4 @@ func sanitizeSecret(secret []byte) ([]byte, error) {
 		}
 	}
 	return secret, nil
-}
-
-func loadCAPool(path string) (*x509.CertPool, error) {
-	pem, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", path, err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("no certificates in %q", path)
-	}
-	return pool, nil
 }

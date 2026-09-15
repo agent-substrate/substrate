@@ -20,6 +20,8 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
@@ -27,6 +29,24 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
+
+// mapCredentialProviderError converts a RequestSecret failure into a
+// client-facing ext_proc denial, mirroring mapEgressIdentityError: a credential
+// the provider does not hold or will not release (NotFound, PermissionDenied)
+// denies as 403 — retrying cannot succeed — while a transient provider failure
+// (Unavailable, DeadlineExceeded) fails closed as a retryable 503. Anything
+// unexpected denies rather than inviting retries of a request that cannot be
+// completed as the policy promised.
+func mapCredentialProviderError(err error) error {
+	switch status.Code(err) {
+	case codes.NotFound, codes.PermissionDenied:
+		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, deniedBody)
+	default:
+		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+	}
+}
 
 // applyEffects resolves a matched rule's credential injections and returns the
 // header mutations to add to the request, or an error that denies it. A rule
@@ -102,7 +122,7 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 			// must not let the request out without it.
 			slog.ErrorContext(ctx, "egress denied: credential fetch failed",
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", inj.GetCredentialUri()), slog.Any("err", err))
-			return nil, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, deniedBody)
+			return nil, mapCredentialProviderError(err)
 		}
 		secret, err := sanitizeSecret(resp.GetBearerToken())
 		if err != nil {

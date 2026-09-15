@@ -82,13 +82,16 @@ type credentialProviderConfig struct {
 	Name string
 	// Address is the provider's gRPC dial target. Empty disables injection.
 	Address string
-	// CAFile is the CA the provider's serving certificate must chain to. Empty
-	// dials the provider plaintext (dev only).
+	// CAFile is the CA the provider's serving certificate must chain to.
+	// Required unless Insecure is set.
 	CAFile string
-	// ClientCert is the credential bundle presented to the provider.
+	// ClientCert is the credential bundle presented to the provider as the
+	// client certificate. Required unless Insecure is set.
 	ClientCert string
 	// ServerName is the SAN/SNI expected on the provider's serving certificate.
 	ServerName string
+	// Insecure dials the provider without TLS; explicit development-only opt-in.
+	Insecure bool
 }
 
 // routerConfig holds deployment setup and endpoint options for the router node instance.

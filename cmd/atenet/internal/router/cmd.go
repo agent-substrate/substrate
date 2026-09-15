@@ -70,9 +70,10 @@ func NewRouterCmd() *cobra.Command {
 	// the request passes through without the credential.
 	cmd.Flags().StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as a substrate-secret:// class prefix (e.g. substrate-secret://kubernetes.io); a policy credential URI of any other class is refused. Empty disables the check (dev only)")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection")
-	cmd.Flags().StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; empty dials the provider plaintext (dev only)")
-	cmd.Flags().StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; required unless --credential-provider-insecure is set")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.ServerName, "credential-provider-server-name", "", "SAN/SNI expected on the credential provider's serving certificate")
+	cmd.Flags().BoolVar(&cfg.CredentialProvider.Insecure, "credential-provider-insecure", false, "Dial the credential provider WITHOUT TLS. Development only: secrets cross the network in the clear. Without this, a missing --credential-provider-ca-file or --credential-provider-client-cert fails startup instead of silently downgrading")
 	// Envoy learns the collector over xDS rather than from its own environment,
 	// so the router has to carry the address for it. Defaulting to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — the same variable the router's own exporter

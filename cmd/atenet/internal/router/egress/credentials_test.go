@@ -22,6 +22,8 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
@@ -154,11 +156,35 @@ func TestInjectionDenials(t *testing.T) {
 			want:          envoy_type.StatusCode_InternalServerError,
 		},
 		{
-			name:          "provider failure fails closed",
-			provider:      &fakeProvider{err: errors.New("provider down")},
+			// A transient provider failure is retryable.
+			name:          "provider unavailable fails closed as retryable",
+			provider:      &fakeProvider{err: status.Error(codes.Unavailable, "provider down")},
 			providerClass: injectionProviderClass,
 			leg:           extproc.EgressTLSMITMFilterChainName,
 			want:          envoy_type.StatusCode_ServiceUnavailable,
+		},
+		{
+			// A secret the provider does not hold cannot appear on retry.
+			name:          "secret not found denies as non-retryable",
+			provider:      &fakeProvider{err: status.Error(codes.NotFound, "no such secret")},
+			providerClass: injectionProviderClass,
+			leg:           extproc.EgressTLSMITMFilterChainName,
+			want:          envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name:          "provider refuses the actor denies as non-retryable",
+			provider:      &fakeProvider{err: status.Error(codes.PermissionDenied, "atespace not allowed")},
+			providerClass: injectionProviderClass,
+			leg:           extproc.EgressTLSMITMFilterChainName,
+			want:          envoy_type.StatusCode_Forbidden,
+		},
+		{
+			// An unclassified error denies rather than inviting retries.
+			name:          "unexpected provider error denies",
+			provider:      &fakeProvider{err: errors.New("provider down")},
+			providerClass: injectionProviderClass,
+			leg:           extproc.EgressTLSMITMFilterChainName,
+			want:          envoy_type.StatusCode_Forbidden,
 		},
 		{
 			name:          "empty secret fails closed",

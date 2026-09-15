@@ -234,6 +234,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				CAFile:     s.cfg.CredentialProvider.CAFile,
 				ClientCert: s.cfg.CredentialProvider.ClientCert,
 				ServerName: s.cfg.CredentialProvider.ServerName,
+				Insecure:   s.cfg.CredentialProvider.Insecure,
 			})
 			if err != nil {
 				return fmt.Errorf("dial credential provider: %w", err)
