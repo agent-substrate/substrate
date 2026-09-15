@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -27,7 +28,9 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
+	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/testcert"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +48,9 @@ const networkingAtespace = "networking-e2e"
 //	hack/install-ate-kind.sh --deploy-demo-egress-microvm             # passthrough, micro-VM
 //	hack/install-ate-kind.sh --deploy-demo-egress-mitm                # sdsmint, gVisor
 //	hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm        # sdsmint, micro-VM
+//
+// Before the MITM networking tests, also run hack/setup-e2e-egress-tls-kind.sh
+// so the gateway can verify the local HTTPS and WSS origins.
 func egressFixture() e2e.Fixture {
 	// E2E_EGRESS_MITM selects the egress gateway variant.
 	if os.Getenv("E2E_EGRESS_MITM") == "" {
@@ -487,4 +493,176 @@ func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Cli
 		t.Fatalf("direct Actor access through %s/%s:80 unexpectedly succeeded; body: %s", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), body)
 	}
 	t.Logf("direct Actor access through %s/%s:80 was blocked as expected: %v", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), err)
+}
+
+// TestActorEgressHTTPSNonStandardPort verifies HTTP/1.1 inside TLS while
+// preserving the original destination port through the egress tunnel.
+func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
+	ctx := t.Context()
+	const expectedBody = "https nonstandard origin"
+	target, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+		Name:       "https-origin",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http", "--body=" + expectedBody},
+		Port:       8443,
+	}, true)
+	actorName, router, actorRef := prepareProtocolActor(t, ctx, "https-port")
+	since := metav1.NewTime(time.Now().Add(-time.Minute))
+	raw := postEgressOnce(t, ctx, router, actorRef, "/", map[string]any{
+		"url": "https://" + address + "/healthz", "rootCA": rootCA, "http1": true,
+	})
+	var got struct {
+		StatusCode int    `json:"statusCode"`
+		Body       string `json:"body"`
+		Protocol   string `json:"protocol"`
+		TLS        bool   `json:"tls"`
+		Error      string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decoding HTTPS observation: %v", err)
+	}
+	if got.Error != "" || got.StatusCode != http.StatusOK || got.Body != expectedBody || got.Protocol != "HTTP/1.1" || !got.TLS {
+		t.Errorf("HTTPS observation = %+v; want verified TLS, HTTP/1.1, status 200 and body %q", got, expectedBody)
+	}
+	assertProtocolGateway(t, ctx, since, actorName, target.Address())
+}
+
+func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod, encrypted bool) (e2e.Server, string, string) {
+	t.Helper()
+	spec.Namespace = e2e.CreateNamespace(t).Name
+	var reserved e2e.Server
+	var rootCA string
+	if encrypted {
+		reserved = e2e.CreateServerService(t, ctx, spec)
+		var material testcert.ServerTLS
+		if os.Getenv("E2E_EGRESS_MITM") != "" {
+			// The E2E setup adds service-DNS roots to the gateway's upstream trust.
+			// Only the leaf key is mounted on the origin Pod.
+			secret, err := e2e.GetClients().K8s.CoreV1().Secrets("podcertificate-controller-system").Get(ctx, "service-dns-ca-pool", metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("reading service-DNS CA pool: %v", err)
+			}
+			pool, err := localca.Unmarshal(secret.Data["pool"])
+			if err != nil {
+				t.Fatalf("parsing service-DNS CA pool: %v", err)
+			}
+			if len(pool.CAs) == 0 {
+				t.Fatal("service-DNS CA pool is empty")
+			}
+			material = testcert.ServerTLSWithCA(t, pool.CAs[0], net.ParseIP(reserved.ClusterIP), spec.Name+"."+spec.Namespace+".svc.cluster.local")
+		} else {
+			material = testcert.NewServerTLS(t, net.ParseIP(reserved.ClusterIP))
+		}
+		rootCA = string(material.RootCA)
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "origin-tls", Namespace: spec.Namespace}, Type: corev1.SecretTypeTLS,
+			Data: map[string][]byte{corev1.TLSCertKey: material.Certificate, corev1.TLSPrivateKeyKey: material.PrivateKey}}
+		if _, err := e2e.GetClients().K8s.CoreV1().Secrets(spec.Namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("creating origin credentials: %v", err)
+		}
+		spec.Volumes = []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secret.Name}}}}
+		spec.VolumeMounts = []corev1.VolumeMount{{Name: "tls", MountPath: "/run/origin-tls", ReadOnly: true}}
+		spec.Args = append(spec.Args, "--tls-cert=/run/origin-tls/tls.crt", "--tls-key=/run/origin-tls/tls.key")
+		spec.HealthScheme = corev1.URISchemeHTTPS
+	}
+	target := e2e.DeployServerPod(t, ctx, spec)
+	if encrypted && target.ClusterIP != reserved.ClusterIP {
+		t.Fatalf("Service IP changed from %s to %s after certificate issuance", reserved.ClusterIP, target.ClusterIP)
+	}
+	e2e.WaitForServerEndpoint(t, ctx, spec)
+	family := "IPv6"
+	if net.ParseIP(target.ClusterIP).To4() != nil {
+		family = "IPv4"
+	}
+	t.Logf("origin %s/%s at %s (%s), TLS=%v", target.Namespace, spec.Name, target.Address(), family, encrypted)
+	address, requestCA := protocolOriginRequest(target, spec.Name, rootCA, encrypted && os.Getenv("E2E_EGRESS_MITM") != "")
+	return target, address, requestCA
+}
+
+// MITM needs a DNS name for certificate minting, and the actor's projected
+// gateway roots. The outer CONNECT log still records target.Address().
+func protocolOriginRequest(target e2e.Server, service, rootCA string, mitm bool) (string, string) {
+	if mitm {
+		return net.JoinHostPort(service+"."+target.Namespace+".svc.cluster.local", strconv.Itoa(target.Port)), ""
+	}
+	return target.Address(), rootCA
+}
+
+func TestProtocolOriginRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, ip, wantAddress, wantCA string
+		mitm                          bool
+	}{
+		{"passthrough IPv4", "10.0.0.7", "10.0.0.7:8443", "origin CA", false},
+		{"passthrough IPv6", "fd00::7", "[fd00::7]:8443", "origin CA", false},
+		{"MITM IPv4", "10.0.0.7", "origin.test.svc.cluster.local:8443", "", true},
+		{"MITM IPv6", "fd00::7", "origin.test.svc.cluster.local:8443", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := e2e.Server{Namespace: "test", ClusterIP: tc.ip, Port: 8443}
+			address, ca := protocolOriginRequest(target, "origin", "origin CA", tc.mitm)
+			if address != tc.wantAddress || ca != tc.wantCA {
+				t.Fatalf("request = (%q, %q), want (%q, %q)", address, ca, tc.wantAddress, tc.wantCA)
+			}
+		})
+	}
+}
+
+func prepareProtocolActor(t *testing.T, ctx context.Context, prefix string) (string, *e2e.RouterClient, resources.ActorRef) {
+	t.Helper()
+	actorName, _ := createAndResumeActor(t, ctx, prefix, egressFixture())
+	router := mustRouterClient(t, ctx)
+	t.Cleanup(func() { router.Close() })
+	ref := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForRouteReady(t, "egress actor ingress readiness", func() (*http.Response, error) { return router.Get(ctx, ref, "/readyz") })
+	return actorName, router, ref
+}
+
+// postEgressOnce starts the measured operation only after readiness. Unlike
+// postThroughEgressActor, an outbound failure is never retried.
+func postEgressOnce(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string, input any) []byte {
+	t.Helper()
+	payload, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("encoding actor operation: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	response, err := router.PostJSON(ctx, actorRef, path, payload)
+	if err != nil {
+		t.Fatalf("actor %s operation %s transport failed: %v", actorRef.Name, path, err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	if err != nil {
+		t.Fatalf("reading actor operation: %v", err)
+	}
+	if len(raw) > 1<<20 {
+		t.Fatal("actor operation response exceeds 1 MiB")
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("actor %s operation %s returned HTTP %d: %s", actorRef.Name, path, response.StatusCode, raw)
+	}
+	return raw
+}
+
+func assertProtocolGateway(t *testing.T, ctx context.Context, since metav1.Time, actorName, authority string) {
+	t.Helper()
+	identity := "spiffe://substrate-actor.local/atespace/" + networkingAtespace + "/actor/" + actorName
+	waitForAccessLog(t, ctx, since, "successful gateway traffic for "+identity+" to "+authority, func(lines []string) (bool, error) {
+		for _, line := range lines {
+			gotAuthority, _ := accessLogField(line, "authority")
+			code, _ := accessLogField(line, "code")
+			peers, _ := accessLogField(line, "peer_san")
+			if gotAuthority != authority || code != "200" {
+				continue
+			}
+			for peer := range strings.SplitSeq(peers, ",") {
+				if peer == identity {
+					t.Logf("gateway evidence: %s", line)
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	})
 }
