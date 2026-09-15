@@ -31,7 +31,9 @@ import (
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/lru"
@@ -44,6 +46,16 @@ var ErrWorkerPodNotFound = errors.New("worker pod not found")
 // Distinct from ErrWorkerPodNotFound, which callers treat as crash-worthy;
 // this one is retryable.
 var ErrNoAteletOnNode = errors.New("no atelet pod found on node")
+
+// unavailableError keeps a sentinel reachable via errors.Is while carrying
+// codes.Unavailable, so the interceptor doesn't default it to Internal.
+type unavailableError struct{ error }
+
+func (e *unavailableError) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
+func (e *unavailableError) Unwrap() error { return e.error }
 
 // The SPIFFE identity that atelet serving certs carry, as minted by the
 // podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
@@ -151,11 +163,13 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 		return nil, fmt.Errorf("while finding atelet on node %q: %w", nodeName, err)
 	}
 
+	// Atelet churn self-heals in seconds; Unavailable lets the router park
+	// and retry instead of failing fast.
 	if len(matchingAtelets) == 0 {
-		return nil, fmt.Errorf("%w: %q", ErrNoAteletOnNode, nodeName)
+		return nil, &unavailableError{fmt.Errorf("%w: %q", ErrNoAteletOnNode, nodeName)}
 	}
 	if len(matchingAtelets) > 1 {
-		return nil, fmt.Errorf("found %d atelet pods on node %q, expected 1", len(matchingAtelets), nodeName)
+		return nil, status.Errorf(codes.Unavailable, "found %d atelet pods on node %q, expected 1", len(matchingAtelets), nodeName)
 	}
 
 	selectedAtelet := matchingAtelets[0].(*corev1.Pod)
@@ -167,7 +181,7 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 	}
 
 	if len(selectedAtelet.Status.PodIPs) == 0 {
-		return nil, fmt.Errorf("selected atelet %q has no assigned IPs", selectedAtelet.ObjectMeta.Namespace+"/"+selectedAtelet.ObjectMeta.Name)
+		return nil, status.Errorf(codes.Unavailable, "selected atelet %q has no assigned IPs", selectedAtelet.ObjectMeta.Namespace+"/"+selectedAtelet.ObjectMeta.Name)
 	}
 
 	creds, err := d.dialCredentials(string(selectedAtelet.ObjectMeta.UID))
