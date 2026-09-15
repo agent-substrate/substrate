@@ -73,6 +73,7 @@ const (
 	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
 	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
 	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
+	ResumeOutcomeUnknown   ResumeOutcome = ateattr.RouterResumeUnknown
 )
 
 type resumeCallResult struct {
@@ -250,30 +251,33 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		}, nil
 	})
 
+	// Disambiguate the singleflight resume outcome. Only a resume that completed
+	// without an error can tell us whether an activation ran, so the three
+	// activation labels are reserved for that case:
+	//   - "none": resumed == false, the actor was already running (warm route).
+	//   - "triggered": resumed == true, this caller led the flight (reqID == leaderID).
+	//   - "joined": resumed == true, this caller waited on another's flight.
+	// Every failed or abandoned resume reports "unknown" instead of guessing from
+	// the gRPC code. A code alone does not say whether an activation ran: a
+	// canceled leader's flight outlives its request and keeps restoring the actor,
+	// and a DeadlineExceeded can land mid-restore.
 	select {
 	case <-ctx.Done():
-		// The caller's request context was canceled before the singleflight resume completed.
-		// Return early with ResumeOutcomeNone ("none")
-		return nil, ResumeOutcomeNone, ctx.Err()
+		// The caller's request context was canceled before the singleflight resume
+		// completed. The flight itself may well continue and activate the actor.
+		return nil, ResumeOutcomeUnknown, ctx.Err()
 	case res := <-ch:
 		callRes, _ := res.Val.(*resumeCallResult)
 		if callRes == nil {
 			if res.Err != nil {
-				return nil, ResumeOutcomeNone, res.Err
+				return nil, ResumeOutcomeUnknown, res.Err
 			}
-			return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
+			return nil, ResumeOutcomeUnknown, status.Error(codes.Internal, "resume call returned nil result")
 		}
-
-		// On error, return ResumeOutcomeNone ("none") so the failure is tagged
-		// under the 'outcome' label rather than misreported as an activation.
 		if callRes.err != nil {
-			return nil, ResumeOutcomeNone, callRes.err
+			return nil, ResumeOutcomeUnknown, callRes.err
 		}
 
-		// Disambiguate singleflight resume outcome:
-		// - ResumeOutcomeNone ("none"): resumed == false, actor was already active/running.
-		// - ResumeOutcomeTriggered ("triggered"): Cold activation leader (resumed == true, caller's reqID == leaderID).
-		// - ResumeOutcomeJoined ("joined"): Cold activation joiner (resumed == true, caller's reqID != leaderID).
 		outcome := ResumeOutcomeNone
 		if callRes.resumed {
 			if callRes.leaderID == reqID {

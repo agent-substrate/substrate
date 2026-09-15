@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -147,8 +148,83 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if got := status.Code(err); got != codes.NotFound {
 			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
 		}
-		if outcome != ResumeOutcomeNone {
-			t.Errorf("expected outcome %q on error, got %q", ResumeOutcomeNone, outcome)
+		if outcome != ResumeOutcomeUnknown {
+			t.Errorf("expected outcome %q on a failed resume, got %q", ResumeOutcomeUnknown, outcome)
+		}
+	})
+
+	t.Run("ContextCanceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				return &ateapipb.ResumeActorResponse{Resumed: true}, nil
+			},
+		}
+
+		resumer := NewActorResumer(mock)
+		_, outcome, err := resumer.ResumeActor(ctx, testActorRef)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+		if outcome != ResumeOutcomeUnknown {
+			t.Errorf("expected outcome %q on context cancellation, got %q", ResumeOutcomeUnknown, outcome)
+		}
+	})
+
+	// A resume that fails tells no caller whether an activation ran — the leader
+	// no more than the joiners — so every caller on the flight reports "unknown"
+	// rather than being split into triggered and joined.
+	t.Run("SingleflightDeduplication_FailedFlight", func(t *testing.T) {
+		var resumeCalled int
+		var mu sync.Mutex
+		const concurrentRequests = 10
+		var callersStarted atomic.Int32
+
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				resumeCalled++
+				mu.Unlock()
+				// Barrier: wait until all concurrent goroutines have launched ResumeActor
+				for callersStarted.Load() < concurrentRequests {
+					time.Sleep(time.Millisecond)
+				}
+				time.Sleep(10 * time.Millisecond)
+				return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+			},
+		}
+
+		resumer := NewActorResumer(mock)
+
+		var wg sync.WaitGroup
+		outcomes := make([]ResumeOutcome, concurrentRequests)
+		errs := make([]error, concurrentRequests)
+
+		wg.Add(concurrentRequests)
+		for i := 0; i < concurrentRequests; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				callersStarted.Add(1)
+				_, outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
+			}(i)
+		}
+		wg.Wait()
+
+		for i := 0; i < concurrentRequests; i++ {
+			if got := status.Code(errs[i]); got != codes.ResourceExhausted {
+				t.Fatalf("request %d expected ResourceExhausted, got %v", i, errs[i])
+			}
+			if outcomes[i] != ResumeOutcomeUnknown {
+				t.Errorf("request %d: expected outcome %q on a failed flight, got %q", i, ResumeOutcomeUnknown, outcomes[i])
+			}
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if resumeCalled != 1 {
+			t.Errorf("expected %d requests to share one ResumeActor call, got %d calls", concurrentRequests, resumeCalled)
 		}
 	})
 

@@ -56,6 +56,22 @@ const (
 	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
 
+// TemplateUnknown is the fallback for unresolvable or missing template dimensions.
+// Note: "unknown" is syntactically a legal atespace/template name; like
+// ate.sandbox.class="unknown", this trades potential collision with a real
+// object named "unknown" for maintaining a bounded, non-empty metric dimension.
+const TemplateUnknown = "unknown"
+
+// NormalizeTemplateDimension ensures a template dimension (atespace or name) is
+// non-empty, falling back to TemplateUnknown if unset. Only the router calls it
+// today; the other metrics carrying ate.template.* still emit the raw value.
+func NormalizeTemplateDimension(dim string) string {
+	if dim == "" {
+		return TemplateUnknown
+	}
+	return dim
+}
+
 // ReservedNamespace is substrate's. A producer that merges untrusted fields into a
 // record drops everything under it, so nothing a workload sets can read as
 // platform-issued attribution downstream.
@@ -237,12 +253,16 @@ const (
 
 // Values for RouterResumeKey.
 const (
-	// RouterResumeNone indicates the actor was already running (steady-state route).
+	// RouterResumeNone indicates the resume found the actor already running (steady-state route).
 	RouterResumeNone = "none"
-	// RouterResumeTriggered indicates this request won the singleflight lock and initiated cold activation.
+	// RouterResumeTriggered indicates this request won the singleflight lock and completed a cold activation.
 	RouterResumeTriggered = "triggered"
-	// RouterResumeJoined indicates this request parked on an in-flight singleflight resume.
+	// RouterResumeJoined indicates this request parked on another request's singleflight resume, which activated the actor.
 	RouterResumeJoined = "joined"
+	// RouterResumeUnknown indicates the resume did not complete, so whether an
+	// activation ran is unknown (a failed or canceled resume, or a direction that
+	// never resumes).
+	RouterResumeUnknown = "unknown"
 )
 
 // Values for ImageCacheOutcomeKey. A hit is a complete image record; a miss
