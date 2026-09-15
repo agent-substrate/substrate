@@ -3244,7 +3244,7 @@ func (*DurableDirVolumeSource) Descriptor() ([]byte, []int) {
 }
 
 // ExternalVolumeTemplate provisions an external volume per actor; the volume
-// lives only as long as the actor. Not supported with SANDBOX_CLASS_MICROVM.
+// lives only as long as the actor.
 type ExternalVolumeTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// capacity of the volume to create, in Kubernetes resource.Quantity string

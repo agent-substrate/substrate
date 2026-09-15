@@ -1108,7 +1108,7 @@ message ImageVolumeSource {
 message DurableDirVolumeSource {}
 
 // ExternalVolumeTemplate provisions an external volume per actor; the volume
-// lives only as long as the actor. Not supported with SANDBOX_CLASS_MICROVM.
+// lives only as long as the actor.
 message ExternalVolumeTemplate {
   // capacity of the volume to create, in Kubernetes resource.Quantity string
   // form (e.g. "10Gi"). Required.
