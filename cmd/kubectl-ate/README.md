@@ -232,6 +232,49 @@ kubectl ate create actor <actor-name> -a <atespace> --template <template-name> -
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
 
+### Egress Policies
+
+An **egress policy** is the ordered rule list the egress gateway evaluates for
+an actor's outbound requests; an actor has at most one, and one without a
+policy has all egress denied. `get` prints that no-policy state as a note on
+stderr and exits 0, so a loop over actors does not stop at the first one
+without a policy.
+
+```bash
+# Show an actor's egress policy, or dump it as a document.
+kubectl ate get egress-policy <actor-name> -a <atespace>
+kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml
+
+# Create an actor's egress policy from a manifest, or clone another actor's.
+kubectl ate create egress-policy <actor-name> -a <atespace> -f policy.yaml
+kubectl ate get egress-policy <src-actor> -a <atespace> -o yaml | \
+  kubectl ate create egress-policy <actor-name> -a <atespace> -f -
+
+# Delete an actor's egress policy; the actor keeps running with all egress denied.
+kubectl ate delete egress-policy <actor-name> -a <atespace>
+```
+
+The manifest is one `EgressPolicy` in protojson form; `metadata` may be omitted
+and server-managed fields are ignored, so the output of `get -o yaml` is a valid
+manifest as is.
+
+```yaml
+# policy.yaml: rules are evaluated in order; the first match wins.
+rules:
+- hostnames: {patterns: ["api.example.com"]}
+- cidrs: {cidrs: ["10.64.0.0/16"]}
+```
+
+#### `kubectl ate get egress-policy` output columns
+
+| Column | Meaning |
+|---|---|
+| `ATESPACE` | The atespace the actor and its policy belong to. |
+| `ACTOR` | The actor the policy applies to. |
+| `RULES` | Number of rules; `-o yaml` shows them in evaluation order. |
+| `VERSION` | The policy's version, bumped on every update. |
+| `AGE` | Time elapsed since the policy was created. |
+
 ### Logs
 
 `kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:

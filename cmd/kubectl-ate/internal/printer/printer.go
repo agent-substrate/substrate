@@ -373,6 +373,25 @@ func PrintTagTo(out io.Writer, tag *ateapipb.Tag, format string) error {
 	return PrintTagsTo(out, []*ateapipb.Tag{tag}, format)
 }
 
+// PrintEgressPolicyTo prints one actor's egress policy. json and yaml emit the
+// bare EgressPolicy so the output can be fed back through a manifest flag. The
+// policy carries no actor name, so the caller passes it for the table.
+func PrintEgressPolicyTo(out io.Writer, actor string, policy *ateapipb.EgressPolicy, format string) error {
+	switch format {
+	case "json", "yaml":
+		return printProto(out, policy, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "ATESPACE\tACTOR\tRULES\tVERSION\tAGE")
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n",
+			policy.GetMetadata().GetAtespace(), actor, len(policy.GetRules()),
+			policy.GetMetadata().GetVersion(), formatAge(policy.GetMetadata().GetCreateTime()))
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
 func sortAtespaces(atespaces []*ateapipb.Atespace) {
 	slices.SortFunc(atespaces, func(a, b *ateapipb.Atespace) int {
 		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
