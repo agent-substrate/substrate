@@ -135,7 +135,8 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
-| `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `false` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 
@@ -263,13 +264,17 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--cluster-version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
-| `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `false` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
 | `--dashboard-dir` | Directory containing dashboard JSON files. | `DASHBOARD_DIR` | `tools/setup-gcp/dashboards` |
 
 *\*Note: Required unless the `BUCKET_NAME` environment variable is set.*
+
+`--enable-nested-virtualization` needs a `--machine-type` that supports the
+feature, and applies only to a cluster this command creates.
 
 ## Examples
 
@@ -289,6 +294,14 @@ go run ./tools/setup-gcp bootstrap
 go run ./tools/setup-gcp bootstrap \
   --cluster-name="custom-cluster" \
   --machine-type="n2-standard-8"
+```
+
+### Bootstrap a cluster whose nodes can run micro-VM workers
+
+```bash
+go run ./tools/setup-gcp bootstrap \
+  --machine-type="n4-standard-8" \
+  --enable-nested-virtualization
 ```
 
 ### Only create the cluster (using env vars for defaults)
