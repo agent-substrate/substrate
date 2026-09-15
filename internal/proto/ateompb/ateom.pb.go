@@ -1107,9 +1107,20 @@ type CheckpointWorkloadRequest struct {
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// What content to include in the checkpoint.
-	Scope         SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Scope SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
+	// skip_durable_dir_tar tells ateom not to archive the actor's durable-dir
+	// volumes, and to leave the directory in place for atelet to archive itself.
+	// atelet sets this when it will stream the archive straight into object
+	// storage instead of staging it on disk, which is only safe because ateom
+	// terminates the workload before returning: nothing writes the directory
+	// afterwards, so an archive taken later is as coherent as one taken inside
+	// the paused window.
+	//
+	// Every other snapshot file is unaffected; ateom still reports the set it
+	// wrote and atelet appends the durable-dir tar to it.
+	SkipDurableDirTar bool `protobuf:"varint,11,opt,name=skip_durable_dir_tar,json=skipDurableDirTar,proto3" json:"skip_durable_dir_tar,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CheckpointWorkloadRequest) Reset() {
@@ -1210,6 +1221,13 @@ func (x *CheckpointWorkloadRequest) GetScope() SnapshotScope {
 		return x.Scope
 	}
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+}
+
+func (x *CheckpointWorkloadRequest) GetSkipDurableDirTar() bool {
+	if x != nil {
+		return x.SkipDurableDirTar
+	}
+	return false
 }
 
 type CheckpointWorkloadResponse struct {
@@ -1912,7 +1930,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
-	"\x13RunWorkloadResponse\"\xa1\x04\n" +
+	"\x13RunWorkloadResponse\"\xd2\x04\n" +
 	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -1926,7 +1944,8 @@ const file_ateom_proto_rawDesc = "" +
 	"\fsnapshot_uri\x18\b \x01(\tR\vsnapshotUri\x12g\n" +
 	"\x13runtime_asset_paths\x18\t \x03(\v27.ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
 	"\x05scope\x18\n" +
-	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x1aD\n" +
+	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12/\n" +
+	"\x14skip_durable_dir_tar\x18\v \x01(\bR\x11skipDurableDirTar\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
