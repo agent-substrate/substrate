@@ -124,10 +124,9 @@ runs (`--tests`), e.g.:
 
 One-time prerequisites: a cluster from the GKE Quickstart in the repo
 README, with nodes big enough for the router, actor fleet, and runner. Envoy
-uses `2 × proxyCpu` CPUs (proxy plus `ext_proc`); AgentGateway uses one
-`proxyCpu` container; the runner requests `clientConcurrency+1`. Therefore,
-`proxyCpu` is a per-container allocation for Envoy, not an equal-total-CPU
-comparison with AgentGateway.
+applies `proxyCpu` to both its proxy and `ext_proc` containers. AgentGateway
+applies `proxyCpu` to its one proxy container. The runner requests
+`clientConcurrency+1` CPUs.
 
 #### Reproducible 2-CPU topology
 
