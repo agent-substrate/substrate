@@ -1,0 +1,4 @@
+# Build outputs. Rebuilt by bench/build.sh.
+bin/
+rust-module/target/
+bench/results/
