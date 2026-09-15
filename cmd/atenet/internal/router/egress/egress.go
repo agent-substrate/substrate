@@ -97,23 +97,21 @@ type Handler struct {
 
 // New builds the egress handler. actorIdentityRoots is the egress listener's
 // trusted_ca; see verifyActorCertificate for why it is checked again here.
-// policyCacheTTL of 0 fetches the policy on every callout. Credential injection
-// is off until WithCredentialProvider is called.
-func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration) *Handler {
+// policyCacheTTL of 0 fetches the policy on every callout.
+//
+// provider resolves an allowed rule's credential injections on the
+// TLS-terminated MITM leg; nil leaves credential injection off, so a rule that
+// requires an injection is skipped. providerClass, when set, is the
+// substrate-secret:// class this gateway serves; a credential URI of another
+// class is refused.
+func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerClass string) *Handler {
 	return &Handler{
 		apiClient:          apiClient,
 		actorIdentityRoots: actorIdentityRoots,
 		policies:           newPolicyCache(apiClient, policyCacheTTL),
+		provider:           provider,
+		providerClass:      providerClass,
 	}
-}
-
-// WithCredentialProvider enables egress credential injection: the handler
-// resolves an allowed rule's InjectStaticHeaders through provider and injects
-// them on the TLS-terminated MITM leg.
-func (h *Handler) WithCredentialProvider(provider credproviderpb.CredentialProviderClient, providerClass string) *Handler {
-	h.provider = provider
-	h.providerClass = providerClass
-	return h
 }
 
 func (h *Handler) Direction() extproc.Direction { return extproc.DirectionEgress }

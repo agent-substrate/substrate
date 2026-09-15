@@ -56,12 +56,11 @@ message RequestSecretRequest {
   SecretRequestContext context = 2;
 }
 
-// RequestSecretResponse carries the resolved credential. The credential is a
-// oneof and we can expand in the future (e.g. an mTLS keypair or a
-// signing key) without breaking callers; today the only shape is a bearer token.
+// RequestSecretResponse carries the resolved credential. The credential members
+// form a union — exactly one is set — expressed as sibling fields per the API
+// style guide, so it can grow other credential shapes (e.g. an mTLS keypair or a
+//  signing key) without breaking callers. Today the only member is a bearer token.
 message RequestSecretResponse {
-  oneof credential {
-    // The raw bearer-token bytes.
-    bytes bearer_token = 1;
-  }
+  // The raw bearer-token bytes.
+  optional bytes bearer_token = 1;
 }

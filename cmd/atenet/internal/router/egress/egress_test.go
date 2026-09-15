@@ -208,7 +208,7 @@ func xfccHeaderDER(chain ...[]byte) string {
 // egressHandler builds a Handler with an allow-everything policy, so the
 // identity tests are about identity alone.
 func egressHandler(roots *x509.CertPool, actor *ateapipb.Actor, err error) *Handler {
-	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, roots, DefaultPolicyCacheTTL)
+	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, roots, DefaultPolicyCacheTTL, nil, "")
 }
 
 // egressMockClient is the slice of ateapi the egress handler talks to.
@@ -376,7 +376,7 @@ func TestConnectLegDecidesAddressRules(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0)
+			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0, nil, "")
 			md := egressMetadata(xfccHeader(leaf))
 			md.Host = tc.authority
 			md.Headers[":authority"] = tc.authority
@@ -402,11 +402,11 @@ func TestConnectLegWithoutRequestLegsFailsClosed(t *testing.T) {
 	leaf := ca.issueActorCert(t, actorCertOptions{})
 	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw}))
 
-	h := New(&egressMockClient{actor: runningActor(), policy: hostnamesPolicy("api.example.com")}, ca.roots(), 0)
+	h := New(&egressMockClient{actor: runningActor(), policy: hostnamesPolicy("api.example.com")}, ca.roots(), 0, nil, "")
 	_, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
 	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 
-	h = New(&egressMockClient{actor: runningActor(), policy: cidrsPolicy("93.184.216.0/24")}, ca.roots(), 0)
+	h = New(&egressMockClient{actor: runningActor(), policy: cidrsPolicy("93.184.216.0/24")}, ca.roots(), 0, nil, "")
 	res, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
 	if err != nil {
 		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)

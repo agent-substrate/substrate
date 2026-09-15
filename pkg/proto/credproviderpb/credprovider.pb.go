@@ -161,15 +161,15 @@ func (x *RequestSecretRequest) GetContext() *SecretRequestContext {
 	return nil
 }
 
-// RequestSecretResponse carries the resolved credential. The credential is a
-// oneof and we can expand in the future (e.g. an mTLS keypair or a
-// signing key) without breaking callers; today the only shape is a bearer token.
+// RequestSecretResponse carries the resolved credential. The credential members
+// form a union — exactly one is set — expressed as sibling fields per the API
+// style guide, so it can grow other credential shapes (e.g. an mTLS keypair or a
+//
+//	signing key) without breaking callers. Today the only member is a bearer token.
 type RequestSecretResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Credential:
-	//
-	//	*RequestSecretResponse_BearerToken
-	Credential    isRequestSecretResponse_Credential `protobuf_oneof:"credential"`
+	// The raw bearer-token bytes.
+	BearerToken   []byte `protobuf:"bytes,1,opt,name=bearer_token,json=bearerToken,proto3,oneof" json:"bearer_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -204,32 +204,12 @@ func (*RequestSecretResponse) Descriptor() ([]byte, []int) {
 	return file_credprovider_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *RequestSecretResponse) GetCredential() isRequestSecretResponse_Credential {
-	if x != nil {
-		return x.Credential
-	}
-	return nil
-}
-
 func (x *RequestSecretResponse) GetBearerToken() []byte {
 	if x != nil {
-		if x, ok := x.Credential.(*RequestSecretResponse_BearerToken); ok {
-			return x.BearerToken
-		}
+		return x.BearerToken
 	}
 	return nil
 }
-
-type isRequestSecretResponse_Credential interface {
-	isRequestSecretResponse_Credential()
-}
-
-type RequestSecretResponse_BearerToken struct {
-	// The raw bearer-token bytes.
-	BearerToken []byte `protobuf:"bytes,1,opt,name=bearer_token,json=bearerToken,proto3,oneof"`
-}
-
-func (*RequestSecretResponse_BearerToken) isRequestSecretResponse_Credential() {}
 
 var File_credprovider_proto protoreflect.FileDescriptor
 
@@ -242,11 +222,10 @@ const file_credprovider_proto_rawDesc = "" +
 	"\x06header\x18\x03 \x01(\tR\x06header\"f\n" +
 	"\x14RequestSecretRequest\x12\x10\n" +
 	"\x03uri\x18\x01 \x01(\tR\x03uri\x12<\n" +
-	"\acontext\x18\x02 \x01(\v2\".credprovider.SecretRequestContextR\acontext\"J\n" +
-	"\x15RequestSecretResponse\x12#\n" +
-	"\fbearer_token\x18\x01 \x01(\fH\x00R\vbearerTokenB\f\n" +
-	"\n" +
-	"credential2p\n" +
+	"\acontext\x18\x02 \x01(\v2\".credprovider.SecretRequestContextR\acontext\"P\n" +
+	"\x15RequestSecretResponse\x12&\n" +
+	"\fbearer_token\x18\x01 \x01(\fH\x00R\vbearerToken\x88\x01\x01B\x0f\n" +
+	"\r_bearer_token2p\n" +
 	"\x12CredentialProvider\x12Z\n" +
 	"\rRequestSecret\x12\".credprovider.RequestSecretRequest\x1a#.credprovider.RequestSecretResponse\"\x00B?Z=github.com/agent-substrate/substrate/pkg/proto/credproviderpbb\x06proto3"
 
@@ -284,9 +263,7 @@ func file_credprovider_proto_init() {
 	if File_credprovider_proto != nil {
 		return
 	}
-	file_credprovider_proto_msgTypes[2].OneofWrappers = []any{
-		(*RequestSecretResponse_BearerToken)(nil),
-	}
+	file_credprovider_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

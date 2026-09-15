@@ -218,12 +218,14 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				return fmt.Errorf("loading --actor-identity-ca-file %q: %w", s.cfg.ActorIdentityCAFile, err)
 			}
 		}
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL)
-
-		// Enabled egress credential injection when credential provider address is set, the gateway
-		// dials the provider over mTLS to get the credential.
+		// Enable egress credential injection when a credential provider address
+		// is set: dial the provider over mTLS and hand the client to the handler.
+		// With no address the handler gets no provider, so an
+		// injection-requiring rule is skipped (see egress.applyEffects).
+		var provider credproviderpb.CredentialProviderClient
+		var providerClass string
 		if s.cfg.CredentialProvider.Address != "" {
-			providerClass, err := egress.ProviderClass(s.cfg.CredentialProvider.Name)
+			providerClass, err = egress.ProviderClass(s.cfg.CredentialProvider.Name)
 			if err != nil {
 				return fmt.Errorf("--credential-provider-name: %w", err)
 			}
@@ -237,12 +239,13 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				return fmt.Errorf("dial credential provider: %w", err)
 			}
 			defer providerConn.Close()
-			egressHandler.WithCredentialProvider(credproviderpb.NewCredentialProviderClient(providerConn), providerClass)
+			provider = credproviderpb.NewCredentialProviderClient(providerConn)
 			slog.InfoContext(ctx, "egress credential injection enabled",
 				slog.String("provider", s.cfg.CredentialProvider.Address),
 				slog.String("provider_name", s.cfg.CredentialProvider.Name))
 		}
 
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerClass)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

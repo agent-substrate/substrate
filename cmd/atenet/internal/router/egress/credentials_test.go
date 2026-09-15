@@ -46,19 +46,14 @@ func (f *fakeProvider) RequestSecret(_ context.Context, req *credproviderpb.Requ
 // bearerTokenResponse is a RequestSecretResponse carrying a bearer-token
 // credential.
 func bearerTokenResponse(token string) *credproviderpb.RequestSecretResponse {
-	return &credproviderpb.RequestSecretResponse{
-		Credential: &credproviderpb.RequestSecretResponse_BearerToken{BearerToken: []byte(token)},
-	}
+	return &credproviderpb.RequestSecretResponse{BearerToken: []byte(token)}
 }
 
 // injectionHandler builds a handler whose actor's policy injects a credential
-// for api.example.com, with provider as the credential provider.
+// for api.example.com, with provider as the credential provider (nil leaves
+// injection off).
 func injectionHandler(provider credproviderpb.CredentialProviderClient, providerClass string) *Handler {
-	h := New(&egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("api.example.com")}, nil, 0)
-	if provider != nil {
-		h.WithCredentialProvider(provider, providerClass)
-	}
-	return h
+	return New(&egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("api.example.com")}, nil, 0, provider, providerClass)
 }
 
 // On the TLS-terminated MITM leg an allowed rule's credential is resolved and
