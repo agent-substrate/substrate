@@ -211,11 +211,10 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 
 // ensurePausedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records where the local snapshot lives, and commits
-// PAUSED with the assignment cleared in a single update — or CRASHED when the
-// worker's node name was lost, since a local snapshot on an unknown node can
-// never be resumed. It re-reads the actor first so an out-of-band transition
-// (e.g. the syncer crashing the actor after its worker died) is not
-// overwritten: with no assignment left there is nothing to finalize.
+// PAUSED with the assignment cleared in a single update. It re-reads the
+// actor after releasing the worker and only finalizes PAUSING, so an
+// out-of-band transition (e.g. worker deletion
+// crashing the actor) is not overwritten.
 func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
@@ -224,27 +223,24 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	if err != nil {
 		return nil, err
 	}
+	if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_PAUSING {
+		return nil, status.Errorf(codes.FailedPrecondition, "FinalizePaused prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_PAUSING)
+	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
 	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
 		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
-		nodeName := ""
 		if err != nil {
-			if !errors.Is(err, store.ErrNotFound) {
-				return nil, fmt.Errorf("while getting worker for release: %w", err)
+			return nil, fmt.Errorf("while getting worker for release: %w", err)
+		}
+		// Drop just this actor's assignment; any other actors the worker
+		// hosts keep theirs.
+		_, err = w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
+		if err != nil {
+			if errors.Is(err, store.ErrVersionConflict) {
+				return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 			}
-			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
-		} else {
-			nodeName = worker.GetNodeName()
-			// Drop just this actor's assignment; any other actors the worker
-			// hosts keep theirs.
-			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
-			if err != nil {
-				if errors.Is(err, store.ErrVersionConflict) {
-					return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-				}
-				return nil, err
-			}
+			return nil, err
 		}
 
 		// 2. Clear the actor's assignment, now that the worker is freed
@@ -252,36 +248,19 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		if err != nil {
 			return nil, err
 		}
-		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
-		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
-		if nodeName == "" {
-			// Without a node name we cannot record where the local snapshot lives,
-			// so the actor can never be resumed (the scheduler would search for a
-			// worker on an unknown node forever). Crash it instead of leaving it
-			// stuck in PAUSED.
-			slog.LogAttrs(ctx, slog.LevelError, "Node name not found during finalize pause, crashing actor",
-				ateattr.ActorRefLogAttrs(actorRef)...)
-			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_PAUSING {
+			return nil, status.Errorf(codes.FailedPrecondition, "FinalizePaused prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_PAUSING)
 		}
 		contentScope := effectiveContentScope(actorTemplate.GetSnapshotsConfig().GetOnPause())
-		sandboxClass := ""
-		if worker != nil {
-			sandboxClass = worker.GetSandboxClass()
-		}
-		// Snapshot crash attributes before pod and pool pointers are cleared below.
-		latestActor.Status.State = newState
-		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 
 		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-			toUpdate.Status.State = newState
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSED
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
 			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
 				localInfo := &ateapipb.LocalSnapshotInfo{
-					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
-					ContentScope: contentScope,
-				}
-				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-					localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
+					SnapshotName:              toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
+					ContentScope:              contentScope,
+					NodeVmsWithLocalSnapshots: []string{worker.GetNodeName()},
 				}
 				toUpdate.Status.LocalSnapshotInfo = localInfo
 				toUpdate.Status.InProgressLocalSnapshotName = ""
@@ -289,10 +268,6 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			toUpdate.Status.WorkerAssignment = nil
 			return nil
 		})
-		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
-			logActorCrashed(ctx, latestActor, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
-			recordActorCrash(ctx, crashAttrs)
-		}
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
 			logActorStateChanged(ctx, storedActor, ateattr.OperationPause)
 		}

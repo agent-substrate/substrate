@@ -117,11 +117,13 @@ type FakeAteletServer struct {
 
 	CheckpointCalled  bool
 	CheckpointRequest *ateletpb.CheckpointRequest
+	AfterCheckpoint   func(context.Context) error
 
 	RestoreCalled  bool
 	RestoreRequest *ateletpb.RestoreRequest
 	FailRestore    error
 	RestoreDelay   time.Duration
+	AfterRestore   func(context.Context) error
 
 	UploadCalled  bool
 	UploadRequest *ateletpb.UploadPausedCheckpointRequest
@@ -169,6 +171,8 @@ func (f *FakeAteletServer) Reset() {
 	f.RestoreRequest = nil
 	f.FailRestore = nil
 	f.RestoreDelay = 0
+	f.AfterRestore = nil
+	f.AfterCheckpoint = nil
 
 	f.UploadCalled = false
 	f.UploadRequest = nil
@@ -211,6 +215,11 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 
 	f.CheckpointCalled = true
 	f.CheckpointRequest = proto.Clone(req).(*ateletpb.CheckpointRequest)
+	if f.AfterCheckpoint != nil {
+		if err := f.AfterCheckpoint(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
 		return nil, err
@@ -229,6 +238,11 @@ func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreReq
 	}
 	if f.FailRestore != nil {
 		return nil, f.FailRestore
+	}
+	if f.AfterRestore != nil {
+		if err := f.AfterRestore(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return &ateletpb.RestoreResponse{}, nil
 }
