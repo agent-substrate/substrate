@@ -216,6 +216,132 @@ func TestRenderServerPod(t *testing.T) {
 	}
 }
 
+// TestRenderServerPod_ExtraPorts covers the multi-protocol origin: one pod
+// serving several ports, which the Service and the container spell differently
+// — the Service publishes every port, while the container declares each
+// listener once, however many published ports point at it.
+func TestRenderServerPod_ExtraPorts(t *testing.T) {
+	pod, service := renderServerPodDocs(t, ServerPod{
+		Name:       "origin",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"serve", "--grpc=:50051"},
+		Port:       80,
+		TargetPort: 8080,
+		ExtraPorts: []ServerPort{
+			{Name: "http-alt", Port: 8080, TargetPort: 8080},
+			{Name: "grpc", Port: 50051},
+		},
+	})
+
+	container := pod.Spec.Containers[0]
+	// Only the primary port is appended as --listen; the rest are flags the
+	// caller wrote, because only the caller knows which listener is which.
+	if got, want := container.Args, []string{"serve", "--grpc=:50051", "--listen=:8080"}; !slices.Equal(got, want) {
+		t.Errorf("container args = %v, want %v", got, want)
+	}
+
+	// 80 and 8080 are published in front of the same listener, and a container
+	// that declared 8080 twice is a pod the API server refuses.
+	wantContainer := []struct {
+		name string
+		port int32
+	}{{"serve", 8080}, {"grpc", 50051}}
+	if len(container.Ports) != len(wantContainer) {
+		t.Fatalf("container declares %d ports, want %d: %+v", len(container.Ports), len(wantContainer), container.Ports)
+	}
+	for i, want := range wantContainer {
+		if got := container.Ports[i]; got.Name != want.name || got.ContainerPort != want.port {
+			t.Errorf("containerPort %d = %s/%d, want %s/%d", i, got.Name, got.ContainerPort, want.name, want.port)
+		}
+	}
+
+	wantService := []struct {
+		name             string
+		port, targetPort int
+	}{{"serve", 80, 8080}, {"http-alt", 8080, 8080}, {"grpc", 50051, 50051}}
+	if len(service.Spec.Ports) != len(wantService) {
+		t.Fatalf("service publishes %d ports, want %d: %+v", len(service.Spec.Ports), len(wantService), service.Spec.Ports)
+	}
+	for i, want := range wantService {
+		got := service.Spec.Ports[i]
+		if got.Name != want.name || int(got.Port) != want.port || got.TargetPort.IntValue() != want.targetPort {
+			t.Errorf("service port %d = %s %d->%d, want %s %d->%d",
+				i, got.Name, got.Port, got.TargetPort.IntValue(), want.name, want.port, want.targetPort)
+		}
+	}
+
+	// The one probe kubelet gets stays on the primary listener. What makes that
+	// enough is the server binding every port before it serves any; see the
+	// ExtraPorts doc comment.
+	probe := container.ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil {
+		t.Fatalf("readinessProbe = %+v, want an httpGet probe", probe)
+	}
+	if got := probe.HTTPGet.Port.IntValue(); got != 8080 {
+		t.Errorf("probe port = %d, want the primary listen port 8080", got)
+	}
+}
+
+// TestServerAddressFor covers the lookup a test dials an extra port through.
+func TestServerAddressFor(t *testing.T) {
+	server := Server{
+		ClusterIP: "10.0.0.7",
+		Port:      80,
+		Ports:     map[string]int{"serve": 80, "grpc": 50051},
+	}
+	if got, want := server.Address(), "10.0.0.7:80"; got != want {
+		t.Errorf("Address() = %q, want %q", got, want)
+	}
+	if got, want := server.AddressFor(t, "grpc"), "10.0.0.7:50051"; got != want {
+		t.Errorf("AddressFor(grpc) = %q, want %q", got, want)
+	}
+	// The primary port is in the map under its own name, so a caller that
+	// reaches for every port by name does not have to special-case one.
+	if got, want := server.AddressFor(t, "serve"), server.Address(); got != want {
+		t.Errorf("AddressFor(serve) = %q, want Address() = %q", got, want)
+	}
+}
+
+// TestCheckServerPorts covers the specs that have to fail here rather than in
+// the cluster: a rendered manifest the API server rejects costs a suite the
+// whole apply, and a duplicate published port costs it a test dialing the
+// wrong server with no sign anything went wrong.
+func TestCheckServerPorts(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ServerPod
+		ok   bool // whether checkServerPorts should accept it
+	}{{
+		name: "the single-port shape every existing caller passes",
+		spec: ServerPod{Port: 80, TargetPort: 8080},
+		ok:   true,
+	}, {
+		name: "two published ports sharing one listener",
+		spec: ServerPod{Port: 80, TargetPort: 8080, ExtraPorts: []ServerPort{{Name: "http-alt", Port: 8080}}},
+		ok:   true,
+	}, {
+		name: "an extra port with no name",
+		spec: ServerPod{Port: 80, ExtraPorts: []ServerPort{{Port: 50051}}},
+	}, {
+		name: "an extra port that publishes nothing",
+		spec: ServerPod{Port: 80, ExtraPorts: []ServerPort{{Name: "grpc"}}},
+	}, {
+		name: "an extra port colliding with the primary one's name",
+		spec: ServerPod{Port: 80, ExtraPorts: []ServerPort{{Name: primaryPortName, Port: 50051}}},
+	}, {
+		name: "an extra port colliding with the primary published port",
+		spec: ServerPod{Port: 80, TargetPort: 8080, ExtraPorts: []ServerPort{{Name: "http-alt", Port: 80}}},
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkServerPorts(serverPorts(tc.spec))
+			if got := err == nil; got != tc.ok {
+				t.Errorf("checkServerPorts accepted = %t, want %t (err = %v)", got, tc.ok, err)
+			}
+		})
+	}
+}
+
 // TestRenderServerPod_Volumes covers the credential-carrying shape the sdsmint
 // suite deploys, with both volume kinds it needs: a plain Secret and a
 // projection. A projection is the interesting one — it nests three levels, so
@@ -284,5 +410,101 @@ func TestRenderServerPod_Volumes(t *testing.T) {
 		if !volumes[m.Name] {
 			t.Errorf("volumeMount %q names no volume; the pod has %v", m.Name, volumes)
 		}
+	}
+}
+
+// resetSharedServers isolates a test from the package-level memo, and restores
+// it afterwards so the suite it belongs to is unaffected.
+func resetSharedServers(t *testing.T) {
+	t.Helper()
+	sharedServersMu.Lock()
+	saved := sharedServers
+	sharedServers = map[string]*sharedServer{}
+	sharedServersMu.Unlock()
+
+	t.Cleanup(func() {
+		sharedServersMu.Lock()
+		sharedServers = saved
+		sharedServersMu.Unlock()
+	})
+}
+
+// TestSharedServerEntry covers the memo DeploySharedServerPod is built on. The
+// deploy itself needs a cluster; which callers are handed the same entry does
+// not, and it is the part that decides whether a suite shares one origin or
+// silently stands up several.
+func TestSharedServerEntry(t *testing.T) {
+	resetSharedServers(t)
+
+	spec := ServerPod{
+		Name:       "egresshttp",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       80,
+		TargetPort: 8080,
+	}
+
+	first, conflict := sharedServerEntry(spec)
+	if conflict {
+		t.Fatalf("the first call for %q reported a conflict", spec.Name)
+	}
+
+	// An equal spec built separately, which is what a suite's callers actually
+	// pass: egressHTTPTarget() returns a fresh value every time, so matching on
+	// identity rather than contents would deploy an origin per caller and
+	// quietly undo the sharing.
+	same := ServerPod{
+		Name:       "egresshttp",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       80,
+		TargetPort: 8080,
+	}
+	second, conflict := sharedServerEntry(same)
+	if conflict {
+		t.Errorf("an equal spec for %q reported a conflict", spec.Name)
+	}
+	if second != first {
+		t.Errorf("an equal spec got a different entry, so its caller would deploy a second origin")
+	}
+}
+
+// TestSharedServerEntryConflict covers the name collision. Handing the second
+// caller the first one's origin would leave it dialing a server it never asked
+// for, so the mismatch has to surface.
+func TestSharedServerEntryConflict(t *testing.T) {
+	resetSharedServers(t)
+
+	spec := ServerPod{Name: "origin", ImportPath: "example.com/a", Port: 80}
+	if _, conflict := sharedServerEntry(spec); conflict {
+		t.Fatalf("the first call for %q reported a conflict", spec.Name)
+	}
+
+	for _, differs := range []ServerPod{
+		{Name: "origin", ImportPath: "example.com/b", Port: 80},
+		{Name: "origin", ImportPath: "example.com/a", Port: 8080},
+		{Name: "origin", ImportPath: "example.com/a", Port: 80, Args: []string{"grpc"}},
+	} {
+		if _, conflict := sharedServerEntry(differs); !conflict {
+			t.Errorf("spec %+v reused the entry for %+v without reporting a conflict", differs, spec)
+		}
+	}
+}
+
+// TestSharedServerEntryDistinctNames covers the ordinary case of a suite with
+// more than one shared origin: different names are different servers.
+func TestSharedServerEntryDistinctNames(t *testing.T) {
+	resetSharedServers(t)
+
+	http, conflict := sharedServerEntry(ServerPod{Name: "egresshttp", Port: 80})
+	if conflict {
+		t.Fatal("the first call for egresshttp reported a conflict")
+	}
+	grpc, conflict := sharedServerEntry(ServerPod{Name: "grpcecho", Port: 50051})
+	if conflict {
+		t.Fatal("grpcecho conflicted with egresshttp, which it does not share a name with")
+	}
+	if http == grpc {
+		t.Error("two names got one entry, so one origin would answer for both")
 	}
 }

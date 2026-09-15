@@ -18,10 +18,15 @@
 # for what each placeholder means.
 #
 # The differences between those servers are the placeholders below: a name, an
-# image, a port, a readiness probe, and whatever credentials the server has to
-# mount. Everything else was identical in every copy of this manifest that
+# image, the ports, a readiness probe, and whatever credentials the server has
+# to mount. Everything else was identical in every copy of this manifest that
 # existed before it was shared, so a per-server file only offered somewhere for
 # the copies to drift apart.
+#
+# One readiness probe covers however many ports the server publishes, because a
+# container gets one: a multi-port server is expected to bind all of its
+# listeners before it serves any, so that the probed one answering means the
+# rest are open too.
 #
 # A plain Pod, not an actor. These servers are scaffolding around the code under
 # test, and running one inside an actor would make its snapshot or restore
@@ -40,9 +45,7 @@ spec:
   - name: ${NAME}
     image: ${IMAGE}
 ${ARGS}
-    ports:
-    - name: serve
-      containerPort: ${TARGET_PORT}
+${CONTAINER_PORTS}
     # The suite starts dialing as soon as it has an address, so without a
     # readiness gate the first connection can land before the listener exists
     # and come back refused -- which reads as a failure of whatever sits between
@@ -79,7 +82,4 @@ metadata:
 spec:
   selector:
     app: ${NAME}
-  ports:
-  - name: serve
-    port: ${PORT}
-    targetPort: ${TARGET_PORT}
+${SERVICE_PORTS}
