@@ -1328,9 +1328,9 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
-	// Reset actor directories on the node
-	if err := resetActorDirs(actorUID); err != nil {
-		return nil, fmt.Errorf("failed to reset actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	// Reclaim the actor's directories on the node
+	if err := removeActorDirs(actorUID); err != nil {
+		return nil, fmt.Errorf("failed to remove actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
 	return &ateletpb.TerminateResponse{}, nil
@@ -1857,6 +1857,8 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return dir.Sync()
 }
 
+// resetActorDirs empties the actor's directories and leaves them in place for
+// its next activation. Use removeActorDirs when the actor will not come back.
 func resetActorDirs(actorUID string) error {
 	// Explicitly leave runsc logs dir untouched.
 
@@ -1941,6 +1943,23 @@ func resetActorDirs(actorUID string) error {
 		return wrapFileSystemErr("while creating volumes dir: %w", err)
 	}
 
+	return nil
+}
+
+// removeActorDirs reclaims the actor's whole directory tree, root included:
+// nothing else on the node deletes it, and no later activation will look here.
+//
+// resetActorDirs runs first for the care a blanket RemoveAll lacks. It refuses
+// to proceed while a volume directory is still populated, so a failed unmount
+// cannot become a deletion of the mount's contents, and it can remove a bundle
+// upper dir carrying an image's read-only modes.
+func removeActorDirs(actorUID string) error {
+	if err := resetActorDirs(actorUID); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(ateompath.ActorPath(actorUID)); err != nil {
+		return wrapFileSystemErr("while deleting actor dir: %w", err)
+	}
 	return nil
 }
 

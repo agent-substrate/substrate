@@ -923,6 +923,61 @@ func TestWrapFileSystemErrAttachesTerminalReason(t *testing.T) {
 	}
 }
 
+// TestRemoveActorDirsReclaimsTheRoot covers what separates removeActorDirs
+// from resetActorDirs: the root goes too, and with it the files directly under
+// it rather than in one of the directories reset knows.
+func TestRemoveActorDirsReclaimsTheRoot(t *testing.T) {
+	useTempNodeDirs(t)
+	const actorUID = "actor-uid-1"
+
+	if err := resetActorDirs(actorUID); err != nil {
+		t.Fatalf("resetActorDirs: %v", err)
+	}
+	// Written at Run and deliberately kept out of the directories reset wipes.
+	if err := os.WriteFile(ateompath.ActorSandboxAssetsFile(actorUID), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("writing sandbox assets file: %v", err)
+	}
+
+	if err := removeActorDirs(actorUID); err != nil {
+		t.Fatalf("removeActorDirs: %v", err)
+	}
+
+	actorDir := ateompath.ActorPath(actorUID)
+	if entries, err := os.ReadDir(actorDir); err == nil {
+		left := make([]string, 0, len(entries))
+		for _, e := range entries {
+			left = append(left, e.Name())
+		}
+		t.Errorf("actor dir %s survived removeActorDirs with %d entries: %v", actorDir, len(left), left)
+	} else if !os.IsNotExist(err) {
+		t.Errorf("reading actor dir %s: %v", actorDir, err)
+	}
+}
+
+// TestRemoveActorDirsKeepsPopulatedVolume checks that removing the root does
+// not defeat the mount safety resetActorDirs provides: a volume directory with
+// contents means the unmount did not take, and deleting it would take the
+// mounted volume's data rather than the actor's.
+func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
+	useTempNodeDirs(t)
+	const actorUID = "actor-uid-1"
+
+	stillMounted := filepath.Join(ateompath.VolumeHostPath(actorUID, "data"), "payload")
+	if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
+		t.Fatalf("creating volume dir: %v", err)
+	}
+	if err := os.WriteFile(stillMounted, []byte("volume contents"), 0o600); err != nil {
+		t.Fatalf("writing volume contents: %v", err)
+	}
+
+	if err := removeActorDirs(actorUID); err == nil {
+		t.Fatal("removeActorDirs succeeded with a populated volume dir, want an error")
+	}
+	if _, err := os.Stat(stillMounted); err != nil {
+		t.Errorf("removeActorDirs deleted the contents of a volume that was still populated: %v", err)
+	}
+}
+
 // mapObjectStorage serves per-object bytes so multi-object downloads can be
 // tested; the key is "<bucket>/<object>".
 type mapObjectStorage struct {
