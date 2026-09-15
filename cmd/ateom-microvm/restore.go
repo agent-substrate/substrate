@@ -130,10 +130,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// cold-starts. The snapshot must carry them — the actor declares the volume, and
 	// every scope captures it.
 	if hasDurableVolumes(p.containers) {
-		if err := untarDurableVolumes(durableDir, restoreDir); err != nil {
+		if err := restoreDurableVolumes(durableDir, restoreDir); err != nil {
 			return nil, err
 		}
 	}
+	tDurable := time.Now()
 
 	switch scope := req.GetScope(); scope {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -152,8 +153,15 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
 		}
+		// Split, because the two halves answer different questions and the
+		// arrangement the snapshot is in moves cost between them: durable is the
+		// host materializing the volumes, boot is the guest starting on top of
+		// them — including its first reads of what was just written.
 		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",
-			slog.String("id", p.actorUID), slog.Duration("total", time.Since(tStart)))
+			slog.String("id", p.actorUID),
+			slog.Duration("durable", tDurable.Sub(tStart)),
+			slog.Duration("boot", time.Since(tDurable)),
+			slog.Duration("total", time.Since(tStart)))
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
 	}

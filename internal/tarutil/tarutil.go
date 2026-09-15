@@ -103,6 +103,12 @@ type SkipFunc func(rel string) bool
 // CreateFiltered is Create with entries omitted where skip returns true. A nil
 // skip archives everything.
 func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) error {
+	return createTree(ctx, tarPath, srcDir, skip, nil)
+}
+
+// createTree writes the archive. A non-nil sink diverts regular-file contents
+// out of it (see CreateSplit).
+func createTree(ctx context.Context, tarPath, srcDir string, skip SkipFunc, sink *blobSink) error {
 	f, err := os.Create(tarPath)
 	if err != nil {
 		return fmt.Errorf("creating tar %q: %w", tarPath, err)
@@ -116,7 +122,7 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 		tarWriterPool.Put(bw)
 	}()
 	tw := tar.NewWriter(bw)
-	if err := writeTree(ctx, tw, srcDir, skip); err != nil {
+	if err := writeTree(ctx, tw, srcDir, skip, sink); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -139,7 +145,7 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 // entry per path, omitting entries (and, for directories, subtrees) that skip
 // selects. The deterministic order keeps archives of identical trees
 // byte-comparable, which makes snapshot diffs meaningful.
-func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc) error {
+func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc, sink *blobSink) error {
 	// Maps an already-archived multi-link inode to the name it was archived
 	// under, so later links become tar hardlink entries instead of copies.
 	linked := map[inodeKey]string{}
@@ -230,6 +236,21 @@ func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc
 				}
 				linked[key] = hdr.Name
 			}
+			// An empty file needs no blob: the header alone reproduces it, and
+			// a blob per empty file would be one more object to ship for no
+			// bytes.
+			if sink != nil && hdr.Size > 0 {
+				blob, err := sink.put(path)
+				if err != nil {
+					return err
+				}
+				if hdr.PAXRecords == nil {
+					hdr.PAXRecords = map[string]string{}
+				}
+				hdr.PAXRecords[blobRecord] = blob
+				hdr.Size = 0
+				return tw.WriteHeader(hdr)
+			}
 			if err := tw.WriteHeader(hdr); err != nil {
 				return fmt.Errorf("writing tar header for %q: %w", path, err)
 			}
@@ -271,6 +292,12 @@ func copyFileInto(tw *tar.Writer, path string) error {
 // an existing path replaces it ("later entry wins", standard tar semantics),
 // except that an existing directory is kept when the entry is also a directory.
 func Extract(tarPath, dstDir string) error {
+	return extractTree(tarPath, dstDir, nil)
+}
+
+// extractTree unpacks the archive. blobs, when non-nil, is the directory
+// holding the contents CreateSplit diverted out of it.
+func extractTree(tarPath, dstDir string, blobs *os.Root) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
 		return fmt.Errorf("opening tar %q: %w", tarPath, err)
@@ -312,7 +339,7 @@ func Extract(tarPath, dstDir string) error {
 		if skip {
 			continue
 		}
-		if err := extractEntry(root, tr, hdr, name, dirs); err != nil {
+		if err := extractEntry(root, tr, hdr, name, dirs, blobs); err != nil {
 			return err
 		}
 	}
@@ -320,7 +347,7 @@ func Extract(tarPath, dstDir string) error {
 }
 
 // extractEntry materializes one archive entry under root.
-func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, dirs map[string]*tar.Header) error {
+func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, dirs map[string]*tar.Header, blobs *os.Root) error {
 	mode := hdr.FileInfo().Mode().Perm()
 
 	switch hdr.Typeflag {
@@ -335,11 +362,36 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		if err := replaceExisting(root, name); err != nil {
 			return err
 		}
+		// Contents come from the entry's blob when CreateSplit diverted them
+		// there, and from the archive stream otherwise. An archive can hold
+		// both kinds: empty files never get a blob.
+		contents := io.Reader(tr)
+		if blob := hdr.PAXRecords[blobRecord]; blob != "" {
+			if blobs == nil {
+				return fmt.Errorf("entry %q names blob %q but no blob directory was given", name, blob)
+			}
+			// Adopt the blob's inode rather than copying it; see ExtractSplit
+			// for what that costs the caller. Only a filesystem that refuses
+			// the link falls through to the copy below.
+			linked, err := linkBlob(blobs, blob, root, name)
+			if err != nil {
+				return err
+			}
+			if linked {
+				return restoreMeta(root, name, hdr)
+			}
+			rc, err := openBlob(blobs, blob, name)
+			if err != nil {
+				return err
+			}
+			defer rc.Close()
+			contents = rc
+		}
 		out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 		if err != nil {
 			return fmt.Errorf("creating file %q: %w", name, err)
 		}
-		_, copyErr := copyPooled(out, tr)
+		_, copyErr := copyPooled(out, contents)
 		closeErr := out.Close()
 		if copyErr != nil {
 			return fmt.Errorf("writing contents of %q: %w", name, copyErr)

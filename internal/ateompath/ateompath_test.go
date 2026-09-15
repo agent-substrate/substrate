@@ -94,3 +94,27 @@ func TestActorPathUsesUID(t *testing.T) {
 		t.Errorf("ActorPath(%q) = %q, want suffix %q", uid1, path1, want)
 	}
 }
+
+// The predicate is what atelet carves durable data out of a FULL snapshot's
+// file set with, so a durable file it misses is data dropped from a DATA
+// snapshot and a guest file it claims is guest state smuggled into one.
+func TestDurableDirSnapshotFile(t *testing.T) {
+	for name, want := range map[string]bool{
+		DurableDirTarFile:             true,
+		DurableDirIndexFile:           true,
+		DurableDirBlobPrefix + "0000": true,
+		DurableDirBlobPrefix + "9999": true,
+		"config.json":                 false,
+		"state.json":                  false,
+		"memory-ranges":               false,
+		"base-id":                     false,
+		"rootfs-upper.tar":            false,
+		"manifest.json":               false,
+		"durable-dir":                 false,
+		"not-durable-dir.blob-0000":   false,
+	} {
+		if got := DurableDirSnapshotFile(name); got != want {
+			t.Errorf("DurableDirSnapshotFile(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
