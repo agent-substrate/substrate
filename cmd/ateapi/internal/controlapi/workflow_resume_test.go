@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -1270,7 +1271,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 		Spec:       corev1.PodSpec{NodeName: "node-1"},
 	}
 	ateletPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-1", UID: "atelet-uid"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: installdefaults.SystemNamespace, Name: "atelet-1", UID: "atelet-uid"},
 		Spec:       corev1.PodSpec{NodeName: "node-1"},
 	}
 	dialer := newDialerForPods(t, workerPod, ateletPod)

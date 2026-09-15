@@ -1220,13 +1220,13 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 	t.Helper()
 	clients := e2e.GetClients()
 
-	svc, err := clients.K8s.CoreV1().Services("ate-system").Get(context.Background(), "atenet-router", metav1.GetOptions{})
+	svc, err := clients.K8s.CoreV1().Services(e2e.SystemNamespace()).Get(context.Background(), e2e.ResourceName("atenet-router"), metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get atenet-router service: %w", err)
 	}
 
 	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
-	pods, err := clients.K8s.CoreV1().Pods("ate-system").List(context.Background(), metav1.ListOptions{LabelSelector: selector})
+	pods, err := clients.K8s.CoreV1().Pods(e2e.SystemNamespace()).List(context.Background(), metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return "", fmt.Errorf("failed to list atenet-router pods: %w", err)
 	}

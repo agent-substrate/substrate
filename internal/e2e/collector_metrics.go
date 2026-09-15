@@ -65,7 +65,7 @@ func ScrapeAgentGatewayRouterMetrics(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating k8s client: %w", err)
 	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, agentGatewayRouterStatsPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), agentGatewayRouterStatsPort)
 	if err != nil {
 		return "", err
 	}
