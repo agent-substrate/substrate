@@ -183,6 +183,46 @@ func TestCanStreamDurableDirTar(t *testing.T) {
 	}
 }
 
+// TestResolveStreamDurableFrom covers the version skew atelet sees while it
+// runs ahead of the workers on its node: an ateom that does not know the flag
+// stages the archive regardless, and streaming a second copy over it would
+// upload the tree twice and name it twice in the manifest.
+func TestResolveStreamDurableFrom(t *testing.T) {
+	const from = "/var/lib/ateom-gvisor/actors/uid/durable-dir"
+
+	for _, tc := range []struct {
+		name  string
+		from  string
+		files []string
+		want  string
+	}{
+		{
+			name:  "ateom honored the flag",
+			from:  from,
+			files: []string{"config.json", "state.json"},
+			want:  from,
+		},
+		{
+			name:  "ateom staged the archive anyway",
+			from:  from,
+			files: []string{"config.json", ateompath.DurableDirTarFile, "state.json"},
+			want:  "",
+		},
+		{
+			name:  "not streaming to begin with",
+			from:  "",
+			files: []string{ateompath.DurableDirTarFile},
+			want:  "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveStreamDurableFrom(tc.from, tc.files); got != tc.want {
+				t.Errorf("resolveStreamDurableFrom() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestUploadSnapshotStreamsDurableDirTar covers the seam: the durable-dir tar
 // is the one snapshot file with no copy in srcDir, and it still has to land as
 // the same object, beside the files that do come off disk.

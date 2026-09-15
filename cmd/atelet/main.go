@@ -686,6 +686,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	s.systemInfoVolumes.Deregister(actorUID)
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
+	streamDurableFrom = resolveStreamDurableFrom(streamDurableFrom, sandboxRec.SnapshotFiles)
 	if streamDurableFrom != "" {
 		// ateom lists what it wrote, and it deliberately did not write this one.
 		// The manifest still has to name it: it is an object of this snapshot
@@ -816,8 +817,9 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 // The conditions are what make the two archives interchangeable:
 //
 //   - External checkpoints only. A local checkpoint's files stay on the node,
-//     so there is no upload to overlap the archive with, and moveLocalCheckpoint
-//     would find the file missing.
+//     so there is no upload to overlap the archive with, and nothing here would
+//     write the archive instead: resetActorDirs deletes the durable dir as soon
+//     as the checkpoint returns, so skipping it would lose the data outright.
 //   - Micro-VM only. gVisor's archive drops the .gvisor.* files its runtime
 //     leaves in the durable dir, a rule that lives in ateom-gvisor; the
 //     archive written here would keep them.
@@ -831,6 +833,23 @@ func canStreamDurableDirTar(req *ateletpb.CheckpointRequest, spec *ateompb.Workl
 		req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL &&
 		atev1alpha1.SandboxClass(rec.SandboxClass) == atev1alpha1.SandboxClassMicroVM &&
 		hasDurableDirMounts(spec)
+}
+
+// resolveStreamDurableFrom narrows the decision canStreamDurableDirTar made
+// before the call to what ateom actually did with it, reported by the file list
+// it answers with: that list comes from reading the checkpoint directory, so it
+// is the ground truth for whether the archive is there.
+//
+// It will not be, normally. But atelet upgrades ahead of the workers on its
+// node, so a new atelet spends that window talking to an ateom too old to know
+// skip_durable_dir_tar — and an unknown field is dropped silently, leaving that
+// ateom to stage the archive as it always has. Uploading a second copy of the
+// same tree on top of the one it already paid for helps nobody, so take its.
+func resolveStreamDurableFrom(streamDurableFrom string, snapshotFiles []string) string {
+	if slices.Contains(snapshotFiles, ateompath.DurableDirTarFile) {
+		return ""
+	}
+	return streamDurableFrom
 }
 
 func hasDurableDirMounts(spec *ateompb.WorkloadSpec) bool {
