@@ -101,7 +101,7 @@ func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor
 	t.Helper()
 	atespace := actor.GetMetadata().GetAtespace()
 	MustCreateAtespace(t, ctx, s, atespace)
-	created, err := s.CreateActor(ctx, actor)
+	created, err := s.CreateActor(ctx, actor, nil)
 	if err != nil {
 		t.Fatalf("creating test actor %q/%q: %v", atespace, actor.GetMetadata().GetName(), err)
 	}

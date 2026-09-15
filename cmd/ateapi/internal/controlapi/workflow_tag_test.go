@@ -226,7 +226,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	persistence := newTestPersistence(t)
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
-	svc := &RPCService{impl: persistence, objectStore: objects}
+	svc := &RPCService{impl: newServiceImpl(persistence, nil), objectStore: objects}
 
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
@@ -312,7 +312,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 	persistence := newTestPersistence(t)
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
-	svc := &RPCService{impl: persistence, objectStore: objects}
+	svc := &RPCService{impl: newServiceImpl(persistence, nil), objectStore: objects}
 
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)

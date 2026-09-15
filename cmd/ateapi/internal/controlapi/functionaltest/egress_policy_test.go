@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -51,6 +53,95 @@ func functionalEgressPolicy() *ateapipb.EgressPolicy {
 		Rules: []*ateapipb.EgressRule{{
 			Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
 		}},
+	}
+}
+
+func TestCreateActor_DefaultEgressPolicy(t *testing.T) {
+	ns := namespaceForTest("ns-template-egress")
+	tc := setupTest(t, ns)
+	t.Cleanup(tc.cleanup)
+	base := createTemplate(t, tc, ns)
+	createAtespace(t, tc, "template-space")
+	ctx := t.Context()
+
+	for _, tt := range []struct {
+		name   string
+		policy *ateapipb.EgressPolicyTemplate
+	}{
+		{name: "absent"},
+		{name: "empty", policy: &ateapipb.EgressPolicyTemplate{}},
+		{name: "rules", policy: &ateapipb.EgressPolicyTemplate{Rules: functionalEgressPolicy().Rules}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			template := proto.CloneOf(base)
+			template.Metadata = &ateapipb.ResourceMetadata{Atespace: "template-space", Name: tt.name}
+			template.DefaultEgressPolicy = tt.policy
+			createdTemplate, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: template})
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tt.name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "template-space", Name: tt.name},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.name}
+			policy, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef})
+			if tt.policy == nil {
+				assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			md := policy.GetMetadata()
+			if md.GetAtespace() != testAtespace || md.GetName() != "default" || md.GetVersion() != 1 || md.GetUid() == "" || md.GetUid() == actor.GetMetadata().GetUid() || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
+				t.Errorf("unexpected policy metadata: %v", md)
+			}
+			if diff := cmp.Diff(tt.policy.Rules, policy.Rules, protocmp.Transform()); diff != "" {
+				t.Errorf("copied rules mismatch (-want +got):\n%s", diff)
+			}
+
+			// Templates have no public spec-update RPC. Change the stored default
+			// to verify that existing policies retain their copied rules.
+			createdTemplate, err = tc.persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(createdTemplate), store.PreconditionFrom(createdTemplate), func(db *ateapipb.ActorTemplate) error {
+				db.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotPolicy, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(policy, gotPolicy, protocmp.Transform()); diff != "" {
+				t.Errorf("template edit changed actor policy (-want +got):\n%s", diff)
+			}
+
+			policy.Rules = []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"updated.example.com"}}}}
+			updated, err := tc.client.UpdateActorEgressPolicy(ctx, &ateapipb.UpdateActorEgressPolicyRequest{Actor: actorRef, EgressPolicy: policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.GetMetadata().GetUid() != md.GetUid() || updated.GetMetadata().GetVersion() != 2 {
+				t.Errorf("unexpected updated policy metadata: %v", updated.GetMetadata())
+			}
+			if _, err := tc.client.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: actorRef}); err != nil {
+				t.Fatal(err)
+			}
+			_, err = tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef})
+			assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")
+			gotTemplate, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: actor.ActorTemplate})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(createdTemplate, gotTemplate, protocmp.Transform()); diff != "" {
+				t.Errorf("policy edits changed template (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
