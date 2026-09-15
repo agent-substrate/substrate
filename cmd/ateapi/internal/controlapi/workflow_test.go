@@ -16,10 +16,12 @@ package controlapi
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -84,7 +86,8 @@ func TestActorStateChangeRecords(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			records := logRecords(t, "Actor state changed")
+			records := logRecords(t, actorevent.StateChangedBody)
+			events := otlpEvents(t)
 
 			persistence := newTestPersistence(t)
 			storetest.MustCreateAtespace(t, ctx, persistence, tmplAtespace)
@@ -132,6 +135,18 @@ func TestActorStateChangeRecords(t *testing.T) {
 			}
 			if len(got) != len(want) {
 				t.Errorf("got %d attributes, want %d: %v", len(got), len(want), got)
+			}
+
+			// The OTLP copy is the same record under an event name.
+			gotEvents := events()
+			if len(gotEvents) != 1 {
+				t.Fatalf("got %d state events, want 1: %v", len(gotEvents), gotEvents)
+			}
+			if gotEvents[0].name != actorevent.StateChanged.Name {
+				t.Errorf("event name = %q, want %q", gotEvents[0].name, actorevent.StateChanged.Name)
+			}
+			if !maps.Equal(gotEvents[0].attrs, got) {
+				t.Errorf("state event attributes = %v, want the stdout record's %v", gotEvents[0].attrs, got)
 			}
 
 			stored, err := persistence.GetActor(ctx, actorRef)

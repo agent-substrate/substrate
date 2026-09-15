@@ -176,6 +176,25 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
 
 The counter carries the same reason but no actor identity, so this record is the only way to attribute a crash to one agent. The decision-point line that precedes it (`Setting Actor to crashed due to error`) carries only `ate.atespace` and `ate.actor.name`: it is written before the Actor is loaded, so no uid exists yet.
 
+#### The same records over OTLP
+
+Both records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. Only ateapi has a LoggerProvider — a worker pod cannot export a log record at all yet, because [the ateom relay](#the-ateom-otlp-relay) carries traces and metrics only.
+
+Two `event.name` values, which is the OTLP LogRecord's own field rather than an attribute:
+
+| `event.name` | Body | Severity | Attributes |
+|---|---|---|---|
+| `ate.actor.state_changed` | `Actor state changed` | 9 | the five identity keys, `ate.actor.operation.name`, `ate.actor.state` |
+| `ate.actor.crashed` | `Actor crashed` | 17 | the above plus `ate.failure.reason`, `ate.failure.domain` |
+
+A crash is its own name because an event name promises a fixed set of attributes, and it carries two more. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. Both names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
+
+The attributes are the same flat `ate.*` keys as the stdout copy, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout copy's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent`, which is how you select this stream, or exclude it.
+
+**Never sample or filter this stream.** A consumer takes the last event for an actor's uid, so one dropped record reports a stale state with no sign that anything is missing. This is the one stream where a sampling policy is a correctness bug rather than a cost trade.
+
+**Both copies exist on purpose.** No substrate or enterprise collector reads pod stdout today, so nothing is duplicated: the stdout copy is what `kubectl logs` shows and what keeps the component's bootstrap and crash output readable, and the OTLP copy is what a backend queries. If a `filelog` DaemonSet is ever added, drop one of the two — exclude ate-system from its include globs, or drop records whose scope is the one above.
+
 ### Per-Actor Usage Events
 
 atelet emits one usage record per **executing** actor per sampling tick, from the same sweep that feeds the [`ate.actor.stats.*` metrics](#the-metric-registry). The two are the halves of one split: the metrics aggregate to the bounded template/pool label set a TSDB can hold, and everything carrying actor identity travels here, on the log stream, where cardinality is free. An idle fleet is silent by design — a worker with no executing actor emits nothing.
@@ -276,9 +295,11 @@ The `ate.*` control-plane metric labels are either fixed value sets (operation, 
 
 ### The metric registry
 
-[`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument that the ate system components send, and the permitted values of each label. Use it as the only source of this data.
+[`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument that the ate system components send, every attribute any signal uses, and the permitted values of each. [`events.yaml`](metrics/registry/events.yaml) beside it defines the [log events](#the-same-records-over-otlp). Use them as the only source of this data.
 
-It is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. Weaver reads it, resolves each `ref`, and refuses a group or an attribute that is not correct:
+A few attributes are defined there but barred from metric labels — actor identity above all. The `note` on each says so, and the cardinality rules below are where the bar lives.
+
+It is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. Weaver reads the whole directory, resolves each `ref`, and refuses a group or an attribute that is not correct:
 
 ```sh
 hack/verify/metrics.sh                           # the command that CI uses
@@ -384,6 +405,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 | Path | service → in-cluster `opentelemetry-collector` | service → Google Managed Prometheus (GMP) |
 | Metrics | collector Prometheus exporter on `:8889` | Google Cloud Monitoring |
 | Traces | Jaeger UI | Google Cloud Trace |
+| Logs | pod stdout; ateapi's [actor lifecycle events](#the-same-records-over-otlp) also to the collector's `debug` exporter | pod stdout. No OTLP logs: `OTEL_LOGS_EXPORTER` is unset |
 | Dashboards | Not supported | Google Cloud Monitoring (see [Dashboards](#5-dashboards)) |
 
 > In Kind, `ateapi`, `atelet`, `ate-controller`, and `atenet-router` are pointed at the in-cluster collector, and the controller propagates the endpoint to the ateom worker pods it creates, so all component telemetry lands locally.

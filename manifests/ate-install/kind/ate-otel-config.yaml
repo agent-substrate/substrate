@@ -29,6 +29,10 @@
 # On ate-controller both do double duty: the controller also propagates them to
 # the ateom worker pods it creates, which have no other way to receive them.
 # Kind only; production keeps the SDK defaults.
+#
+# OTEL_LOGS_EXPORTER turns on the actor lifecycle events. serverboot defaults it
+# to none, so the base ConfigMap leaves it unset and no other environment sends
+# log records yet. Only ateapi has a LoggerProvider today.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -38,3 +42,4 @@ data:
   OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector.otel-system.svc:4317
   OTEL_METRIC_EXPORT_INTERVAL: "10000"
   OTEL_METRIC_EXPORT_TIMEOUT: "10000"
+  OTEL_LOGS_EXPORTER: otlp
