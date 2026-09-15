@@ -28,6 +28,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const testForeignEgressPolicyUID = "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+
 func setupEgressPolicyActor(t *testing.T, testName string) (*testContext, *ateapipb.ObjectRef) {
 	t.Helper()
 	ns := namespaceForTest(testName)
@@ -178,7 +180,7 @@ func TestUpdateActorEgressPolicy_Preconditions(t *testing.T) {
 	assertGrpcError(t, err, codes.InvalidArgument, "EgressPolicy UID and version are required")
 
 	wrongUID := proto.Clone(created).(*ateapipb.EgressPolicy)
-	wrongUID.Metadata.Uid = "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+	wrongUID.Metadata.Uid = testForeignEgressPolicyUID
 	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: wrongUID})
 	assertGrpcError(t, err, codes.Aborted, "EgressPolicy UID conflict")
 
@@ -191,7 +193,24 @@ func TestDeleteActorEgressPolicy(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-delete-egress-policy")
 	created := createEgressPolicy(t, tc, actor)
 
-	deleted, err := tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor})
+	_, err := tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{
+		Actor:   actor,
+		Options: &ateapipb.DeleteOptions{Version: created.GetMetadata().GetVersion() + 1},
+	})
+	assertGrpcError(t, err, codes.Aborted, "EgressPolicy version conflict")
+	_, err = tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{
+		Actor:   actor,
+		Options: &ateapipb.DeleteOptions{Uid: testForeignEgressPolicyUID},
+	})
+	assertGrpcError(t, err, codes.Aborted, "EgressPolicy UID conflict")
+
+	deleted, err := tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{
+		Actor: actor,
+		Options: &ateapipb.DeleteOptions{
+			Uid:     created.GetMetadata().GetUid(),
+			Version: created.GetMetadata().GetVersion(),
+		},
+	})
 	if err != nil {
 		t.Fatalf("DeleteActorEgressPolicy failed: %v", err)
 	}
