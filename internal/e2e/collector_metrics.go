@@ -31,7 +31,9 @@ const (
 	collectorNamespace = "otel-system"
 	collectorService   = "opentelemetry-collector"
 	collectorPromPort  = 8889
-	routerStatsPort    = 15020
+	// AgentGateway exposes native Prometheus metrics; it does not export these
+	// instruments through the OTLP collector.
+	agentGatewayRouterStatsPort = 15020
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -63,7 +65,7 @@ func ScrapeAgentGatewayRouterMetrics(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating k8s client: %w", err)
 	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, routerStatsPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, agentGatewayRouterStatsPort)
 	if err != nil {
 		return "", err
 	}

@@ -26,8 +26,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,14 +62,12 @@ func TestRequestParking(t *testing.T) {
 		t.Fatalf("creating router client: %v", err)
 	}
 	defer router.Close()
-	var statusz *e2e.StatuszClient
-	if os.Getenv("E2E_DATAPLANE") != "agentgateway" {
-		statusz, err = e2e.NewStatuszClient(ctx)
-		if err != nil {
-			t.Fatalf("creating statusz client: %v", err)
-		}
-		defer statusz.Close()
+	dataplane := e2e.CurrentAtenetDataplane()
+	parking, err := dataplane.NewParkingObserver(ctx)
+	if err != nil {
+		t.Fatalf("creating parking observer: %v", err)
 	}
+	defer parking.Close()
 
 	t.Run("ParkThenServed", func(t *testing.T) {
 		// Occupy the only worker with actor A.
@@ -109,8 +105,9 @@ func TestRequestParking(t *testing.T) {
 			}()
 			if attempt == 1 {
 				// Free the worker only once the request is observably parked —
-				// the statusz gauge, not a sleep, is the synchronization point.
-				waitForParkedCount(ctx, t, statusz, func(active int) bool { return active >= 1 })
+				// the dataplane's active-parking gauge, not a sleep, is the
+				// synchronization point.
+				waitForParkedCount(ctx, t, parking, func(active int) bool { return active >= 1 })
 				suspendActor(ctx, t, clients, actorA)
 			}
 			res = <-resCh
@@ -118,13 +115,7 @@ func TestRequestParking(t *testing.T) {
 			if res.err != nil {
 				t.Fatalf("parked request failed transport-level: %v", res.err)
 			}
-			retryableBudgetExhaustion := res.resp.StatusCode == http.StatusServiceUnavailable &&
-				strings.Contains(res.body, "no free workers available")
-			// TODO(keithmattix): align common dataplane contract
-			if os.Getenv("E2E_DATAPLANE") == "agentgateway" {
-				retryableBudgetExhaustion = res.resp.StatusCode == http.StatusGatewayTimeout &&
-					strings.Contains(res.body, "request timed out")
-			}
+			retryableBudgetExhaustion := dataplane.IsRetryableParkingBudgetExhaustion(res.resp.StatusCode, res.body)
 			if retryableBudgetExhaustion && attempt < 3 {
 				t.Logf("attempt %d budget-exhausted while the worker was still freeing (HTTP %d after %v); retrying", attempt, res.resp.StatusCode, elapsed)
 				continue
@@ -157,7 +148,7 @@ func TestRequestParking(t *testing.T) {
 		}
 
 		// The slot must be released once served.
-		waitForParkedCount(ctx, t, statusz, func(active int) bool { return active == 0 })
+		waitForParkedCount(ctx, t, parking, func(active int) bool { return active == 0 })
 	})
 
 	t.Run("BudgetExhaustion", func(t *testing.T) {
@@ -174,11 +165,7 @@ func TestRequestParking(t *testing.T) {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
 
-		wantStatus := http.StatusServiceUnavailable
-		// TODO(keithmattix): align common dataplane contract
-		if os.Getenv("E2E_DATAPLANE") == "agentgateway" {
-			wantStatus = http.StatusGatewayTimeout
-		}
+		wantStatus := dataplane.ParkingBudgetStatus()
 		if resp.StatusCode != wantStatus {
 			t.Fatalf("status = %d (body %q), want %d", resp.StatusCode, string(body), wantStatus)
 		}
@@ -283,47 +270,13 @@ func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 	t.Fatalf("timed out waiting for actor %q to reach %v", name, want)
 }
 
-// waitForParkedCount polls the router's statusz parking gauge until cond holds.
+// waitForParkedCount polls the dataplane's active-parking gauge until cond holds.
 // The deadline is short: a parking request becomes visible within its first
 // retry interval (~100ms), and a served one releases its slot immediately.
-func waitForParkedCount(ctx context.Context, t *testing.T, statusz *e2e.StatuszClient, cond func(active int) bool) {
+func waitForParkedCount(ctx context.Context, t *testing.T, parking e2e.ParkingObserver, cond func(active int) bool) {
 	t.Helper()
-	deadline := time.Now().Add(4 * time.Second)
-	var last int
-	for time.Now().Before(deadline) {
-		if statusz != nil {
-			p, err := statusz.Parking(ctx)
-			if err == nil {
-				last = p.Active
-				if cond(p.Active) {
-					return
-				}
-			}
-		} else if active, ok := agentGatewayParkingCount(ctx); ok {
-			last = active
-			if cond(active) {
-				return
-			}
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for the parking gauge to satisfy the condition (last active=%d)", last)
-}
-
-func agentGatewayParkingCount(ctx context.Context) (int, bool) {
-	scrape, err := e2e.ScrapeAgentGatewayRouterMetrics(ctx)
+	last, err := parking.WaitForCount(ctx, cond)
 	if err != nil {
-		return 0, false
+		t.Fatalf("waiting for parking gauge (last active=%d): %v", last, err)
 	}
-	for _, line := range strings.Split(scrape, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 || !strings.HasPrefix(fields[0], "agentgateway_substrate_request_parking_active") {
-			continue
-		}
-		value, err := strconv.ParseFloat(fields[1], 64)
-		if err == nil {
-			return int(value), true
-		}
-	}
-	return 0, false
 }

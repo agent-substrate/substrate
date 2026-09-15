@@ -69,7 +69,7 @@ jobs:
         - dataplane: agentgateway
           experimental: true
     env:
-      E2E_DATAPLANE: ${{ matrix.dataplane }}
+      E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -101,7 +101,7 @@ jobs:
     - name: Install Agent Substrate (${{ matrix.dataplane }})
       # The dataplane selection applies to both the ingress router and egress
       # gateway.
-      run: hack/install-ate-kind.sh --deploy-ate-system --dataplane=${{ matrix.dataplane }}
+      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }}
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -114,7 +114,7 @@ jobs:
       # counter-microvm demo onto the control plane installed above. The demo
       # redeploys the control plane, so retain the selected dataplane.
       env:
-        ATE_DATAPLANE: ${{ matrix.dataplane }}
+        ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       run: hack/run-microvm-demo-kind.sh
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
@@ -144,7 +144,7 @@ jobs:
       # Cluster-wide, so it must come AFTER the standard lanes: once egress
       # TLS is intercepted, their passthrough assumptions
       # (TestActorEgressHTTPS's end-to-end TLS with the origin) no longer hold.
-      run: hack/install-ate-kind.sh --deploy-atenet --dataplane=${{ matrix.dataplane }} --experimental-use-sdsmint
+      run: hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=${{ matrix.dataplane }} --experimental-use-sdsmint
     - name: Run E2E tests (egress MITM trust)
       # The consumption half of the trust-bundle chain: an actor does TLS with
       # the MITM gateway's minted leaf using ONLY the projected bundle, plus a
