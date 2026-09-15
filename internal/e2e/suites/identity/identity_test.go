@@ -193,9 +193,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
 		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
 	}
-	if got.Trust != rotatedTrust {
-		t.Errorf("after suspend/resume: /run/ate/trust-bundle.pem = %q, want the rotated sanitized bundle %q (probe read error: %q)", got.Trust, rotatedTrust, got.Error)
-	}
+	waitForTrust(t, ctx, rc, id, rotatedTrust)
 
 	// The other actor never cycled: the second rotation must reach it live,
 	// undisturbed by a sibling of the same bundle suspending and resuming.
