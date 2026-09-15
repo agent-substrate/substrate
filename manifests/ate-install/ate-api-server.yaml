@@ -91,6 +91,7 @@ spec:
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
           - --postgres-connection-string=@env
           - --postgres-schema=@env
+          - --status-port=4040
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
@@ -170,7 +171,10 @@ spec:
           mountPath: "/run/postgres-server-ca"
           readOnly: true
         ports:
-        - containerPort: 443
+        - name: grpc
+          containerPort: 443
+        - name: status
+          containerPort: 4040
         - name: prometheus
           containerPort: 9090
         readinessProbe:
@@ -286,4 +290,8 @@ spec:
   - name: grpc
     protocol: TCP
     port: 443
-    targetPort: 443
+    targetPort: grpc
+  - name: status
+    protocol: TCP
+    port: 4040
+    targetPort: status

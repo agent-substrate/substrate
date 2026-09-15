@@ -20,6 +20,36 @@ Currently, Agent Substrate automatically wraps container output and injects thes
 
 ---
 
+## Replica-local ateapi status
+
+Each ateapi replica serves an operator status page at `/statusz` on its internal `status` port, 4040 by default. Like the router status page, this endpoint is unauthenticated and only exposed through the cluster-internal Service. Its build, readiness, uptime, resolved configuration, known-worker data, PostgreSQL pool occupancy, and recent failed Control RPCs describe the one replica selected by the connection; they are not a cluster-wide view. Readiness and uptime are evaluated for every request. Configuration is the immutable startup projection. Configuration values use a closed display policy: credentials and database connection strings are redacted, credential and configuration paths report only whether they are configured, values resolved from environment variables are redacted, and unrecognized flags are redacted.
+
+Every request reads fresh replica-local worker, PostgreSQL pool, and recent-failure snapshots. These readers run sequentially, so the fields describe the request rather than one atomic point in time. An unavailable worker cache or unsupported pool reader remains a successful response with its normal unavailable state. The HTML refresh selector reloads the whole page after 5, 10, or 30 seconds (10 seconds by default), and its manual setting disables automatic reloads. Automatic reload is a browser behavior; the server does not cache or sample diagnostics in the background.
+
+Each request scans the selected replica's local worker cache, displays and retains at most 100 detached groups, and reports the full worker/group totals plus truncation. Replicas observe the same shared worker inventory, so their worker groups overlap and must not be summed into a service-wide total. Each request also copies at most 100 failure records and reads two pool roles. The PostgreSQL values report acquired, idle, and configured maximum connections for each role at the time that request reads them. The roles remain separate even when they share one physical pool, and the values are occupancy rather than a connectivity health check.
+
+The RPC section is the newest 100 completed non-OK authenticated unary `Control` calls retained by this process when the request reads it. Each row contains completion time, full method, bounded principal kind and ID, canonical gRPC status, and elapsed time. Method and principal text processing inspects at most 256 source bytes per field, emits at most 256 valid UTF-8 bytes, and detaches retained text from larger input storage. It excludes successful calls, authentication rejections, streams, and other services; retains no issuer, metadata, payload, credential, response, or raw error; and resets when the process restarts. An empty list means no matching events were retained on that replica when read, not that the system has no errors.
+
+Use the status page for current local process fields and individual retained events. For aggregate traffic, error rates, and latency distributions over an explicit time window, query `rpc.server.call.duration` by `rpc.method` and `rpc.response.status_code` in the metrics backend. That histogram covers a broader RPC population than the retained list. For failing actor lifecycle operations specifically, correlate with `ate.actor.lifecycle.operation.duration`, where `error.type` is present on failures; it does not provide an all-Control-call denominator. There is currently no registered store metric corresponding to the pool occupancy rows.
+
+List the ready ateapi pods, choose one replica, and port-forward it:
+
+```bash
+kubectl get pods -n ate-system -l app=ate-api-server
+kubectl port-forward -n ate-system pod/<pod-name> 4040:4040
+```
+
+Open [http://localhost:4040/statusz](http://localhost:4040/statusz) for HTML. Request diagnostics as JSON with either form:
+
+```bash
+curl 'http://localhost:4040/statusz?format=json'
+curl -H 'Accept: application/json' http://localhost:4040/statusz
+```
+
+Responses use `Cache-Control: no-store`. Set `--status-port` to zero or a negative value to disable the listener.
+
+---
+
 ## 1. Logging
 
 Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
