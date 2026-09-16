@@ -25,10 +25,8 @@ const fixture = `package owner
 import settings "github.com/agent-substrate/substrate/internal/env"
 const name = "SECRET_SETTING"
 var setting = settings.Var[string]{
- Name: name, Default: "declared", Component: "example",
- Description: "Description <tag> with *markup*", AcceptedValues: "Any string.",
- Precedence: "No CLI flag.",
- Parse: func(string) string { panic("documentation must never execute this") },
+ Name: name, Default: "declared",
+ Description: "Description <tag> with *markup*",
 }
 `
 
@@ -46,7 +44,7 @@ func TestGenerateAndCheck(t *testing.T) {
 		}
 	}
 	write("cmd/settings.go", fixture)
-	write("internal/identity.go", strings.ReplaceAll(strings.ReplaceAll(fixture, `Name: name`, `Name: "NODE_NAME", SystemProvided: true`), `Component: "example"`, `Component: "worker"`))
+	write("internal/identity.go", strings.ReplaceAll(fixture, `Name: name`, `Name: "NODE_NAME"`))
 	write("cmd/ignored_test.go", "not valid Go; tests are outside the registry")
 	write("pkg/unrelated.go", "not valid Go; has no env import")
 	t.Setenv("SECRET_SETTING", "live-secret-must-not-appear")
@@ -64,7 +62,7 @@ func TestGenerateAndCheck(t *testing.T) {
 			t.Errorf("output missing %q", want)
 		}
 	}
-	if strings.Contains(output, "live-secret") || strings.Contains(output, "panic") {
+	if strings.Contains(output, "live-secret") {
 		t.Fatal("output contains values other than declaration metadata")
 	}
 	if strings.Index(output, "SECRET_SETTING") > strings.Index(output, "## System-provided values") {
@@ -82,10 +80,15 @@ func TestGenerateAndCheck(t *testing.T) {
 	if err != nil || string(current) != "stale" {
 		t.Fatal("check mode modified the file")
 	}
-	write("cmd/duplicate.go", strings.ReplaceAll(fixture, "Name: name", "Name: name, SystemProvided: true"))
-	if err := run(root, false); err == nil || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("duplicate error = %v", err)
+	write("pkg/other.go", strings.ReplaceAll(fixture, `Default: "declared"`, `Default: "other-default"`))
+	entries, err := collect(root)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(entries) != 3 || entries[0].fields["Default"] != "declared" || entries[1].fields["Default"] != "other-default" {
+		t.Fatalf("consumer defaults = %#v", entries)
+	}
+
 }
 
 func TestRejectDynamicOrMissingMetadata(t *testing.T) {

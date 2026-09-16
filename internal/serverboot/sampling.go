@@ -31,23 +31,15 @@ const (
 )
 
 var traceSampler = env.Var[string]{
-	Name:               tracesSamplerEnv,
-	Default:            "",
-	Component:          "ateapi, atecontroller, atelet, ateom-gvisor, ateom-microvm, atenet router; glutton also uses this shared resolver",
-	Description:        "Selects trace sampling. Names are trimmed and case-insensitive. Empty keeps the component default; invalid settings warn and keep that default.",
-	AcceptedValues:     "always_on, always_off, traceidratio, parentbased_always_on, parentbased_always_off, parentbased_traceidratio.",
-	Precedence:         "Overrides the default passed to serverboot.ResolveTraceSampling; no CLI flag for the process's own sampler.",
-	DefaultDescription: "parentbased_traceidratio with ratio 0.1 for control-plane components and ateoms, 0.01 for atenet router; parentbased_always_off for glutton.",
+	Name:        tracesSamplerEnv,
+	Default:     "",
+	Description: "Trace sampler override. Empty or invalid settings keep the parent-based defaults: 10% for control-plane components and ateoms, 1% for atenet router, and no root sampling for glutton.",
 }
 
 var traceSamplerArg = env.Var[string]{
-	Name:               tracesSamplerArgEnv,
-	Default:            "",
-	Component:          "ateapi, atecontroller, atelet, ateom-gvisor, ateom-microvm, atenet router; glutton also uses this shared resolver",
-	Description:        "Ratio for traceidratio and parentbased_traceidratio. Trimmed before parsing; missing, empty, or invalid arguments warn and keep the component default.",
-	AcceptedValues:     "Floating-point ratio in [0, 1]; ignored by other sampler types.",
-	Precedence:         "Used only with a ratio sampler selected by OTEL_TRACES_SAMPLER.",
-	DefaultDescription: "Empty; effective component defaults are listed under OTEL_TRACES_SAMPLER.",
+	Name:        tracesSamplerArgEnv,
+	Default:     "",
+	Description: "Ratio in [0, 1] for traceidratio and parentbased_traceidratio samplers. Missing or invalid ratios keep the component default; other samplers ignore it.",
 }
 
 // ControlPlaneTraceRatio is the default root sampling ratio for the control

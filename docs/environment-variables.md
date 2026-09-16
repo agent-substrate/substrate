@@ -8,273 +8,205 @@ read only inside dependencies (such as AWS credentials and OTel SDK settings)
 are outside this initial registry. Shared settings can have different defaults
 and precedence in each consumer; each declaration is listed separately below.
 
-Types describe the value returned to the consumer. Some strings are parsed or
-forwarded later; their accepted values and effective defaults are documented
-separately. An explicitly empty value is distinct from an unset variable.
+Types describe the value returned to the consumer. Descriptions explain any
+consumer-specific parsing and precedence. An explicitly empty value is distinct
+from an unset variable.
 Documentation is generated from declared metadata, never the live environment.
 
 To add a setting, see [the declaration guide](dev/environment-variables.md).
 
 ## Operator configuration
 
-### ATE_API_POSTGRES_CONNECTION_STRING (ateapi)
+### ATE_API_POSTGRES_CONNECTION_STRING (cmd/ateapi/main.go)
 
-PostgreSQL connection string. May contain credentials.
-
-- Type: string
-- Declared default: ""
-- Effective default: Empty when @env is selected; the flag also defaults to empty.
-- Accepted values: libpq DSN or PostgreSQL URI; empty fails the required connection-string check.
-- Precedence: Read only when --postgres-connection-string=@env; all other flag values take precedence.
-- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L90)
-
-### ATE_API_POSTGRES_SCHEMA (ateapi)
-
-PostgreSQL schema for Substrate tables.
+PostgreSQL DSN or URI, read only with --postgres-connection-string=@env; empty is rejected.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty when @env is selected; without @env the flag defaults to public.
-- Accepted values: Nonempty PostgreSQL schema name; empty fails startup.
-- Precedence: Read only when --postgres-schema=@env; all other flag values take precedence.
-- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L100)
+- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L82)
 
-### ATE_STORAGE_BACKEND (ateapi)
+### ATE_API_POSTGRES_SCHEMA (cmd/ateapi/main.go)
 
-Selects the object storage backend for external snapshots. Configure ateapi and atelet consistently. AWS SDK configuration is used for S3.
+PostgreSQL schema, read only with --postgres-schema=@env; empty is rejected. The flag otherwise defaults to public.
 
 - Type: string
 - Declared default: ""
-- Effective default: GCS
-- Accepted values: Exact s3 selects S3; every other value, including empty or unrecognized values, selects GCS.
-- Precedence: No CLI flag.
+- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L88)
+
+### ATE_STORAGE_BACKEND (cmd/ateapi/main.go)
+
+Snapshot backend: exact s3 selects S3; every other value uses GCS.
+
+- Type: string
+- Declared default: ""
 - Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L70)
 
-### ATE_STORAGE_BACKEND (atelet)
+### ATE_STORAGE_BACKEND (cmd/atelet/main.go)
 
-Selects the object storage backend for external snapshots. Configure ateapi and atelet consistently. AWS SDK configuration is used for S3.
+Snapshot backend: exact s3 selects S3; every other value uses GCS.
 
 - Type: string
 - Declared default: ""
-- Effective default: GCS
-- Accepted values: Exact s3 selects S3; every other value, including empty or unrecognized values, selects GCS.
-- Precedence: No CLI flag.
 - Source: [cmd/atelet/main.go](../cmd/atelet/main.go#L88)
 
-### AWS_S3_USE_PATH_STYLE (ateapi)
+### AWS_S3_USE_PATH_STYLE (cmd/ateapi/main.go)
 
-Enables path-style addressing on the S3 client. Read only when ATE_STORAGE_BACKEND=s3.
-
-- Type: bool
-- Declared default: false
-- Accepted values: Only exact lowercase true enables it; all other values disable it.
-- Precedence: No CLI flag.
-- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L80)
-
-### AWS_S3_USE_PATH_STYLE (atelet)
-
-Enables path-style addressing on the S3 client. Read only when ATE_STORAGE_BACKEND=s3.
-
-- Type: bool
-- Declared default: false
-- Accepted values: Only exact lowercase true enables it; all other values disable it.
-- Precedence: No CLI flag.
-- Source: [cmd/atelet/main.go](../cmd/atelet/main.go#L98)
-
-### OTEL_EXPORTER_OTLP_COMPRESSION (atelet (OTLP relay))
-
-Upstream gRPC compression for the atelet OTLP relay. Conflicting resolved trace and metric settings reject relay startup.
+Enable S3 path-style addressing only for the exact string true.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty resolves to none.
-- Accepted values: gzip or none, case-sensitive; whitespace is trimmed. Unsupported values reject relay startup.
-- Precedence: Nonempty OTEL_EXPORTER_OTLP_TRACES_COMPRESSION and OTEL_EXPORTER_OTLP_METRICS_COMPRESSION override this per signal. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L146)
+- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L76)
 
-### OTEL_EXPORTER_OTLP_ENDPOINT (atecontroller (worker pod configuration))
+### AWS_S3_USE_PATH_STYLE (cmd/atelet/main.go)
 
-OTLP endpoint passed to ateom worker pods.
+Enable S3 path-style addressing only for the exact string true.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; the controller injects none of the worker telemetry settings.
-- Accepted values: OTLP gRPC endpoint.
-- Precedence: Used as the default for --otel-exporter-otlp-endpoint; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.
+- Source: [cmd/atelet/main.go](../cmd/atelet/main.go#L94)
+
+### OTEL_EXPORTER_OTLP_COMPRESSION (internal/otlprelay/relay.go)
+
+OTLP relay compression: gzip or none; empty means none. Signal-specific settings override this value and must agree.
+
+- Type: string
+- Declared default: ""
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L134)
+
+### OTEL_EXPORTER_OTLP_ENDPOINT (cmd/atecontroller/main.go)
+
+Default for --otel-exporter-otlp-endpoint. Empty disables injection of worker telemetry settings; a flag overrides the environment.
+
+- Type: string
+- Declared default: ""
 - Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L53)
 
-### OTEL_EXPORTER_OTLP_ENDPOINT (atelet (OTLP relay))
+### OTEL_EXPORTER_OTLP_ENDPOINT (cmd/atenet/internal/router/cmd.go)
 
-Upstream collector for the atelet OTLP relay. Conflicting resolved trace and metric endpoints reject relay startup.
-
-- Type: string
-- Declared default: ""
-- Effective default: Empty; the relay is disabled when no endpoint is configured.
-- Accepted values: host:port or http:// URL; HTTPS is rejected. Whitespace is trimmed; a missing port uses 4317.
-- Precedence: Nonempty OTEL_EXPORTER_OTLP_TRACES_ENDPOINT and OTEL_EXPORTER_OTLP_METRICS_ENDPOINT override this per signal. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L116)
-
-### OTEL_EXPORTER_OTLP_ENDPOINT (atenet router (Envoy tracing))
-
-Collector address for Envoy tracing. Invalid or HTTPS endpoints disable Envoy tracing with a warning.
+Default for --otlp-collector-address: host:port or http:// URL for Envoy tracing. Empty or invalid values disable Envoy tracing.
 
 - Type: string
 - Declared default: ""
-- Accepted values: host:port or http:// URL; empty disables Envoy tracing.
-- Precedence: Default for --otlp-collector-address; an explicit flag, including empty, overrides it. The flag does not change the router process's own OTel exporter.
 - Source: [cmd/atenet/internal/router/cmd.go](../cmd/atenet/internal/router/cmd.go#L28)
 
-### OTEL_EXPORTER_OTLP_HEADERS (atelet (OTLP relay))
+### OTEL_EXPORTER_OTLP_ENDPOINT (internal/otlprelay/relay.go)
 
-Collector request headers for the atelet OTLP relay. May contain secrets. Signal headers replace, rather than merge with, generic headers; malformed headers reject relay startup.
-
-- Type: string
-- Declared default: ""
-- Effective default: Empty; no additional headers.
-- Accepted values: Comma-separated key=value pairs with percent-encoded values; keys are trimmed, lowercased, and must be nonempty.
-- Precedence: Nonempty OTEL_EXPORTER_OTLP_TRACES_HEADERS and OTEL_EXPORTER_OTLP_METRICS_HEADERS override this per signal. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L176)
-
-### OTEL_EXPORTER_OTLP_METRICS_COMPRESSION (atelet (OTLP relay))
-
-Upstream gRPC compression for the atelet OTLP relay. Conflicting resolved trace and metric settings reject relay startup.
+OTLP relay collector: host:port or http:// URL; HTTPS is rejected. Signal-specific endpoints override this value and must agree. Empty disables the relay.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; falls back to OTEL_EXPORTER_OTLP_COMPRESSION.
-- Accepted values: gzip or none, case-sensitive; whitespace is trimmed. Unsupported values reject relay startup.
-- Precedence: Nonempty value overrides OTEL_EXPORTER_OTLP_COMPRESSION for metrics. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L166)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L116)
 
-### OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (atelet (OTLP relay))
+### OTEL_EXPORTER_OTLP_HEADERS (internal/otlprelay/relay.go)
 
-Upstream collector for the atelet OTLP relay. Conflicting resolved trace and metric endpoints reject relay startup.
+OTLP relay headers as comma-separated key=value pairs with percent-encoded values. Signal-specific headers replace these. May contain secrets.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; falls back to OTEL_EXPORTER_OTLP_ENDPOINT.
-- Accepted values: host:port or http:// URL; HTTPS is rejected. Whitespace is trimmed; a missing port uses 4317.
-- Precedence: Nonempty value overrides OTEL_EXPORTER_OTLP_ENDPOINT for metrics. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L136)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L152)
 
-### OTEL_EXPORTER_OTLP_METRICS_HEADERS (atelet (OTLP relay))
+### OTEL_EXPORTER_OTLP_METRICS_COMPRESSION (internal/otlprelay/relay.go)
 
-Collector request headers for the atelet OTLP relay. May contain secrets. Signal headers replace, rather than merge with, generic headers; malformed headers reject relay startup.
+OTLP relay metrics compression; nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION. Resolved trace and metric settings must agree.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty or whitespace-only; falls back to OTEL_EXPORTER_OTLP_HEADERS.
-- Accepted values: Comma-separated key=value pairs with percent-encoded values; keys are trimmed, lowercased, and must be nonempty.
-- Precedence: Nonempty value overrides OTEL_EXPORTER_OTLP_HEADERS for metrics. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L196)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L146)
 
-### OTEL_EXPORTER_OTLP_TRACES_COMPRESSION (atelet (OTLP relay))
+### OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (internal/otlprelay/relay.go)
 
-Upstream gRPC compression for the atelet OTLP relay. Conflicting resolved trace and metric settings reject relay startup.
+OTLP relay metrics endpoint; nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT. Resolved trace and metric settings must agree.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; falls back to OTEL_EXPORTER_OTLP_COMPRESSION.
-- Accepted values: gzip or none, case-sensitive; whitespace is trimmed. Unsupported values reject relay startup.
-- Precedence: Nonempty value overrides OTEL_EXPORTER_OTLP_COMPRESSION for traces. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L156)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L128)
 
-### OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (atelet (OTLP relay))
+### OTEL_EXPORTER_OTLP_METRICS_HEADERS (internal/otlprelay/relay.go)
 
-Upstream collector for the atelet OTLP relay. Conflicting resolved trace and metric endpoints reject relay startup.
+OTLP relay metrics headers; nonempty values override OTEL_EXPORTER_OTLP_HEADERS. May contain secrets.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; falls back to OTEL_EXPORTER_OTLP_ENDPOINT.
-- Accepted values: host:port or http:// URL; HTTPS is rejected. Whitespace is trimmed; a missing port uses 4317.
-- Precedence: Nonempty value overrides OTEL_EXPORTER_OTLP_ENDPOINT for traces. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L126)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L164)
 
-### OTEL_EXPORTER_OTLP_TRACES_HEADERS (atelet (OTLP relay))
+### OTEL_EXPORTER_OTLP_TRACES_COMPRESSION (internal/otlprelay/relay.go)
 
-Collector request headers for the atelet OTLP relay. May contain secrets. Signal headers replace, rather than merge with, generic headers; malformed headers reject relay startup.
+OTLP relay traces compression; nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION. Resolved trace and metric settings must agree.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty or whitespace-only; falls back to OTEL_EXPORTER_OTLP_HEADERS.
-- Accepted values: Comma-separated key=value pairs with percent-encoded values; keys are trimmed, lowercased, and must be nonempty.
-- Precedence: Nonempty value overrides OTEL_EXPORTER_OTLP_HEADERS for traces. No CLI flag; --otlp-relay-socket="" disables the relay.
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L186)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L140)
 
-### OTEL_METRIC_EXPORT_INTERVAL (atecontroller (worker pod configuration))
+### OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (internal/otlprelay/relay.go)
 
-Metric export interval passed to ateom worker pods. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.
+OTLP relay traces endpoint; nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT. Resolved trace and metric settings must agree.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; keeps the worker SDK default of 60000 milliseconds.
-- Accepted values: Positive integer milliseconds; parsed by the worker OTel SDK.
-- Precedence: Used as the default for --otel-metric-export-interval; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L63)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L122)
 
-### OTEL_METRIC_EXPORT_TIMEOUT (atecontroller (worker pod configuration))
+### OTEL_EXPORTER_OTLP_TRACES_HEADERS (internal/otlprelay/relay.go)
 
-Metric export timeout passed to ateom worker pods. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.
+OTLP relay traces headers; nonempty values override OTEL_EXPORTER_OTLP_HEADERS. May contain secrets.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; keeps the worker SDK default of 30000 milliseconds.
-- Accepted values: Positive integer milliseconds; parsed by the worker OTel SDK.
-- Precedence: Used as the default for --otel-metric-export-timeout; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L73)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L158)
 
-### OTEL_TRACES_SAMPLER (ateapi, atecontroller, atelet, ateom-gvisor, ateom-microvm, atenet router; glutton also uses this shared resolver)
+### OTEL_METRIC_EXPORT_INTERVAL (cmd/atecontroller/main.go)
 
-Selects trace sampling. Names are trimmed and case-insensitive. Empty keeps the component default; invalid settings warn and keep that default.
+Default for --otel-metric-export-interval, forwarded to workers when an OTLP endpoint is set. Empty uses the SDK default of 60000 ms.
 
 - Type: string
 - Declared default: ""
-- Effective default: parentbased_traceidratio with ratio 0.1 for control-plane components and ateoms, 0.01 for atenet router; parentbased_always_off for glutton.
-- Accepted values: always_on, always_off, traceidratio, parentbased_always_on, parentbased_always_off, parentbased_traceidratio.
-- Precedence: Overrides the default passed to serverboot.ResolveTraceSampling; no CLI flag for the process's own sampler.
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L59)
+
+### OTEL_METRIC_EXPORT_TIMEOUT (cmd/atecontroller/main.go)
+
+Default for --otel-metric-export-timeout, forwarded to workers when an OTLP endpoint is set. Empty uses the SDK default of 30000 ms.
+
+- Type: string
+- Declared default: ""
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L65)
+
+### OTEL_TRACES_SAMPLER (cmd/atecontroller/main.go)
+
+Default for --otel-traces-sampler, forwarded to workers when an OTLP endpoint is set. Empty keeps the worker sampling default.
+
+- Type: string
+- Declared default: ""
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L71)
+
+### OTEL_TRACES_SAMPLER (internal/serverboot/sampling.go)
+
+Trace sampler override. Empty or invalid settings keep the parent-based defaults: 10% for control-plane components and ateoms, 1% for atenet router, and no root sampling for glutton.
+
+- Type: string
+- Declared default: ""
 - Source: [internal/serverboot/sampling.go](../internal/serverboot/sampling.go#L33)
 
-### OTEL_TRACES_SAMPLER (atecontroller (worker pod configuration))
+### OTEL_TRACES_SAMPLER_ARG (cmd/atecontroller/main.go)
 
-Trace sampler passed to ateom worker pods. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.
-
-- Type: string
-- Declared default: ""
-- Effective default: Empty; keeps the ateom default parentbased_traceidratio with ratio 0.1.
-- Accepted values: Sampler names supported by serverboot; passed through without parsing.
-- Precedence: Used as the default for --otel-traces-sampler; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L83)
-
-### OTEL_TRACES_SAMPLER_ARG (ateapi, atecontroller, atelet, ateom-gvisor, ateom-microvm, atenet router; glutton also uses this shared resolver)
-
-Ratio for traceidratio and parentbased_traceidratio. Trimmed before parsing; missing, empty, or invalid arguments warn and keep the component default.
+Default for --otel-traces-sampler-arg, forwarded to workers only when an OTLP endpoint and sampler are set.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; effective component defaults are listed under OTEL_TRACES_SAMPLER.
-- Accepted values: Floating-point ratio in \[0, 1\]; ignored by other sampler types.
-- Precedence: Used only with a ratio sampler selected by OTEL_TRACES_SAMPLER.
-- Source: [internal/serverboot/sampling.go](../internal/serverboot/sampling.go#L43)
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L77)
 
-### OTEL_TRACES_SAMPLER_ARG (atecontroller (worker pod configuration))
+### OTEL_TRACES_SAMPLER_ARG (internal/serverboot/sampling.go)
 
-Trace sampler argument passed to ateom worker pods; ignored when the resolved sampler flag is empty. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.
+Ratio in \[0, 1\] for traceidratio and parentbased_traceidratio samplers. Missing or invalid ratios keep the component default; other samplers ignore it.
 
 - Type: string
 - Declared default: ""
-- Effective default: Empty; ratio samplers with a missing argument keep the worker component default.
-- Accepted values: Ratio in \[0, 1\] for ratio samplers; passed through without parsing.
-- Precedence: Used as the default for --otel-traces-sampler-arg; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L93)
+- Source: [internal/serverboot/sampling.go](../internal/serverboot/sampling.go#L39)
 
 ## System-provided values
 
-### NODE_NAME (atelet)
+### NODE_NAME (cmd/atelet/statspoller.go)
 
-Node name supplied through the Kubernetes Downward API; scopes worker-pool labels on actor stats.
+Node name injected by the Kubernetes Downward API. Without it, actor stats omit worker-pool labels.
 
 - Type: string
 - Declared default: ""
-- Accepted values: Kubernetes node name; empty emits stats without worker-pool labels.
-- Precedence: No CLI flag.
 - Source: [cmd/atelet/statspoller.go](../cmd/atelet/statspoller.go#L468)
