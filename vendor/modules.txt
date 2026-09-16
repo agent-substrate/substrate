@@ -1863,6 +1863,9 @@ k8s.io/client-go/util/keyutil
 k8s.io/client-go/util/retry
 k8s.io/client-go/util/watchlist
 k8s.io/client-go/util/workqueue
+# k8s.io/cri-api v0.37.0
+## explicit; go 1.26.0
+k8s.io/cri-api/pkg/apis/runtime/v1
 # k8s.io/klog/v2 v2.140.0
 ## explicit; go 1.21
 k8s.io/klog/v2
