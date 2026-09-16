@@ -32,8 +32,8 @@ service CredentialProvider {
 // the sole selector. Whatever referred to the secret — an EgressPolicy injection
 // rule, image-pull configuration — encodes any needed specificity in the provider tail.
 message FetchSecretRequest {
-  // A ate-secret:// URI:
-  //   ate-secret://<provider name>/<provider tail>
+  // The uri for the substrate secret to fetch.
+  // Example: ate-secret://<provider name>/<provider tail>
   // The provider tail is provider-interpreted.
   string uri = 1;
 
