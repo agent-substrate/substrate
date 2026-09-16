@@ -24,6 +24,14 @@ OUTDIR="_LICENSES" # under $ROOT
 # Ensure the tool is built and up-to-date
 GO_LICENSES_BIN="$(bash "${ROOT}/hack/run-tool.sh" --print-bin-path go-licenses)"
 
+# go-licenses runs in temporary verification worktrees that do not have enough
+# VCS metadata for Go's build stamping.
+if [[ -n "${GOFLAGS:-}" ]]; then
+  export GOFLAGS="${GOFLAGS} -buildvcs=false"
+else
+  export GOFLAGS="-buildvcs=false"
+fi
+
 # Clean out previous licenses
 rm -rf "${OUTDIR}"
 mkdir -p "${OUTDIR}"

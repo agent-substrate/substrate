@@ -358,29 +358,21 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	prewarmMaxJitter = 0
 	t.Cleanup(func() { ateompath.StaticFilesDir, prewarmMaxJitter = origDir, origJitter })
 
-	host := imageVolumeTestRegistry(t)
-	pauseRef := host + "/pause:3.10"
-	pushPauseImage(t, pauseRef)
-
 	content := []byte("runsc binary bytes")
 	sha := fmt.Sprintf("%x", sha256.Sum256(content))
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", sha)
-	cfg.Spec.PauseImage = pauseRef
+	cfg.Spec.PauseImage = ""
 
 	ctx := t.Context()
 	client := fake.NewSimpleClientset(cfg)
 	factory := externalversions.NewSharedInformerFactory(client, 0)
 	informer := factory.Api().V1alpha1().SandboxConfigs().Informer()
 
-	store, err := imagecache.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("imagecache.New: %v", err)
-	}
 	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.
-	if err := startSandboxAssetPrewarm(ctx, informer, herder, store, false); err != nil {
+	if err := startSandboxAssetPrewarm(ctx, informer, herder, nil, false); err != nil {
 		t.Fatalf("startSandboxAssetPrewarm: %v", err)
 	}
 	stopCh := make(chan struct{})

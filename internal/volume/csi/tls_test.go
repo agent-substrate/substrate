@@ -391,6 +391,11 @@ func TestCAPoolCache_HitAndFileChange(t *testing.T) {
 
 	// Modify the file.
 	writeFile(t, caPath, ca.certPEM())
+	// Advance mtime explicitly; consecutive writes can share a filesystem tick.
+	modified := cache.fi.ModTime().Add(time.Second)
+	if err := os.Chtimes(caPath, modified, modified); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3rd call should detect file change and return a newly parsed pool.
 	pool3, err := cache.getCertPool()
