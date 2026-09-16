@@ -196,3 +196,7 @@ func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	// TODO: implement this
 	return s.store.DeleteTag(ctx, tagRef, precondition)
 }
+
+func (s *ServiceImpl) ListTagBorrowers(ctx context.Context, tagUID string, opts store.ListOptions) (store.ListResponse[string], error) {
+	return s.store.ListTagBorrowers(ctx, tagUID, opts)
+}
