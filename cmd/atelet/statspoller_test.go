@@ -158,6 +158,7 @@ func TestStatsPollerCollectAggregates(t *testing.T) {
 		"uid-3": {resp: executingResponse("ns-b", "tmpl-b", ateompb.SandboxClass_SANDBOX_CLASS_MICROVM, ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, 42, 40)},
 		"uid-4": {resp: availableResponse()},
 		"uid-5": {resp: pendingResponse("uid-5-actor")},
+		"uid-6": {resp: executingResponse("ns-c", "tmpl-c", ateompb.SandboxClass_SANDBOX_CLASS_KATA, ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, 84, 80)},
 	}
 	p, closers := newPollerFixture(t, fakes)
 
@@ -169,6 +170,9 @@ func TestStatsPollerCollectAggregates(t *testing.T) {
 		},
 		{templateNamespace: "ns-b", templateName: "tmpl-b", sandboxClass: "microvm", source: "guest-agent"}: {
 			sampledActors: 1, memoryCurrentBytes: 42, memoryWorkingSetBytes: 40,
+		},
+		{templateNamespace: "ns-c", templateName: "tmpl-c", sandboxClass: "kata", source: "guest-agent"}: {
+			sampledActors: 1, memoryCurrentBytes: 84, memoryWorkingSetBytes: 80,
 		},
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(templateAggregate{}, templateKey{}, workerPoolRef{})); diff != "" {

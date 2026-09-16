@@ -243,6 +243,9 @@ spec:
         - name: host-dev
           mountPath: /host/dev
           readOnly: true
+        - name: kata-assets
+          mountPath: /opt/ateom-kata
+          readOnly: true
       volumes:
       - name: run-ateom
         hostPath:
@@ -268,6 +271,12 @@ spec:
       - name: host-dev
         hostPath:
           path: /dev
+          type: Directory
+      # ateom-kata SandboxConfig assets are immutable node-local bundles. Keep
+      # them read-only inside atelet, which validates and stages those assets.
+      - name: kata-assets
+        hostPath:
+          path: /opt/ateom-kata
           type: Directory
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns

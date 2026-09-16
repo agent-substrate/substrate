@@ -42,12 +42,30 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
 // records the actor identity, snapshot files, and sandbox binaries. It is written
 // next to the checkpoint images so a snapshot is self-describing.
 const sandboxManifestName = "manifest.json"
+
+const (
+	kataAssetManifestName = "sandbox-assets.json"
+	kataFileIndexName     = "kata-files.json"
+
+	kataRuntimeBundleAssetName = "ateom-kata-runtime-bundle"
+	kataRuntimeConfigAssetName = "ateom-kata-runtime-config"
+	kataBundleManifestName     = "bundle-manifest.json"
+	kataBundleManifestVersion  = 1
+)
+
+func snapshotAssetManifestName(sandboxClass string) string {
+	if sandboxClass == string(atev1alpha1.SandboxClassKata) {
+		return kataAssetManifestName
+	}
+	return sandboxManifestName
+}
 
 // maxAssetBytes guards disk against an unbounded download URL; a var so tests can lower it.
 // ponytail: 8GiB ceiling, make it a flag if a rootfs ever needs more.
@@ -68,6 +86,22 @@ const (
 type assetEntry struct {
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256"`
+}
+
+// kataBundleManifest describes every regular file in the independently
+// distributed Kata runtime bundle. Names are the stable keys forwarded in
+// RuntimeAssetPaths; paths are relative to the extracted bundle root.
+type kataBundleManifest struct {
+	Version int                   `json:"version"`
+	Files   []kataBundleFileEntry `json:"files"`
+}
+
+type kataBundleFileEntry struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Size       int64  `json:"size"`
+	SHA256     string `json:"sha256"`
+	Executable bool   `json:"executable"`
 }
 
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
@@ -127,6 +161,16 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 	for name, f := range archAssets.GetFiles() {
 		rec.Assets[name] = assetEntry{URL: f.GetUrl(), SHA256: f.GetSha256()}
 	}
+	if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) {
+		if len(rec.Assets) != 2 {
+			return nil, fmt.Errorf("kata sandbox_assets must contain exactly %q and %q for architecture %q", kataRuntimeBundleAssetName, kataRuntimeConfigAssetName, arch)
+		}
+		for _, name := range []string{kataRuntimeBundleAssetName, kataRuntimeConfigAssetName} {
+			if _, ok := rec.Assets[name]; !ok {
+				return nil, fmt.Errorf("kata sandbox_assets is missing required asset %q for architecture %q", name, arch)
+			}
+		}
+	}
 	return rec, nil
 }
 
@@ -143,11 +187,20 @@ func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAsset
 		}
 		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}
+
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
 		var p string
 		var err error
-		if name == gvisorAssetName {
+		if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) && name == kataRuntimeBundleAssetName {
+			var bundlePaths map[string]string
+			p, bundlePaths, err = s.fetchKataRuntimeBundle(ctx, entry)
+			for bundleName, bundlePath := range bundlePaths {
+				paths[bundleName] = bundlePath
+			}
+		} else if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) && name == kataRuntimeConfigAssetName {
+			p, err = s.fetchKataRuntimeConfig(ctx, entry)
+		} else if name == gvisorAssetName {
 			p, err = s.fetchGVisorRelease(ctx, entry)
 		} else {
 			p, err = s.fetchAsset(ctx, entry)
@@ -158,6 +211,308 @@ func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAsset
 		paths[name] = p
 	}
 	return paths, nil
+}
+
+func kataRuntimeBundleDir(sha string) string {
+	return filepath.Join(ateompath.StaticFilesDir, kataRuntimeBundleAssetName+"-"+sha)
+}
+
+func kataRuntimeConfigPath(sha string) string {
+	return filepath.Join(ateompath.StaticFilesDir, kataRuntimeConfigAssetName+"-"+sha+".toml")
+}
+
+func (s *AteomHerder) fetchKataRuntimeConfig(ctx context.Context, entry assetEntry) (string, error) {
+	if err := resources.ValidateSHA256(entry.SHA256); err != nil {
+		return "", wrapFileSystemErr("while validating Kata runtime config hash", err)
+	}
+	if local, ok := localKataAssetPath(entry.URL); ok {
+		if err := verifyLocalAsset(local, entry.SHA256, false); err != nil {
+			return "", err
+		}
+		return local, nil
+	}
+	path := kataRuntimeConfigPath(entry.SHA256)
+	if fi, err := os.Lstat(path); err == nil {
+		if !fi.Mode().IsRegular() {
+			return "", fmt.Errorf("%w: cached Kata runtime config is not a regular file", ateerrors.ReasonInvalidSandboxAsset)
+		}
+		got, err := fileSHA256(path)
+		if err != nil {
+			return "", err
+		}
+		if got != entry.SHA256 {
+			return "", fmt.Errorf("%w: cached Kata runtime config SHA-256 %s, want %s", ateerrors.ReasonInvalidSandboxAsset, got, entry.SHA256)
+		}
+		return path, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", wrapFileSystemErr("while stat-ing Kata runtime config", err)
+	}
+	tmp, err := s.downloadVerified(ctx, entry, kataRuntimeConfigAssetName+"-download-")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp)
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return "", wrapFileSystemErr("while setting Kata runtime config mode", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return "", wrapFileSystemErr("while publishing Kata runtime config", err)
+	}
+	return path, nil
+}
+
+func (s *AteomHerder) fetchKataRuntimeBundle(ctx context.Context, entry assetEntry) (string, map[string]string, error) {
+	if err := resources.ValidateSHA256(entry.SHA256); err != nil {
+		return "", nil, wrapFileSystemErr("while validating Kata runtime bundle hash", err)
+	}
+	if local, ok := localKataAssetPath(entry.URL); ok {
+		if err := verifyLocalAsset(local, entry.SHA256, true); err != nil {
+			return "", nil, err
+		}
+		paths, err := validateKataRuntimeBundle(local)
+		return local, paths, err
+	}
+	bundleDir := kataRuntimeBundleDir(entry.SHA256)
+	if fi, err := os.Lstat(bundleDir); err == nil {
+		if !fi.IsDir() {
+			return "", nil, fmt.Errorf("%w: cached Kata runtime bundle is not a directory", ateerrors.ReasonInvalidSandboxAsset)
+		}
+		paths, err := validateKataRuntimeBundle(bundleDir)
+		return bundleDir, paths, err
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", nil, wrapFileSystemErr("while stat-ing Kata runtime bundle", err)
+	}
+
+	tarball, err := s.downloadVerified(ctx, entry, kataRuntimeBundleAssetName+"-download-")
+	if err != nil {
+		return "", nil, err
+	}
+	defer os.Remove(tarball)
+	tmpDir, err := os.MkdirTemp(ateompath.StaticFilesDir, kataRuntimeBundleAssetName+"-extract-")
+	if err != nil {
+		return "", nil, wrapFileSystemErr("while creating Kata runtime bundle extraction dir", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if err := extractKataRuntimeBundle(ctx, tarball, tmpDir); err != nil {
+		return "", nil, err
+	}
+	paths, err := validateKataRuntimeBundle(tmpDir)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.Chmod(tmpDir, 0o700); err != nil {
+		return "", nil, wrapFileSystemErr("while setting Kata runtime bundle mode", err)
+	}
+	if err := os.Rename(tmpDir, bundleDir); err != nil {
+		if errors.Is(err, syscall.EEXIST) || errors.Is(err, syscall.ENOTEMPTY) {
+			paths, validateErr := validateKataRuntimeBundle(bundleDir)
+			return bundleDir, paths, validateErr
+		}
+		return "", nil, wrapFileSystemErr("while publishing Kata runtime bundle", err)
+	}
+	for name, path := range paths {
+		paths[name] = filepath.Join(bundleDir, strings.TrimPrefix(path, tmpDir+string(os.PathSeparator)))
+	}
+	return bundleDir, paths, nil
+}
+
+// localKataAssetPath enables node-preinstalled Kata assets. It is deliberately
+// opt-in via file:// and never follows a relative path from an untrusted URL.
+func localKataAssetPath(raw string) (string, bool) {
+	if !strings.HasPrefix(raw, "file://") {
+		return "", false
+	}
+	p := strings.TrimPrefix(raw, "file://")
+	return filepath.Clean(p), filepath.IsAbs(p)
+}
+
+func verifyLocalAsset(path, want string, bundle bool) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return wrapFileSystemErr("while stat-ing local Kata asset", err)
+	}
+	if bundle {
+		if !fi.IsDir() {
+			return fmt.Errorf("%w: local Kata bundle is not a directory", ateerrors.ReasonInvalidSandboxAsset)
+		}
+		path = filepath.Join(path, kataBundleManifestName)
+	} else if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%w: local Kata config is not a regular file", ateerrors.ReasonInvalidSandboxAsset)
+	}
+	got, err := fileSHA256(path)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("%w: local Kata asset SHA-256 %s, want %s", ateerrors.ReasonInvalidSandboxAsset, got, want)
+	}
+	return nil
+}
+
+func extractKataRuntimeBundle(ctx context.Context, tarPath, destDir string) error {
+	f, err := os.Open(tarPath)
+	if err != nil {
+		return wrapFileSystemErr("while opening Kata runtime bundle", err)
+	}
+	defer f.Close()
+	gzr, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("%w: Kata runtime bundle must be a .tar.gz archive: %w", ateerrors.ReasonInvalidSandboxAsset, err)
+	}
+	defer gzr.Close()
+	tr := tar.NewReader(gzr)
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%w: while reading Kata runtime bundle: %w", ateerrors.ReasonInvalidSandboxAsset, err)
+		}
+		name, err := cleanBundleRelativePath(hdr.Name)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(destDir, filepath.FromSlash(name))
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(dest, 0o700); err != nil {
+				return wrapFileSystemErr("while creating Kata runtime bundle directory", err)
+			}
+		case tar.TypeReg:
+			if hdr.Size < 0 || total > maxAssetBytes-hdr.Size {
+				return fmt.Errorf("%w: Kata runtime bundle inflates past the %d-byte cap", ateerrors.ReasonInvalidSandboxAsset, maxAssetBytes)
+			}
+			total += hdr.Size
+			if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+				return wrapFileSystemErr("while creating Kata runtime bundle parent", err)
+			}
+			if err := writeTarFile(dest, io.LimitReader(tr, hdr.Size), fs.FileMode(hdr.Mode)&0o777); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%w: Kata runtime bundle entry %q has forbidden type %d", ateerrors.ReasonInvalidSandboxAsset, hdr.Name, hdr.Typeflag)
+		}
+	}
+}
+
+func cleanBundleRelativePath(name string) (string, error) {
+	if name == "" || strings.ContainsRune(name, '\\') {
+		return "", fmt.Errorf("%w: invalid Kata runtime bundle path %q", ateerrors.ReasonInvalidSandboxAsset, name)
+	}
+	clean := filepath.ToSlash(filepath.Clean(name))
+	if clean == "." || filepath.IsAbs(name) || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("%w: Kata runtime bundle path %q escapes the extraction root", ateerrors.ReasonInvalidSandboxAsset, name)
+	}
+	return clean, nil
+}
+
+func validateKataRuntimeBundle(root string) (map[string]string, error) {
+	manifestPath := filepath.Join(root, kataBundleManifestName)
+	b, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read Kata bundle manifest: %v", ateerrors.ReasonInvalidSandboxAsset, err)
+	}
+	var manifest kataBundleManifest
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("%w: decode Kata bundle manifest: %v", ateerrors.ReasonInvalidSandboxAsset, err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("%w: Kata bundle manifest has trailing JSON data", ateerrors.ReasonInvalidSandboxAsset)
+	}
+	if manifest.Version != kataBundleManifestVersion {
+		return nil, fmt.Errorf("%w: Kata bundle manifest version %d, require %d", ateerrors.ReasonInvalidSandboxAsset, manifest.Version, kataBundleManifestVersion)
+	}
+	paths := make(map[string]string, len(manifest.Files))
+	declared := map[string]bool{kataBundleManifestName: true}
+	for _, entry := range manifest.Files {
+		if entry.Name == "" || paths[entry.Name] != "" {
+			return nil, fmt.Errorf("%w: empty or duplicate Kata bundle file name %q", ateerrors.ReasonInvalidSandboxAsset, entry.Name)
+		}
+		rel, err := cleanBundleRelativePath(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		if declared[rel] {
+			return nil, fmt.Errorf("%w: duplicate Kata bundle path %q", ateerrors.ReasonInvalidSandboxAsset, rel)
+		}
+		if err := resources.ValidateSHA256(entry.SHA256); err != nil {
+			return nil, fmt.Errorf("%w: invalid SHA-256 for Kata bundle file %q", ateerrors.ReasonInvalidSandboxAsset, entry.Name)
+		}
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		fi, err := os.Lstat(path)
+		if err != nil || !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("%w: Kata bundle file %q is missing or not regular", ateerrors.ReasonInvalidSandboxAsset, rel)
+		}
+		if fi.Size() != entry.Size {
+			return nil, fmt.Errorf("%w: Kata bundle file %q size %d, want %d", ateerrors.ReasonInvalidSandboxAsset, rel, fi.Size(), entry.Size)
+		}
+		isExecutable := fi.Mode().Perm()&0o111 != 0
+		if isExecutable != entry.Executable {
+			return nil, fmt.Errorf("%w: Kata bundle file %q executable=%t, want %t", ateerrors.ReasonInvalidSandboxAsset, rel, isExecutable, entry.Executable)
+		}
+		got, err := fileSHA256(path)
+		if err != nil {
+			return nil, err
+		}
+		if got != entry.SHA256 {
+			return nil, fmt.Errorf("%w: Kata bundle file %q SHA-256 %s, want %s", ateerrors.ReasonInvalidSandboxAsset, rel, got, entry.SHA256)
+		}
+		declared[rel] = true
+		paths[entry.Name] = path
+	}
+	vmmKey := "kata-qemu"
+	if paths["kata-dragonball"] != "" {
+		vmmKey = "kata-dragonball"
+	}
+	for _, required := range []string{"kata-shim", vmmKey, "kata-kernel"} {
+		if paths[required] == "" {
+			return nil, fmt.Errorf("%w: Kata bundle manifest is missing %q", ateerrors.ReasonInvalidSandboxAsset, required)
+		}
+	}
+	if (paths["kata-image"] == "") == (paths["kata-initrd"] == "") {
+		return nil, fmt.Errorf("%w: Kata bundle manifest must contain exactly one of kata-image or kata-initrd", ateerrors.ReasonInvalidSandboxAsset)
+	}
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if !declared[rel] {
+			return fmt.Errorf("%w: undeclared Kata bundle entry %q", ateerrors.ReasonInvalidSandboxAsset, rel)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", wrapFileSystemErr("while opening file for SHA-256", err)
+	}
+	h := sha256.New()
+	_, copyErr := io.Copy(h, f)
+	closeErr := f.Close()
+	if copyErr != nil || closeErr != nil {
+		return "", fmt.Errorf("%w: hash file %q: %v %v", ateerrors.ReasonInvalidSandboxAsset, path, copyErr, closeErr)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // runscPathFor returns the local path of the gVisor `runsc` binary from a
@@ -173,7 +528,7 @@ func runscPathFor(paths map[string]string) string {
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.
 func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
+	if err := resources.ValidateSHA256(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 
@@ -210,7 +565,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 // the shared static-files cache, returning the local path of the extracted
 // `runsc` binary.
 func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
+	if err := resources.ValidateSHA256(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 
