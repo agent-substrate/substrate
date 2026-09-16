@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -84,10 +85,12 @@ func MaxDeadlineUnaryInterceptor(maxDeadline time.Duration) grpc.UnaryServerInte
 }
 
 // InternalServerUnaryInterceptor is for internal services to return full gRPC errors with specific error codes and debugging details.
+// An first ateerrors.Reason tagged in the error chain is surfaced as an AIP-193 ErrorInfo detail here.
 func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	startTime := time.Now()
 
 	resp, err := handler(ctx, req)
+	err = ateerrors.ReasonAsGRPCError(ctx, err)
 
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),

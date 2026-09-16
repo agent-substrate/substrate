@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"strings"
@@ -275,14 +276,12 @@ func TestCrashActor(t *testing.T) {
 	}
 }
 
-func TestMaybeCrashActor(t *testing.T) {
-	const wrapMsg = "calling atelet"
+func TestCrashActorOnError(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
-	crashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), errors.New("boom"))
-	// A structured error carrying a reason but no actorCrashed directive must be
-	// wrapped, not crash the actor.
-	noCrashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonFailedGetExternalObject, nil, errors.New("infra"))
+	// A structured error carrying a reason: it labels the crash, but any error
+	// crashes the actor regardless.
+	structuredErr := ateerrors.ReasonAsGRPCError(context.Background(), fmt.Errorf("%w: boom", ateerrors.ReasonTerminalFileSystemError))
 	plainErr := errors.New("transient")
 
 	tests := []struct {
@@ -298,17 +297,17 @@ func TestMaybeCrashActor(t *testing.T) {
 			err:  nil,
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err != nil {
-					t.Fatalf("maybeCrashActor() = %v, want nil", err)
+					t.Fatalf("crashActorOnError() = %v, want nil", err)
 				}
 			},
 		},
 		{
-			name: "crash reason crashes actor",
+			name: "structured atelet error crashes actor",
 			seed: true,
-			err:  crashErr,
+			err:  structuredErr,
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err == nil {
-					t.Fatal("maybeCrashActor() = nil, want error")
+					t.Fatal("crashActorOnError() = nil, want error")
 				}
 				if got := status.Code(err); got != codes.DataLoss {
 					t.Errorf("status code = %v, want %v", got, codes.DataLoss)
@@ -317,67 +316,33 @@ func TestMaybeCrashActor(t *testing.T) {
 			},
 		},
 		{
-			name: "crash reason but actor missing returns load error",
+			name: "actor missing returns load error",
 			seed: false,
-			err:  crashErr,
+			err:  structuredErr,
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err == nil {
-					t.Fatal("maybeCrashActor() = nil, want error")
+					t.Fatal("crashActorOnError() = nil, want error")
 				}
 				if got := status.Code(err); got == codes.DataLoss {
 					t.Errorf("status code = %v, want it not to be DataLoss", got)
 				}
 				if !errors.Is(err, store.ErrNotFound) {
-					t.Errorf("maybeCrashActor() error = %v, want errors.Is(store.ErrNotFound)", err)
+					t.Errorf("crashActorOnError() error = %v, want errors.Is(store.ErrNotFound)", err)
 				}
 			},
 		},
 		{
-			name: "status error without crash directive is wrapped",
-			seed: true,
-			err:  noCrashErr,
-			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
-				if err == nil {
-					t.Fatal("maybeCrashActor() = nil, want error")
-				}
-				if !errors.Is(err, noCrashErr) {
-					t.Errorf("maybeCrashActor() error = %v, want errors.Is(noCrashErr)", err)
-				}
-				if !strings.HasPrefix(err.Error(), wrapMsg) {
-					t.Errorf("maybeCrashActor() error = %q, want prefix %q", err, wrapMsg)
-				}
-				// The actor must not have been crashed.
-				got, gerr := st.GetActor(ctx, actorRef)
-				if gerr != nil {
-					t.Fatalf("GetActor() = %v, want nil", gerr)
-				}
-				if got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
-					t.Errorf("status = CRASHED, want it unchanged")
-				}
-			},
-		},
-		{
-			name: "non-crash error is wrapped",
+			name: "plain error also crashes actor",
 			seed: true,
 			err:  plainErr,
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err == nil {
-					t.Fatal("maybeCrashActor() = nil, want error")
+					t.Fatal("crashActorOnError() = nil, want error")
 				}
-				if !errors.Is(err, plainErr) {
-					t.Errorf("maybeCrashActor() error = %v, want errors.Is(plainErr)", err)
+				if got := status.Code(err); got != codes.DataLoss {
+					t.Errorf("status code = %v, want %v", got, codes.DataLoss)
 				}
-				if !strings.HasPrefix(err.Error(), wrapMsg) {
-					t.Errorf("maybeCrashActor() error = %q, want prefix %q", err, wrapMsg)
-				}
-				// The actor must not have been crashed.
-				got, gerr := st.GetActor(ctx, actorRef)
-				if gerr != nil {
-					t.Fatalf("GetActor() = %v, want nil", gerr)
-				}
-				if got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
-					t.Errorf("status = CRASHED, want it unchanged")
-				}
+				assertCrashed(t, ctx, st, actorRef)
 			},
 		},
 	}
@@ -392,7 +357,7 @@ func TestMaybeCrashActor(t *testing.T) {
 				seedActor(t, ctx, st, actorRef)
 			}
 
-			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg, ateattr.OperationUnknown)
+			err := crashActorOnError(ctx, st, actorRef, tt.err, ateattr.OperationUnknown)
 
 			tt.check(t, ctx, st, err)
 		})
