@@ -1,0 +1,35 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+# Cluster-wide SandboxConfig for the gVisor (runsc) sandbox class, shipped with
+# the platform so gVisor ActorTemplates have a config to name via
+# sandboxConfig.configName.
+apiVersion: ate.dev/v1alpha1
+kind: SandboxConfig
+metadata:
+  name: gvisor-default
+spec:
+  sandboxClass: gvisor
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  assets:
+    amd64:
+      gvisor:
+        url: "gs://gvisor/releases/release/20260803/x86_64/gvisor.tar.bz2"
+        sha256: "9e7a5fcc2cbd28c9cd4af910a9327abcf07a8efcce242c285b860d79010c2db5"
+    arm64:
+      gvisor:
+        url: "gs://gvisor/releases/release/20260803/aarch64/gvisor.tar.bz2"
+        sha256: "294d54dea2a18bcd2614a4b5072d6f32f0e8938f9e6e71c9e86b843c4a7b707b"

@@ -22,4 +22,4 @@ package controllers
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch,namespace=ate-system
 
-//go:generate bash ../../../../hack/run-tool.sh controller-gen rbac:headerFile=../../../../hack/boilerplate/sh.txt,roleName=ate-controller paths="./..." output:rbac:artifacts:config=../../../../manifests/ate-install/generated/
+//go:generate bash ../../../../hack/gen-rbac.sh

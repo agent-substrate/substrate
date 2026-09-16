@@ -58,6 +58,32 @@ data:
               insecureHost: true
 
     routes:
+    - name: substrate-actors-grpc
+      gateways:
+      - http
+      - https
+      matches:
+      - headers:
+        - name: content-type
+          value:
+            regex: '(?i)^application/grpc(?:\+[^;]+)?(?:;.*)?$'
+        path:
+          pathPrefix: /
+      policies:
+        substrateIngress:
+          host: api.ate-system.svc:443
+          # AgentGateway only uses atunnel's CONNECT listener.
+          connectTargetPort: 8443
+          policies:
+            backendTLS:
+              cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+              key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+              root: /run/servicedns-ca/trust-bundle.pem
+      backends:
+      - backend: /dynamic
+        policies:
+          http:
+            version: HTTP/2.0
     - name: substrate-actors
       gateways:
       - http
@@ -77,6 +103,9 @@ data:
               root: /run/servicedns-ca/trust-bundle.pem
       backends:
       - backend: /dynamic
+        policies:
+          http:
+            version: HTTP/1.1
 
     # Terminate client CONNECT before internal HTTP routing.
     binds:
@@ -97,6 +126,28 @@ data:
       listeners:
       - protocol: HTTP
         routes:
+        - name: substrate-actors-tunneled-grpc
+          matches:
+          - headers:
+            - name: content-type
+              value:
+                regex: '(?i)^application/grpc(?:\+[^;]+)?(?:;.*)?$'
+            path:
+              pathPrefix: /
+          policies:
+            substrateIngress:
+              host: api.ate-system.svc:443
+              connectTargetPort: 8443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns-ca/trust-bundle.pem
+          backends:
+          - backend: /dynamic
+            policies:
+              http:
+                version: HTTP/2.0
         - name: substrate-actors-tunneled
           matches:
           - path:
@@ -112,6 +163,9 @@ data:
                   root: /run/servicedns-ca/trust-bundle.pem
           backends:
           - backend: /dynamic
+            policies:
+              http:
+                version: HTTP/1.1
 
 ---
 apiVersion: v1

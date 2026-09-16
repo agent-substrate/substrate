@@ -1,0 +1,137 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- if .Values.rustfs.enabled -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "substrate.fullname" (list "rustfs-data" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.rustfs.storageSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "substrate.fullname" (list "rustfs" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: rustfs
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "substrate.fullname" (list "rustfs" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rustfs
+  template:
+    metadata:
+      labels:
+        app: rustfs
+    spec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+      - name: rustfs
+        image: {{ .Values.images.rustfs }}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9000
+          name: api
+        - containerPort: 9001
+          name: console
+        env:
+        - name: RUSTFS_ADDRESS
+          value: ":9000"
+        - name: RUSTFS_CONSOLE_ADDRESS
+          value: ":9001"
+        - name: RUSTFS_CONSOLE_ENABLE
+          value: "true"
+        - name: RUSTFS_VOLUMES
+          value: "/data"
+        - name: RUSTFS_ACCESS_KEY
+          value: {{ .Values.rustfs.accessKey | quote }}
+        - name: RUSTFS_SECRET_KEY
+          value: {{ .Values.rustfs.secretKey | quote }}
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ include "substrate.fullname" (list "rustfs-data" .) }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "substrate.fullname" (list "rustfs-bucket-init" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: create-bucket
+        image: {{ .Values.images.awsCli }}
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          value: {{ .Values.rustfs.accessKey | quote }}
+        - name: AWS_SECRET_ACCESS_KEY
+          value: {{ .Values.rustfs.secretKey | quote }}
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ENDPOINT_URL
+          value: http://{{ include "substrate.fullname" (list "rustfs" .) }}.{{ .Release.Namespace }}.svc:9000
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          for i in $(seq 1 60); do
+            if aws s3api head-bucket --bucket {{ .Values.rustfs.bucket }} 2>/dev/null; then
+              echo "bucket {{ .Values.rustfs.bucket }} already exists"
+              exit 0
+            fi
+            if aws s3api create-bucket --bucket {{ .Values.rustfs.bucket }} 2>/dev/null; then
+              echo "bucket {{ .Values.rustfs.bucket }} created"
+              exit 0
+            fi
+            echo "waiting for rustfs to become available... ($i/60)"
+            sleep 2
+          done
+          echo "timed out waiting for rustfs"
+          exit 1
+{{- end }}

@@ -1,0 +1,234 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- $name := include "substrate.fullname" (list "postgres" .) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-config
+  namespace: {{ .Release.Namespace }}
+data:
+  postgresql.conf: |
+    listen_addresses = '*'
+    ssl = on
+    ssl_cert_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
+    ssl_key_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
+    ssl_ca_file = '/run/podidentity.podcert.ate.dev/trust-bundle.pem'
+    hba_file = '/etc/postgresql/pg_hba.conf'
+  pg_hba.conf: |
+    # Local socket access is limited to processes in this pod and is used by
+    # health checks, the workload's idempotent database bootstrap, and the
+    # tls-reloader sidecar's configuration reloads.
+    local all all trust
+    # PostgreSQL verifies client certificates against the pod-identity CA. It
+    # does not need its own serving CA because it never verifies its server certificate.
+    hostssl all all all trust clientcert=verify-ca
+  reload-tls.sh: |
+    # PostgreSQL opens ssl_cert_file, ssl_key_file and ssl_ca_file at startup
+    # and on SIGHUP, and nowhere else. The kubelet replaces the projected pod
+    # certificate in place about 30 minutes before it expires, so without this
+    # loop the server keeps presenting the certificate it booted with until it
+    # expires about a day later and every client stops trusting it.
+    set -eu
+
+    # As PID 1 this shell only sees SIGTERM if a handler is installed, and only
+    # acts on it between commands, so the sleep below runs in the background
+    # and is waited on. Without both halves the pod takes the full termination
+    # grace period to go away.
+    trap 'exit 0' TERM INT
+
+    CERT=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+    CA=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+
+    # Comfortably inside the 30m headroom (notAfter - beginRefreshAt) that
+    # cmd/podcertcontroller/internal/servicednssigner/servicednssigner.go
+    # leaves; hashing two small files costs nothing.
+    INTERVAL=60
+
+    reloaded=""
+    while true; do
+      current="$(sha256sum "${CERT}" "${CA}")"
+      # Reloading fails until the server is accepting connections, which is
+      # where every pod starts out, so only record a hash once it has worked.
+      # Starting empty also means a restart of this container costs one
+      # redundant reload rather than a missed one.
+      if [ "${current}" != "${reloaded}" ] \
+        && psql -U postgres -d postgres -Atc 'SELECT pg_reload_conf()' >/dev/null 2>&1; then
+        reloaded="${current}"
+        echo "$(date -u +%FT%TZ) reloaded TLS configuration"
+      fi
+      sleep "${INTERVAL}" &
+      wait $!
+    done
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  selector:
+    app: {{ $name }}
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      securityContext:
+        # Group ownership of the projected certificate below, and of the data
+        # volume so that a freshly provisioned one is writable. OnRootMismatch
+        # keeps the kubelet from walking the data directory on every start,
+        # which would leave PGDATA group-writable and postgres refusing to run.
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+      # PostgreSQL re-reads its TLS files only on SIGHUP, so this sidecar
+      # reloads the server whenever the kubelet rotates the projected pod
+      # certificate. fsGroup is also what makes that projection readable: the
+      # kubelet writes it root-owned for as long as the pod's containers do not
+      # all agree on one non-root user, and grants the fsGroup group access,
+      # landing the key at root:postgres 0640, the only shared mode PostgreSQL
+      # accepts. Pinning runAsUser on the postgres container would make the key
+      # postgres-owned and group-readable, which it rejects.
+      # See https://www.postgresql.org/docs/current/ssl-tcp.html#SSL-SETUP
+      initContainers:
+      - name: tls-reloader
+        restartPolicy: Always
+        image: {{ .Values.images.postgres }}
+        securityContext:
+          runAsUser: 70
+        command:
+        - /bin/sh
+        - /etc/postgresql/reload-tls.sh
+        volumeMounts:
+        - name: config
+          mountPath: /etc/postgresql
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: podidentity-ca
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: socket
+          mountPath: /var/run/postgresql
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+      containers:
+      - name: postgres
+        image: {{ .Values.images.postgres }}
+        lifecycle:
+          postStart:
+            exec:
+              command:
+              - /bin/sh
+              - -ec
+              - |
+                until psql -U postgres -d postgres -Atc 'SELECT 1' >/dev/null 2>&1; do
+                  sleep 1
+                done
+                if ! psql -U postgres -d postgres -Atc \
+                  "SELECT 1 FROM pg_database WHERE datname = 'atepg'" | grep -qx 1; then
+                  createdb -U postgres atepg
+                fi
+        env:
+        - name: POSTGRES_DB
+          value: atepg
+        - name: POSTGRES_HOST_AUTH_METHOD
+          value: trust
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - name: postgres
+          containerPort: 5432
+        readinessProbe:
+          exec:
+            command: ["/bin/sh", "-ec", "psql -U postgres -d atepg -Atc 'SELECT 1' >/dev/null"]
+          initialDelaySeconds: 2
+          periodSeconds: 2
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        args: ["-c", "config_file=/etc/postgresql/postgresql.conf"]
+        volumeMounts:
+        - name: config
+          mountPath: /etc/postgresql
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: podidentity-ca
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: socket
+          mountPath: /var/run/postgresql
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        resources:
+{{ toYaml .Values.postgres.resources | indent 10 }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ $name }}-config
+      - name: servicedns
+        projected:
+          # 0600 plus the group read that fsGroup adds is the 0640 above.
+          defaultMode: 0600
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      # The unix socket directory, shared so the sidecar can ask the running
+      # server to reload. The image defaults both the server and its clients to
+      # this path, so nothing else has to know about it.
+      - name: socket
+        emptyDir: {}
+      - name: podidentity-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: {{ .Values.postgres.storageSize }}

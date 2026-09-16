@@ -1,0 +1,72 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for the substrate chart.
+#
+# The chart requires ClusterTrustBundle, ClusterTrustBundleProjection,
+# PodCertificateRequest, and the certificates.k8s.io/v1beta1 API.
+
+# Set to true to have the chart create the release namespace.
+# Off by default — most helm workflows expect the namespace to already exist
+# (helm install -n <ns> --create-namespace). Enable for the generated
+# manifests/ate-install/ install path (kubectl apply).
+createNamespace: false
+
+postgres:
+  storageSize: 1Gi
+  connectionString: ""
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+rustfs:
+  enabled: true
+  storageSize: 1Gi
+  bucket: ate-snapshots
+  accessKey: rustfsadmin
+  secretKey: rustfsadmin
+
+# atelet daemonset overrides. Defaults use the in-cluster RustFS deployment for
+# snapshots. Set rustfs.enabled=false and override these fields when using
+# external storage.
+# extraArgs / extraEnv are appended verbatim for installer-specific knobs
+# (e.g. registry replacement for kind).
+atelet:
+  gcpAuthForImagePulls: false
+  storageBackend: s3
+  extraArgs: []
+  extraEnv: []
+
+# Name of a ConfigMap in the release namespace that supplies per-environment
+# overrides for ate-api-server (ATE_API_POSTGRES_CONNECTION_STRING, ...).
+# Mounted via envFrom with optional=true. Created by the chart from these values.
+ateApiServerEnvVarsConfigMap: ate-api-server-envvars
+
+otel:
+  endpoint: ""
+
+image:
+  registry: ghcr.io/kagent-dev/substrate
+  tag: ""
+
+images:
+  postgres: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+  rustfs: rustfs/rustfs:1.0.0-beta.3@sha256:378642b05b7dcb4849fb77ebe6aca4ced1c3f66e7e504247df95a5c9018d3358
+  awsCli: amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73
+  agentgateway: ghcr.io/agentgateway/agentgateway:v0.0.0-alpha.9f9744cf
+  busybox: busybox:1.36

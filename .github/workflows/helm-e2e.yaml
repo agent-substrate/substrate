@@ -1,0 +1,116 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: helm-e2e
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  e2e-test:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: helm-e2e
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: go.mod
+    - name: Setup Helm
+      uses: azure/setup-helm@v4
+    - name: Cache micro-VM assets
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: bin/microvm-assets/amd64
+        key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Create cluster
+      run: hack/create-kind-cluster.sh
+    - name: Label nodes with the installed version
+      run: kubectl label nodes --all ate.dev/substrate-version=${VERSION}
+    - name: Create install namespace
+      run: kubectl create namespace ate-system
+    - name: Install observability fixtures
+      run: |
+        kubectl apply -f manifests/ate-install/kind/otel-collector.yaml
+        kubectl apply -f manifests/ate-install/kind/prometheus.yaml
+    - name: Build chart images
+      run: |
+        for component in ateapi atecontroller atelet podcertcontroller atenet; do
+          KO_DOCKER_REPO="localhost:5001/${component}" \
+            ./hack/run-tool.sh ko build --bare --tags helm-e2e \
+              --platform linux/amd64 "./cmd/${component}"
+        done
+    - name: Install Agent Substrate with Helm
+      run: |
+        helm upgrade --install substrate-crds charts/substrate-crds
+        helm upgrade --install substrate charts/substrate \
+          --namespace ate-system \
+          --create-namespace \
+          --set image.registry=localhost:5001 \
+          --set image.tag=helm-e2e \
+          --set 'atelet.extraArgs[0]=--localhost-registry-replacement=kind-registry:5000' \
+          --set otel.endpoint=http://opentelemetry-collector.otel-system.svc:4317 \
+          --set postgres.resources.requests.cpu=500m
+    - name: Bootstrap mTLS authorities
+      run: |
+        hack/install-ate-kind.sh --create-podcertificate-controller-cas
+        hack/install-ate-kind.sh --create-jwt-authority-pool-secret
+        hack/install-ate-kind.sh --create-actor-id-ca-pool-secret
+        hack/install-ate-kind.sh --create-actor-id-ca-certs-secret
+        hack/install-ate-kind.sh --create-api-authentication-config
+    - name: Wait for Helm install
+      run: |
+        helm upgrade substrate charts/substrate \
+          --namespace ate-system \
+          --reuse-values \
+          --wait --timeout=10m
+    - name: Enable NFS
+      run: |
+        sudo modprobe nfs || true
+        sudo modprobe nfsd || true
+    - name: Install CSI NFS driver
+      run: hack/install-ate-kind.sh --setup-csi=nfs
+    - name: Deploy micro-VM counter demo
+      # The deploy creates the substrate ActorTemplate and waits for its golden
+      # snapshot internally; the ActorTemplate CRD (and its Ready condition)
+      # no longer exists to wait on.
+      run: hack/run-microvm-demo-kind.sh --skip-control-plane
+    - name: Deploy gVisor counter demo
+      run: hack/install-ate-kind.sh --deploy-demo-counter
+    - name: Deploy egress demo
+      run: hack/install-ate-kind.sh --deploy-demo-egress
+    - name: Run E2E tests (gVisor)
+      run: hack/run-e2e-kind.sh -v -args --no-color
+    - name: Run E2E tests (micro-VM)
+      env:
+        E2E_SANDBOX_CLASS: microvm
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color
+    - name: Dump diagnostics on failure
+      if: failure()
+      run: |
+        kubectl --context kind-kind get workerpool,pods -A -o wide || true
+        for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
+          echo "=== logs: ate-system/${p} ==="
+          kubectl --context kind-kind logs -n ate-system "$p" --all-containers --tail=300 || true
+        done

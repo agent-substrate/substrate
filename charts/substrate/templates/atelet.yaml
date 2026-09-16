@@ -1,0 +1,232 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+# atelet
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-role" .) }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["ate.dev"]
+  resources: ["csidriverconfigs"]
+  verbs: ["get", "watch", "list"]
+# ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
+# resolved on the node: atelet reads them through an informer and projects
+# the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["clustertrustbundles"]
+  verbs: ["get", "watch", "list"]
+# SandboxConfigs are watched to pre-download sandbox assets into the node's
+# cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go).
+- apiGroups: ["ate.dev"]
+  resources: ["sandboxconfigs"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-binding" .) }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "substrate.fullname" (list "atelet-role" .) }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-endpointslices" .) }}
+  namespace: {{ .Release.Namespace }}
+rules:
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-endpointslices" .) }}
+  namespace: {{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "substrate.fullname" (list "atelet-endpointslices" .) }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-node-critical" .) }}
+value: 1000000000
+globalDefault: false
+description: "Node-local ate components that every actor activation depends on."
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: atelet
+spec:
+  selector:
+    matchLabels:
+      app: atelet
+  template:
+    metadata:
+      labels:
+        app: atelet
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: {{ include "substrate.fullname" (list "atelet" .) }}
+      priorityClassName: {{ include "substrate.fullname" (list "ate-node-critical" .) }}
+      containers:
+      - name: atelet
+        image: {{ include "substrate.componentImage" (list "atelet" .) }}
+        args:
+        - --gcp-auth-for-image-pulls={{ .Values.atelet.gcpAuthForImagePulls }}
+        - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+{{- with .Values.atelet.extraArgs }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
+{{- if .Values.otel.endpoint }}
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.otel.endpoint | quote }}
+{{- end }}
+        - name: ATE_STORAGE_BACKEND
+          value: {{ .Values.atelet.storageBackend | quote }}
+{{- if .Values.rustfs.enabled }}
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ENDPOINT_URL
+          value: http://{{ include "substrate.fullname" (list "rustfs" .) }}.{{ .Release.Namespace }}.svc:9000
+        - name: AWS_S3_USE_PATH_STYLE
+          value: "true"
+        - name: AWS_ACCESS_KEY_ID
+          value: {{ .Values.rustfs.accessKey | quote }}
+        - name: AWS_SECRET_ACCESS_KEY
+          value: {{ .Values.rustfs.secretKey | quote }}
+{{- end }}
+{{- with .Values.atelet.extraEnv }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+        ports:
+        - name: grpc
+          containerPort: 8085
+          hostPort: 8085
+        - name: prometheus
+          containerPort: 9090
+          hostPort: 9090
+          protocol: TCP
+        volumeMounts:
+        - name: run-ateom
+          mountPath: /var/lib/ateom-gvisor
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: kubelet-plugins
+          mountPath: /var/lib/kubelet/plugins
+        - name: device-plugins
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: host-dev
+          mountPath: /host/dev
+          readOnly: true
+      volumes:
+      - name: run-ateom
+        hostPath:
+          path: /var/lib/ateom-gvisor
+          type: DirectoryOrCreate
+      - name: kubelet-plugins
+        hostPath:
+          path: /var/lib/kubelet/plugins
+          type: DirectoryOrCreate
+      - name: device-plugins
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: DirectoryOrCreate
+      - name: host-dev
+        hostPath:
+          path: /dev
+          type: Directory
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem

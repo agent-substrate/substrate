@@ -1,0 +1,237 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "substrate.fullname" (list "atenet-egress" .) }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-config" .) }}
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+    frontendPolicies:
+      accessLog:
+        add:
+          substrate.connect.authority: source.connectHeaders["host"]
+      # Authorize the actor identity at CONNECT-accept, before any tunnel
+      # (HTTP, TLS, or opaque TCP) is terminated. Fails closed when the
+      # control plane is unreachable.
+      substrateEgressActorResolution:
+        host: {{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:443
+        policies:
+          backendTLS:
+            cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+            key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+            root: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+
+    binds:
+    - port: 8443
+      tunnelProtocol: connect
+      listeners:
+      - protocol: HTTPS
+        tls:
+          cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+          key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+          root: /run/actor-id-ca-certs/ca.crt
+        routes: []
+    - mode: internal
+      protocol: AUTO
+      listeners:
+      - protocol: TLS
+        hostname: "*"
+        tcpRoutes:
+        - backends:
+          - dynamic:
+              target: source.connectHeaders["host"]
+      - protocol: HTTP
+        routes:
+        - backends:
+          - dynamic:
+              target: source.connectHeaders["host"]
+          policies:
+            substrateEgress:
+              host: {{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+      - protocol: TCP
+        tcpRoutes:
+        - backends:
+          - dynamic:
+              target: source.connectHeaders["host"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "substrate.fullname" (list "atenet-egress" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: atenet-egress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atenet-egress
+  template:
+    metadata:
+      labels:
+        app: atenet-egress
+    spec:
+      serviceAccountName: {{ include "substrate.fullname" (list "atenet-egress" .) }}
+      securityContext:
+        sysctls:
+        - name: net.ipv4.ip_unprivileged_port_start
+          value: "0"
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: agentgateway
+        image: {{ .Values.images.agentgateway }}
+        args:
+        - -f
+        - /etc/agentgateway/config.yaml
+        ports:
+        - name: https
+          containerPort: 8443
+        - name: readiness
+          containerPort: 15021
+        - name: stats
+          containerPort: 15020
+        readinessProbe:
+          httpGet:
+            path: /healthz/ready
+            port: readiness
+          periodSeconds: 10
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /healthz/ready
+            port: readiness
+          periodSeconds: 1
+        volumeMounts:
+        - name: config
+          mountPath: /etc/agentgateway
+          readOnly: true
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: actor-id-ca-certs
+          mountPath: /run/actor-id-ca-certs
+          readOnly: true
+      - name: ext-proc
+        image: {{ include "substrate.componentImage" (list "atenet" .) }}
+        args:
+        - router
+        - --mode=egress
+        - --namespace={{ .Release.Namespace }}
+        - --port-extproc=50051
+        - --extproc-address=127.0.0.1
+        - --ateapi-address={{ include "substrate.ateApi.endpoint" . }}
+        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+        - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        - --actor-identity-ca-file=/run/actor-id-ca-certs/ca.crt
+        - --otlp-collector-address=
+        - --envoy-admin-address=localhost:15000
+        - --atenet-dataplane=agentgateway
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - name: extproc
+          containerPort: 50051
+        readinessProbe:
+          tcpSocket:
+            port: extproc
+          periodSeconds: 10
+        volumeMounts:
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: actor-id-ca-certs
+          mountPath: /run/actor-id-ca-certs
+          readOnly: true
+        - name: drain-signal
+          mountPath: /var/run/atenet
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-config" .) }}
+      - name: drain-signal
+        emptyDir: {}
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: actor-id-ca-certs
+        secret:
+          secretName: actor-id-ca-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "substrate.fullname" (list "atenet-egress" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
+  selector:
+    app: atenet-egress
+  ports:
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP

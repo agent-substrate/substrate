@@ -1,0 +1,210 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server-role" .) }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools", "sandboxconfigs", "csidriverconfigs"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "watch", "list"]
+# Secret reads for env source resolution are intentionally NOT granted
+# cluster-wide here. Each demo / tenant is responsible for granting
+# ate-api-server read access only to the specific Secrets referenced by its
+# ActorTemplates (e.g. via a namespace-scoped Role + RoleBinding using
+# resourceNames).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server-binding" .) }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "substrate.fullname" (list "ate-api-server-role" .) }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ate-api-server
+  template:
+    metadata:
+      labels:
+        app: ate-api-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+      terminationGracePeriodSeconds: 40
+      containers:
+      - name: ate-api-server
+        image: {{ include "substrate.componentImage" (list "ateapi" .) }}
+        args:
+        - "--grpc-listen-addr=0.0.0.0:443"
+        - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        - "--authentication-config=/etc/ateapi/authentication/authentication.yaml"
+        - "--postgres-connection-string=@env"
+        - "--actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json"
+        - "--actor-id-ca-pool=/run/actor-id-ca-pool/pool.json"
+        - "--egress-gateway-address={{ include "substrate.fullname" (list "atenet-egress" .) }}.{{ .Release.Namespace }}.svc:443"
+        - "--atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        - "--pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+        - "--drain-delay=13s"
+        - "--drain-timeout=15s"
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+{{- if .Values.otel.endpoint }}
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.otel.endpoint | quote }}
+{{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ .Values.ateApiServerEnvVarsConfigMap }}
+            optional: true
+        volumeMounts:
+        - { name: servicedns,          mountPath: /run/servicedns.podcert.ate.dev }
+        - { name: actor-id-jwt-pool,   mountPath: /run/actor-id-jwt-pool }
+        - { name: actor-id-ca-pool,    mountPath: /run/actor-id-ca-pool, readOnly: true }
+        - { name: podidentity,         mountPath: /run/podidentity.podcert.ate.dev, readOnly: true }
+        - { name: authentication-config, mountPath: /etc/ateapi/authentication, readOnly: true }
+        ports:
+        - containerPort: 443
+        - name: prometheus
+          containerPort: 9090
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: actor-id-jwt-pool
+        projected:
+          sources:
+          - secret:
+              name: actor-id-jwt-pool
+              items:
+              - { key: pool, path: pool.json }
+      - name: actor-id-ca-pool
+        projected:
+          sources:
+          - secret:
+              name: actor-id-ca-pool
+              items:
+              - { key: pool, path: pool.json }
+      - name: authentication-config
+        configMap:
+          name: ate-api-authentication
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ate-api-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "substrate.fullname" (list "api" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  selector:
+    app: ate-api-server
+  ports:
+  - name: grpc
+    protocol: TCP
+    port: 443
+    targetPort: 443
