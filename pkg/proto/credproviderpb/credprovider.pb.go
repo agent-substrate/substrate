@@ -35,81 +35,25 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// HttpRequestContext is the attested context Substrate passes with a http request.
-type HttpRequestContext struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// The destination authority the matched egress policy rule authorized, i.e.
-	// where the credential will be sent.
-	Authority string `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
-	// The request header the credential will be injected into (e.g.
-	// "authorization"), from the matched policy rule.
-	Header        string `protobuf:"bytes,2,opt,name=header,proto3" json:"header,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *HttpRequestContext) Reset() {
-	*x = HttpRequestContext{}
-	mi := &file_credprovider_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *HttpRequestContext) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*HttpRequestContext) ProtoMessage() {}
-
-func (x *HttpRequestContext) ProtoReflect() protoreflect.Message {
-	mi := &file_credprovider_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use HttpRequestContext.ProtoReflect.Descriptor instead.
-func (*HttpRequestContext) Descriptor() ([]byte, []int) {
-	return file_credprovider_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *HttpRequestContext) GetAuthority() string {
-	if x != nil {
-		return x.Authority
-	}
-	return ""
-}
-
-func (x *HttpRequestContext) GetHeader() string {
-	if x != nil {
-		return x.Header
-	}
-	return ""
-}
-
-// FetchSecretRequest asks a provider to resolve one credential URI.
+// FetchSecretRequest asks a provider to resolve one credential URI. The URI is
+// the sole selector. Whatever referred to the secret — an EgressPolicy injection
+// rule, image-pull configuration — encodes any needed specificity in the provider tail.
 type FetchSecretRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// A ate-secret:// URI:
 	//   ate-secret://<provider name>/<provider tail>
+	// The provider tail is provider-interpreted.
 	Uri string `protobuf:"bytes,1,opt,name=uri,proto3" json:"uri,omitempty"`
 	// The SPIFFE ID of the actor on whose behalf the secret is fetched, as
 	// verified by the egress gateway. This field always contains a SPIFFE ID.
 	ActorSpiffeId string `protobuf:"bytes,2,opt,name=actor_spiffe_id,json=actorSpiffeId,proto3" json:"actor_spiffe_id,omitempty"`
-	// The attested context for http request.
-	Context       *HttpRequestContext `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FetchSecretRequest) Reset() {
 	*x = FetchSecretRequest{}
-	mi := &file_credprovider_proto_msgTypes[1]
+	mi := &file_credprovider_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -121,7 +65,7 @@ func (x *FetchSecretRequest) String() string {
 func (*FetchSecretRequest) ProtoMessage() {}
 
 func (x *FetchSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_credprovider_proto_msgTypes[1]
+	mi := &file_credprovider_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -134,7 +78,7 @@ func (x *FetchSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSecretRequest.ProtoReflect.Descriptor instead.
 func (*FetchSecretRequest) Descriptor() ([]byte, []int) {
-	return file_credprovider_proto_rawDescGZIP(), []int{1}
+	return file_credprovider_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *FetchSecretRequest) GetUri() string {
@@ -151,13 +95,6 @@ func (x *FetchSecretRequest) GetActorSpiffeId() string {
 	return ""
 }
 
-func (x *FetchSecretRequest) GetContext() *HttpRequestContext {
-	if x != nil {
-		return x.Context
-	}
-	return nil
-}
-
 // FetchSecretResponse carries the resolved credential.
 type FetchSecretResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -169,7 +106,7 @@ type FetchSecretResponse struct {
 
 func (x *FetchSecretResponse) Reset() {
 	*x = FetchSecretResponse{}
-	mi := &file_credprovider_proto_msgTypes[2]
+	mi := &file_credprovider_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -181,7 +118,7 @@ func (x *FetchSecretResponse) String() string {
 func (*FetchSecretResponse) ProtoMessage() {}
 
 func (x *FetchSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_credprovider_proto_msgTypes[2]
+	mi := &file_credprovider_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -194,7 +131,7 @@ func (x *FetchSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSecretResponse.ProtoReflect.Descriptor instead.
 func (*FetchSecretResponse) Descriptor() ([]byte, []int) {
-	return file_credprovider_proto_rawDescGZIP(), []int{2}
+	return file_credprovider_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *FetchSecretResponse) GetOpaqueBytes() []byte {
@@ -208,14 +145,10 @@ var File_credprovider_proto protoreflect.FileDescriptor
 
 const file_credprovider_proto_rawDesc = "" +
 	"\n" +
-	"\x12credprovider.proto\x12\fcredprovider\"J\n" +
-	"\x12HttpRequestContext\x12\x1c\n" +
-	"\tauthority\x18\x01 \x01(\tR\tauthority\x12\x16\n" +
-	"\x06header\x18\x02 \x01(\tR\x06header\"\x8a\x01\n" +
+	"\x12credprovider.proto\x12\fcredprovider\"N\n" +
 	"\x12FetchSecretRequest\x12\x10\n" +
 	"\x03uri\x18\x01 \x01(\tR\x03uri\x12&\n" +
-	"\x0factor_spiffe_id\x18\x02 \x01(\tR\ractorSpiffeId\x12:\n" +
-	"\acontext\x18\x03 \x01(\v2 .credprovider.HttpRequestContextR\acontext\"8\n" +
+	"\x0factor_spiffe_id\x18\x02 \x01(\tR\ractorSpiffeId\"8\n" +
 	"\x13FetchSecretResponse\x12!\n" +
 	"\fopaque_bytes\x18\x01 \x01(\fR\vopaqueBytes2j\n" +
 	"\x12CredentialProvider\x12T\n" +
@@ -233,21 +166,19 @@ func file_credprovider_proto_rawDescGZIP() []byte {
 	return file_credprovider_proto_rawDescData
 }
 
-var file_credprovider_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_credprovider_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_credprovider_proto_goTypes = []any{
-	(*HttpRequestContext)(nil),  // 0: credprovider.HttpRequestContext
-	(*FetchSecretRequest)(nil),  // 1: credprovider.FetchSecretRequest
-	(*FetchSecretResponse)(nil), // 2: credprovider.FetchSecretResponse
+	(*FetchSecretRequest)(nil),  // 0: credprovider.FetchSecretRequest
+	(*FetchSecretResponse)(nil), // 1: credprovider.FetchSecretResponse
 }
 var file_credprovider_proto_depIdxs = []int32{
-	0, // 0: credprovider.FetchSecretRequest.context:type_name -> credprovider.HttpRequestContext
-	1, // 1: credprovider.CredentialProvider.FetchSecret:input_type -> credprovider.FetchSecretRequest
-	2, // 2: credprovider.CredentialProvider.FetchSecret:output_type -> credprovider.FetchSecretResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: credprovider.CredentialProvider.FetchSecret:input_type -> credprovider.FetchSecretRequest
+	1, // 1: credprovider.CredentialProvider.FetchSecret:output_type -> credprovider.FetchSecretResponse
+	1, // [1:2] is the sub-list for method output_type
+	0, // [0:1] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for extension type_name
+	0, // [0:0] is the sub-list for extension extendee
+	0, // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_credprovider_proto_init() }
@@ -261,7 +192,7 @@ func file_credprovider_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_credprovider_proto_rawDesc), len(file_credprovider_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

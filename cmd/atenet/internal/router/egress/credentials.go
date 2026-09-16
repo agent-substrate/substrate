@@ -112,10 +112,6 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		resp, err := h.provider.FetchSecret(ctx, &credproviderpb.FetchSecretRequest{
 			Uri:           inj.GetCredentialUri(),
 			ActorSpiffeId: actorSpiffeID,
-			Context: &credproviderpb.HttpRequestContext{
-				Authority: dest.Hostname,
-				Header:    inj.GetHeader(),
-			},
 		})
 		if err != nil {
 			// Fail closed: a credential the policy required but we could not fetch

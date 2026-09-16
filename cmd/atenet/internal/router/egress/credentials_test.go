@@ -91,12 +91,6 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 	if got := provider.got.GetActorSpiffeId(); got != testActorSPIFFEID {
 		t.Errorf("actor identity = %q, want %q", got, testActorSPIFFEID)
 	}
-	if got := provider.got.GetContext().GetAuthority(); got != "api.example.com" {
-		t.Errorf("context authority = %q, want api.example.com", got)
-	}
-	if got := provider.got.GetContext().GetHeader(); got != "authorization" {
-		t.Errorf("context header = %q, want authorization", got)
-	}
 }
 
 // When injection cannot be performed — a cleartext leg, or no provider
