@@ -15,10 +15,14 @@
 package steps
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"maps"
 	"slices"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/agent-substrate/substrate/internal/localca"
 )
@@ -99,7 +103,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 // the shape here — one named CA, marked active, with a usable root and the
 // requested key type — turns a library change into a failing unit test rather
 // than a cluster whose signers pick the wrong CA.
-func TestNewCAPoolBytes(t *testing.T) {
+func TestNewCAPoolSecretData(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		id      string
@@ -110,12 +114,23 @@ func TestNewCAPoolBytes(t *testing.T) {
 		{"egress mitm", poolKeyID, localca.KeyTypeECDSAP256, x509.ECDSA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			poolBytes, err := newCAPoolBytes(tc.id, tc.keyType)
+			data, err := newCAPoolSecretData(tc.id, tc.keyType)
 			if err != nil {
-				t.Fatalf("newCAPoolBytes() error = %v", err)
+				t.Fatalf("newCAPoolSecretData() error = %v", err)
 			}
 
-			pool, err := localca.Unmarshal(poolBytes)
+			// The egress dataplanes mount tls.crt and tls.key from this
+			// Secret non-optionally, so dropping either one wedges their
+			// pods in ContainerCreating rather than failing anything here.
+			wantKeys := []string{"pool", corev1.TLSCertKey, corev1.TLSPrivateKeyKey}
+			if diff := cmp.Diff(wantKeys, slices.Sorted(maps.Keys(data))); diff != "" {
+				t.Errorf("secret keys differ (-want +got):\n%s", diff)
+			}
+			if _, err := tls.X509KeyPair(data[corev1.TLSCertKey], data[corev1.TLSPrivateKeyKey]); err != nil {
+				t.Errorf("tls.X509KeyPair() error = %v, want the CA certificate and key to form a usable pair", err)
+			}
+
+			pool, err := localca.Unmarshal(data["pool"])
 			if err != nil {
 				t.Fatalf("Unmarshal() error = %v", err)
 			}

@@ -49,6 +49,12 @@ type DeployOptions struct {
 	SetupCSI string
 }
 
+// Validate checks the options that can be checked without configuration or a
+// cluster, so the command can reject them while cobra is still parsing.
+func (o DeployOptions) Validate() error {
+	return ValidateCSIDriver(o.SetupCSI)
+}
+
 // DeployAteSystem installs the whole control plane: CRDs, RBAC, the
 // podcertificate controller, the store, ateapi, the controller, atenet, and
 // atelet.
@@ -57,6 +63,12 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 
 	// Fail fast on an unusable build version before touching the cluster.
 	if _, _, err := e.SubstrateVersion(); err != nil {
+		return err
+	}
+	// Likewise the CSI request, even though it is only acted on partway
+	// through: a driver this cluster cannot run is worth knowing before the
+	// control plane goes up, not after.
+	if err := e.CheckCSIDriver(opts.SetupCSI); err != nil {
 		return err
 	}
 
@@ -121,7 +133,14 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	if err := e.applyBundledPostgres(ctx); err != nil {
+	// Resolved before the bundle apply: adopting a Cloud SQL instance reads
+	// the ConfigMap that EnsureAPIServerPrerequisites has already rewritten,
+	// and the answer decides both the apply and the rollout wait below.
+	postgres, err := e.planPostgres(ctx)
+	if err != nil {
+		return err
+	}
+	if err := e.applyBundledPostgres(ctx, postgres); err != nil {
 		return err
 	}
 
@@ -136,6 +155,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 	if err := e.Kube.ApplyBytes(ctx, manifests); err != nil {
+		return err
+	}
+
+	// After the bundle, which resets the pod template to the sidecar-free base.
+	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
 
@@ -154,10 +178,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	log.Step("Waiting for ATE system components to be ready...")
 	type rollout struct{ kind, name string }
 	var waits []rollout
-	// Only when the bundled StatefulSet was applied above; an external
-	// database means it never gets deployed, and waiting on it would block
-	// until the timeout on an object that will never exist.
-	if e.useBundledPostgres() {
+	if postgres.bundled {
 		waits = append(waits, rollout{kube.KindStatefulSet, "postgres"})
 	}
 	waits = append(waits,
@@ -172,7 +193,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 			return err
 		}
 	}
-	return nil
+	return e.applyOtelEndpointOverride(ctx)
 }
 
 // applyPodcertWorkersOverride sets WORKERS_PER_SIGNER on podcertificate-controller if configured.
@@ -234,7 +255,14 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
+	if err := e.applyOtelEndpointOverride(ctx); err != nil {
+		return err
+	}
 	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
+		return err
+	}
+	// After the manifest, which resets the pod template to the sidecar-free base.
+	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-api-server", e.Cfg.RolloutTimeout)
@@ -275,6 +303,9 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
+	if err := e.applyOtelEndpointOverride(ctx); err != nil {
+		return err
+	}
 
 	var manifest []byte
 	var err error
@@ -312,6 +343,9 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 		return err
 	}
 	if err := e.applyOtelConfig(ctx); err != nil {
+		return err
+	}
+	if err := e.applyOtelEndpointOverride(ctx); err != nil {
 		return err
 	}
 

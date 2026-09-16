@@ -16,6 +16,8 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 )
 
 var setupCmd = &cobra.Command{
@@ -33,14 +35,27 @@ single-node Kind only, while NFS is not restricted to Kind.
 
 Both drivers expose their controllers over TCP so atelet and ateapi can reach them. Re-running this removes
 the previous deployment first, which clears stale mounts left behind by an earlier install.`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		driver := "nfs"
-		if len(args) > 0 {
-			driver = args[0]
+	// Rejecting an unknown driver here rather than in the step means it costs
+	// nothing: cobra validates arguments before the root command loads the
+	// configuration and connects to a cluster.
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.MaximumNArgs(1)(cmd, args); err != nil {
+			return err
 		}
-		return env.SetupCSI(cmd.Context(), driver)
+		return steps.ValidateCSIDriver(csiDriver(args))
 	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return env.SetupCSI(cmd.Context(), csiDriver(args))
+	},
+}
+
+// csiDriver is the driver `setup csi` was asked for, defaulting as the shell
+// installer's setup_csi did.
+func csiDriver(args []string) string {
+	if len(args) > 0 {
+		return args[0]
+	}
+	return "nfs"
 }
 
 func init() {

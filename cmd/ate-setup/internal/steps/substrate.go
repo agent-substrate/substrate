@@ -121,7 +121,7 @@ func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref 
 // DeleteSubstrateDemo removes a substrate demo's control-plane resources:
 // every actor created from the given templates, then the templates (which
 // server-side also removes their golden actors and snapshots), then the
-// atespaces. As with DeleteDemoActors, a cluster without a reachable
+// atespaces. A cluster without a reachable
 // ate-api-server is not an error -- there is nothing to clean up.
 func (e *Env) DeleteSubstrateDemo(ctx context.Context, refs []resources.ActorTemplateRef, atespaces []string) error {
 	present, err := e.Kube.DeploymentExists(ctx, NamespaceAteSystem, "ate-api-server")
