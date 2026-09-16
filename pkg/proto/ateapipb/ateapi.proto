@@ -1396,13 +1396,18 @@ message ResumeActorResponse {
   bool resumed = 2;
 }
 
+// RevertActorRequest identifies the Actor to revert.
 message RevertActorRequest {
+  // actor to revert.
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
+// RevertActorResponse holds the reverted Actor.
 message RevertActorResponse {
+  // actor as it stands after the revert, SUSPENDED and still holding the
+  // external snapshot it was reverted to.
   Actor actor = 1;
 }
 

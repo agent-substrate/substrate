@@ -4627,8 +4627,10 @@ func (x *ResumeActorResponse) GetResumed() bool {
 	return false
 }
 
+// RevertActorRequest identifies the Actor to revert.
 type RevertActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// actor to revert.
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
@@ -4673,9 +4675,12 @@ func (x *RevertActorRequest) GetActor() *ObjectRef {
 	return nil
 }
 
+// RevertActorResponse holds the reverted Actor.
 type RevertActorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *Actor                 `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// actor as it stands after the revert, SUSPENDED and still holding the
+	// external snapshot it was reverted to.
+	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
