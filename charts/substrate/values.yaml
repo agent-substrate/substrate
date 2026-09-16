@@ -54,6 +54,10 @@ atelet:
   extraArgs: []
   extraEnv: []
 
+# Additional arguments appended to the ateapi defaults.
+ateApi:
+  extraArgs: []
+
 # Name of a ConfigMap in the release namespace that supplies per-environment
 # overrides for ate-api-server (ATE_API_POSTGRES_CONNECTION_STRING, ...).
 # Mounted via envFrom with optional=true. Created by the chart from these values.
