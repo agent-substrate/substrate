@@ -29,18 +29,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// grpcEcho is the origin this test deploys: a cleartext-HTTP/2 gRPC server, in
-// its own namespace, so nothing here depends on the internet.
-var grpcEcho = e2e.ServerPod{
-	Name:       "grpcecho",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-	Args:       []string{"grpc"},
-	Port:       50051,
-	// A gRPC server answers an HTTP GET with a protocol error, so readiness has
-	// to go through the health service the fixture registers.
-	GRPCProbe: true,
-}
-
 // grpcEchoResponse mirrors the egress demo Actor's /grpc answer. Kept as a
 // local copy rather than imported: the demo is a separate module-internal
 // command, and what this suite is really pinning is the wire shape between the
@@ -70,11 +58,12 @@ type grpcEchoStreamedMsg struct {
 // over a held-open connection, and a bidirectional stream has both directions
 // carrying frames at once and then half-closes one of them.
 //
-// The origin is an in-cluster cleartext-HTTP/2 server, deployed per test into
-// its own namespace, so nothing in this test depends on the internet.
+// The origin is the suite's shared in-cluster server, reached on the port it
+// serves cleartext HTTP/2 and nothing else on, so nothing in this test depends
+// on the internet.
 func TestActorEgressGRPC(t *testing.T) {
 	ctx := context.Background()
-	target := e2e.DeployServerPod(t, ctx, grpcEcho).Address()
+	target := e2e.DeploySharedServerPod(t, ctx, sharedOrigin()).AddressFor(t, originGRPCPortName)
 
 	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-grpc", egressFixture(), e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
@@ -154,5 +143,5 @@ func TestActorEgressGRPC(t *testing.T) {
 	// Everything above would also pass if the Actor's traffic had been
 	// masqueraded straight out instead of tunneled. This is what says it went
 	// through the gateway, on this Actor's own certificate.
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(grpcEcho.Port))
+	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(originGRPCPort))
 }

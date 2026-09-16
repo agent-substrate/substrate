@@ -67,6 +67,49 @@ type Namespace struct {
 // the cleanup registered below.
 func CreateNamespace(t *testing.T) *Namespace {
 	t.Helper()
+	ns := createNamespace(t)
+
+	// Release the namespace as soon as this test is done rather than at the end of
+	// the run. A suite's namespaces each carry a WorkerPool, and its worker pods
+	// hold node capacity for as long as the namespace exists; keeping every one of
+	// them alive until the binary exits starves the tests still to come, which on a
+	// single-node kind cluster shows up as worker pods that never get scheduled.
+	//
+	// A failed test keeps its namespace, for the same reason RetainNamespaces does:
+	// the worker pods are where the ateom (and micro-VM guest console) logs live,
+	// and they are gone the moment the namespace is.
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+		deleteNamespace(ns.Name)
+	})
+	return ns
+}
+
+// CreateSuiteNamespace is CreateNamespace for something a whole suite shares.
+// It registers no per-test cleanup, so the namespace outlives the test that
+// happened to create it.
+//
+// Nothing more is needed to clean it up: every namespace is registered for the
+// end-of-run pass when it is created, so this one is deleted by
+// CleanupNamespaces if the suite passed and kept by RetainNamespaces if it did
+// not — the same bargain a per-test namespace strikes, at the scale of the test
+// binary.
+//
+// Only for contents cheap enough to hold for the whole run. The per-test release
+// above is not a tidiness habit: it exists because a suite's namespaces each
+// carry a WorkerPool, and one of those held to the end of the run starves the
+// tests still to come.
+func CreateSuiteNamespace(t *testing.T) *Namespace {
+	t.Helper()
+	return createNamespace(t)
+}
+
+// createNamespace creates the namespace and registers it for the end-of-run
+// pass, leaving any earlier release to the caller.
+func createNamespace(t *testing.T) *Namespace {
+	t.Helper()
 
 	// Check that we didn't dupe a name in namespacesToCleanup
 	namespacesMu.Lock()
@@ -101,22 +144,6 @@ func CreateNamespace(t *testing.T) *Namespace {
 	if err != nil {
 		t.Fatalf("Failed to create namespace %s: %v", nsName, err)
 	}
-
-	// Release the namespace as soon as this test is done rather than at the end of
-	// the run. A suite's namespaces each carry a WorkerPool, and its worker pods
-	// hold node capacity for as long as the namespace exists; keeping every one of
-	// them alive until the binary exits starves the tests still to come, which on a
-	// single-node kind cluster shows up as worker pods that never get scheduled.
-	//
-	// A failed test keeps its namespace, for the same reason RetainNamespaces does:
-	// the worker pods are where the ateom (and micro-VM guest console) logs live,
-	// and they are gone the moment the namespace is.
-	t.Cleanup(func() {
-		if t.Failed() {
-			return
-		}
-		deleteNamespace(nsName)
-	})
 
 	// Wait for namespace to be active
 	const timeout = 60 * time.Second

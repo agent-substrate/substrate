@@ -26,6 +26,35 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// echoWebsocket upgrades the request and answers PING with PONG until the peer
+// goes away. A package-level handler because the `serve` subcommand mounts it
+// too: one origin serving several protocols answers websocket on its HTTP port,
+// since a websocket is an HTTP upgrade and needs no port of its own.
+func echoWebsocket(w http.ResponseWriter, r *http.Request) {
+	c, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Print("upgrade:", err)
+		return
+	}
+	defer c.Close()
+	for {
+		mt, message, err := c.ReadMessage()
+		if err != nil {
+			log.Println("read:", err)
+			break
+		}
+		log.Printf("recv: %s", message)
+
+		if string(message) == "PING" {
+			err = c.WriteMessage(mt, []byte("PONG"))
+			if err != nil {
+				log.Println("write:", err)
+				break
+			}
+		}
+	}
+}
+
 func newWebsocketCmd() *cobra.Command {
 	var listenAddress string
 	cmd := &cobra.Command{
@@ -40,30 +69,7 @@ func newWebsocketCmd() *cobra.Command {
 				w.Write([]byte("ok"))
 			})
 
-			mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-				c, err := upgrader.Upgrade(w, r, nil)
-				if err != nil {
-					log.Print("upgrade:", err)
-					return
-				}
-				defer c.Close()
-				for {
-					mt, message, err := c.ReadMessage()
-					if err != nil {
-						log.Println("read:", err)
-						break
-					}
-					log.Printf("recv: %s", message)
-
-					if string(message) == "PING" {
-						err = c.WriteMessage(mt, []byte("PONG"))
-						if err != nil {
-							log.Println("write:", err)
-							break
-						}
-					}
-				}
-			})
+			mux.HandleFunc("/ws", echoWebsocket)
 
 			server := &http.Server{
 				Addr:    listenAddress,
