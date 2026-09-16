@@ -20,6 +20,11 @@ workerSelector:
     workload: benchmark-ateom
 containers:
 - name: astropy
+  # Fill this in before deploying. The task image is built from the SWE-Perf
+  # repo, which supplies both the server entrypoint and the trajectory under
+  # test; the command below runs that entrypoint against that trace, so the
+  # image has to be the one built for this task. A shared public registry of 
+  # these images is planned; for now this is our working version. 
   image: us-central1-docker.pkg.dev/nishanth-gke-dev/agent-sandbox/swe-astropy-7336@sha256:944924a9a4571c0fac72ac5d1c9be71ff5e98ef2cdcd1034ceaa48d47f755ced
   command:
   - "python3"
