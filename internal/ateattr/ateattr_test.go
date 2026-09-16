@@ -647,6 +647,7 @@ func TestActorStateValue(t *testing.T) {
 		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, want: ActorStatePaused},
 		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, want: ActorStateCrashed},
 		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING, want: ActorStateDeleting},
+		{name: "reverting", state: ateapipb.ActorState_ACTOR_STATE_REVERTING, want: ActorStateReverting},
 		{name: "unspecified", state: ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED, want: ActorStateUnknown},
 		{name: "value outside the enum", state: ateapipb.ActorState(9999), want: ActorStateUnknown},
 	}
@@ -680,6 +681,7 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 		ActorStatePaused:     true,
 		ActorStateCrashed:    true,
 		ActorStateDeleting:   true,
+		ActorStateReverting:  true,
 		ActorStateDeleted:    true,
 		ActorStateUnknown:    true,
 	}

@@ -94,6 +94,7 @@ const (
 	ActorStatePaused     = "paused"
 	ActorStateCrashed    = "crashed"
 	ActorStateDeleting   = "deleting"
+	ActorStateReverting  = "reverting"
 	ActorStateDeleted    = "deleted"
 	ActorStateUnknown    = "unknown"
 )
@@ -118,6 +119,8 @@ func ActorStateValue(state ateapipb.ActorState) string {
 		return ActorStateCrashed
 	case ateapipb.ActorState_ACTOR_STATE_DELETING:
 		return ActorStateDeleting
+	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
+		return ActorStateReverting
 	default:
 		return ActorStateUnknown
 	}

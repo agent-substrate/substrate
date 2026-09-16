@@ -324,7 +324,7 @@ func TestValidateActorUpdate(t *testing.T) {
 	}, {
 		"just out of bounds actor.status.state",
 		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = 9 })),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = 10 })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "state"), nil, "").WithOrigin("maximum")},
 	}, {
 		"invalid actor.status.state",

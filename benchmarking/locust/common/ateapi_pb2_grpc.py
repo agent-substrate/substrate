@@ -79,6 +79,11 @@ class ControlStub:
                 request_serializer=ateapi__pb2.ResumeActorRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.ResumeActorResponse.FromString,
                 _registered_method=True)
+        self.RevertActor = channel.unary_unary(
+                '/ateapi.Control/RevertActor',
+                request_serializer=ateapi__pb2.RevertActorRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.RevertActorResponse.FromString,
+                _registered_method=True)
         self.DeleteActor = channel.unary_unary(
                 '/ateapi.Control/DeleteActor',
                 request_serializer=ateapi__pb2.DeleteActorRequest.SerializeToString,
@@ -264,6 +269,14 @@ class ControlServicer:
 
     def ResumeActor(self, request, context):
         """Resume an actor from its latest snapshot.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RevertActor(self, request, context):
+        """Revert an actor to SUSPENDED state.
+        Only crashed, running or paused actors can be reverted.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -511,6 +524,11 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.ResumeActor,
                     request_deserializer=ateapi__pb2.ResumeActorRequest.FromString,
                     response_serializer=ateapi__pb2.ResumeActorResponse.SerializeToString,
+            ),
+            'RevertActor': grpc.unary_unary_rpc_method_handler(
+                    servicer.RevertActor,
+                    request_deserializer=ateapi__pb2.RevertActorRequest.FromString,
+                    response_serializer=ateapi__pb2.RevertActorResponse.SerializeToString,
             ),
             'DeleteActor': grpc.unary_unary_rpc_method_handler(
                     servicer.DeleteActor,
@@ -816,6 +834,33 @@ class Control:
             '/ateapi.Control/ResumeActor',
             ateapi__pb2.ResumeActorRequest.SerializeToString,
             ateapi__pb2.ResumeActorResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RevertActor(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/RevertActor',
+            ateapi__pb2.RevertActorRequest.SerializeToString,
+            ateapi__pb2.RevertActorResponse.FromString,
             options,
             channel_credentials,
             insecure,
