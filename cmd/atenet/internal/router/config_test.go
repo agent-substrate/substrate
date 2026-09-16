@@ -15,9 +15,13 @@
 package router
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	"sigs.k8s.io/yaml"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
@@ -189,6 +193,96 @@ func TestRouterConfigExtProcMaxRequests(t *testing.T) {
 	}
 }
 
+// The whole shutdown sequence has to fit inside the router pod's
+// terminationGracePeriodSeconds or the kubelet SIGKILLs mid-drain. That is why
+// the derivation uses drainRouteBudget and not the route timeout: with a route
+// ceiling sized for a full model generation, deriving from it would put the
+// drain alone past five minutes. This pins the independence, which the
+// arithmetic cases below do not.
+//
+// The two numbers it checks against are read out of the installed manifest
+// rather than copied here, so retuning either one is caught instead of drifting
+// away from the Go side in silence.
+func TestRouterConfigDrainTimeoutIndependentOfRouteTimeout(t *testing.T) {
+	drainDelay, graceBudget := routerShutdownBudget(t)
+
+	cfg := routerConfig{DrainTimeout: 0, RouteTimeout: defaultRouteTimeout}
+	parkCfg := ingress.ParkedRequestConfig{Budget: ingress.DefaultParkedRequestBudget, Max: 1024}.Normalized()
+
+	got := cfg.drainTimeout(parkCfg)
+	if got >= defaultRouteTimeout {
+		t.Errorf("derived drain timeout %v tracks the route timeout %v; it must derive from drainRouteBudget", got, defaultRouteTimeout)
+	}
+
+	// drain delay, then the Envoy drain window (see router.go), then the
+	// ext_proc drain.
+	sequence := drainDelay + (drainRouteBudget + drainTimeoutMargin) + got
+	if sequence > graceBudget {
+		t.Errorf("shutdown sequence sums to %v, past terminationGracePeriodSeconds %v in %s", sequence, graceBudget, routerManifestPath)
+	}
+}
+
+// routerManifestPath is the atenet-router Deployment ate-setup installs.
+const routerManifestPath = "../../../../manifests/ate-install/atenet-router.yaml"
+
+// routerShutdownBudget returns the two shutdown numbers that live in the
+// manifest rather than in Go: --drain-delay on the router container, which is
+// how long it keeps serving after SIGTERM, and the pod's
+// terminationGracePeriodSeconds, which is the whole budget.
+//
+// --drain-delay is read back through the router command's own flag set, so a
+// renamed or retyped flag fails here rather than being parsed by a private
+// copy of the syntax.
+func routerShutdownBudget(t *testing.T) (drainDelay, grace time.Duration) {
+	t.Helper()
+	raw, err := os.ReadFile(routerManifestPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", routerManifestPath, err)
+	}
+	for _, doc := range strings.Split(string(raw), "\n---\n") {
+		var head struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &head); err != nil {
+			t.Fatalf("parsing a document of %s: %v", routerManifestPath, err)
+		}
+		if head.Kind != "Deployment" || head.Metadata.Name != "atenet-router" {
+			continue
+		}
+		var deployment appsv1.Deployment
+		if err := yaml.Unmarshal([]byte(doc), &deployment); err != nil {
+			t.Fatalf("decoding the atenet-router Deployment from %s: %v", routerManifestPath, err)
+		}
+		pod := deployment.Spec.Template.Spec
+		if pod.TerminationGracePeriodSeconds == nil {
+			t.Fatalf("%s sets no terminationGracePeriodSeconds on the atenet-router pod", routerManifestPath)
+		}
+		for _, c := range pod.Containers {
+			if c.Name != "atenet-router" {
+				continue
+			}
+			cmd := NewRouterCmd()
+			if len(c.Args) == 0 || c.Args[0] != cmd.Name() {
+				t.Fatalf("the atenet-router container's args are %v; they should invoke the %q subcommand", c.Args, cmd.Name())
+			}
+			if err := cmd.ParseFlags(c.Args[1:]); err != nil {
+				t.Fatalf("the atenet-router container's flags are not ones the binary accepts: %v", err)
+			}
+			d, err := cmd.Flags().GetDuration("drain-delay")
+			if err != nil {
+				t.Fatalf("reading --drain-delay from the manifest args: %v", err)
+			}
+			return d, time.Duration(*pod.TerminationGracePeriodSeconds) * time.Second
+		}
+		t.Fatalf("the atenet-router Deployment in %s has no container named atenet-router", routerManifestPath)
+	}
+	t.Fatalf("%s has no Deployment named atenet-router", routerManifestPath)
+	return 0, 0
+}
+
 func TestRouterConfigDrainTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -197,16 +291,16 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 		want    time.Duration
 	}{
 		{
-			name:    "auto derives budget + route timeout + margin",
+			name:    "auto derives budget + drain route budget + margin",
 			cfg:     routerConfig{DrainTimeout: 0},
 			parkCfg: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.Normalized(),
-			want:    5*time.Second + defaultRouteTimeout + drainTimeoutMargin,
+			want:    5*time.Second + drainRouteBudget + drainTimeoutMargin,
 		},
 		{
 			name:    "auto scales with a larger budget",
 			cfg:     routerConfig{DrainTimeout: 0},
 			parkCfg: ingress.ParkedRequestConfig{Budget: 30 * time.Second, Max: 1024}.Normalized(),
-			want:    30*time.Second + defaultRouteTimeout + drainTimeoutMargin,
+			want:    30*time.Second + drainRouteBudget + drainTimeoutMargin,
 		},
 		{
 			name: "parking disabled still derives from the normalized default budget",
@@ -215,7 +309,7 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 			// derived drain still covers a later re-enable without a restart
 			// surprise.
 			parkCfg: ingress.ParkedRequestConfig{Max: 0}.Normalized(),
-			want:    ingress.DefaultParkedRequestBudget + defaultRouteTimeout + drainTimeoutMargin,
+			want:    ingress.DefaultParkedRequestBudget + drainRouteBudget + drainTimeoutMargin,
 		},
 		{
 			name:    "explicit value wins over derivation",

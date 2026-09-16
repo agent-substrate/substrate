@@ -94,7 +94,7 @@ log_step "preflight"
 # Ready means the template's golden snapshot exists; protojson omits empty
 # fields, so the key is only present once it is set.
 run_kubectl_ate get actor-template "${DEMO_POOL}" -a "${ATESPACE}" -o json 2>/dev/null \
-  | grep -q '"goldenSnapshot"' \
+  | grep -q '"goldenTag"' \
   || fail "actor template ${ATESPACE}/${DEMO_POOL} has no golden snapshot; install the counter demo first"
 # Column 4 is STATUS; the header row's "ASSIGNED ACTOR" column name must not
 # trip the check.

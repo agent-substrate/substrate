@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -325,7 +326,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		// Server-owned status a client must not be able to set.
 		tmpl.Status = &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-				GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/sneaky"},
+				GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 			},
 		}
 	})
@@ -346,6 +347,125 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	}
 	if got := created.GetMetadata().GetUid(); got == "" || got == in.GetMetadata().GetUid() {
 		t.Errorf("created uid = %q, want a fresh server-assigned uid", got)
+	}
+}
+
+func TestDeleteActorTemplate(t *testing.T) {
+	tests := []struct {
+		name         string
+		actorDeleted bool
+		tagDeleted   bool
+		pendingTag   bool
+		// failPrefix makes object storage fail cleanup for this resource kind.
+		failPrefix            string
+		wantActorAfterFailure bool
+	}{
+		{name: "golden actor and tag"},
+		{name: "golden actor already deleted", actorDeleted: true},
+		{name: "golden tag absent", tagDeleted: true},
+		{name: "no golden resources", actorDeleted: true, tagDeleted: true},
+		{name: "incomplete golden tag", pendingTag: true},
+		{name: "actor cleanup failure", failPrefix: "/actors/", wantActorAfterFailure: true},
+		{name: "tag cleanup failure", failPrefix: "/tags/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
+			templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
+			goldenRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
+				ActorTemplate: templateRef.ToObjectRef(),
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			workflow, objects := newFinalizeWorkflow(persistence)
+			actorURI := mustActorSnapshotURI(t, tmpl, actor, "snapshot")
+			objects.PutSnapshot(t, actorURI, "manifest.json")
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: actorURI.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+				s.CurrentActorTemplateUid = tmpl.GetMetadata().GetUid()
+			})
+			var tag *ateapipb.Tag
+			if tt.pendingTag {
+				tag = storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, goldenRef.Name, actor))
+			} else {
+				var err error
+				tag, err = workflow.TagActorSnapshot(ctx, tagToCreate(goldenRef, goldenRef.Name))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			tagRef := resources.TagRefFromTag(tag)
+			tagURI := mustReservedTagSnapshotURI(t, tag)
+			objects.PutSnapshot(t, tagURI, "manifest.json")
+			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStore: objects}
+			// The handler must request AnyState to clean up an active golden actor.
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+			})
+			if tt.actorDeleted {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.tagDeleted {
+				if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.failPrefix != "" {
+				objects.OnDelete = func(_, key string) error {
+					if strings.Contains(key, tt.failPrefix) {
+						return errObjectStore
+					}
+					return nil
+				}
+			}
+			req := &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}
+			deleted, err := svc.DeleteActorTemplate(ctx, req)
+			if tt.failPrefix != "" {
+				if !errors.Is(err, errObjectStore) {
+					t.Fatalf("DeleteActorTemplate = %v, want object storage error", err)
+				}
+				if _, err := persistence.GetActorTemplate(ctx, templateRef); err != nil {
+					t.Fatalf("template lost after cleanup failure: %v", err)
+				}
+				if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+					t.Fatalf("tag lost after cleanup failure: %v", err)
+				}
+				_, actorErr := persistence.GetActor(ctx, goldenRef)
+				if tt.wantActorAfterFailure && actorErr != nil || !tt.wantActorAfterFailure && !errors.Is(actorErr, store.ErrNotFound) {
+					t.Fatalf("GetActor after failure = %v, want present %v", actorErr, tt.wantActorAfterFailure)
+				}
+				objects.OnDelete = nil
+				deleted, err = svc.DeleteActorTemplate(ctx, req)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tmpl, deleted, protocmp.Transform()); diff != "" {
+				t.Fatalf("deleted template mismatch (-want +got):\n%s", diff)
+			}
+			if _, err := persistence.GetActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetActorTemplate after delete = %v, want NotFound", err)
+			}
+			if _, err := persistence.GetActor(ctx, goldenRef); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetActor after delete = %v, want NotFound", err)
+			}
+			if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetTag after delete = %v, want NotFound", err)
+			}
+			for _, uri := range []resources.SnapshotURI{actorURI, tagURI} {
+				if got := objects.Snapshot(t, uri); len(got) != 0 {
+					t.Errorf("snapshot %s still holds %v", uri, got)
+				}
+			}
+			if _, err := svc.DeleteActorTemplate(ctx, req); status.Code(err) != codes.NotFound {
+				t.Fatalf("delete missing template = %v, want NotFound", err)
+			}
+		})
 	}
 }
 
@@ -1275,7 +1395,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	// A server-owned status write passes validation and bumps the version.
 	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
 		tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"},
+			GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 		}}
 		return nil
 	})
