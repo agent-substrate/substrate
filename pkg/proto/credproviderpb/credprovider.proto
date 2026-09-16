@@ -28,9 +28,7 @@ service CredentialProvider {
   rpc FetchSecret(FetchSecretRequest) returns (FetchSecretResponse) {}
 }
 
-// FetchSecretRequest asks a provider to resolve one credential URI. The URI is
-// the sole selector. Whatever referred to the secret — an EgressPolicy injection
-// rule, image-pull configuration — encodes any needed specificity in the provider tail.
+// FetchSecretRequest asks a provider to resolve one credential URI.
 message FetchSecretRequest {
   // The uri for the substrate secret to fetch.
   // Example: ate-secret://<provider name>/<provider tail>

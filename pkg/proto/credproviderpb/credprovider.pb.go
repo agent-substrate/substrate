@@ -35,13 +35,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// FetchSecretRequest asks a provider to resolve one credential URI. The URI is
-// the sole selector. Whatever referred to the secret — an EgressPolicy injection
-// rule, image-pull configuration — encodes any needed specificity in the provider tail.
+// FetchSecretRequest asks a provider to resolve one credential URI.
 type FetchSecretRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// A ate-secret:// URI:
-	//   ate-secret://<provider name>/<provider tail>
+	// The uri for the substrate secret to fetch.
+	// Example: ate-secret://<provider name>/<provider tail>
 	// The provider tail is provider-interpreted.
 	Uri string `protobuf:"bytes,1,opt,name=uri,proto3" json:"uri,omitempty"`
 	// The SPIFFE ID of the actor on whose behalf the secret is fetched, as
