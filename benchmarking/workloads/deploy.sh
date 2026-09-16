@@ -18,6 +18,11 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+if ! command -v jq &>/dev/null; then
+  echo "jq is required for benchmark workload deployment" >&2
+  exit 1
+fi
+
 # Source the environment variables if configured
 if [[ -f .ate-dev-env.sh ]]; then
   source .ate-dev-env.sh
@@ -77,6 +82,23 @@ usage() {
   echo "  --node-selector KEY=VALUE  Require worker pods on nodes with this label (repeatable)"
   echo "  --toleration KEY=VALUE:EFFECT  Tolerate a matching worker-node taint (repeatable)"
   echo "  -h, --help                  Show this help message"
+}
+
+add_node_selector() {
+  local selector="$1"
+  local key value
+  IFS='=' read -r key value <<<"${selector}"
+  WORKER_NODE_SELECTOR="$(jq -c --arg key "${key}" --arg value "${value}" \
+    '. + {($key): $value}' <<<"${WORKER_NODE_SELECTOR}")"
+}
+
+add_toleration() {
+  local toleration="$1"
+  local key value effect
+  IFS='=:' read -r key value effect <<<"${toleration}"
+  WORKER_TOLERATIONS="$(jq -c --arg key "${key}" --arg value "${value}" --arg effect "${effect}" \
+    '. + [{key: $key, operator: "Equal", value: $value, effect: $effect}]' \
+    <<<"${WORKER_TOLERATIONS}")"
 }
 
 # Read the endpoint from the ate-otel-config ConfigMap, which every control
@@ -176,10 +198,6 @@ wait_actortemplate_ready() {
 # snapshot exists (there is no kubectl wait for substrate resources), failing
 # fast when the template reconciler reports an error.
 wait_templates_ready() {
-  if ! command -v jq &>/dev/null; then
-    echo "jq is required to wait for the benchmark actor templates" >&2
-    return 1
-  fi
   local template
   for template in "${TEMPLATES[@]}"; do
     echo "Waiting for the benchmark-workloads/${template} golden snapshot..."
@@ -285,67 +303,17 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --node-selector)
       shift
-      selector="$1"
-      if [[ ! "${selector}" =~ ^[^=[:space:]]+=[^=[:space:]]+$ ]]; then
-        echo "Error: --node-selector must be KEY=VALUE, got '${selector}'" >&2
-        exit 1
-      fi
-      selector_key="${selector%%=*}"
-      selector_value="${selector#*=}"
-      if [[ "${WORKER_NODE_SELECTOR}" == "{}" ]]; then
-        WORKER_NODE_SELECTOR="{\"${selector_key}\":\"${selector_value}\"}"
-      else
-        WORKER_NODE_SELECTOR="${WORKER_NODE_SELECTOR%\}} ,\"${selector_key}\":\"${selector_value}\"}"
-      fi
+      add_node_selector "$1"
       ;;
     --node-selector=*)
-      selector="${1#*=}"
-      if [[ ! "${selector}" =~ ^[^=[:space:]]+=[^=[:space:]]+$ ]]; then
-        echo "Error: --node-selector must be KEY=VALUE, got '${selector}'" >&2
-        exit 1
-      fi
-      selector_key="${selector%%=*}"
-      selector_value="${selector#*=}"
-      if [[ "${WORKER_NODE_SELECTOR}" == "{}" ]]; then
-        WORKER_NODE_SELECTOR="{\"${selector_key}\":\"${selector_value}\"}"
-      else
-        WORKER_NODE_SELECTOR="${WORKER_NODE_SELECTOR%\}} ,\"${selector_key}\":\"${selector_value}\"}"
-      fi
+      add_node_selector "${1#*=}"
       ;;
     --toleration)
       shift
-      toleration="$1"
-      if [[ ! "${toleration}" =~ ^[^=[:space:]]+=[^:[:space:]]+:(NoSchedule|PreferNoSchedule|NoExecute)$ ]]; then
-        echo "Error: --toleration must be KEY=VALUE:EFFECT, got '${toleration}'" >&2
-        exit 1
-      fi
-      toleration_key="${toleration%%=*}"
-      toleration_value_effect="${toleration#*=}"
-      toleration_value="${toleration_value_effect%%:*}"
-      toleration_effect="${toleration_value_effect#*:}"
-      entry="{\"key\":\"${toleration_key}\",\"operator\":\"Equal\",\"value\":\"${toleration_value}\",\"effect\":\"${toleration_effect}\"}"
-      if [[ "${WORKER_TOLERATIONS}" == "[]" ]]; then
-        WORKER_TOLERATIONS="[${entry}]"
-      else
-        WORKER_TOLERATIONS="${WORKER_TOLERATIONS%]} ,${entry}]"
-      fi
+      add_toleration "$1"
       ;;
     --toleration=*)
-      toleration="${1#*=}"
-      if [[ ! "${toleration}" =~ ^[^=[:space:]]+=[^:[:space:]]+:(NoSchedule|PreferNoSchedule|NoExecute)$ ]]; then
-        echo "Error: --toleration must be KEY=VALUE:EFFECT, got '${toleration}'" >&2
-        exit 1
-      fi
-      toleration_key="${toleration%%=*}"
-      toleration_value_effect="${toleration#*=}"
-      toleration_value="${toleration_value_effect%%:*}"
-      toleration_effect="${toleration_value_effect#*:}"
-      entry="{\"key\":\"${toleration_key}\",\"operator\":\"Equal\",\"value\":\"${toleration_value}\",\"effect\":\"${toleration_effect}\"}"
-      if [[ "${WORKER_TOLERATIONS}" == "[]" ]]; then
-        WORKER_TOLERATIONS="[${entry}]"
-      else
-        WORKER_TOLERATIONS="${WORKER_TOLERATIONS%]} ,${entry}]"
-      fi
+      add_toleration "${1#*=}"
       ;;
     -h|--help)
       usage
