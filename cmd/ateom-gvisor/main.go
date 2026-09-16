@@ -174,6 +174,12 @@ func do(ctx context.Context) error {
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
+	// Clean up the ateom directory during graceful shutdown (#1677).
+	defer func() {
+		if err := os.RemoveAll(ateomDir); err != nil {
+			slog.ErrorContext(ctx, "Failed to remove the ateom directory on shutdown", slog.Any("err", err))
+		}
+	}()
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
