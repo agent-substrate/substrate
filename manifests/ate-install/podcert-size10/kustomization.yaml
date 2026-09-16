@@ -15,7 +15,7 @@
 # size10 cluster overlay for podcertificate-controller: raises the client-go
 # rate limits above the built-in 5 QPS / 10 burst so signing keeps up with
 # the request volume the size10 postgres profile enables. Selected by
-# hack/install-ate.sh when --cluster-size=size10.
+# hack/install-ate.sh and cmd/ate-setup when --cluster-size=size10.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

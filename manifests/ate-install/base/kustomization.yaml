@@ -19,13 +19,14 @@ kind: Kustomization
 # via envFrom. The kind overlay lists its own copy of the same ConfigMap name
 # instead of building on this directory, so the two never collide.
 #
-# pod-certificate-controller.yaml is deliberately absent. hack/install-ate.sh
-# applies it on its own before this bundle, through the podcert-size10 overlay
-# on large clusters, and then sets WORKERS_PER_SIGNER on the Deployment.
-# Listing the base file here would re-apply it after those steps and revert
-# both the overlay's flags and the env override. The same goes for the
-# sandboxconfig and atenet-egress files: install-ate.sh applies the variant it
-# selects, so they are not listed here either.
+# pod-certificate-controller.yaml is deliberately absent. The installers
+# (hack/install-ate.sh and cmd/ate-setup) apply it on their own before this
+# bundle, through the podcert-size10 overlay on large clusters, and then set
+# WORKERS_PER_SIGNER on the Deployment. Listing the base file here would
+# re-apply it after those steps and revert both the overlay's flags and the
+# env override. The same goes for the sandboxconfig and atenet-egress files:
+# the installers apply the variant they select, so they are not listed here
+# either.
 resources:
   - ../ate-api-server.yaml
   - ../ate-controller.yaml
