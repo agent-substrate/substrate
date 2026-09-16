@@ -287,3 +287,50 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	}
 	return tag, nil
 }
+
+func (p *Persistence) ListTagBorrowers(ctx context.Context, tagUID string, opts store.ListOptions) (store.ListResponse[string], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[string]{}, err
+	}
+	pageSize := opts.PageSize
+	// The token is scoped to the Tag, so one cannot be replayed against another
+	// Tag's borrowers.
+	token, err := decodePageToken(opts.PageToken, kindTagBorrow, tagUID, 1)
+	if err != nil {
+		return store.ListResponse[string]{}, err
+	}
+	var last *string
+	if len(token.Last) > 0 {
+		last = &token.Last[0]
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT actor_uid FROM tag_borrows
+		WHERE tag_uid = $1 AND ($2::text IS NULL OR actor_uid > $2)
+		ORDER BY actor_uid
+		LIMIT $3`, tagUID, last, int64(pageSize)+1)
+	if err != nil {
+		return store.ListResponse[string]{}, fmt.Errorf("listing the borrowers of tag %s: %w", tagUID, err)
+	}
+	defer rows.Close()
+
+	var actorUIDs []string
+	for rows.Next() {
+		var actorUID string
+		if err := rows.Scan(&actorUID); err != nil {
+			return store.ListResponse[string]{}, fmt.Errorf("scanning tag borrow row: %w", err)
+		}
+		actorUIDs = append(actorUIDs, actorUID)
+	}
+	if err := rows.Err(); err != nil {
+		return store.ListResponse[string]{}, fmt.Errorf("listing the borrowers of tag %s: %w", tagUID, err)
+	}
+
+	var nextToken string
+	if len(actorUIDs) > int(pageSize) {
+		actorUIDs = actorUIDs[:pageSize]
+		nextToken = encodePageToken(kindTagBorrow, tagUID, []string{actorUIDs[pageSize-1]})
+	}
+	return store.ListResponse[string]{Items: actorUIDs, NextPageToken: nextToken}, nil
+}

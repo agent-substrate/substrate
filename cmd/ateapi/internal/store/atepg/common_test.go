@@ -26,7 +26,7 @@ import (
 // state, so the statement lives here rather than on Persistence.
 func clearAll(t *testing.T, p *Persistence) {
 	t.Helper()
-	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, tags, workers, worker_assignments, leases, worker_outbox, worker_outbox_trim`); err != nil {
+	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, tags, tag_borrows, workers, worker_assignments, leases, worker_outbox, worker_outbox_trim`); err != nil {
 		t.Fatalf("truncating tables: %v", err)
 	}
 }

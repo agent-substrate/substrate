@@ -42,7 +42,13 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor create: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
@@ -57,7 +63,45 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		}
 		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
 	}
+	if err := updateTagBorrow(ctx, tx, dbActor); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor create: %w", err)
+	}
 	return dbActor, nil
+}
+
+// updateTagBorrow upserts or clears the actor's borrow of a Tag's external
+// snapshot.
+func updateTagBorrow(ctx context.Context, tx pgx.Tx, actor *ateapipb.Actor) error {
+	actorUID := actor.GetMetadata().GetUid()
+
+	var tagUID string
+	if snapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); snapshotURI != "" {
+		uri, err := resources.ParseSnapshotURI(snapshotURI)
+		if err != nil {
+			return fmt.Errorf("reading the external snapshot of actor %s: %w", actorUID, err)
+		}
+		if owner, ok := uri.Owner().TagUID(); ok {
+			tagUID = owner
+		}
+	}
+
+	if tagUID == "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM tag_borrows WHERE actor_uid = $1`, actorUID); err != nil {
+			return fmt.Errorf("clearing the tag borrow of actor %s: %w", actorUID, err)
+		}
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tag_borrows (actor_uid, tag_uid)
+		VALUES ($1, $2)
+		ON CONFLICT (actor_uid) DO UPDATE SET tag_uid = $2`,
+		actorUID, tagUID); err != nil {
+		return fmt.Errorf("recording the borrow of tag %s by actor %s: %w", tagUID, actorUID, err)
+	}
+	return nil
 }
 
 func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
@@ -115,7 +159,13 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	commandTag, err := tx.Exec(ctx, `
 			UPDATE actors
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
@@ -129,13 +179,25 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
+	if err := updateTagBorrow(ctx, tx, dbActor); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor update: %w", err)
+	}
 	return dbActor, nil
 }
 
 func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor delete: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		DELETE FROM actors
 		WHERE atespace = $1 AND name = $2
 		  AND ($3::text = '' OR uid = $3::text)
@@ -144,7 +206,7 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	if errors.Is(err, pgx.ErrNoRows) {
 		var uid string
 		var version int64
-		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
+		err := tx.QueryRow(ctx, `SELECT uid, version FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
 		return nil, mapDeleteError(err, uid, version, precondition)
 	}
 	if err != nil {
@@ -153,6 +215,12 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	out := &ateapipb.Actor{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted actor: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tag_borrows WHERE actor_uid = $1`, out.GetMetadata().GetUid()); err != nil {
+		return nil, fmt.Errorf("clearing the tag borrow of actor %s/%s: %w", atespace, name, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor delete: %w", err)
 	}
 	return out, nil
 }

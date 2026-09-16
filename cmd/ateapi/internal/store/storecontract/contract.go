@@ -210,6 +210,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runAtespaceContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runTagContractTests(t, setup)
+	runTagBorrowContractTests(t, setup)
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
@@ -3019,6 +3020,304 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-b", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace(team-b, non-empty) = %v, want ErrFailedPrecondition", err)
+		}
+	})
+}
+
+func runTagBorrowContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	const tagUID = "9a3c7e51-8b04-4f6d-a2e9-71c5d8f0b34a"
+	const otherTagUID = "2f8d14b6-5c93-4a70-be18-6d02a9e7c5f3"
+
+	borrowingActor := func(name, borrowedTagUID string) *ateapipb.Actor {
+		return &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			Status: &ateapipb.ActorStatus{
+				State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: testTagSnapshotURI("gs://bucket", testAtespace, borrowedTagUID)},
+			},
+		}
+	}
+
+	t.Run("TagBorrow_CreateActor", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			snapshot   *ateapipb.ExternalSnapshot
+			wantBorrow bool
+		}{
+			{
+				name:       "a snapshot under the tag's prefix is a borrow",
+				snapshot:   &ateapipb.ExternalSnapshot{SnapshotUri: testTagSnapshotURI("gs://bucket", testAtespace, tagUID)},
+				wantBorrow: true,
+			},
+			{
+				name:       "a snapshot under the actor's own prefix is not",
+				snapshot:   &ateapipb.ExternalSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
+				wantBorrow: false,
+			},
+			{
+				name:       "another tag's snapshot is not",
+				snapshot:   &ateapipb.ExternalSnapshot{SnapshotUri: testTagSnapshotURI("gs://bucket", testAtespace, otherTagUID)},
+				wantBorrow: false,
+			},
+			{
+				name:       "no snapshot at all is not",
+				snapshot:   nil,
+				wantBorrow: false,
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				s := setup(t)
+				mustCreateAtespace(t, s, testAtespace)
+
+				created, err := s.CreateActor(context.Background(), &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "session-1"},
+					Status: &ateapipb.ActorStatus{
+						State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+						ExternalSnapshot: test.snapshot,
+					},
+				})
+				if err != nil {
+					t.Fatalf("CreateActor failed: %v", err)
+				}
+				var want []string
+				if test.wantBorrow {
+					want = []string{created.GetMetadata().GetUid()}
+				}
+				page, err := s.ListTagBorrowers(context.Background(), tagUID, store.ListOptions{PageSize: 1000})
+				if err != nil {
+					t.Fatalf("ListTagBorrowers failed: %v", err)
+				}
+				if diff := cmp.Diff(want, page.Items); diff != "" {
+					t.Errorf("borrowers of the tag (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+
+	t.Run("TagBorrow_UpdateActor", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			mutate     func(*ateapipb.Actor)
+			wantBorrow bool
+		}{
+			{
+				name: "taking over the snapshot ends the borrow",
+				mutate: func(a *ateapipb.Actor) {
+					a.Status.ExternalSnapshot.SnapshotUri = testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")
+				},
+				wantBorrow: false,
+			},
+			{
+				name:       "dropping the snapshot ends the borrow",
+				mutate:     func(a *ateapipb.Actor) { a.Status.ExternalSnapshot = nil },
+				wantBorrow: false,
+			},
+			{
+				name:       "a suspend that writes no snapshot leaves the borrow standing",
+				mutate:     func(a *ateapipb.Actor) { a.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED },
+				wantBorrow: true,
+			},
+			{
+				name: "moving to another tag moves the borrow",
+				mutate: func(a *ateapipb.Actor) {
+					a.Status.ExternalSnapshot.SnapshotUri = testTagSnapshotURI("gs://bucket", testAtespace, otherTagUID)
+				},
+				wantBorrow: false,
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				s := setup(t)
+				ctx := context.Background()
+				mustCreateAtespace(t, s, testAtespace)
+
+				created, err := s.CreateActor(ctx, borrowingActor("session-1", tagUID))
+				if err != nil {
+					t.Fatalf("CreateActor failed: %v", err)
+				}
+				actorRef := resources.ActorRefFromActor(created)
+				if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
+					test.mutate(toUpdate)
+					return nil
+				}); err != nil {
+					t.Fatalf("UpdateActor failed: %v", err)
+				}
+				var want []string
+				if test.wantBorrow {
+					want = []string{created.GetMetadata().GetUid()}
+				}
+				page, err := s.ListTagBorrowers(ctx, tagUID, store.ListOptions{PageSize: 1000})
+				if err != nil {
+					t.Fatalf("ListTagBorrowers failed: %v", err)
+				}
+				if diff := cmp.Diff(want, page.Items); diff != "" {
+					t.Errorf("borrowers of the tag (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+
+	// A snapshot URI the store cannot read tells it nothing about whether a Tag
+	// lent the snapshot, so the write is refused rather than recorded as "no
+	// borrow". Storing the actor and dropping the borrow would leave DeleteTag
+	// free to destroy the snapshot the actor is still running on.
+	t.Run("TagBorrow_UnreadableSnapshotURI", func(t *testing.T) {
+		const unreadableURI = "not-a-valid-snapshot-uri"
+
+		t.Run("CreateActor is refused", func(t *testing.T) {
+			s := setup(t)
+			ctx := context.Background()
+			mustCreateAtespace(t, s, testAtespace)
+
+			actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+			if _, err := s.CreateActor(ctx, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				Status: &ateapipb.ActorStatus{
+					State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+					ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: unreadableURI},
+				},
+			}); err == nil {
+				t.Fatalf("CreateActor with snapshot URI %q = nil error, want the write refused", unreadableURI)
+			}
+			if _, err := s.GetActor(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetActor after the refused create = %v, want ErrNotFound, the whole write to have rolled back", err)
+			}
+		})
+
+		t.Run("UpdateActor is refused and the borrow stands", func(t *testing.T) {
+			s := setup(t)
+			ctx := context.Background()
+			mustCreateAtespace(t, s, testAtespace)
+
+			created, err := s.CreateActor(ctx, borrowingActor("session-1", tagUID))
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			actorRef := resources.ActorRefFromActor(created)
+			if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
+				toUpdate.Status.ExternalSnapshot.SnapshotUri = unreadableURI
+				return nil
+			}); err == nil {
+				t.Fatalf("UpdateActor to snapshot URI %q = nil error, want the write refused", unreadableURI)
+			}
+			page, err := s.ListTagBorrowers(ctx, tagUID, store.ListOptions{PageSize: 1000})
+			if err != nil {
+				t.Fatalf("ListTagBorrowers failed: %v", err)
+			}
+			want := []string{created.GetMetadata().GetUid()}
+			if diff := cmp.Diff(want, page.Items); diff != "" {
+				t.Errorf("borrowers after the refused update (-want +got), want the borrow to stand:\n%s", diff)
+			}
+		})
+	})
+
+	t.Run("TagBorrow_DeleteActor", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		created, err := s.CreateActor(ctx, borrowingActor("session-1", tagUID))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		actorRef := resources.ActorRefFromActor(created)
+		deleting, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("marking the actor deleting failed: %v", err)
+		}
+		page, err := s.ListTagBorrowers(ctx, tagUID, store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListTagBorrowers failed: %v", err)
+		}
+		if diff := cmp.Diff([]string{created.GetMetadata().GetUid()}, page.Items); diff != "" {
+			t.Fatalf("borrowers while the actor is deleting (-want +got), want the borrow to stand until the row is gone:\n%s", diff)
+		}
+		if _, err := s.DeleteActor(ctx, resources.ActorRefFromActor(deleting), store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
+		}
+		page, err = s.ListTagBorrowers(ctx, tagUID, store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListTagBorrowers failed: %v", err)
+		}
+		if page.Items != nil {
+			t.Errorf("borrowers after the actor was deleted = %v, want none", page.Items)
+		}
+	})
+
+	t.Run("TagBorrow_ListPagination", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		var created []*ateapipb.Actor
+		var wantBorrowers []string
+		for _, name := range []string{"session-1", "session-2", "session-3"} {
+			actor, err := s.CreateActor(ctx, borrowingActor(name, tagUID))
+			if err != nil {
+				t.Fatalf("CreateActor(%s) failed: %v", name, err)
+			}
+			created = append(created, actor)
+			wantBorrowers = append(wantBorrowers, actor.GetMetadata().GetUid())
+		}
+
+		// Walking one borrower at a time must yield every borrower exactly once,
+		// in UID order, and stop on its own.
+		var got []string
+		var pageToken string
+		for range len(created) {
+			page, err := s.ListTagBorrowers(ctx, tagUID, store.ListOptions{PageSize: 1, PageToken: pageToken})
+			if err != nil {
+				t.Fatalf("ListTagBorrowers failed: %v", err)
+			}
+			if len(page.Items) != 1 {
+				t.Fatalf("ListTagBorrowers(page size 1) returned %d borrowers, want 1", len(page.Items))
+			}
+			got = append(got, page.Items...)
+			pageToken = page.NextPageToken
+		}
+
+		slices.Sort(wantBorrowers)
+		if diff := cmp.Diff(wantBorrowers, got); diff != "" {
+			t.Errorf("borrowers walked one page at a time (-want +got):\n%s", diff)
+		}
+		if pageToken != "" {
+			t.Errorf("the page holding the last borrower carries NextPageToken %q, want the walk to end there", pageToken)
+		}
+	})
+
+	t.Run("TagBorrow_ListRejectsForeignPageToken", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		for _, name := range []string{"session-1", "session-2"} {
+			if _, err := s.CreateActor(ctx, borrowingActor(name, tagUID)); err != nil {
+				t.Fatalf("CreateActor(%s) failed: %v", name, err)
+			}
+		}
+		page, err := s.ListTagBorrowers(ctx, tagUID, store.ListOptions{PageSize: 1})
+		if err != nil {
+			t.Fatalf("ListTagBorrowers failed: %v", err)
+		}
+		if _, err := s.ListTagBorrowers(ctx, otherTagUID, store.ListOptions{PageSize: 1, PageToken: page.NextPageToken}); !errors.Is(err, store.ErrInvalidPageToken) {
+			t.Errorf("ListTagBorrowers with another tag's page token = %v, want ErrInvalidPageToken", err)
+		}
+	})
+
+	t.Run("TagBorrow_UnknownTag", func(t *testing.T) {
+		s := setup(t)
+		page, err := s.ListTagBorrowers(context.Background(), tagUID, store.ListOptions{PageSize: 10})
+		if err != nil {
+			t.Fatalf("ListTagBorrowers failed: %v", err)
+		}
+		if len(page.Items) != 0 || page.HasNextPage() {
+			t.Errorf("ListTagBorrowers on a tag nobody borrows = %v (next token %q), want empty and no next page", page.Items, page.NextPageToken)
 		}
 	})
 }

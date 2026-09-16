@@ -237,6 +237,41 @@ func TestNewTagSnapshotURI(t *testing.T) {
 	}
 }
 
+// TestSnapshotOwnerTagUID covers reading a lender out of a parsed URI. An
+// Actor records the URI it was cloned from, and its owner is all the deletion
+// check has to tell a borrowed tag snapshot from one the Actor took itself.
+func TestSnapshotOwnerTagUID(t *testing.T) {
+	tests := []struct {
+		name    string
+		owner   SnapshotOwner
+		want    string
+		wantTag bool
+	}{
+		{
+			name:    "a tag owns its snapshot",
+			owner:   TagSnapshotOwner("team-a", "tag-uid-1"),
+			want:    "tag-uid-1",
+			wantTag: true,
+		},
+		{
+			name:  "an actor's own snapshot has no tag",
+			owner: ActorSnapshotOwner("team-a", "actor-uid"),
+		},
+		{
+			name:  "the zero owner has no tag",
+			owner: SnapshotOwner{},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, gotTag := tc.owner.TagUID()
+			if got != tc.want || gotTag != tc.wantTag {
+				t.Errorf("%s.TagUID() = (%q, %t), want (%q, %t)", tc.owner, got, gotTag, tc.want, tc.wantTag)
+			}
+		})
+	}
+}
+
 // TestSnapshotOwnedBy covers the check every collector makes before deleting.
 // An owner may only reach its own objects, which is what keeps an actor
 // borrowing a tag's snapshot from collecting it out from under every other

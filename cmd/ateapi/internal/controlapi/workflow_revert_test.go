@@ -96,7 +96,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			// The snapshot revert must preserve, plus the node-local state a
 			// pause left behind, which it must not. Revert drops the pointer;
 			// pruning the bytes it names is still a TODO (#641).
-			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
+			const keptURI = "gs://snapshots/atespaces/team-a/actors/keep/snapshots/snapshot"
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: keptURI}
 				s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "local-1"}
