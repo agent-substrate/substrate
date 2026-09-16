@@ -37,6 +37,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/env"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore"
@@ -65,6 +66,46 @@ import (
 const maxRPCDeadline = 10 * time.Minute
 
 const minResyncInterval = 250 * time.Millisecond
+
+var storageBackendEnv = env.Var[string]{
+	Name:               "ATE_STORAGE_BACKEND",
+	Default:            "",
+	Component:          "ateapi",
+	Description:        "Selects the object storage backend for external snapshots. Configure ateapi and atelet consistently. AWS SDK configuration is used for S3.",
+	AcceptedValues:     "Exact s3 selects S3; every other value, including empty or unrecognized values, selects GCS.",
+	Precedence:         "No CLI flag.",
+	DefaultDescription: "GCS",
+}
+
+var s3PathStyleEnv = env.Var[bool]{
+	Name:           "AWS_S3_USE_PATH_STYLE",
+	Default:        false,
+	Component:      "ateapi",
+	Description:    "Enables path-style addressing on the S3 client. Read only when ATE_STORAGE_BACKEND=s3.",
+	AcceptedValues: "Only exact lowercase true enables it; all other values disable it.",
+	Precedence:     "No CLI flag.",
+	Parse:          func(raw string) bool { return raw == "true" },
+}
+
+var postgresConnectionStringEnv = env.Var[string]{
+	Name:               "ATE_API_POSTGRES_CONNECTION_STRING",
+	Default:            "",
+	Component:          "ateapi",
+	Description:        "PostgreSQL connection string. May contain credentials.",
+	AcceptedValues:     "libpq DSN or PostgreSQL URI; empty fails the required connection-string check.",
+	Precedence:         "Read only when --postgres-connection-string=@env; all other flag values take precedence.",
+	DefaultDescription: "Empty when @env is selected; the flag also defaults to empty.",
+}
+
+var postgresSchemaEnv = env.Var[string]{
+	Name:               "ATE_API_POSTGRES_SCHEMA",
+	Default:            "",
+	Component:          "ateapi",
+	Description:        "PostgreSQL schema for Substrate tables.",
+	AcceptedValues:     "Nonempty PostgreSQL schema name; empty fails startup.",
+	Precedence:         "Read only when --postgres-schema=@env; all other flag values take precedence.",
+	DefaultDescription: "Empty when @env is selected; without @env the flag defaults to public.",
+}
 
 var (
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
@@ -318,14 +359,14 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 func loadFlagsFromEnv() {
 	overrides := []struct {
 		flag *string
-		env  string
+		env  env.Var[string]
 	}{
-		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
-		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
+		{postgresConnectionString, postgresConnectionStringEnv},
+		{postgresSchema, postgresSchemaEnv},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
-			*o.flag = os.Getenv(o.env)
+			*o.flag = o.env.Get()
 		}
 	}
 }
@@ -351,7 +392,7 @@ func logFlagValues(ctx context.Context) {
 // writes snapshots through, so both ends of a snapshot's life agree on where
 // it lives.
 func newObjectStore(ctx context.Context) (objectstore.Store, error) {
-	switch backend := os.Getenv("ATE_STORAGE_BACKEND"); backend {
+	switch backend := storageBackendEnv.Get(); backend {
 	case "s3":
 		slog.InfoContext(ctx, "Using S3 storage backend")
 		// Depends on the standard AWS environment variables, which have to be
@@ -361,7 +402,7 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 			return nil, fmt.Errorf("loading S3 config: %w", err)
 		}
 		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
+			if s3PathStyleEnv.Get() {
 				o.UsePathStyle = true
 			}
 		})), nil

@@ -43,6 +43,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/env"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
@@ -83,6 +84,26 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/lru"
 )
+
+var storageBackendEnv = env.Var[string]{
+	Name:               "ATE_STORAGE_BACKEND",
+	Default:            "",
+	Component:          "atelet",
+	Description:        "Selects the object storage backend for external snapshots. Configure ateapi and atelet consistently. AWS SDK configuration is used for S3.",
+	AcceptedValues:     "Exact s3 selects S3; every other value, including empty or unrecognized values, selects GCS.",
+	Precedence:         "No CLI flag.",
+	DefaultDescription: "GCS",
+}
+
+var s3PathStyleEnv = env.Var[bool]{
+	Name:           "AWS_S3_USE_PATH_STYLE",
+	Default:        false,
+	Component:      "atelet",
+	Description:    "Enables path-style addressing on the S3 client. Read only when ATE_STORAGE_BACKEND=s3.",
+	AcceptedValues: "Only exact lowercase true enables it; all other values disable it.",
+	Precedence:     "No CLI flag.",
+	Parse:          func(raw string) bool { return raw == "true" },
+}
 
 var (
 	port              = pflag.Int("port", atelet.DefaultPort, "The port to listen on")
@@ -223,7 +244,7 @@ func main() {
 	}
 
 	var wrappedGCS ategcs.ObjectStorage
-	storageBackend := os.Getenv("ATE_STORAGE_BACKEND")
+	storageBackend := storageBackendEnv.Get()
 	switch storageBackend {
 	case "s3":
 		slog.InfoContext(ctx, "Using S3 storage backend")
@@ -234,7 +255,7 @@ func main() {
 			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
 		wrappedGCS = ategcs.NewS3Client(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if usePathStyle := os.Getenv("AWS_S3_USE_PATH_STYLE"); usePathStyle == "true" {
+			if s3PathStyleEnv.Get() {
 				o.UsePathStyle = true
 			}
 		}))

@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/env"
 	"golang.org/x/sync/errgroup"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -464,6 +465,16 @@ func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx
 // units carried by the instrument's unit field rather than the name --
 // exporters re-attach them per their own conventions (the Prometheus
 // rendering of memory.working_set is ate_actor_stats_memory_working_set_bytes).
+var nodeNameEnv = env.Var[string]{
+	SystemProvided: true,
+	Name:           "NODE_NAME",
+	Default:        "",
+	Component:      "atelet",
+	Description:    "Node name supplied through the Kubernetes Downward API; scopes worker-pool labels on actor stats.",
+	AcceptedValues: "Kubernetes node name; empty emits stats without worker-pool labels.",
+	Precedence:     "No CLI flag.",
+}
+
 const (
 	sampledActorsMetric = "ate.actor.stats.sampled_actors"
 	memoryCurrentMetric = "ate.actor.stats.memory.usage"
@@ -602,7 +613,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
-	if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
+	if nodeName := nodeNameEnv.Get(); nodeName != "" {
 		poller.fetchWorkerPools = newWorkerPoolFetcher(k8sClient, nodeName)
 	} else {
 		slog.WarnContext(ctx, "NODE_NAME not set; actor stats will carry no worker pool labels")
