@@ -652,24 +652,29 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 // collapsing concurrent requests for the same layer across images.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
-			// Refresh the dir mtime inside the flight: retireLayer re-checks
-			// the mtime in this same flight, so a layer reused here can
-			// never be renamed away between this stat and the image record
-			// that will re-reference it.
-			now := time.Now()
-			if err := os.Chtimes(dir, now, now); err != nil {
-				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+	for {
+		result, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+			if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+				// Refresh the dir mtime inside the flight: retireLayer re-checks
+				// the mtime in this same flight, so a layer reused here can
+				// never be renamed away between this stat and the image record
+				// that will re-reference it.
+				now := time.Now()
+				if err := os.Chtimes(dir, now, now); err != nil {
+					slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+				}
+				return dir, nil
 			}
-			return nil, nil
+			return dir, s.unpackLayerToPool(ctx, diffID, layer)
+		})
+		if err != nil {
+			return "", err
 		}
-		return nil, s.unpackLayerToPool(ctx, diffID, layer)
-	})
-	if err != nil {
-		return "", err
+		// A joined retirement returns nil, so the layer still needs a pull.
+		if result != nil {
+			return dir, nil
+		}
 	}
-	return dir, nil
 }
 
 // unpackLayerToPool streams the layer (download → decompress → untar) into a

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -200,4 +201,41 @@ func TestRetireLayerVsEnsureImageRace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(img.LayerDirs[0], layerFSDirName)); err != nil {
 		t.Errorf("final layer dir missing: %v", err)
 	}
+}
+
+func TestEnsureLayerJoinsRetirement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := newTestStore(t)
+		layer := layerFromEntries(t, []tarEntry{
+			{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: "hi"},
+		})
+		diffID, err := layer.DiffID()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Hold a retirement flight while the pull joins it.
+		release := make(chan struct{})
+		go func() {
+			_, _, _ = store.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+				<-release
+				return nil, nil
+			})
+		}()
+		synctest.Wait()
+		var dir string
+		go func() {
+			dir, err = store.ensureLayer(context.Background(), diffID, layer)
+		}()
+		synctest.Wait()
+		close(release)
+		synctest.Wait()
+
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName, "f")); err != nil {
+			t.Fatalf("layer was not unpacked after retirement: %v", err)
+		}
+	})
 }
