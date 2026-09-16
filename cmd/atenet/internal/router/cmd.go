@@ -26,12 +26,9 @@ import (
 )
 
 var otlpCollectorEndpointEnv = env.Var[string]{
-	Name:           "OTEL_EXPORTER_OTLP_ENDPOINT",
-	Default:        "",
-	Component:      "atenet router (Envoy tracing)",
-	Description:    "Collector address for Envoy tracing. Invalid or HTTPS endpoints disable Envoy tracing with a warning.",
-	AcceptedValues: "host:port or http:// URL; empty disables Envoy tracing.",
-	Precedence:     "Default for --otlp-collector-address; an explicit flag, including empty, overrides it. The flag does not change the router process's own OTel exporter.",
+	Name:        "OTEL_EXPORTER_OTLP_ENDPOINT",
+	Default:     "",
+	Description: "Default for --otlp-collector-address: host:port or http:// URL for Envoy tracing. Empty or invalid values disable Envoy tracing.",
 }
 
 func NewRouterCmd() *cobra.Command {

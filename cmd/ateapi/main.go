@@ -68,43 +68,27 @@ const maxRPCDeadline = 10 * time.Minute
 const minResyncInterval = 250 * time.Millisecond
 
 var storageBackendEnv = env.Var[string]{
-	Name:               "ATE_STORAGE_BACKEND",
-	Default:            "",
-	Component:          "ateapi",
-	Description:        "Selects the object storage backend for external snapshots. Configure ateapi and atelet consistently. AWS SDK configuration is used for S3.",
-	AcceptedValues:     "Exact s3 selects S3; every other value, including empty or unrecognized values, selects GCS.",
-	Precedence:         "No CLI flag.",
-	DefaultDescription: "GCS",
+	Name:        "ATE_STORAGE_BACKEND",
+	Default:     "",
+	Description: "Snapshot backend: exact s3 selects S3; every other value uses GCS.",
 }
 
-var s3PathStyleEnv = env.Var[bool]{
-	Name:           "AWS_S3_USE_PATH_STYLE",
-	Default:        false,
-	Component:      "ateapi",
-	Description:    "Enables path-style addressing on the S3 client. Read only when ATE_STORAGE_BACKEND=s3.",
-	AcceptedValues: "Only exact lowercase true enables it; all other values disable it.",
-	Precedence:     "No CLI flag.",
-	Parse:          func(raw string) bool { return raw == "true" },
+var s3PathStyleEnv = env.Var[string]{
+	Name:        "AWS_S3_USE_PATH_STYLE",
+	Default:     "",
+	Description: "Enable S3 path-style addressing only for the exact string true.",
 }
 
 var postgresConnectionStringEnv = env.Var[string]{
-	Name:               "ATE_API_POSTGRES_CONNECTION_STRING",
-	Default:            "",
-	Component:          "ateapi",
-	Description:        "PostgreSQL connection string. May contain credentials.",
-	AcceptedValues:     "libpq DSN or PostgreSQL URI; empty fails the required connection-string check.",
-	Precedence:         "Read only when --postgres-connection-string=@env; all other flag values take precedence.",
-	DefaultDescription: "Empty when @env is selected; the flag also defaults to empty.",
+	Name:        "ATE_API_POSTGRES_CONNECTION_STRING",
+	Default:     "",
+	Description: "PostgreSQL DSN or URI, read only with --postgres-connection-string=@env; empty is rejected.",
 }
 
 var postgresSchemaEnv = env.Var[string]{
-	Name:               "ATE_API_POSTGRES_SCHEMA",
-	Default:            "",
-	Component:          "ateapi",
-	Description:        "PostgreSQL schema for Substrate tables.",
-	AcceptedValues:     "Nonempty PostgreSQL schema name; empty fails startup.",
-	Precedence:         "Read only when --postgres-schema=@env; all other flag values take precedence.",
-	DefaultDescription: "Empty when @env is selected; without @env the flag defaults to public.",
+	Name:        "ATE_API_POSTGRES_SCHEMA",
+	Default:     "",
+	Description: "PostgreSQL schema, read only with --postgres-schema=@env; empty is rejected. The flag otherwise defaults to public.",
 }
 
 var (
@@ -402,7 +386,7 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 			return nil, fmt.Errorf("loading S3 config: %w", err)
 		}
 		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if s3PathStyleEnv.Get() {
+			if s3PathStyleEnv.Get() == "true" {
 				o.UsePathStyle = true
 			}
 		})), nil

@@ -34,6 +34,16 @@ import (
 
 const envPackage = "github.com/agent-substrate/substrate/internal/env"
 
+// System-injected values are grouped here without adding runtime metadata.
+var systemVariables = map[string]bool{"NODE_NAME": true}
+
+func section(name string) string {
+	if systemVariables[name] {
+		return "System-provided values"
+	}
+	return "Operator configuration"
+}
+
 func main() {
 	root := flag.String("root", "../..", "Repository root")
 	check := flag.Bool("check", false, "Check the reference without writing it")
@@ -103,16 +113,8 @@ func collect(root string) ([]entry, error) {
 		}
 	}
 	slices.SortFunc(entries, func(a, b entry) int {
-		return cmp.Or(cmp.Compare(a.fields["SystemProvided"], b.fields["SystemProvided"]), cmp.Compare(a.fields["Name"], b.fields["Name"]), cmp.Compare(a.fields["Component"], b.fields["Component"]))
+		return cmp.Or(cmp.Compare(section(a.fields["Name"]), section(b.fields["Name"])), cmp.Compare(a.fields["Name"], b.fields["Name"]), cmp.Compare(a.source, b.source), cmp.Compare(a.line, b.line))
 	})
-	seen := map[[2]string]bool{}
-	for _, e := range entries {
-		key := [2]string{e.fields["Name"], e.fields["Component"]}
-		if seen[key] {
-			return nil, fmt.Errorf("duplicate declaration for %s in %s", key[0], key[1])
-		}
-		seen[key] = true
-	}
 
 	if len(entries) == 0 {
 		return nil, errors.New("no environment declarations found")
@@ -177,7 +179,7 @@ func declarations(path string, source []byte) ([]entry, error) {
 		if !ok || ident.Name != alias {
 			return true
 		}
-		e := entry{fields: map[string]string{"SystemProvided": "false"}, source: path, line: fset.Position(lit.Pos()).Line}
+		e := entry{fields: map[string]string{}, source: path, line: fset.Position(lit.Pos()).Line}
 		typ, ok := indexed.Index.(*ast.Ident)
 		if !ok || (typ.Name != "string" && typ.Name != "bool") {
 			err = fmt.Errorf("%s:%d: unsupported env.Var type", path, e.line)
@@ -191,9 +193,6 @@ func declarations(path string, source []byte) ([]entry, error) {
 				return false
 			}
 			key := kv.Key.(*ast.Ident).Name
-			if key == "Parse" {
-				continue
-			} // Never evaluate custom parsers.
 			value, valueErr := literal(kv.Value, constants, map[string]bool{})
 			if valueErr != nil {
 				err = fmt.Errorf("%s:%d: %s: %w", path, e.line, key, valueErr)
@@ -201,7 +200,7 @@ func declarations(path string, source []byte) ([]entry, error) {
 			}
 			e.fields[key] = value
 		}
-		for _, key := range []string{"Name", "Default", "Component", "Description", "AcceptedValues", "Precedence"} {
+		for _, key := range []string{"Name", "Default", "Description"} {
 			value, exists := e.fields[key]
 			if !exists || (key != "Default" && value == "") {
 				err = fmt.Errorf("%s:%d: missing %s metadata", path, e.line, key)
@@ -246,9 +245,9 @@ read only inside dependencies (such as AWS credentials and OTel SDK settings)
 are outside this initial registry. Shared settings can have different defaults
 and precedence in each consumer; each declaration is listed separately below.
 
-Types describe the value returned to the consumer. Some strings are parsed or
-forwarded later; their accepted values and effective defaults are documented
-separately. An explicitly empty value is distinct from an unset variable.
+Types describe the value returned to the consumer. Descriptions explain any
+consumer-specific parsing and precedence. An explicitly empty value is distinct
+from an unset variable.
 Documentation is generated from declared metadata, never the live environment.
 
 To add a setting, see [the declaration guide](dev/environment-variables.md).
@@ -258,24 +257,18 @@ To add a setting, see [the declaration guide](dev/environment-variables.md).
 	category := ""
 	for _, e := range entries {
 		f := e.fields
-		next := "Operator configuration"
-		if f["SystemProvided"] == "true" {
-			next = "System-provided values"
-		}
+		next := section(f["Name"])
 		if next != category {
 			fmt.Fprintf(&out, "## %s\n\n", next)
 			category = next
 		}
-		fmt.Fprintf(&out, "### %s (%s)\n\n%s\n\n", escape.Replace(f["Name"]), escape.Replace(f["Component"]), escape.Replace(f["Description"]))
+		fmt.Fprintf(&out, "### %s (%s)\n\n%s\n\n", escape.Replace(f["Name"]), e.source, escape.Replace(f["Description"]))
 		value := f["Default"]
 		if e.typ == "string" {
 			value = strconv.Quote(value)
 		}
 		fmt.Fprintf(&out, "- Type: %s\n- Declared default: %s\n", e.typ, escape.Replace(value))
-		if f["DefaultDescription"] != "" {
-			fmt.Fprintf(&out, "- Effective default: %s\n", escape.Replace(f["DefaultDescription"]))
-		}
-		fmt.Fprintf(&out, "- Accepted values: %s\n- Precedence: %s\n- Source: [%s](../%s#L%d)\n\n", escape.Replace(f["AcceptedValues"]), escape.Replace(f["Precedence"]), e.source, e.source, e.line)
+		fmt.Fprintf(&out, "- Source: [%s](../%s#L%d)\n\n", e.source, e.source, e.line)
 	}
 	return []byte(strings.TrimSuffix(out.String(), "\n"))
 }

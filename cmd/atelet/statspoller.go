@@ -466,13 +466,9 @@ func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx
 // exporters re-attach them per their own conventions (the Prometheus
 // rendering of memory.working_set is ate_actor_stats_memory_working_set_bytes).
 var nodeNameEnv = env.Var[string]{
-	SystemProvided: true,
-	Name:           "NODE_NAME",
-	Default:        "",
-	Component:      "atelet",
-	Description:    "Node name supplied through the Kubernetes Downward API; scopes worker-pool labels on actor stats.",
-	AcceptedValues: "Kubernetes node name; empty emits stats without worker-pool labels.",
-	Precedence:     "No CLI flag.",
+	Name:        "NODE_NAME",
+	Default:     "",
+	Description: "Node name injected by the Kubernetes Downward API. Without it, actor stats omit worker-pool labels.",
 }
 
 const (

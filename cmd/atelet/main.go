@@ -86,23 +86,15 @@ import (
 )
 
 var storageBackendEnv = env.Var[string]{
-	Name:               "ATE_STORAGE_BACKEND",
-	Default:            "",
-	Component:          "atelet",
-	Description:        "Selects the object storage backend for external snapshots. Configure ateapi and atelet consistently. AWS SDK configuration is used for S3.",
-	AcceptedValues:     "Exact s3 selects S3; every other value, including empty or unrecognized values, selects GCS.",
-	Precedence:         "No CLI flag.",
-	DefaultDescription: "GCS",
+	Name:        "ATE_STORAGE_BACKEND",
+	Default:     "",
+	Description: "Snapshot backend: exact s3 selects S3; every other value uses GCS.",
 }
 
-var s3PathStyleEnv = env.Var[bool]{
-	Name:           "AWS_S3_USE_PATH_STYLE",
-	Default:        false,
-	Component:      "atelet",
-	Description:    "Enables path-style addressing on the S3 client. Read only when ATE_STORAGE_BACKEND=s3.",
-	AcceptedValues: "Only exact lowercase true enables it; all other values disable it.",
-	Precedence:     "No CLI flag.",
-	Parse:          func(raw string) bool { return raw == "true" },
+var s3PathStyleEnv = env.Var[string]{
+	Name:        "AWS_S3_USE_PATH_STYLE",
+	Default:     "",
+	Description: "Enable S3 path-style addressing only for the exact string true.",
 }
 
 var (
@@ -255,7 +247,7 @@ func main() {
 			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
 		wrappedGCS = ategcs.NewS3Client(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if s3PathStyleEnv.Get() {
+			if s3PathStyleEnv.Get() == "true" {
 				o.UsePathStyle = true
 			}
 		}))

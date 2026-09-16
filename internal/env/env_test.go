@@ -53,25 +53,3 @@ func TestBool(t *testing.T) {
 		}
 	}
 }
-
-func TestOwnerParser(t *testing.T) {
-	calls := 0
-	v := Var[bool]{Name: "SUBSTRATE_ENV_TEST", Default: true, Parse: func(raw string) bool {
-		calls++
-		return raw == "true"
-	}}
-	t.Setenv(v.Name, "")
-	if err := os.Unsetenv(v.Name); err != nil {
-		t.Fatal(err)
-	}
-	if got := v.Get(); !got || calls != 0 {
-		t.Fatalf("unset Get = %v; parser calls = %d", got, calls)
-	}
-	for _, raw := range []string{"true", "TRUE", "1", "false", "invalid", ""} {
-		t.Setenv(v.Name, raw)
-		before := calls
-		if got := v.Get(); got != (raw == "true") || calls != before+1 {
-			t.Fatalf("Get(%q) = %v; parser calls = %d", raw, got, calls-before)
-		}
-	}
-}

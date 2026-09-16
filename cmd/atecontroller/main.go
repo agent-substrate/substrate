@@ -51,53 +51,33 @@ import (
 )
 
 var otelEndpointEnv = env.Var[string]{
-	Name:               "OTEL_EXPORTER_OTLP_ENDPOINT",
-	Default:            "",
-	Component:          "atecontroller (worker pod configuration)",
-	Description:        "OTLP endpoint passed to ateom worker pods.",
-	AcceptedValues:     "OTLP gRPC endpoint.",
-	Precedence:         "Used as the default for --otel-exporter-otlp-endpoint; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.",
-	DefaultDescription: "Empty; the controller injects none of the worker telemetry settings.",
+	Name:        "OTEL_EXPORTER_OTLP_ENDPOINT",
+	Default:     "",
+	Description: "Default for --otel-exporter-otlp-endpoint. Empty disables injection of worker telemetry settings; a flag overrides the environment.",
 }
 
 var otelMetricExportIntervalEnv = env.Var[string]{
-	Name:               "OTEL_METRIC_EXPORT_INTERVAL",
-	Default:            "",
-	Component:          "atecontroller (worker pod configuration)",
-	Description:        "Metric export interval passed to ateom worker pods. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.",
-	AcceptedValues:     "Positive integer milliseconds; parsed by the worker OTel SDK.",
-	Precedence:         "Used as the default for --otel-metric-export-interval; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.",
-	DefaultDescription: "Empty; keeps the worker SDK default of 60000 milliseconds.",
+	Name:        "OTEL_METRIC_EXPORT_INTERVAL",
+	Default:     "",
+	Description: "Default for --otel-metric-export-interval, forwarded to workers when an OTLP endpoint is set. Empty uses the SDK default of 60000 ms.",
 }
 
 var otelMetricExportTimeoutEnv = env.Var[string]{
-	Name:               "OTEL_METRIC_EXPORT_TIMEOUT",
-	Default:            "",
-	Component:          "atecontroller (worker pod configuration)",
-	Description:        "Metric export timeout passed to ateom worker pods. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.",
-	AcceptedValues:     "Positive integer milliseconds; parsed by the worker OTel SDK.",
-	Precedence:         "Used as the default for --otel-metric-export-timeout; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.",
-	DefaultDescription: "Empty; keeps the worker SDK default of 30000 milliseconds.",
+	Name:        "OTEL_METRIC_EXPORT_TIMEOUT",
+	Default:     "",
+	Description: "Default for --otel-metric-export-timeout, forwarded to workers when an OTLP endpoint is set. Empty uses the SDK default of 30000 ms.",
 }
 
 var otelTracesSamplerEnv = env.Var[string]{
-	Name:               "OTEL_TRACES_SAMPLER",
-	Default:            "",
-	Component:          "atecontroller (worker pod configuration)",
-	Description:        "Trace sampler passed to ateom worker pods. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.",
-	AcceptedValues:     "Sampler names supported by serverboot; passed through without parsing.",
-	Precedence:         "Used as the default for --otel-traces-sampler; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.",
-	DefaultDescription: "Empty; keeps the ateom default parentbased_traceidratio with ratio 0.1.",
+	Name:        "OTEL_TRACES_SAMPLER",
+	Default:     "",
+	Description: "Default for --otel-traces-sampler, forwarded to workers when an OTLP endpoint is set. Empty keeps the worker sampling default.",
 }
 
 var otelTracesSamplerArgEnv = env.Var[string]{
-	Name:               "OTEL_TRACES_SAMPLER_ARG",
-	Default:            "",
-	Component:          "atecontroller (worker pod configuration)",
-	Description:        "Trace sampler argument passed to ateom worker pods; ignored when the resolved sampler flag is empty. Applied only when --otel-exporter-otlp-endpoint resolves to a nonempty value.",
-	AcceptedValues:     "Ratio in [0, 1] for ratio samplers; passed through without parsing.",
-	Precedence:         "Used as the default for --otel-traces-sampler-arg; an explicit flag, including empty, overrides it. This flag affects workers, not the controller's own telemetry.",
-	DefaultDescription: "Empty; ratio samplers with a missing argument keep the worker component default.",
+	Name:        "OTEL_TRACES_SAMPLER_ARG",
+	Default:     "",
+	Description: "Default for --otel-traces-sampler-arg, forwarded to workers only when an OTLP endpoint and sampler are set.",
 }
 
 var (

@@ -67,17 +67,3 @@ func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
 	}
 }
-
-func TestS3PathStyleEnvironment(t *testing.T) {
-	for _, tc := range []struct {
-		raw  string
-		want bool
-	}{
-		{"true", true}, {"TRUE", false}, {"1", false}, {"false", false}, {"", false}, {"invalid", false},
-	} {
-		t.Setenv("AWS_S3_USE_PATH_STYLE", tc.raw)
-		if got := s3PathStyleEnv.Get(); got != tc.want {
-			t.Errorf("AWS_S3_USE_PATH_STYLE=%q: got %v, want %v", tc.raw, got, tc.want)
-		}
-	}
-}

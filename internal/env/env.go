@@ -21,24 +21,13 @@ import (
 	"strconv"
 )
 
-// Var describes a setting. Default is used when the variable is unset;
-// an explicitly empty value is passed through the same parser as any other value.
-// String values are returned unchanged. Booleans use strconv.ParseBool and fall
-// back to Default on invalid input, unless Parse supplies the owner's semantics.
-// Get and Lookup read the environment on every call, not at declaration time.
+// Var describes a setting. Get and Lookup read the environment on every call.
+// Strings are returned unchanged. Booleans use strconv.ParseBool, falling back
+// to Default on invalid input. An unset variable always returns Default.
 type Var[T string | bool] struct {
-	Name           string
-	Default        T
-	Description    string
-	Component      string
-	AcceptedValues string
-	Precedence     string
-	// DefaultDescription explains an effective default resolved by the consumer.
-	DefaultDescription string
-	// SystemProvided distinguishes injected runtime identity from operator configuration.
-	SystemProvided bool
-	// Parse overrides the built-in conversion, including for empty values.
-	Parse func(string) T
+	Name        string
+	Default     T
+	Description string
 }
 
 // Get returns the current value, or Default when unset.
@@ -53,9 +42,6 @@ func (v Var[T]) Lookup() (T, bool) {
 	raw, present := os.LookupEnv(v.Name)
 	if !present {
 		return v.Default, false
-	}
-	if v.Parse != nil {
-		return v.Parse(raw), true
 	}
 	switch any(v.Default).(type) {
 	case string:
