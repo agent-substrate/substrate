@@ -51,6 +51,14 @@ Common Go Test Flags (passed before -args):
   -run <regexp>    Run only tests matching regexp
   -v               Verbose output
   -count n         Run tests n times
+  -p n             Test package concurrency (default: \$E2E_PARALLELISM, or 4)
+  -timeout d       Per-binary timeout (default: \$E2E_TIMEOUT, or 30m)
+
+Passing -p or -timeout explicitly overrides the default for that flag.
+
+Environment Variables:
+  E2E_PARALLELISM  Default for -p (default: 4)
+  E2E_TIMEOUT      Default for -timeout (default: 30m)
 
 See "go help testflag" for more Go test flags.
 EOF
@@ -81,6 +89,8 @@ fi
 go_test_args=()
 e2e_args=()
 found_args_sep=false
+has_p_flag=false
+has_timeout_flag=false
 
 for arg in "$@"; do
     if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
@@ -95,6 +105,11 @@ for arg in "$@"; do
     if [[ "$found_args_sep" == "true" ]]; then
         e2e_args+=("$arg")
     else
+        # Both spellings: go's flag package accepts -flag, --flag, and either with =value.
+        case "$arg" in
+            -p|-p=*|--p|--p=*) has_p_flag=true ;;
+            -timeout|-timeout=*|--timeout|--timeout=*) has_timeout_flag=true ;;
+        esac
         go_test_args+=("$arg")
     fi
 done
@@ -104,5 +119,47 @@ if [[ -n "${KUBECTL_CONTEXT:-}" ]]; then
     extra_e2e_args+=("--kube-context" "${KUBECTL_CONTEXT}")
 fi
 
-exec go test -v "$target_path" ${go_test_args[@]+"${go_test_args[@]}"} -args --e2e ${extra_e2e_args[@]+"${extra_e2e_args[@]}"} ${e2e_args[@]+"${e2e_args[@]}"}
+# Pin the two bounds go test would otherwise infer from the machine.
+#
+# -p: the system default is GOMAXPROCS causing the suite concurrency to track the
+# runner's CPU count rather than what the cluster can absorb, in this case a single
+# node Kind cluster. Explicitly setting this to E2E_PARALLELISM (default 4) avoids
+# overshooting the cluster's capacity.
+#
+# -timeout: Go's default, when no value is provided, is 10m. TemplateReadyTimeout
+# for the micro-VM class (internal/e2e/sandbox.go) is also 10 minutes. Any E2E
+# test that times out waiting for the template will actually be killed by the global
+# suite timeout instead, which skips t.Cleanup, potentially leaking resources.
+# Explicitly setting the E2E_TIMEOUT (default 30m) here avoids this suite-level and
+# test-level timeout conflict.
+default_go_test_args=()
+if [[ "${has_p_flag}" == "false" ]]; then
+    default_go_test_args+=("-p" "${E2E_PARALLELISM:-4}")
+fi
+if [[ "${has_timeout_flag}" == "false" ]]; then
+    default_go_test_args+=("-timeout" "${E2E_TIMEOUT:-30m}")
+fi
+
+# Assembled once so the two execution paths below cannot drift apart.
+test_argv=(-v "$target_path")
+test_argv+=(${default_go_test_args[@]+"${default_go_test_args[@]}"})
+test_argv+=(${go_test_args[@]+"${go_test_args[@]}"})
+test_argv+=(-args --e2e)
+test_argv+=(${extra_e2e_args[@]+"${extra_e2e_args[@]}"})
+test_argv+=(${e2e_args[@]+"${e2e_args[@]}"})
+
+# E2E_JUNIT_FILE opts into a machine-readable record of the run: the XML for
+# report consumers, the JSON event stream for failure analysis. Unset, this is a
+# plain go test and gotestsum is never built, so a local run needs no toolchain
+# beyond go itself.
+if [[ -n "${E2E_JUNIT_FILE:-}" ]]; then
+    mkdir -p "$(dirname "${E2E_JUNIT_FILE}")"
+    exec "${ROOT}/hack/run-tool.sh" gotestsum \
+        --junitfile "${E2E_JUNIT_FILE}" \
+        --jsonfile "${E2E_JUNIT_FILE%.xml}.json" \
+        --format standard-verbose \
+        -- "${test_argv[@]}"
+fi
+
+exec go test "${test_argv[@]}"
 
