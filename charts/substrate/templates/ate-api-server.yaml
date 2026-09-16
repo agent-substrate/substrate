@@ -112,6 +112,20 @@ spec:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: {{ .Values.otel.endpoint | quote }}
 {{- end }}
+        - name: ATE_STORAGE_BACKEND
+          value: {{ .Values.atelet.storageBackend | quote }}
+{{- if .Values.rustfs.enabled }}
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ENDPOINT_URL
+          value: http://{{ include "substrate.fullname" (list "rustfs" .) }}.{{ .Release.Namespace }}.svc:9000
+        - name: AWS_S3_USE_PATH_STYLE
+          value: "true"
+        - name: AWS_ACCESS_KEY_ID
+          value: {{ .Values.rustfs.accessKey | quote }}
+        - name: AWS_SECRET_ACCESS_KEY
+          value: {{ .Values.rustfs.secretKey | quote }}
+{{- end }}
         envFrom:
         - configMapRef:
             name: {{ .Values.ateApiServerEnvVarsConfigMap }}
