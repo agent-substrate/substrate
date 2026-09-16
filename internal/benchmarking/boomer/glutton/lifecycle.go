@@ -64,9 +64,12 @@ const (
 	concurrentUpdateMsg = "concurrent update conflict, please retry"
 	// Retry budget for ResumeActor concurrent-update conflicts. First retry
 	// is immediate (no initial backoff — conflicts often clear the instant
-	// the racing writer commits); subsequent gaps are pinned at 50ms.
-	resumeMaxAttempts = 5
-	resumeMaxBackoff  = 50 * time.Millisecond
+	// the racing writer commits); subsequent gaps are 50ms plus uniform
+	// jitter in [0, resumeBackoffJitter) so the losers of one race do not
+	// retry in lockstep and lose the next one the same way.
+	resumeMaxAttempts   = 5
+	resumeMaxBackoff    = 50 * time.Millisecond
+	resumeBackoffJitter = 5 * time.Millisecond
 
 	// Per-wake ping loop: pings after the first are spaced by a random gap
 	// in [minPingGap, maxPingGap). The loop stops early once the live
@@ -363,8 +366,9 @@ func (u *gluttonActor) resume(ctx context.Context) bool {
 				return lastErr
 			}
 			if backoff > 0 {
+				jitter := time.Duration(rand.Float64() * float64(resumeBackoffJitter))
 				select {
-				case <-time.After(backoff):
+				case <-time.After(backoff + jitter):
 				case <-callCtx.Done():
 					return callCtx.Err()
 				}
