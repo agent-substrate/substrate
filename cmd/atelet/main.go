@@ -93,6 +93,7 @@ var (
 	ateapiAddress        = pflag.String("ateapi-address", "k8s:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
 	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
+	grpcInsecure         = pflag.Bool("grpc-insecure", false, "Serve gRPC without transport security. Intended only for local clusters without Pod Certificates.")
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
@@ -316,73 +317,76 @@ func main() {
 	// it would never list or watch. Start is idempotent per informer — this
 	// launches the new one and leaves the already-running ones untouched.
 	ateFactory.Start(stopCh)
-	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
-		CAFile:           *ateapiCAFile,
-		ServerName:       *ateapiServerName,
-		ClientCredBundle: *grpcServerCredBundle,
-	})
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
-	}
-	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
-	}
-	defer ateapiConn.Close()
-
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
 
-	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
-	}
-	ateletCert, err := credbundle.Parse(*grpcServerCredBundle)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", err)
-	}
-	ateletIdentity, err := substratex509.PodIdentityFromCertificate(ateletCert.Leaf)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", err)
-	}
-	if ateletIdentity == nil {
-		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
-	}
-
-	ateomFacingTLS := tlsCfg.Clone()
-	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
-	if err := os.Remove(ateompath.AteomSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
-		serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
-	}
-	ateomFacingLis, err := net.Listen("unix", ateompath.AteomSupportSocket)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to listen for credential broker", err)
-	}
-	defer ateomFacingLis.Close()
-	if err := os.Chmod(ateompath.AteomSupportSocket, 0o600); err != nil {
-		serverboot.Fatal(ctx, "Failed to restrict credential broker socket", err)
-	}
-
-	ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
-
-	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
-		controlClient: ateapipb.NewControlClient(ateapiConn),
-		workers:       ateapipb.NewWorkerServiceClient(ateapiConn),
-	})
-	go func() {
-		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {
-			serverboot.Fatal(ctx, "Failed to serve credential broker", err)
-		}
-	}()
-
-	svr := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(tlsCfg)),
+	serverOpts := []grpc.ServerOption{
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
-	)
+	}
+	if *grpcInsecure {
+		slog.WarnContext(ctx, "Serving atelet gRPC without transport security")
+	} else {
+		tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to build server TLS config", err)
+		}
+		serverOpts = append(serverOpts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+
+		dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+			K8sClient:        k8sClient,
+			CAFile:           *ateapiCAFile,
+			ServerName:       *ateapiServerName,
+			ClientCredBundle: *grpcServerCredBundle,
+		})
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
+		}
+		ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create ateapi client", err)
+		}
+		defer ateapiConn.Close()
+
+		ateletCert, err := credbundle.Parse(*grpcServerCredBundle)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to load atelet Pod identity", err)
+		}
+		ateletIdentity, err := substratex509.PodIdentityFromCertificate(ateletCert.Leaf)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to load atelet Pod identity", err)
+		}
+		if ateletIdentity == nil {
+			serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
+		}
+		ateomFacingTLS := tlsCfg.Clone()
+		ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
+		if err := os.Remove(ateompath.AteomSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
+			serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
+		}
+		ateomFacingLis, err := net.Listen("unix", ateompath.AteomSupportSocket)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to listen for credential broker", err)
+		}
+		defer ateomFacingLis.Close()
+		if err := os.Chmod(ateompath.AteomSupportSocket, 0o600); err != nil {
+			serverboot.Fatal(ctx, "Failed to restrict credential broker socket", err)
+		}
+		ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
+		ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
+			controlClient: ateapipb.NewControlClient(ateapiConn),
+			workers:       ateapipb.NewWorkerServiceClient(ateapiConn),
+		})
+		go func() {
+			if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {
+				serverboot.Fatal(ctx, "Failed to serve credential broker", err)
+			}
+		}()
+	}
+
+	svr := grpc.NewServer(serverOpts...)
 	ateletpb.RegisterAteomHerderServer(svr, wmService)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))

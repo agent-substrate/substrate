@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -32,6 +33,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/lru"
@@ -68,6 +70,11 @@ type DialerOption func(*AteletDialer)
 // while still exercising the real lookup, dial and connection-cache path.
 func WithDialCredentials(build func(expectedPodUID string) (credentials.TransportCredentials, error)) DialerOption {
 	return func(d *AteletDialer) { d.dialCredentials = build }
+}
+
+// WithInsecureCredentials disables transport security for local clusters without Pod Certificates.
+func WithInsecureCredentials() DialerOption {
+	return WithDialCredentials(func(string) (credentials.TransportCredentials, error) { return insecure.NewCredentials(), nil })
 }
 
 // NewAteletDialer creates a new AteletDialer. clientBundlePath and serverCAPath
@@ -164,7 +171,7 @@ func buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID string) (*tls
 	if err != nil {
 		return nil, fmt.Errorf("while loading CA bundle from %s: %w", serverCAPath, err)
 	}
-	expectedID, err := spiffeid.FromSegments(trustDomain, "ns", ateletNamespace, "sa", ateletSA)
+	expectedID, err := spiffeid.FromSegments(trustDomain, "ns", installdefaults.NamespaceFromPodEnv(), "sa", ateletSA)
 	if err != nil {
 		return nil, fmt.Errorf("while building expected atelet SPIFFE ID: %w", err)
 	}
