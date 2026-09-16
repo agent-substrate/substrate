@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package sweperf implements the boomer-Go implementation of the
+// SweperfUser locust test. Each user creates an actor from a SWE-bench workload
+// template and drives it through a trajectory of steps that are partitioned into
+// cycles. This is workload-agnostic and can be used to benchmark any SWE-bench
+// workload by providing the appropriate template and dynamic configuration.
+
 package sweperf
 
 import (
@@ -30,6 +36,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
@@ -44,18 +51,23 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// templateNS is the namespace holding the actor templates this workload
+// instantiates from.
 const (
-	templateNS  = "benchmark-workloads"
-	actorDomain = "actors.resources.substrate.ate.dev"
+	templateNS = "benchmark-workloads"
 )
 
+// Defaults for a sweperf session, used when neither the dynamic config nor the
+// environment supplies a value.
 const (
-	sweperfUserClass        = "SweperfUser"
+	sweperfUserClass         = "SweperfUser"
 	defaultSweperfTemplate   = "swebench-astropy-7336"
 	defaultSweperfTotalSteps = 21
 	defaultSweperfNumCycles  = 4
 )
 
+// init registers the sweperf user class so the boomer worker can select it by
+// name and the runner can match it to the equivalent locust file.
 func init() {
 	userclass.Add(userclass.Entry{
 		Name:       "sweperf",
@@ -71,6 +83,9 @@ type chunk struct {
 	end   int
 }
 
+// generateDynamicChunks splits totalSteps into numCycles contiguous chunks.
+// The remainder is spread over the earliest cycles, so chunk lengths differ by
+// at most one.
 func generateDynamicChunks(totalSteps int, numCycles int) []chunk {
 	if numCycles <= 1 {
 		return []chunk{{0, totalSteps}}
@@ -98,6 +113,9 @@ func generateDynamicChunks(totalSteps int, numCycles int) []chunk {
 	return chunks
 }
 
+// initSweperf creates a runtime tied to cfg and returns a boomer-compatible
+// task function plus a shutdown hook the caller should run before exit (it
+// suspend+deletes every actor this worker created).
 func initSweperf(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("substrate-boomer/sweperf")
@@ -109,11 +127,16 @@ func initSweperf(cfg *userclass.Config) (taskFn func(), shutdown func(context.Co
 	return rt.iterate, rt.shutdown
 }
 
+// sweperfRuntime is the per-worker state shared by every boomer goroutine.
+// Each goroutine keeps its own session in users, keyed by goroutine ID,
+// because boomer offers no per-VU context.
 type sweperfRuntime struct {
 	cfg   *userclass.Config
 	users sync.Map // goroutineID -> *sweperfUser
 }
 
+// resolveConfig returns the template, total step count and cycle count for a
+// new session. Each is taken from the first source that supplies it.
 func (r *sweperfRuntime) resolveConfig() (string, int, int) {
 	dyn := r.cfg.Dyn.Load()
 
@@ -155,6 +178,8 @@ func (r *sweperfRuntime) resolveConfig() (string, int, int) {
 	return template, totalSteps, numCycles
 }
 
+// dynamicWait is the think time between cycles: a uniform draw from
+// [MinWait, MaxWait), or MinWait when the range is empty.
 func (r *sweperfRuntime) dynamicWait() time.Duration {
 	cfg := r.cfg.Dyn.Load()
 	if cfg.MaxWait <= cfg.MinWait {
@@ -164,6 +189,11 @@ func (r *sweperfRuntime) dynamicWait() time.Duration {
 	return cfg.MinWait + time.Duration(rand.Float64()*float64(jitter))
 }
 
+// iterate is the boomer task function, one call per goroutine per iteration.
+// It binds a session to the calling goroutine on first use and runs one cycle
+// per call thereafter, looping back to the first cycle when the trace is
+// exhausted so the actor keeps serving load. A session that fails to start is
+// retried on the next iteration.
 func (r *sweperfRuntime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
@@ -193,6 +223,10 @@ func (r *sweperfRuntime) iterate() {
 	time.Sleep(r.dynamicWait())
 }
 
+// startUser creates an actor and blocks until its sandbox serves, so the
+// caller gets a session that is ready to take cycles. Resolves the config per
+// session, which lets a value changed mid-run apply to later sessions. On
+// failure it tears the actor down.
 func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 	tmpl, totalSteps, numCycles := r.resolveConfig()
 	chunks := generateDynamicChunks(totalSteps, numCycles)
@@ -205,7 +239,6 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 		chunks:       chunks,
 		cycleIndex:   0,
 	}
-	u.hostHeader = u.actorName + "." + u.cfg.Atespace + "." + actorDomain
 
 	slog.Info("Creating new sweperf user session",
 		slog.String("actor", u.actorName),
@@ -223,7 +256,7 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 		return nil, fmt.Errorf("createActor: %w", err)
 	}
 
-	// Poll status for liveness
+	// poll status for liveness
 	if err := u.pollLiveness(ctx); err != nil {
 		u.suspendAndDelete(ctx)
 		bmetrics.UpdateUsers(u.userClass, -1)
@@ -234,6 +267,9 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 	return u, nil
 }
 
+// shutdown suspends and deletes every actor this worker created. Boomer has
+// no per-VU stop hook, so a mid-run decrease in user count leaks actors until
+// this runs — acceptable for a run that ramps up, holds, then tears down.
 func (r *sweperfRuntime) shutdown(ctx context.Context) {
 	r.users.Range(func(_, val any) bool {
 		u := val.(*sweperfUser)
@@ -245,10 +281,12 @@ func (r *sweperfRuntime) shutdown(ctx context.Context) {
 	})
 }
 
+// sweperfUser is one benchmark session: a single actor, the cycle plan it
+// replays, and its progress through that plan. Owned by one boomer goroutine,
+// so its fields need no locking.
 type sweperfUser struct {
 	cfg          *userclass.Config
 	actorName    string
-	hostHeader   string
 	templateName string
 	userClass    string
 	chunks       []chunk
@@ -256,10 +294,20 @@ type sweperfUser struct {
 	cleanedUp    bool
 }
 
+// ref is the control-plane reference to this user's actor.
 func (u *sweperfUser) ref() *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
+// setActorRouting names the actor the atenet router should route this request
+// to. The router selects the actor from this header alone, so the request's
+// own Host stays the router's; a request without it is refused with a 404.
+func (u *sweperfUser) setActorRouting(req *http.Request) {
+	req.Header.Set(atenet.TargetActorHeader, u.cfg.Atespace+"/"+u.actorName)
+}
+
+// ensureAtespace creates the configured atespace, treating AlreadyExists as
+// success so concurrent users racing the first creation all proceed.
 func (u *sweperfUser) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
@@ -279,6 +327,9 @@ func (u *sweperfUser) ensureAtespace(ctx context.Context) error {
 	})
 }
 
+// create registers the actor against its ActorTemplate. The actor is not yet
+// running when this returns: the first request through the router starts it
+// (see pollLiveness).
 func (u *sweperfUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
@@ -291,6 +342,9 @@ func (u *sweperfUser) create(ctx context.Context) error {
 	})
 }
 
+// resume wakes the actor for the next cycle and reports whether it worked. A
+// failure is the caller's cue to abandon the cycle rather than talk to a
+// sandbox that is not running.
 func (u *sweperfUser) resume(ctx context.Context) bool {
 	err := u.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
@@ -305,6 +359,9 @@ func (u *sweperfUser) resume(ctx context.Context) bool {
 	return true
 }
 
+// suspend snapshots the actor and puts it to sleep, ending a cycle. A failure
+// is logged and recorded but not returned: the run continues, and the next
+// resume reports the resulting state.
 func (u *sweperfUser) suspend(ctx context.Context) {
 	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
@@ -317,6 +374,8 @@ func (u *sweperfUser) suspend(ctx context.Context) {
 	}
 }
 
+// delete removes the actor. Errors are recorded as a failed DeleteActor row
+// and otherwise ignored, since the only caller is already tearing down.
 func (u *sweperfUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
@@ -326,6 +385,10 @@ func (u *sweperfUser) delete(ctx context.Context) {
 	})
 }
 
+// suspendAndDelete releases the actor and the worker it holds, and decrements
+// the user gauge. It suspends first because a worker only frees an actor it
+// can account for, and an actor still awake at delete risks being left
+// CRASHED. Safe to call more than once: it is a no-op after the first.
 func (u *sweperfUser) suspendAndDelete(ctx context.Context) {
 	if u.cleanedUp {
 		return
@@ -338,6 +401,10 @@ func (u *sweperfUser) suspendAndDelete(ctx context.Context) {
 	u.cleanedUp = true
 }
 
+// tracedCall runs one control-plane RPC under a span named name and records
+// it as a locust stats row of the same name. It prefers the server-measured
+// elapsed time from the response trailer over the client-observed latency, so
+// the figure excludes the client's own queueing.
 func (u *sweperfUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
@@ -360,10 +427,15 @@ func (u *sweperfUser) tracedCall(ctx context.Context, name string, do func(conte
 	return nil
 }
 
+// statusResponse is the /status liveness reply; Status is "up" once the
+// in-sandbox server can serve.
 type statusResponse struct {
 	Status string `json:"status"`
 }
 
+// pollLiveness waits for the actor's in-sandbox server to answer /status with
+// "up", for up to a minute. The first request through the router is also what
+// wakes a newly created actor, so this doubles as the implicit resume.
 func (u *sweperfUser) pollLiveness(ctx context.Context) error {
 	statusURL := u.cfg.RouterURL + "/status"
 	maxRetries := 30
@@ -374,7 +446,7 @@ func (u *sweperfUser) pollLiveness(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		req.Host = u.hostHeader
+		u.setActorRouting(req)
 
 		resp, err := u.cfg.HTTPClient.Do(req)
 		if err == nil {
@@ -402,14 +474,19 @@ func (u *sweperfUser) pollLiveness(ctx context.Context) error {
 	return fmt.Errorf("failed to verify server liveness for actor %s", u.actorName)
 }
 
+// isDone reports whether every cycle of the trace has run.
 func (u *sweperfUser) isDone() bool {
 	return u.cycleIndex >= len(u.chunks)
 }
 
+// resetCycles rewinds to the first cycle so the same actor replays the trace
+// again, which is how one session keeps producing load for the whole run.
 func (u *sweperfUser) resetCycles() {
 	u.cycleIndex = 0
 }
 
+// step runs one cycle: resume the actor, replay that cycle's slice of the
+// trace, then suspend it again.
 func (u *sweperfUser) step(ctx context.Context) {
 	if u.cycleIndex >= len(u.chunks) {
 		return
@@ -451,11 +528,17 @@ func (u *sweperfUser) step(ctx context.Context) {
 	u.cycleIndex++
 }
 
+// executeRequest is the /execute body: the 1-based, inclusive range of trace
+// steps to replay.
 type executeRequest struct {
 	StartStep int `json:"start_step"`
 	EndStep   int `json:"end_step"`
 }
 
+// executeResponse is the /execute reply. A non-empty JobID means the server
+// accepted the work and runs it asynchronously, leaving ExitCode unset until
+// the job is polled; otherwise the run is already over and ExitCode, Stderr
+// and Error describe how it went.
 type executeResponse struct {
 	JobID    string `json:"job_id"`
 	Status   string `json:"status"`
@@ -464,6 +547,9 @@ type executeResponse struct {
 	Error    string `json:"error"`
 }
 
+// jobStatusResponse is the /status?job_id= reply. ExitCode is a pointer
+// because a job that has not finished reports none, which is distinct from an
+// exit code of 0.
 type jobStatusResponse struct {
 	JobID         string `json:"job_id"`
 	Status        string `json:"status"`
@@ -472,6 +558,9 @@ type jobStatusResponse struct {
 	Error         string `json:"error"`
 }
 
+// pollJobCompletion waits for an asynchronous /execute job to reach a terminal
+// state, for up to two minutes. It returns an error when the job fails, when
+// it completes with a non-zero exit code, or when that budget runs out.
 func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycleNum int) error {
 	const maxRetries = 600
 	const retryInterval = 200 * time.Millisecond
@@ -482,7 +571,7 @@ func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycle
 		if err != nil {
 			return err
 		}
-		req.Host = u.hostHeader
+		u.setActorRouting(req)
 
 		resp, err := u.cfg.HTTPClient.Do(req)
 		if err == nil {
@@ -517,6 +606,10 @@ func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycle
 	return fmt.Errorf("timed out waiting for job %s to complete in cycle %d", jobID, cycleNum)
 }
 
+// execute runs the trace steps of one cycle inside the actor's sandbox and
+// times them as Workload_Cycle_<cycleNum>. The server may answer either way:
+// a job ID means the run is asynchronous and pollJobCompletion waits it out,
+// while an exit code alone means it already finished.
 func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, endIdx int) error {
 	metricName := fmt.Sprintf("Workload_Cycle_%d", cycleNum)
 
@@ -547,6 +640,9 @@ func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, e
 	return err
 }
 
+// httpJSONCall posts body to route on the actor's in-sandbox server and
+// records the result under metricName. validate inspects the response body and
+// decides the outcome.
 func (u *sweperfUser) httpJSONCall(ctx context.Context, metricName, route string, body []byte, validate func([]byte) error) ([]byte, error) {
 	ctx, span := u.cfg.Tracer.Start(ctx, metricName)
 	defer span.End()
@@ -556,7 +652,7 @@ func (u *sweperfUser) httpJSONCall(ctx context.Context, metricName, route string
 		bmetrics.RecordFailure("http", metricName, u.userClass, 0, err.Error())
 		return nil, err
 	}
-	httpReq.Host = u.hostHeader
+	u.setActorRouting(httpReq)
 	httpReq.Header.Set("Content-Type", "application/json")
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 

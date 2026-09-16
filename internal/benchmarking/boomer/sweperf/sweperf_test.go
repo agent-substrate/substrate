@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -118,6 +119,46 @@ func newTestConfig(t *testing.T, handler http.Handler) (*userclass.Config, *http
 		Tracer:     otel.Tracer("test-sweperf"),
 	}
 	return cfg, ts, fakeCtrl
+}
+
+func TestActorRoutingHeader(t *testing.T) {
+	var mu sync.Mutex
+	var gotHeaders []string
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotHeaders = append(gotHeaders, r.Header.Get(atenet.TargetActorHeader))
+		mu.Unlock()
+
+		if r.URL.Path == "/status" {
+			json.NewEncoder(w).Encode(statusResponse{Status: "up"})
+			return
+		}
+		exitCode := 0
+		json.NewEncoder(w).Encode(executeResponse{Status: "COMPLETED", ExitCode: exitCode})
+	})
+
+	cfg, _, _ := newTestConfig(t, handler)
+	u := &sweperfUser{cfg: cfg, actorName: "test-actor", userClass: sweperfUserClass}
+
+	if err := u.pollLiveness(context.Background()); err != nil {
+		t.Fatalf("pollLiveness: %v", err)
+	}
+	if err := u.execute(context.Background(), 1, 0, 5); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gotHeaders) == 0 {
+		t.Fatal("no requests reached the router")
+	}
+	want := "benchmark-test/test-actor"
+	for i, got := range gotHeaders {
+		if got != want {
+			t.Errorf("request %d: %s = %q, want %q", i, atenet.TargetActorHeader, got, want)
+		}
+	}
 }
 
 func TestGenerateDynamicChunks(t *testing.T) {
@@ -267,7 +308,6 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 	u := &sweperfUser{
 		cfg:          cfg,
 		actorName:    "test-actor",
-		hostHeader:   "test-actor.benchmark." + actorDomain,
 		templateName: defaultSweperfTemplate,
 		userClass:    sweperfUserClass,
 		chunks:       []chunk{{0, 5}, {5, 10}},
@@ -350,7 +390,7 @@ func TestExecuteSyncExitCodeFailure(t *testing.T) {
 		})
 	})
 	cfg, _, _ := newTestConfig(t, handler)
-	u := &sweperfUser{cfg: cfg, actorName: "act", hostHeader: "act.domain"}
+	u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 	err := u.execute(context.Background(), 1, 0, 5)
 	if err == nil {
@@ -367,7 +407,7 @@ func TestExecuteHTTPStatusError(t *testing.T) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	})
 	cfg, _, _ := newTestConfig(t, handler)
-	u := &sweperfUser{cfg: cfg, actorName: "act", hostHeader: "act.domain"}
+	u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 	err := u.execute(context.Background(), 1, 0, 5)
 	if err == nil {
@@ -381,7 +421,7 @@ func TestSweperfPollLiveness(t *testing.T) {
 			json.NewEncoder(w).Encode(statusResponse{Status: "up"})
 		})
 		cfg, _, _ := newTestConfig(t, handler)
-		u := &sweperfUser{cfg: cfg, actorName: "act", hostHeader: "act.domain"}
+		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		if err := u.pollLiveness(context.Background()); err != nil {
 			t.Errorf("pollLiveness failed unexpectedly: %v", err)
@@ -393,7 +433,7 @@ func TestSweperfPollLiveness(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		})
 		cfg, _, _ := newTestConfig(t, handler)
-		u := &sweperfUser{cfg: cfg, actorName: "act", hostHeader: "act.domain"}
+		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
@@ -415,7 +455,7 @@ func TestSweperfPollJobCompletion(t *testing.T) {
 			})
 		})
 		cfg, _, _ := newTestConfig(t, handler)
-		u := &sweperfUser{cfg: cfg, actorName: "act", hostHeader: "act.domain"}
+		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		if err := u.pollJobCompletion(context.Background(), "job-1", 1); err != nil {
 			t.Errorf("pollJobCompletion failed unexpectedly: %v", err)
@@ -433,7 +473,7 @@ func TestSweperfPollJobCompletion(t *testing.T) {
 			})
 		})
 		cfg, _, _ := newTestConfig(t, handler)
-		u := &sweperfUser{cfg: cfg, actorName: "act", hostHeader: "act.domain"}
+		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		if err := u.pollJobCompletion(context.Background(), "job-1", 1); err == nil {
 			t.Errorf("pollJobCompletion expected error on failed job, got nil")
