@@ -3586,6 +3586,165 @@ func TestRevertActor(t *testing.T) {
 	}
 }
 
+// TestRevertActor_FromPaused reverts a paused actor back to its external
+// snapshot, discarding the local pause snapshot info on the actor record.
+func TestRevertActor_FromPaused(t *testing.T) {
+	ns := namespaceForTest("ns-revert-paused")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if snapshotURI == "" {
+		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
+	}
+
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("second ResumeActor failed: %v", err)
+	}
+	if _, err := tc.client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.CheckpointCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+
+	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("RevertActor failed: %v", err)
+	}
+
+	got := reverted.GetActor().GetStatus()
+	if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state = %v, want SUSPENDED", got.GetState())
+	}
+	if uri := got.GetExternalSnapshot().GetSnapshotUri(); uri != snapshotURI {
+		t.Errorf("external snapshot = %q, want it untouched at %q", uri, snapshotURI)
+	}
+	assertSnapshotPresent(t, tc, snapshotURI)
+	if got.GetLocalSnapshotInfo() != nil {
+		t.Errorf("local snapshot info = %v, want nil", got.GetLocalSnapshotInfo())
+	}
+	if got.GetWorkerAssignment() != nil {
+		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
+	}
+	if tc.fakeAtelet.TerminateCalled {
+		t.Errorf("unexpected Terminate call for paused actor")
+	}
+	if tc.fakeAtelet.CheckpointCalled {
+		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
+	}
+}
+
+// TestRevertActor_FromCrashed recovers a crashed actor back to SUSPENDED at its
+// last external snapshot so it can be resumed again.
+func TestRevertActor_FromCrashed(t *testing.T) {
+	ns := namespaceForTest("ns-revert-crashed")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if snapshotURI == "" {
+		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
+	}
+
+	// Resume onto worker-1, then delete the worker pod so the actor crashes.
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("second ResumeActor failed: %v", err)
+	}
+	deleteWorkerPod(t, tc, ns, "worker-1")
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if crashed.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state = %v, want CRASHED", crashed.GetStatus().GetState())
+	}
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.CheckpointCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+
+	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("RevertActor from CRASHED failed: %v", err)
+	}
+
+	got := reverted.GetActor().GetStatus()
+	if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state = %v, want SUSPENDED", got.GetState())
+	}
+	if uri := got.GetExternalSnapshot().GetSnapshotUri(); uri != snapshotURI {
+		t.Errorf("external snapshot = %q, want it untouched at %q", uri, snapshotURI)
+	}
+	assertSnapshotPresent(t, tc, snapshotURI)
+	if got.GetWorkerAssignment() != nil {
+		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
+	}
+	if tc.fakeAtelet.TerminateCalled {
+		t.Errorf("unexpected Terminate call for crashed actor with no worker")
+	}
+	if tc.fakeAtelet.CheckpointCalled {
+		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
+	}
+
+	// Verify the recovered actor can be resumed onto a new worker.
+	createWorkerPod(t, tc, ns, "worker-2", "node1", "pool1")
+	resumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("ResumeActor after revert from CRASHED failed: %v", err)
+	}
+	if resumed.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("resumed state = %v, want RUNNING", resumed.GetActor().GetStatus().GetState())
+	}
+}
+
 // TestRevertActor_RejectsSuspended pins the rejection a lost race produces: a
 // suspend that won left the actor SUSPENDED, and reporting success there would
 // claim the opposite of what the revert asked for.
