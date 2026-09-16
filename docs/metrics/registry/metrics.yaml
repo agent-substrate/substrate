@@ -60,6 +60,10 @@ groups:
               stability: development
               value: delete
               brief: ateapi removed the actor record.
+            - id: revert
+              stability: development
+              value: revert
+              brief: ateapi discarded the actor's execution and returned it to its existing snapshot.
             - id: unknown
               stability: development
               value: unknown

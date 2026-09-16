@@ -279,6 +279,7 @@ const (
 	OperationSuspend = "suspend"
 	OperationPause   = "pause"
 	OperationDelete  = "delete"
+	OperationRevert  = "revert"
 	OperationUnknown = "unknown"
 )
 
@@ -289,6 +290,7 @@ var AllOperations = []string{
 	OperationSuspend,
 	OperationPause,
 	OperationDelete,
+	OperationRevert,
 }
 
 // NormalizeOperationName ensures op is one of the bounded lifecycle operations.
