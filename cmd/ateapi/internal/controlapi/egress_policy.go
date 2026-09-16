@@ -40,7 +40,7 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 	policy := req.GetEgressPolicy()
 	if policy != nil {
 		scrubResourceMetadataForCreate(policy.Metadata)
-		defaults.ApplyEgressPolicyDefaults(policy)
+		defaults.Apply(policy)
 	}
 	if errs := validateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -95,7 +95,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, policy)
 		toUpdate.Metadata = metadata
-		defaults.ApplyEgressPolicyDefaults(toUpdate)
+		defaults.Apply(toUpdate)
 		return nil
 	})
 }

@@ -596,6 +596,45 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 	}
 }
 
+func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+
+	if _, err := s.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:        &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "template-a"},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	templateRef := resources.ActorTemplateRef{Atespace: "team-a", Name: "template-a"}
+	got, err := s.GetActorTemplate(ctx, templateRef)
+	if err != nil {
+		t.Fatalf("GetActorTemplate failed: %v", err)
+	}
+	want := &ateapipb.SnapshotsConfig{
+		OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
+	}
+	if diff := cmp.Diff(want, got.GetSnapshotsConfig(), protocmp.Transform()); diff != "" {
+		t.Errorf("GetActorTemplate did not backfill snapshots_config defaults (-want +got):\n%s", diff)
+	}
+
+	// ListActorTemplates decodes rows on its own path; it must backfill too.
+	page, err := s.ListActorTemplates(ctx, "team-a", store.ListOptions{PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListActorTemplates failed: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("ListActorTemplates returned %d items, want 1", len(page.Items))
+	}
+	if diff := cmp.Diff(want, page.Items[0].GetSnapshotsConfig(), protocmp.Transform()); diff != "" {
+		t.Errorf("ListActorTemplates did not backfill snapshots_config defaults (-want +got):\n%s", diff)
+	}
+}
+
 // createTestSuspendedActor seeds an actor holding an external snapshot, which
 // is what CreateTag tags.
 func createTestSuspendedActor(t *testing.T, s *Persistence, atespace, name string) *ateapipb.Actor {

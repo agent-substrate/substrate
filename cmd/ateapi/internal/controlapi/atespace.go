@@ -35,7 +35,7 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 	if inAtespace != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inAtespace.Metadata)
 		// no status field, but if there were, we would scrub it here
-		defaults.ApplyAtespaceDefaults(inAtespace)
+		defaults.Apply(inAtespace)
 	}
 
 	// Validate the request, including the object within it.

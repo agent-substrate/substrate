@@ -43,7 +43,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 	if inTag != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inTag.Metadata)
 		inTag.Status = nil
-		defaults.ApplyTagDefaults(inTag)
+		defaults.Apply(inTag)
 	}
 
 	if errs := validateCreateTagRequest(ctx, req); len(errs) > 0 {
@@ -171,7 +171,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 		// Restore the server-owned fields, discarding whatever the request
 		// carried in them.
 		toUpdate.Metadata, toUpdate.Status = metadata, tagStatus
-		defaults.ApplyTagDefaults(toUpdate)
+		defaults.Apply(toUpdate)
 		return nil
 	})
 	if err != nil {

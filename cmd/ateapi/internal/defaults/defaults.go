@@ -19,11 +19,33 @@
 package defaults
 
 import (
+	"fmt"
+
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
-// ApplyActorTemplateDefaults applies the ActorTemplate defaults in place.
-func ApplyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
+// Apply set default values to Substrate resource proto messages.
+func Apply(m proto.Message) {
+	switch v := m.(type) {
+	case *ateapipb.Actor:
+		applyActorDefaults(v)
+	case *ateapipb.ActorTemplate:
+		applyActorTemplateDefaults(v)
+	case *ateapipb.Atespace:
+		applyAtespaceDefaults(v)
+	case *ateapipb.EgressPolicy:
+		applyEgressPolicyDefaults(v)
+	case *ateapipb.Tag:
+		applyTagDefaults(v)
+	case *ateapipb.Worker:
+		applyWorkerDefaults(v)
+	default:
+		panic(fmt.Sprintf("unknown resource message %T", m))
+	}
+}
+
+func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 	if t == nil {
 		return
 	}
@@ -33,7 +55,6 @@ func ApplyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 	}
 }
 
-// applySnapshotsConfigDefaults fills the snapshot scopes and the resume policy.
 func applySnapshotsConfigDefaults(sc *ateapipb.SnapshotsConfig) {
 	if sc == nil {
 		return
@@ -52,8 +73,6 @@ func applySnapshotsConfigDefaults(sc *ateapipb.SnapshotsConfig) {
 	}
 }
 
-// applyContainerDefaults fills the readiness probe's deadline and path. An
-// absent probe means no readiness gate, so nothing is created for it.
 func applyContainerDefaults(c *ateapipb.Container) {
 	const (
 		defaultReadyzTimeoutSeconds int32 = 30
@@ -70,24 +89,12 @@ func applyContainerDefaults(c *ateapipb.Container) {
 	}
 }
 
-// ApplyActorDefaults applies the Actor defaults in place. An Actor has none:
-// its optional fields (worker_selector, source_tag) mean something by being
-// absent.
-func ApplyActorDefaults(*ateapipb.Actor) {}
+func applyActorDefaults(*ateapipb.Actor) {}
 
-// ApplyAtespaceDefaults applies the Atespace defaults in place. An Atespace
-// has none; it is metadata only.
-func ApplyAtespaceDefaults(*ateapipb.Atespace) {}
+func applyAtespaceDefaults(*ateapipb.Atespace) {}
 
-// ApplyEgressPolicyDefaults applies the EgressPolicy defaults in place. A
-// policy has none: an empty rule list means deny all, and an unset header
-// prefix already is the empty string.
-func ApplyEgressPolicyDefaults(*ateapipb.EgressPolicy) {}
+func applyEgressPolicyDefaults(*ateapipb.EgressPolicy) {}
 
-// ApplyTagDefaults applies the Tag defaults in place. A Tag has none: scope
-// and source_actor are required.
-func ApplyTagDefaults(*ateapipb.Tag) {}
+func applyTagDefaults(*ateapipb.Tag) {}
 
-// ApplyWorkerDefaults applies the Worker defaults in place. A Worker has
-// none: sandbox_class and labels mirror the WorkerPool as they are.
-func ApplyWorkerDefaults(*ateapipb.Worker) {}
+func applyWorkerDefaults(*ateapipb.Worker) {}

@@ -51,7 +51,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	if inActor != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inActor.Metadata)
 		inActor.Status = nil
-		defaults.ApplyActorDefaults(inActor)
+		defaults.Apply(inActor)
 	}
 
 	// Validate the request, including the object within it.
@@ -279,7 +279,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 		// Restore status and metadata from the server.
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
-		defaults.ApplyActorDefaults(toUpdate)
+		defaults.Apply(toUpdate)
 		return nil
 	})
 	if err != nil {

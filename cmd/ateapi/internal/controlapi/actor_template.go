@@ -44,7 +44,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	if in != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(in.Metadata)
 		in.Status = nil
-		defaults.ApplyActorTemplateDefaults(in)
+		defaults.Apply(in)
 	}
 
 	// Validate the request, including the object within it.

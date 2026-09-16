@@ -23,17 +23,19 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-func TestApplyActorTemplateDefaults(t *testing.T) {
+func TestApply(t *testing.T) {
 	const (
 		scopeFull = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 		scopeData = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 	)
 	tests := []struct {
 		name string
-		in   *ateapipb.ActorTemplate
-		want *ateapipb.ActorTemplate
+		in   proto.Message
+		want proto.Message
 	}{{
-		name: "nil template is tolerated",
+		name: "nil actor template is tolerated",
+		in:   (*ateapipb.ActorTemplate)(nil),
+		want: (*ateapipb.ActorTemplate)(nil),
 	}, {
 		name: "missing snapshots_config is left for validation",
 		in:   &ateapipb.ActorTemplate{},
@@ -116,18 +118,38 @@ func TestApplyActorTemplateDefaults(t *testing.T) {
 			{Name: "b"},
 			{Name: "c", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 3, Path: "/readyz"}, TimeoutSeconds: 30}},
 		}},
+	}, {
+		name: "actor has no defaults",
+		in:   &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}},
+		want: &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}},
+	}, {
+		name: "atespace has no defaults",
+		in:   &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
+		want: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
+	}, {
+		name: "egress policy has no defaults",
+		in:   &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}},
+		want: &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}},
+	}, {
+		name: "tag has no defaults",
+		in:   &ateapipb.Tag{Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED},
+		want: &ateapipb.Tag{Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED},
+	}, {
+		name: "worker has no defaults",
+		in:   &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}},
+		want: &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := proto.CloneOf(tt.in)
-			ApplyActorTemplateDefaults(got)
+			got := proto.Clone(tt.in)
+			Apply(got)
 			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
-				t.Fatalf("ApplyActorTemplateDefaults mismatch (-want +got):\n%s", diff)
+				t.Fatalf("Apply mismatch (-want +got):\n%s", diff)
 			}
-			again := proto.CloneOf(got)
-			ApplyActorTemplateDefaults(again)
+			again := proto.Clone(got)
+			Apply(again)
 			if diff := cmp.Diff(got, again, protocmp.Transform()); diff != "" {
-				t.Errorf("ApplyActorTemplateDefaults is not idempotent (-once +twice):\n%s", diff)
+				t.Errorf("Apply is not idempotent (-once +twice):\n%s", diff)
 			}
 		})
 	}
