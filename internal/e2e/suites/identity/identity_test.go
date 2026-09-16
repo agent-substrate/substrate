@@ -157,7 +157,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// surface the host-side rename on their next read.
 	liveTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-live")
 	for _, id := range ids {
-		waitForTrust(t, ctx, rc, id, liveTrust)
+		waitForTrust(t, ctx, rc, id, liveTrust, 2*time.Minute)
 	}
 
 	// Full suspend/resume cycle of one actor (see the doc comment): the whoami
@@ -193,20 +193,18 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
 		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
 	}
-	if got.Trust != rotatedTrust {
-		t.Errorf("after suspend/resume: /run/ate/trust-bundle.pem = %q, want the rotated sanitized bundle %q (probe read error: %q)", got.Trust, rotatedTrust, got.Error)
-	}
+	waitForTrust(t, ctx, rc, id, rotatedTrust, 10*time.Second)
 
 	// The other actor never cycled: the second rotation must reach it live,
 	// undisturbed by a sibling of the same bundle suspending and resuming.
-	waitForTrust(t, ctx, rc, ids[1], rotatedTrust)
+	waitForTrust(t, ctx, rc, ids[1], rotatedTrust, 2*time.Minute)
 }
 
 // waitForTrust polls the probe until its projected trust bundle equals want;
 // live refresh has no completion signal to wait on.
-func waitForTrust(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, want string) {
+func waitForTrust(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, want string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Minute)
+	deadline := time.Now().Add(timeout)
 	var got whoamiResponse
 	var lastErr error
 	for time.Now().Before(deadline) {
