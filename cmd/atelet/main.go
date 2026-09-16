@@ -91,10 +91,10 @@ var storageBackendEnv = env.Var[string]{
 	Description: "Snapshot backend: exact s3 selects S3; every other value uses GCS.",
 }
 
-var s3PathStyleEnv = env.Var[string]{
+var s3PathStyleEnv = env.Var[bool]{
 	Name:        "AWS_S3_USE_PATH_STYLE",
-	Default:     "",
-	Description: "Enable S3 path-style addressing only for the exact string true.",
+	Default:     false,
+	Description: "Enable S3 path-style addressing. Accepts Go boolean values, including true and 1.",
 }
 
 var (
@@ -247,7 +247,7 @@ func main() {
 			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
 		wrappedGCS = ategcs.NewS3Client(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if s3PathStyleEnv.Get() == "true" {
+			if s3PathStyleEnv.Get() {
 				o.UsePathStyle = true
 			}
 		}))

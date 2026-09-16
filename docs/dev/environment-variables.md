@@ -13,9 +13,8 @@ var storageBackend = env.Var[string]{
 `Get()` reads the current value; `Lookup()` also reports whether it is set.
 Strings are returned unchanged. Booleans use `strconv.ParseBool`, falling back
 to `Default` on invalid input. Unset variables return `Default`; explicitly
-empty values are parsed. Keep special parsing at the call site: S3 path-style
-addressing uses a string declaration and `Get() == "true"` to preserve its
-existing behavior.
+empty values are parsed. Like `pflag`, boolean settings accept `1`, `t`, `T`,
+`TRUE`, `true`, `True`, `0`, `f`, `F`, `FALSE`, `false`, and `False`.
 
 Use `Description` for relevant defaults, accepted values, and flag precedence.
 The generator links each declaration to its source, so shared names can have
