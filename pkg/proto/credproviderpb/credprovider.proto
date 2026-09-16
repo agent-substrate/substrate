@@ -41,8 +41,8 @@ message HttpRequestContext {
 
 // FetchSecretRequest asks a provider to resolve one credential URI.
 message FetchSecretRequest {
-  // A substrate-secret:// URI:
-  //   substrate-secret://<provider name>/<provider tail>
+  // A ate-secret:// URI:
+  //   ate-secret://<provider name>/<provider tail>
   string uri = 1;
 
   // The SPIFFE ID of the actor on whose behalf the secret is fetched, as

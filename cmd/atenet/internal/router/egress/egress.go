@@ -91,7 +91,7 @@ type Handler struct {
 	// credential injection is not configured, and injection will be skipped.
 	provider credproviderpb.CredentialProviderClient
 	// providerName, when set, is the provider this gateway serves (the host of
-	// its substrate-secret:// prefix); a credential URI naming another provider
+	// its ate-secret:// prefix); a credential URI naming another provider
 	// is refused.
 	providerName string
 }

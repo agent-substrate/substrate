@@ -506,7 +506,7 @@ message CredentialHeaderInjection {
   string prefix = 2;
 
   // Source-agnostic reference interpreted by a registered credential provider:
-  // substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
+  // ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
   //
   // +k8s:required
   // +k8s:customValidation # format

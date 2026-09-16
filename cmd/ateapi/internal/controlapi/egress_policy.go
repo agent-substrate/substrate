@@ -251,7 +251,7 @@ func ValidateCustom_CredentialHeaderInjection_Prefix(_ context.Context, _ operat
 func ValidateCustom_CredentialHeaderInjection_CredentialUri(_ context.Context, _ operation.Operation, p *field.Path, uri, _ *string) field.ErrorList {
 	if !validCredentialURI(*uri) {
 		return field.ErrorList{
-			field.Invalid(p, *uri, "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
+			field.Invalid(p, *uri, "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
 		}
 	}
 	return nil
@@ -259,7 +259,7 @@ func ValidateCustom_CredentialHeaderInjection_CredentialUri(_ context.Context, _
 
 func validCredentialURI(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "substrate-secret" || u.Host == "" || u.Host != u.Hostname() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(validation.IsDNS1123Subdomain(u.Host)) != 0 {
+	if err != nil || u.Scheme != "ate-secret" || u.Host == "" || u.Host != u.Hostname() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(validation.IsDNS1123Subdomain(u.Host)) != 0 {
 		return false
 	}
 	escapedPath := u.EscapedPath()

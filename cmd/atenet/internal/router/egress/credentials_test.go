@@ -30,7 +30,7 @@ import (
 )
 
 // credentialInjectionPolicySample injects "authorization: Bearer <secret>" from
-// substrate-secret://k8s/default/token, so the provider name under test is "k8s".
+// ate-secret://k8s/default/token, so the provider name under test is "k8s".
 const injectionProviderName = "k8s"
 
 // fakeProvider is a stub CredentialProviderClient recording the last request.
@@ -85,7 +85,7 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 	if h0.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
 		t.Errorf("append action = %v, want OVERWRITE_IF_EXISTS_OR_ADD", h0.GetAppendAction())
 	}
-	if got := provider.got.GetUri(); got != "substrate-secret://k8s/default/token" {
+	if got := provider.got.GetUri(); got != "ate-secret://k8s/default/token" {
 		t.Errorf("provider URI = %q", got)
 	}
 	if got := provider.got.GetActorSpiffeId(); got != testActorSPIFFEID {
@@ -157,7 +157,7 @@ func TestInjectionDenials(t *testing.T) {
 		{
 			name:         "credential URI for another provider is refused",
 			provider:     &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
-			providerName: "vault", // policy URI is substrate-secret://k8s/...
+			providerName: "vault", // policy URI is ate-secret://k8s/...
 			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_InternalServerError,
 		},

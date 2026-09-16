@@ -53,7 +53,7 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"--credential-provider-name=substrate-secret://kubernetes.io",
+		"--credential-provider-name=ate-secret://kubernetes.io",
 		"--credential-provider-address=credprovider.ate-system.svc:50051",
 		"--credential-provider-server-name=credprovider.ate-system.svc",
 	} {

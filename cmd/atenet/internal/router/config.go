@@ -76,7 +76,7 @@ type authConfig struct {
 // non-empty Address enables injection; the rest configures the mTLS the gateway
 // dials the provider with. See cmd/atenet/internal/router/egress.
 type credentialProviderConfig struct {
-	// Name is the provider this gateway serves, as a substrate-secret://
+	// Name is the provider this gateway serves, as a ate-secret://
 	// prefix; a policy credential URI naming any other provider is refused.
 	// Empty disables the check (dev only).
 	Name string

@@ -1416,7 +1416,7 @@ type CredentialHeaderInjection struct {
 	// +k8s:customValidation # format
 	Prefix string `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
 	// Source-agnostic reference interpreted by a registered credential provider:
-	// substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
+	// ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
 	//
 	// +k8s:required
 	// +k8s:customValidation # format

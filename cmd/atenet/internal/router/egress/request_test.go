@@ -50,7 +50,7 @@ func credentialInjectionPolicySample(pattern string) *ateapipb.EgressPolicy {
 		Hostnames: &ateapipb.HostnameRule{
 			Patterns: []string{pattern},
 			Effects: &ateapipb.EgressRuleEffects{InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
-				Header: "authorization", Prefix: "Bearer ", CredentialUri: "substrate-secret://k8s/default/token",
+				Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token",
 			}}},
 		},
 	}}}

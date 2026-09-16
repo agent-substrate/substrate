@@ -95,8 +95,8 @@ func (x *HttpRequestContext) GetHeader() string {
 // FetchSecretRequest asks a provider to resolve one credential URI.
 type FetchSecretRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// A substrate-secret:// URI:
-	//   substrate-secret://<provider name>/<provider tail>
+	// A ate-secret:// URI:
+	//   ate-secret://<provider name>/<provider tail>
 	Uri string `protobuf:"bytes,1,opt,name=uri,proto3" json:"uri,omitempty"`
 	// The SPIFFE ID of the actor on whose behalf the secret is fetched, as
 	// verified by the egress gateway. This field always contains a SPIFFE ID.

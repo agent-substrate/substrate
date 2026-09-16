@@ -122,7 +122,7 @@ func (e *Env) patchAtenetEgressInject(raw []byte) ([]byte, error) {
 
 	name := e.Cfg.CredentialProviderName
 	if name == "" {
-		name = "substrate-secret://kubernetes.io"
+		name = "ate-secret://kubernetes.io"
 	}
 	address := e.Cfg.CredentialProviderAddress
 	if address == "" {

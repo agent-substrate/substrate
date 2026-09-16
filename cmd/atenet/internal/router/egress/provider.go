@@ -37,7 +37,7 @@ import (
 )
 
 // credentialURIScheme is the only scheme a credential URI may carry.
-const credentialURIScheme = "substrate-secret"
+const credentialURIScheme = "ate-secret"
 
 // ProviderDialConfig configures the mTLS connection the egress gateway dials the
 // credential provider with.
@@ -81,8 +81,8 @@ func DialProvider(ctx context.Context, cfg ProviderDialConfig) (*grpc.ClientConn
 	return grpc.NewClient(cfg.Address, append(dialOpts, statsOpt)...)
 }
 
-// ProviderName reduces a configured provider — a substrate-secret:// prefix such
-// as substrate-secret://kubernetes.io — to the provider name (the URI host) the
+// ProviderName reduces a configured provider — a ate-secret:// prefix such
+// as ate-secret://kubernetes.io — to the provider name (the URI host) the
 // handler compares credential URIs against, so a URI naming another provider
 // fails closed. An empty input returns an empty name, which disables the check
 // (dev only).
@@ -93,9 +93,9 @@ func ProviderName(name string) (string, error) {
 	return providerNameFromURI(name)
 }
 
-// providerNameFromURI returns the provider name of a substrate-secret:// URI —
+// providerNameFromURI returns the provider name of a ate-secret:// URI —
 // the URI host, e.g. "kubernetes.io" in
-// substrate-secret://kubernetes.io/<namespace>/<secret>. The gateway uses it to
+// ate-secret://kubernetes.io/<namespace>/<secret>. The gateway uses it to
 // confirm a URI targets the provider it is configured to serve.
 func providerNameFromURI(raw string) (string, error) {
 	u, err := url.Parse(raw)

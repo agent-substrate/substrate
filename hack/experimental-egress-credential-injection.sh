@@ -34,7 +34,7 @@ egress_credential_injection_enabled() {
 
 # Arguments:
 #
-# $1 = credential-provider name (substrate-secret:// prefix)
+# $1 = credential-provider name (ate-secret:// prefix)
 # $2 = credential-provider gRPC address
 # $3 = credential-provider serving-cert SAN to pin
 emit_egress_inject_flags() {
@@ -69,7 +69,7 @@ patch_atenet_egress_inject() {
     return 1
   fi
 
-  local name="${ATE_CREDENTIAL_PROVIDER_NAME:-substrate-secret://kubernetes.io}"
+  local name="${ATE_CREDENTIAL_PROVIDER_NAME:-ate-secret://kubernetes.io}"
   local address="${ATE_CREDENTIAL_PROVIDER_ADDRESS:-credprovider.ate-system.svc:50051}"
   # Pin the provider's serving-cert SAN to its Service DNS name (the address
   # without the port), so a rotated cert for the same Service still validates.
