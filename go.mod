@@ -18,6 +18,7 @@ require (
 	github.com/aws/smithy-go v1.25.1
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/distribution/reference v0.6.0
+	github.com/containerd/cgroups/v3 v3.0.5
 	github.com/containerd/containerd/api v1.12.0-beta.0
 	github.com/containerd/ttrpc v1.2.9
 	github.com/envoyproxy/go-control-plane v0.14.0
