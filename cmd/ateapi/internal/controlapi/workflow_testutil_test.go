@@ -19,6 +19,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -57,7 +58,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoretest.New())
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, time.Minute, objectstoretest.New())
 }
 
 // newFinalizeWorkflow builds an ActorWorkflow over persistence with an
@@ -65,7 +66,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 // directly rather than going through newTestActorWorkflow.
 func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
 	objects := objectstoretest.New()
-	return &ActorWorkflow{store: persistence, objectStore: objects}, objects
+	return &ActorWorkflow{store: persistence, workflowDeadline: time.Minute, objectStore: objects}, objects
 }
 
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under

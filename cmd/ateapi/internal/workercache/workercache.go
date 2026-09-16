@@ -120,6 +120,12 @@ func (c *Cache) Forget(name string) {
 	delete(c.workers, name)
 }
 
+// Observe applies a worker returned by a successful store write immediately,
+// without waiting for the corresponding watch event.
+func (c *Cache) Observe(worker *ateapipb.Worker) {
+	c.applyEvent(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: worker})
+}
+
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 	watch, err := c.store.WatchWorkers(ctx)
 	if err != nil {

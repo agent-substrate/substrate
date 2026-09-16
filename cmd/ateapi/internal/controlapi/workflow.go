@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -111,14 +112,13 @@ type ActorWorkflow struct {
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
+	workflowDeadline     time.Duration
 	objectStore          objectstore.Store
 }
 
-// NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
-//
-// objectStore may be nil, which leaves external snapshots in place instead of
-// copying and releasing them. Only tests that never reach those steps pass nil;
-// ate-api always builds one.
+// NewActorWorkflow creates a new ActorWorkflow. workflowDeadline bounds how
+// long a single Resume/Suspend can run end-to-end; instruments and objectStore
+// may be nil.
 func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
@@ -128,6 +128,7 @@ func NewActorWorkflow(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
+	workflowDeadline time.Duration,
 	objectStore objectstore.Store,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
@@ -140,6 +141,7 @@ func NewActorWorkflow(
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
+		workflowDeadline:     workflowDeadline,
 		objectStore:          objectStore,
 	}
 }
@@ -213,7 +215,14 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 }
 
 func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
-	return acquireLease(ctx, w.store, "lease:actor:"+actorRef.Atespace+":"+actorRef.Name, "actor")
+	workflowCtx, cancel := context.WithTimeout(ctx, w.workflowDeadline)
+	leaseCtx, lease, err := acquireLease(workflowCtx, w.store, "lease:actor:"+actorRef.Atespace+":"+actorRef.Name, "actor")
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	context.AfterFunc(lease.Context(), cancel)
+	return leaseCtx, lease, nil
 }
 
 func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {

@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
@@ -63,14 +64,8 @@ type VolumePluginRegistry interface {
 	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
 }
 
-// NewRPCService creates an instance of the ControlServer service. This is what
-// implements the outward-facing RPC interface.
-//
-// instruments may be nil; the record helpers no-op.
-//
-// objectStore may be nil, which leaves external snapshots in place instead of
-// copying and releasing them. Only tests that never reach those steps pass nil;
-// ate-api always builds one.
+// NewRPCService creates an RPC service. actorWorkflowDeadline bounds how long a single
+// Resume/Suspend workflow can run end-to-end. instruments and objectStore may be nil.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -80,6 +75,7 @@ func NewRPCService(
 	dialer *AteletDialer,
 	instruments *Instruments,
 	egressGatewayAddress string,
+	actorWorkflowDeadline time.Duration,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 	objectStore objectstore.Store,
 	actorIdentityJWTIssuer string,
@@ -101,7 +97,7 @@ func NewRPCService(
 		actorIDJWTPool:         actorIDJWTPool,
 		actorIDCAPool:          actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, actorWorkflowDeadline, objectStore)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }

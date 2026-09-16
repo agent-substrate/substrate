@@ -218,6 +218,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		dialer,
 		instruments,
 		"",
+		30*time.Second,
 		volPlugins,
 		objectStore,
 		"https://nonexistent-issuer.example",

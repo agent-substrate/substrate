@@ -89,6 +89,7 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
+	actorWorkflowDeadline  = pflag.Duration("actor-workflow-deadline", 5*time.Minute, "Maximum wall-clock duration of a single Resume/Suspend workflow; raise it for slow image registries.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -260,6 +261,7 @@ func main() {
 		ateletDialer,
 		instruments,
 		*egressGatewayAddress,
+		*actorWorkflowDeadline,
 		volPlugins,
 		objectStore,
 		actorIdentityJWTIssuer,
@@ -379,6 +381,7 @@ func logFlagValues(ctx context.Context) {
 		slog.Bool("atelet-insecure", *ateletInsecure),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
+		slog.Duration("actor-workflow-deadline", *actorWorkflowDeadline),
 	)
 }
 
