@@ -544,19 +544,23 @@ func TestSystemInfoVolumeRefresher_DeregisterMarksStale(t *testing.T) {
 	}
 }
 
-func TestSystemInfoVolumeRefresher_RegisterTwicePanics(t *testing.T) {
+func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	r := newSystemInfoVolumeRefresher(store.lister, nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-1")
+	first := r.actors["uid-1"]
 
-	defer func() {
-		if recover() == nil {
-			t.Error("Register of a still-registered UID did not panic")
-		}
-	}()
-	_ = r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil)
+	if err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil); err != nil {
+		t.Fatalf("second Register: %v", err)
+	}
+	if !first.stale {
+		t.Error("superseded entry was not marked stale")
+	}
+	if r.actors["uid-1"] == first {
+		t.Error("superseded entry was not replaced in r.actors")
+	}
 }
 
 func TestSystemInfoVolumesFor(t *testing.T) {
@@ -670,6 +674,17 @@ func TestSystemInfoVolumeRegister_TrustBundle(t *testing.T) {
 		err := r.Register("uid-2", resources.ActorRef{Atespace: "team-a", Name: "actor-2"}, []*systemInfoVolume{vol})
 		if err == nil || !strings.Contains(err.Error(), "not found") || !strings.Contains(err.Error(), `"trust"`) {
 			t.Errorf("Register = %v, want not-found error naming the volume", err)
+		}
+	})
+
+	t.Run("re-registration supersedes stale entry without panicking", func(t *testing.T) {
+		r := newSystemInfoVolumeRefresher(store.lister, nil)
+		dir1 := t.TempDir()
+		dir2 := t.TempDir()
+		registerTrustVolume(t, r, dir1, "uid-rereg")
+		registerTrustVolume(t, r, dir2, "uid-rereg")
+		if got := readProjected(t, dir2, "uid-rereg", "trust", "ca.pem"); got != string(certPEM) {
+			t.Errorf("content = %q, want the sanitized bundle", got)
 		}
 	})
 }

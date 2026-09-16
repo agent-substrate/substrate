@@ -105,8 +105,9 @@ func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, i
 }
 
 // Register records actorUID's system-info volumes and writes their contents
-// from current cluster state.
-// Double registering an actor causes a panic.
+// from current cluster state. If actorUID is already registered (for example
+// after a worker pod crash left a stale entry without Terminate), the previous
+// registration is superseded.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) error {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
 	// Held until the initial write finishes so a refresh cannot interleave.
@@ -114,13 +115,16 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 	defer actor.mu.Unlock()
 
 	r.mu.Lock()
-	_, dup := r.actors[actorUID]
-	if !dup {
-		r.actors[actorUID] = actor
-	}
+	prev := r.actors[actorUID]
+	r.actors[actorUID] = actor
 	r.mu.Unlock()
-	if dup {
-		panic(fmt.Sprintf("system-info volumes: actor %s registered twice", actorUID))
+	if prev != nil {
+		prev.mu.Lock()
+		prev.stale = true
+		prev.mu.Unlock()
+		slog.Info("Superseded a stale system-info volume registration",
+			slog.String("actor_uid", actorUID),
+			slog.Any("actor", ref))
 	}
 
 	for _, v := range volumes {
