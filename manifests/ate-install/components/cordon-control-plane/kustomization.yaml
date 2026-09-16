@@ -13,8 +13,9 @@
 # limitations under the License.
 
 # Pins each control plane workload to its own dedicated node. Selected by
-# hack/install-ate.sh under --cordon-control-plane, which wraps every
-# control plane apply in a kustomization that includes this component.
+# hack/install-ate.sh and cmd/ate-setup under --cordon-control-plane; both
+# wrap every control plane apply in a kustomization that includes this
+# component.
 #
 # Assumes a node pool whose nodes carry the label and the taint
 # ate.dev/workloadType=ate-control-plane:NoSchedule. The hostname

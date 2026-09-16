@@ -38,6 +38,12 @@ const (
 
 	SandboxClassGvisor  = "gvisor"
 	SandboxClassMicrovm = "microvm"
+
+	// Cluster size profiles. size0 is the shipped footprint; size10 assumes a
+	// dedicated node for PostgreSQL and raises the store, its client pool, and
+	// the podcertificate controller's API rate limits to match.
+	ClusterSizeSize0  = "size0"
+	ClusterSizeSize10 = "size10"
 )
 
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
@@ -48,6 +54,12 @@ const DefaultRolloutTimeout = 60 * time.Second
 // podcertificate controller's projected servicedns trust bundle and its own
 // podidentity credential bundle.
 const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+
+// Size10PostgresPoolParams is appended to the default connection string on
+// size10 clusters. pgxpool defaults MaxConns to max(4, runtime.NumCPU()), which
+// under-uses the size10 server's raised max_connections; pinning the pool makes
+// the client side open the sockets the server is provisioned for.
+const Size10PostgresPoolParams = "&pool_max_conns=64&pool_min_conns=4"
 
 // DefaultPostgresSchema mirrors the shell installer's default for
 // ATE_API_POSTGRES_SCHEMA, the PostgreSQL schema holding the Substrate tables.
@@ -113,6 +125,16 @@ type Config struct {
 	// PodcertWorkersPerSigner overrides WORKERS_PER_SIGNER on podcertificate-controller.
 	PodcertWorkersPerSigner int
 
+	// ClusterSize is the footprint profile (ATE_INSTALL_CLUSTER_SIZE): size0
+	// or size10.
+	ClusterSize string
+
+	// CordonControlPlane pins each control plane workload to its own node
+	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a node pool labeled and
+	// tainted ate.dev/workloadType=ate-control-plane:NoSchedule with one node
+	// per pod plus a spare for rollout surges.
+	CordonControlPlane bool
+
 	// ExperimentalUseSDSMint enables per-SNI dynamic cert minting on atenet-egress.
 	ExperimentalUseSDSMint bool
 
@@ -151,6 +173,8 @@ type Options struct {
 	Router                                string
 	RolloutTimeout                        string
 	PodcertWorkersPerSigner               int
+	ClusterSize                           string
+	CordonControlPlane                    bool
 	ExperimentalUseSDSMint                bool
 	AdditionalEgressExtprocService        string
 	ExperimentalEgressCredentialInjection bool
@@ -219,6 +243,17 @@ func Load(opts Options) (*Config, error) {
 	extproc := firstNonEmpty(opts.AdditionalEgressExtprocService, env["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"])
 	injection := opts.ExperimentalEgressCredentialInjection || env["ATE_CREDENTIAL_INJECTION_ENABLED"] == "true"
 
+	cordon := opts.CordonControlPlane
+	if !cordon {
+		switch env["ATE_INSTALL_CORDON_CONTROL_PLANE"] {
+		case "", "false":
+		case "true":
+			cordon = true
+		default:
+			return nil, fmt.Errorf("ATE_INSTALL_CORDON_CONTROL_PLANE must be true or false, got %q", env["ATE_INSTALL_CORDON_CONTROL_PLANE"])
+		}
+	}
+
 	cfg := &Config{
 		Root:                                  root,
 		Kind:                                  opts.Kind,
@@ -236,6 +271,8 @@ func Load(opts Options) (*Config, error) {
 		RolloutTimeout:                        rolloutTimeout,
 		rolloutTimeoutSet:                     timeoutStr != "",
 		PodcertWorkersPerSigner:               podcertWorkers,
+		ClusterSize:                           firstNonEmpty(opts.ClusterSize, env["ATE_INSTALL_CLUSTER_SIZE"], ClusterSizeSize0),
+		CordonControlPlane:                    cordon,
 		ExperimentalUseSDSMint:                sdsmint,
 		AdditionalEgressExtprocService:        extproc,
 		ExperimentalEgressCredentialInjection: injection,
@@ -289,6 +326,11 @@ func validate(cfg *Config) error {
 	if cfg.PodcertWorkersPerSigner < 0 {
 		return fmt.Errorf("--podcert-workers-per-signer must be a positive integer, got %d", cfg.PodcertWorkersPerSigner)
 	}
+	switch cfg.ClusterSize {
+	case ClusterSizeSize0, ClusterSizeSize10:
+	default:
+		return fmt.Errorf("--cluster-size must be %s or %s, got %q", ClusterSizeSize0, ClusterSizeSize10, cfg.ClusterSize)
+	}
 	if cfg.AdditionalEgressExtprocService != "" {
 		if err := validateExtprocService(cfg.AdditionalEgressExtprocService); err != nil {
 			return err
@@ -334,12 +376,23 @@ func validateExtprocService(spec string) error {
 }
 
 // PostgresConnString returns the configured connection string, falling back to
-// the in-cluster default.
+// the in-cluster default. On a size10 cluster the default also pins the
+// client pool to what the bundled server is provisioned for; an explicit
+// connection string is passed through untouched, since its database was sized
+// by whoever wrote it.
 func (c *Config) PostgresConnString() string {
 	if c.PostgresConnectionString != "" {
 		return c.PostgresConnectionString
 	}
+	if c.ClusterSize == ClusterSizeSize10 {
+		return DefaultPostgresConnectionString + Size10PostgresPoolParams
+	}
 	return DefaultPostgresConnectionString
+}
+
+// Size10 reports whether the size10 footprint profile is selected.
+func (c *Config) Size10() bool {
+	return c.ClusterSize == ClusterSizeSize10
 }
 
 // PostgresSchemaName returns the configured schema, falling back to the
@@ -436,6 +489,16 @@ func (c *Config) ScriptEnv() []string {
 	}
 	if c.PodcertWorkersPerSigner > 0 {
 		merged["ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER"] = strconv.Itoa(c.PodcertWorkersPerSigner)
+	}
+	// Resolved values again, so a flag overrides whatever the environment
+	// carried rather than layering under it.
+	delete(merged, "ATE_INSTALL_CLUSTER_SIZE")
+	if c.ClusterSize != "" && c.ClusterSize != ClusterSizeSize0 {
+		merged["ATE_INSTALL_CLUSTER_SIZE"] = c.ClusterSize
+	}
+	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
+	if c.CordonControlPlane {
+		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
 	}
 	if c.ExperimentalUseSDSMint {
 		merged["ATE_EXPERIMENTAL_USE_SDSMINT"] = "true"

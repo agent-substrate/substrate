@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 const (
@@ -55,4 +56,13 @@ func Infof(format string, args ...any) {
 // Warnf prints a warning to stderr.
 func Warnf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "Warning: "+format+"\n", args...)
+}
+
+// Elapsed prints how long an operation took, in the same "(label took 1.234s)"
+// form the shell installer prints after each kubectl, ko, and gcloud call, so
+// a slow install can be attributed to a step from its log alone. Use it as
+// `defer log.Elapsed(time.Now(), "ko resolve")`: the start time is captured
+// when the defer statement runs.
+func Elapsed(start time.Time, label string) {
+	fmt.Fprintf(out, "  (%s took %.3fs)\n", label, time.Since(start).Seconds())
 }

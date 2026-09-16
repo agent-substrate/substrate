@@ -43,7 +43,8 @@ not supported here — the ATE_API_POSTGRES_CLOUDSQL_* variables are ignored, so
 use hack/install-ate.sh for a Cloud SQL install (see
 cmd/ate-setup/differences.md).
 
-Shape the install with the global --atenet-dataplane flag.`,
+Shape the install with the global --atenet-dataplane, --cluster-size, and
+--cordon-control-plane flags.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployAteSystem(cmd.Context(), deployOpts)

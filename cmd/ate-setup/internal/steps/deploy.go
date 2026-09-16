@@ -84,16 +84,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 
 	// The podcertificate controller goes first so it starts signing and
 	// publishing trust bundles immediately.
-	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
-		return err
-	}
-	if err := e.applyPodcertWorkersOverride(ctx); err != nil {
-		return err
-	}
-	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespacePodCert, "podcertificate-controller", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
-		return err
-	}
-	if err := e.WaitForPodCertificateTrustBundles(ctx); err != nil {
+	if err := e.DeployPodCertificateController(ctx); err != nil {
 		return err
 	}
 	if err := e.SetupCSI(ctx, opts.SetupCSI); err != nil {
@@ -121,6 +112,8 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
+	// Rendered at its final size before the apply, so the rollout wait below
+	// covers the one pod that will actually serve.
 	if err := e.applyBundledPostgres(ctx); err != nil {
 		return err
 	}
@@ -173,6 +166,33 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		}
 	}
 	return nil
+}
+
+// DeployPodCertificateController applies the podcertificate controller,
+// applies the WORKERS_PER_SIGNER override, and waits until it is rolling and
+// has published its trust bundles.
+//
+// size10 clusters render the podcert-size10 overlay instead of the base file.
+// It appends --kube-api-qps=100 / --kube-api-burst=200 so the controller keeps
+// up with the request volume the size10 postgres profile enables. An overlay
+// rather than a post-apply patch, so that no later apply of the base file can
+// reconcile the flags away; the base kustomization leaves the file out for the
+// same reason.
+func (e *Env) DeployPodCertificateController(ctx context.Context) error {
+	path := e.Cfg.Manifest("pod-certificate-controller.yaml")
+	if e.Cfg.Size10() {
+		path = e.Cfg.Manifest("podcert-size10")
+	}
+	if err := e.renderResolveApply(ctx, path); err != nil {
+		return err
+	}
+	if err := e.applyPodcertWorkersOverride(ctx); err != nil {
+		return err
+	}
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespacePodCert, "podcertificate-controller", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
+		return err
+	}
+	return e.WaitForPodCertificateTrustBundles(ctx)
 }
 
 // applyPodcertWorkersOverride sets WORKERS_PER_SIGNER on podcertificate-controller if configured.
@@ -234,7 +254,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
+	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-api-server", e.Cfg.RolloutTimeout)
@@ -253,7 +273,7 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
+	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-controller", e.Cfg.RolloutTimeout)
