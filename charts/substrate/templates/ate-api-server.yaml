@@ -108,9 +108,8 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-{{- if .Values.otel.endpoint }}
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: {{ .Values.otel.endpoint | quote }}
+{{- with include "substrate.otel.env" . }}
+{{- . | trim | nindent 8 }}
 {{- end }}
         - name: ATE_STORAGE_BACKEND
           value: {{ .Values.atelet.storageBackend | quote }}

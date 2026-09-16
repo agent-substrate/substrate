@@ -107,7 +107,6 @@ data:
           receivers: [otlp]
           processors: [batch]
           exporters: [prometheus, debug]
-
         # Every ate event, plus any workload that sends OTLP logs. debug is the
         # only exporter: kind has no log store, and the e2e read-back goes
         # through the count connector below. Never put a sampler or a filter

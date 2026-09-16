@@ -79,6 +79,60 @@ Plaintext HTTP URL that clients use to reach atenet-router.
 {{- end -}}
 
 {{/*
+OTLP endpoint a signal exports to, or empty when the signal is disabled or no
+endpoint resolves. The per-signal endpoint wins over the generic one, matching
+the precedence the OpenTelemetry SDK gives OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT
+over OTEL_EXPORTER_OTLP_ENDPOINT.
+
+Usage:
+  {{ include "substrate.otel.signalEndpoint" (list "traces" .) }}
+*/}}
+{{- define "substrate.otel.signalEndpoint" -}}
+{{- $signal := index . 0 -}}
+{{- $ctx := index . 1 -}}
+{{- $cfg := index $ctx.Values.otel $signal -}}
+{{- if $cfg.enabled -}}
+{{- $cfg.endpoint | default $ctx.Values.otel.endpoint -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+OTEL_* env entries for a Go component, as a list of "- name/value" items.
+Empty when nothing under .Values.otel is set, so callers can gate the env
+key on the result.
+
+Usage:
+  {{- with include "substrate.otel.env" . }}
+  {{- . | trim | nindent 8 }}
+  {{- end }}
+*/}}
+{{- define "substrate.otel.env" -}}
+{{- $otel := .Values.otel -}}
+{{- if $otel.endpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ $otel.endpoint | quote }}
+{{- end }}
+{{- range $signal := list "traces" "metrics" "logs" }}
+{{- $cfg := index $otel $signal }}
+{{- if not $cfg.enabled }}
+{{- /* "none" is the SDK's own exporter name for "export nothing"; leaving the
+       endpoint unset would fall back to the SDK default of localhost:4317. */}}
+- name: OTEL_{{ upper $signal }}_EXPORTER
+  value: none
+{{- else if $cfg.endpoint }}
+- name: OTEL_EXPORTER_OTLP_{{ upper $signal }}_ENDPOINT
+  value: {{ $cfg.endpoint | quote }}
+{{- end }}
+{{- end }}
+{{- if include "substrate.otel.signalEndpoint" (list "traces" .) }}
+- name: OTEL_TRACES_SAMPLER
+  value: parentbased_traceidratio
+- name: OTEL_TRACES_SAMPLER_ARG
+  value: {{ $otel.traces.samplingRatio | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Build an image reference for a substrate component binary.
 
 Usage:

@@ -42,4 +42,11 @@ See `values.yaml` for the full set; the important keys:
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
 | `atelet.gcpAuthForImagePulls` | `false` | Enable only when using GCP registry auth |
-| `otel.endpoint` | `""` | Set to an OTLP endpoint to export traces/metrics |
+| `otel.endpoint` | `""` | Set to an OTLP endpoint to export traces, metrics and the router access log |
+| `otel.traces.enabled` | `true` | Set to `false` to export no traces from the router; the Go components do not honor this yet |
+| `otel.traces.endpoint` | `""` | OTLP endpoint for traces, overriding `otel.endpoint` |
+| `otel.traces.samplingRatio` | `0.01` | Fraction of parentless requests that start a trace, applied to the Go components and the router |
+| `otel.metrics.enabled` | `true` | Sets the OTLP metrics exporter to `none`; the Go components do not honor this yet |
+| `otel.metrics.endpoint` | `""` | OTLP endpoint for metrics, overriding `otel.endpoint` |
+| `otel.logs.enabled` | `true` | Set to `false` to export no logs; the router access log is the only OTLP log source today |
+| `otel.logs.endpoint` | `""` | OTLP endpoint for logs, overriding `otel.endpoint` |

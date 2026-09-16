@@ -59,8 +59,26 @@ atelet:
 # Mounted via envFrom with optional=true. Created by the chart from these values.
 ateApiServerEnvVarsConfigMap: ate-api-server-envvars
 
+# OTLP export, following the OpenTelemetry SDK environment variable spec.
+# endpoint applies to every signal; a signal's own endpoint overrides it.
+# A signal exports only when it is enabled and resolves to an endpoint.
+#
+# traces.enabled and metrics.enabled set OTEL_<SIGNAL>_EXPORTER=none on the
+# Go components, which do not read it yet and keep exporting; the setting
+# takes effect on the router's agentgateway only. logs.enabled works in full,
+# since the agentgateway access log is the only OTLP log source.
 otel:
   endpoint: ""
+  traces:
+    enabled: true
+    endpoint: ""
+    samplingRatio: 0.01
+  metrics:
+    enabled: true
+    endpoint: ""
+  logs:
+    enabled: true
+    endpoint: ""
 
 image:
   registry: ghcr.io/kagent-dev/substrate

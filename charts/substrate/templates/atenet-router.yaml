@@ -37,12 +37,25 @@ data:
       backend:
         poolMaxSize: 0
 
-{{- if .Values.otel.endpoint }}
+{{- $traces := include "substrate.otel.signalEndpoint" (list "traces" .) }}
+{{- $logs := include "substrate.otel.signalEndpoint" (list "logs" .) }}
+{{- if or $traces $logs }}
     frontendPolicies:
+{{- if $traces }}
       tracing:
-        host: $AGENTGATEWAY_OTLP_ADDRESS
+        host: $AGENTGATEWAY_OTLP_TRACES_ADDRESS
         protocol: grpc
-        randomSampling: 0.01
+        randomSampling: {{ .Values.otel.traces.samplingRatio }}
+{{- end }}
+{{- if $logs }}
+      # Unsampled per-request access log. It carries the ate.* actor
+      # attribution, which the sampled traces cannot be aggregated on.
+      # `fields` stays unset so the OTLP sink inherits the full field set.
+      accessLog:
+        otlp:
+          host: $AGENTGATEWAY_OTLP_LOGS_ADDRESS
+          protocol: grpc
+{{- end }}
 {{- end }}
 
     backends:
@@ -232,9 +245,8 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-{{- if .Values.otel.endpoint }}
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: {{ .Values.otel.endpoint | quote }}
+{{- with include "substrate.otel.env" . }}
+{{- . | trim | nindent 8 }}
 {{- end }}
         ports:
         - name: extproc
@@ -251,10 +263,19 @@ spec:
         args:
         - "-f"
         - "/etc/agentgateway/config.yaml"
-{{- if .Values.otel.endpoint }}
+{{- $traces := include "substrate.otel.signalEndpoint" (list "traces" .) }}
+{{- $logs := include "substrate.otel.signalEndpoint" (list "logs" .) }}
+{{- if or $traces $logs }}
+        # agentgateway takes host:port, not a URL, so the scheme is trimmed.
         env:
-        - name: AGENTGATEWAY_OTLP_ADDRESS
-          value: {{ trimPrefix "http://" .Values.otel.endpoint | quote }}
+{{- if $traces }}
+        - name: AGENTGATEWAY_OTLP_TRACES_ADDRESS
+          value: {{ trimPrefix "http://" $traces | quote }}
+{{- end }}
+{{- if $logs }}
+        - name: AGENTGATEWAY_OTLP_LOGS_ADDRESS
+          value: {{ trimPrefix "http://" $logs | quote }}
+{{- end }}
 {{- end }}
         ports:
         - name: http

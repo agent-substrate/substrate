@@ -79,10 +79,9 @@ spec:
         - "--ateapi-conn-spec=dns:///{{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-{{- if .Values.otel.endpoint }}
+{{- with include "substrate.otel.env" . }}
         env:
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: {{ .Values.otel.endpoint | quote }}
+{{- . | trim | nindent 8 }}
 {{- end }}
         ports:
         - name: metrics
