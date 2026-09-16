@@ -17,12 +17,50 @@
 package main
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
+
+func TestCleanupKeepsSandboxAliveUntilApplicationsDeleted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runsc")
+	// Model runsc's control socket: deleting an application fails once the
+	// sandbox has stopped, even when deletion is forced.
+	script := `#!/bin/sh
+set -eu
+shift 5
+case "$1" in
+kill)
+    if [ "$2" = _pause ]; then touch "$0.stopped"; fi
+    ;;
+delete)
+    if [ "$3" = _pause ]; then
+        touch "$0.stopped"
+    elif [ -e "$0.stopped" ]; then
+        exit 128
+    fi
+    ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r := &runsc{path: path, actorUID: "test-actor"}
+	containers := []*ateompb.Container{{Name: "counter"}}
+	stopContainers(context.Background(), r, containers)
+	if err := cleanupContainers(context.Background(), r, containers); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".stopped"); err != nil {
+		t.Fatalf("sandbox was not stopped: %v", err)
+	}
+}
 
 func TestKillArgs(t *testing.T) {
 	r := &runsc{

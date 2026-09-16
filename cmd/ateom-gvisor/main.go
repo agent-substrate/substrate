@@ -891,8 +891,8 @@ func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*at
 		_ = rcmd.cmdKill(ctx, ctr.GetName(), "SIGKILL")
 		_ = rcmd.cmdWait(ctx, ctr.GetName())
 	}
-	_ = rcmd.cmdKill(ctx, ocispec.PauseContainer, "SIGKILL")
-	_ = rcmd.cmdWait(ctx, ocispec.PauseContainer)
+	// Keep the sandbox alive for application deletion. cleanupContainers
+	// force-deletes the pause container after deleting the applications.
 }
 
 func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) error {
