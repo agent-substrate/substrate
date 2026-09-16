@@ -35,6 +35,8 @@ func sandboxClassString(in ateapipb.SandboxClass) string {
 		return string(atev1alpha1.SandboxClassGvisor)
 	case ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM:
 		return string(atev1alpha1.SandboxClassMicroVM)
+	case ateapipb.SandboxClass_SANDBOX_CLASS_KATA:
+		return string(atev1alpha1.SandboxClassKata)
 	default:
 		return ""
 	}

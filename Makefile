@@ -74,6 +74,11 @@ build-images:
 	    --ldflags="$(LDFLAGS)" \
 	    $(IMAGES)
 
+.PHONY: build-ateom-kata-image
+build-ateom-kata-image:
+	@test -n "$(IMAGE)" || (echo "IMAGE is required" >&2; exit 1)
+	LDFLAGS="$(LDFLAGS)" hack/build-ateom-kata-image.sh "$(IMAGE)"
+
 .PHONY: build-atectl
 build-atectl:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate

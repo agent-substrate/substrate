@@ -331,6 +331,42 @@ func TestMicroVMPodShape(t *testing.T) {
 }
 
 // containerMountsPath reports whether c mounts anything at path.
+
+func TestKataPodShapeIsRuntimeLocal(t *testing.T) {
+	wp := testWorkerPoolApplyConfig(nil)
+	wp.Spec.SandboxClass = atev1alpha1.SandboxClassKata
+	pod := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
+	container := pod.Containers[0]
+
+	if len(container.Command) != 1 || container.Command[0] != "/ateom-kata" {
+		t.Fatalf("command = %v, want /ateom-kata", container.Command)
+	}
+	if container.SecurityContext == nil || container.SecurityContext.Privileged == nil || !*container.SecurityContext.Privileged {
+		t.Fatal("Kata worker must be privileged for shim, VM and network setup")
+	}
+	if got, ok := deviceLimit(container, deviceplugin.ResourceKVM); !ok || got != "1" {
+		t.Fatalf("%s limit = %q (present=%v), want 1", deviceplugin.ResourceKVM, got, ok)
+	}
+	for _, path := range []string{tunDevicePath, "/run/sandboxd", "/run/kata-containers", kataAssetsPath, kataVMStatePath, "/dev/shm"} {
+		if !containerMountsPath(container, path) {
+			t.Errorf("Kata container does not mount %s", path)
+		}
+	}
+	for _, volume := range pod.Volumes {
+		if volume.Name == nil || *volume.Name != "kata-shm" {
+			continue
+		}
+		if volume.EmptyDir == nil || volume.EmptyDir.Medium == nil || *volume.EmptyDir.Medium != corev1.StorageMediumMemory {
+			t.Fatal("Kata /dev/shm must use a memory-backed emptyDir")
+		}
+		if volume.EmptyDir.SizeLimit == nil || volume.EmptyDir.SizeLimit.String() != "4Gi" {
+			t.Fatalf("Kata /dev/shm size = %v, want 4Gi", volume.EmptyDir.SizeLimit)
+		}
+		return
+	}
+	t.Fatal("Kata /dev/shm volume is missing")
+}
+
 func containerMountsPath(c corev1ac.ContainerApplyConfiguration, path string) bool {
 	for _, m := range c.VolumeMounts {
 		if m.MountPath != nil && *m.MountPath == path {
