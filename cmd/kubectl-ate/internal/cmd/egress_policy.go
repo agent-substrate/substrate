@@ -60,6 +60,20 @@ Its metadata may be omitted.`,
 	RunE: runCreateEgressPolicy,
 }
 
+var updateEgressPolicyCmd = &cobra.Command{
+	Use:     "egress-policy <actor-name> -f <manifest>",
+	Aliases: []string{"egress-policies"},
+	Short:   "Replace an actor's egress policy from a manifest",
+	Long: `Replace the egress policy of an actor from a manifest file.
+
+The manifest is a YAML or JSON EgressPolicy, as printed by
+"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+Its metadata.uid and metadata.version are required preconditions; the server
+rejects the update when they no longer match those of the stored egress policy.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runUpdateEgressPolicy,
+}
+
 // egressPolicyFromManifest parses a single protojson-shaped YAML or JSON
 // document into an EgressPolicy. Parsing is strict: unknown fields are an
 // error.
@@ -242,6 +256,88 @@ func runCreateEgressPolicy(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx)
 }
 
+// egressPolicyUpdater abstracts the RPCs update egress-policy makes: the policy
+// write, and the actor read that tells a missing actor from a missing policy.
+type egressPolicyUpdater interface {
+	UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error)
+	GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
+}
+
+// updateEgressPolicyRunner executes the update egress-policy command logic.
+type updateEgressPolicyRunner struct {
+	updater   egressPolicyUpdater
+	actor     *ateapipb.ObjectRef
+	policy    *ateapipb.EgressPolicy
+	outputFmt string
+	stdout    io.Writer
+}
+
+func (r *updateEgressPolicyRunner) Run(ctx context.Context) error {
+	updated, err := r.updater.UpdateActorEgressPolicy(ctx, &ateapipb.UpdateActorEgressPolicyRequest{Actor: r.actor, EgressPolicy: r.policy})
+	if status.Code(err) == codes.NotFound {
+		// The server answers NotFound for a missing actor too, so read the actor
+		// to tell the two apart.
+		if _, err := r.updater.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actor}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				return fmt.Errorf("actor %q in atespace %q not found", r.actor.GetName(), r.actor.GetAtespace())
+			}
+			return fmt.Errorf("failed to get actor %q in atespace %q: %w", r.actor.GetName(), r.actor.GetAtespace(), err)
+		}
+		return fmt.Errorf(`actor %q in atespace %q has no egress policy to update; create it with "kubectl ate create egress-policy"`,
+			r.actor.GetName(), r.actor.GetAtespace())
+	}
+	if status.Code(err) == codes.Aborted {
+		return fmt.Errorf(`manifest's uid and version preconditions do not match those of the stored egress policy for actor %q in atespace %q (changed since it was read, or read from another actor's policy); re-run "get egress-policy -o yaml" and reapply the edit: %w`,
+			r.actor.GetName(), r.actor.GetAtespace(), err)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to update egress policy for actor %q in atespace %q: %w", r.actor.GetName(), r.actor.GetAtespace(), err)
+	}
+	return printer.PrintEgressPolicyTo(r.stdout, r.actor.GetName(), updated, r.outputFmt)
+}
+
+// requireEgressPolicyPreconditions rejects a manifest missing the uid and
+// version preconditions an update requires. The client can only see that they
+// are present; the server decides whether they still match.
+func requireEgressPolicyPreconditions(policy *ateapipb.EgressPolicy, actor *ateapipb.ObjectRef) error {
+	if policy.GetMetadata().GetUid() == "" || policy.GetMetadata().GetVersion() == 0 {
+		return fmt.Errorf(`manifest for actor %q in atespace %q lacks the metadata.uid and metadata.version preconditions that "get egress-policy -o yaml" prints`,
+			actor.GetName(), actor.GetAtespace())
+	}
+	return nil
+}
+
+func runUpdateEgressPolicy(cmd *cobra.Command, args []string) error {
+	policy, err := loadEgressPolicyManifest(cmd.InOrStdin(), egressPolicyFlags.filename)
+	if err != nil {
+		return err
+	}
+	if err := overrideEgressPolicyMetadata(policy, egressPolicyFlags.atespace); err != nil {
+		return err
+	}
+	actor := &ateapipb.ObjectRef{Atespace: egressPolicyFlags.atespace, Name: args[0]}
+	// Checked before dialing, so an unusable manifest costs no connection.
+	if err := requireEgressPolicyPreconditions(policy, actor); err != nil {
+		return err
+	}
+
+	ctx := cmd.Context()
+	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+	}
+	defer apiClient.Close()
+
+	runner := &updateEgressPolicyRunner{
+		updater:   apiClient,
+		actor:     actor,
+		policy:    policy,
+		outputFmt: outputFmt,
+		stdout:    cmd.OutOrStdout(),
+	}
+	return runner.Run(ctx)
+}
+
 func init() {
 	getEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
 	_ = getEgressPolicyCmd.MarkFlagRequired("atespace")
@@ -252,4 +348,10 @@ func init() {
 	_ = createEgressPolicyCmd.MarkFlagRequired("atespace")
 	_ = createEgressPolicyCmd.MarkFlagRequired("filename")
 	createCmd.AddCommand(createEgressPolicyCmd)
+
+	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
+	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "Manifest file holding one EgressPolicy; use - for stdin (required)")
+	_ = updateEgressPolicyCmd.MarkFlagRequired("atespace")
+	_ = updateEgressPolicyCmd.MarkFlagRequired("filename")
+	updateCmd.AddCommand(updateEgressPolicyCmd)
 }
