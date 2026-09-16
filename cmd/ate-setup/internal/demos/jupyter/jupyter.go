@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package egress installs the egress demo, which exercises egress policy
-// enforcement through atenet.
-package egress
+// Package jupyter installs the Jupyter demo, which runs an unmodified
+// jupyter/base-notebook image as an actor that suspends when idle and resumes
+// when the notebook is next opened.
+package jupyter
 
 import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
@@ -24,17 +25,17 @@ import (
 
 // namespace is the pool's k8s namespace; it doubles as the atespace holding
 // the demo's ActorTemplate.
-const namespace = "ate-demo-egress"
+const namespace = "ate-demo-jupyter"
 
 func init() {
 	demos.Register(&demos.Substrate{
-		DemoName:           "demo-egress",
-		Short:              "Egress policy enforcement through atenet",
-		WorkerPoolManifest: "demos/egress/egress.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "egress"}},
+		DemoName:           "demo-jupyter",
+		Short:              "An unmodified Jupyter notebook image as a suspending actor",
+		WorkerPoolManifest: "demos/jupyter/jupyter.yaml.tmpl",
+		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "jupyter"}},
 		Templates: []demos.SubstrateTemplate{{
-			Manifest: "demos/egress/egress-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "egress"},
+			Manifest: "demos/jupyter/jupyter-template.yaml.tmpl",
+			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "jupyter"},
 		}},
 	})
 }

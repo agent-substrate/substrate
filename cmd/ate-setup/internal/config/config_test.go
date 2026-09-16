@@ -40,12 +40,18 @@ func loadEnv(t *testing.T) {
 	for _, name := range []string{
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_API_POSTGRES_CLOUDSQL_GSA",
+		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
+		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
 		"ATE_API_POSTGRES_CONNECTION_STRING",
+		"ATE_API_POSTGRES_POOL_MAX_CONNS",
 		"ATE_API_POSTGRES_SCHEMA",
+		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_EXPERIMENTAL_USE_SDSMINT",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
+		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
 		"ATE_OTLP_ENDPOINT",
@@ -53,6 +59,7 @@ func loadEnv(t *testing.T) {
 		"BUCKET_NAME",
 		"CLUSTER_LOCATION",
 		"CLUSTER_NAME",
+		"EXPECTED_JWT_ISSUER",
 		"KIND_CLUSTER_NAME",
 		"KO_DEFAULTPLATFORMS",
 		"KO_DOCKER_REPO",
@@ -62,6 +69,19 @@ func loadEnv(t *testing.T) {
 		"PROJECT_ID",
 	} {
 		t.Setenv(name, "")
+	}
+	// Blanking this one would not read as unset: an exported but empty
+	// instance is the explicit "remove Cloud SQL" request.
+	unsetEnv(t, "ATE_API_POSTGRES_CLOUDSQL_INSTANCE")
+}
+
+// unsetEnv removes a variable for the duration of the test. t.Setenv first, so
+// that its cleanup restores whatever the caller's environment had.
+func unsetEnv(t *testing.T, name string) {
+	t.Helper()
+	t.Setenv(name, "")
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("os.Unsetenv(%s) = %v", name, err)
 	}
 }
 
@@ -135,6 +155,154 @@ func TestLoadPostgresSchema(t *testing.T) {
 	}
 	if cfg.PostgresSchemaName() != "substrate" {
 		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "substrate")
+	}
+}
+
+// The apiserver reads its pool size and its server CA out of the DSN and a
+// mounted file respectively, neither of which the shell installer synthesizes.
+func TestLoadPostgresTuning(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "50")
+	t.Setenv("ATE_API_POSTGRES_SERVER_CA_FILE", "/etc/ssl/server-ca.pem")
+
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.PostgresPoolMaxConns != "50" {
+		t.Errorf("PostgresPoolMaxConns = %q, want 50", cfg.PostgresPoolMaxConns)
+	}
+	if want := "/etc/ssl/server-ca.pem"; cfg.PostgresServerCAFile != want {
+		t.Errorf("PostgresServerCAFile = %q, want %q", cfg.PostgresServerCAFile, want)
+	}
+}
+
+// ATE_API_POSTGRES_CLOUDSQL_INSTANCE is three-way, and Load is where the
+// distinction is made: everything downstream sees only Instance and
+// InstanceSet.
+func TestLoadCloudSQL(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		loadEnv(t)
+		cfg, err := Load(Options{})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.CloudSQL.InstanceSet {
+			t.Errorf("CloudSQL = %+v, want InstanceSet false so the cluster's record is adopted", cfg.CloudSQL)
+		}
+	})
+
+	t.Run("exported but empty removes Cloud SQL", func(t *testing.T) {
+		loadEnv(t)
+		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "")
+		cfg, err := Load(Options{})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.CloudSQL.InstanceSet || cfg.CloudSQL.Instance != "" {
+			t.Errorf("CloudSQL = %+v, want an explicitly empty instance", cfg.CloudSQL)
+		}
+	})
+
+	t.Run("fully specified", func(t *testing.T) {
+		loadEnv(t)
+		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "p:r:i")
+		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_GSA", "ate@p.iam.gserviceaccount.com")
+		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH", "false")
+		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE", CloudSQLIPTypePSC)
+
+		cfg, err := Load(Options{})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		want := CloudSQLConfig{
+			Instance:    "p:r:i",
+			InstanceSet: true,
+			GSA:         "ate@p.iam.gserviceaccount.com",
+			IAMAuth:     "false",
+			IPType:      CloudSQLIPTypePSC,
+		}
+		if cfg.CloudSQL != want {
+			t.Errorf("CloudSQL = %+v, want %+v", cfg.CloudSQL, want)
+		}
+	})
+
+	// An unrecognized IP type reaches the proxy as an unset flag, which silently
+	// dials the public address instead of the private one that was meant.
+	t.Run("rejects an unknown IP type", func(t *testing.T) {
+		loadEnv(t)
+		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE", "internal")
+		if _, err := Load(Options{}); err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_CLOUDSQL_IP_TYPE") {
+			t.Fatalf("Load() error = %v, want it to name the invalid IP type", err)
+		}
+	})
+}
+
+// EXPECTED_JWT_ISSUER overrides the issuer derived from the GKE coordinates,
+// which is how a cluster authenticating against something other than its own
+// OIDC discovery document is installed.
+func TestLoadExpectedJWTIssuer(t *testing.T) {
+	loadEnv(t)
+	const issuer = "https://issuer.example.com"
+	t.Setenv("EXPECTED_JWT_ISSUER", issuer)
+
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ExpectedJWTIssuer != issuer {
+		t.Errorf("ExpectedJWTIssuer = %q, want %q", cfg.ExpectedJWTIssuer, issuer)
+	}
+}
+
+// The endpoint has to reach both the Go steps and the shell scripts ate-setup
+// still delegates to, or the two halves of an install export different
+// collectors.
+func TestLoadOtlpEndpoint(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_OTLP_ENDPOINT", "http://from-environment:4317")
+
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if want := "http://from-environment:4317"; cfg.OtlpEndpoint != want {
+		t.Errorf("OtlpEndpoint = %q, want %q", cfg.OtlpEndpoint, want)
+	}
+
+	cfg, err = Load(Options{OtlpEndpoint: "http://from-flag:4317"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if want := "http://from-flag:4317"; cfg.OtlpEndpoint != want {
+		t.Errorf("OtlpEndpoint = %q, want %q", cfg.OtlpEndpoint, want)
+	}
+	if got := scriptEnvMap(t, cfg)["ATE_OTLP_ENDPOINT"]; got != "http://from-flag:4317" {
+		t.Errorf("ScriptEnv()[ATE_OTLP_ENDPOINT] = %q, want the flag's value", got)
+	}
+}
+
+// hack/install-ate-kind.sh exports ATE_INSTALL_KIND rather than passing a flag,
+// so the environment has to select the Kind profile as completely as --kind
+// does; a Kind install that only half-applied would push images to the wrong
+// registry.
+func TestLoadKindFromEnvironment(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_INSTALL_KIND", "true")
+	t.Setenv("PROJECT_ID", "some-project")
+
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Kind {
+		t.Error("Kind = false, want true")
+	}
+	if cfg.KODockerRepo != "localhost:5001" {
+		t.Errorf("KODockerRepo = %q, want the Kind default", cfg.KODockerRepo)
+	}
+	if cfg.ProjectID != "" {
+		t.Errorf("ProjectID = %q, want it cleared by the Kind profile", cfg.ProjectID)
 	}
 }
 

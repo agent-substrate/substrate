@@ -23,7 +23,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -37,6 +36,8 @@ const (
 	SecretServiceDNSCA     = "service-dns-ca-pool"
 	SecretPodIdentityCA    = "pod-identity-ca-pool"
 	SecretEgressMITMCAPool = "egress-mitm-ca-pool"
+	SecretAPIEnvVars       = "ate-api-server-secret-envvars"
+	SecretPostgresServerCA = "postgres-server-ca"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
 	// poolKeyID is the identifier given to the first CA and JWT key in a new
@@ -81,9 +82,11 @@ func (e *Env) CreateEgressMITMCAPoolSecret(ctx context.Context) error {
 	return e.createPoolSecret(ctx, NamespaceAteSystem, SecretEgressMITMCAPool, poolBytes)
 }
 
-// EnsureEgressMITMCAPoolSecret creates the egress MITM CA pool secret if sdsmint is enabled.
+// EnsureEgressMITMCAPoolSecret creates the egress MITM CA pool secret if
+// sdsmint is enabled. Both dataplanes need it: the agentgateway-egress-mitm
+// overlay mounts the same Secret the envoy egress does.
 func (e *Env) EnsureEgressMITMCAPoolSecret(ctx context.Context) error {
-	if e.Cfg.Router == config.RouterAgentgateway || !e.Cfg.ExperimentalUseSDSMint {
+	if !e.Cfg.ExperimentalUseSDSMint {
 		return nil
 	}
 	return e.ensureSecret(ctx, NamespaceAteSystem, SecretEgressMITMCAPool, e.CreateEgressMITMCAPoolSecret)
@@ -119,35 +122,6 @@ func (e *Env) CreateActorIDCACertsSecret(ctx context.Context) error {
 	})
 }
 
-// CreateAPIServerEnvVars writes the ConfigMap that tells ate-api-server how to
-// reach its PostgreSQL store. ate-api-server.yaml pulls it in via an optional
-// envFrom and resolves --postgres-connection-string=@env and
-// --postgres-schema=@env from it.
-func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
-	log.Step("create_api_server_env_vars")
-	if err := e.Kube.EnsureNamespace(ctx, NamespaceAteSystem); err != nil {
-		return err
-	}
-
-	connString := e.Cfg.PostgresConnString()
-	log.Infof("POSTGRES_CONNECTION_STRING: %s", connString)
-
-	return e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars,
-		buildAPIServerEnvVars(connString, e.Cfg.PostgresSchemaName()))
-}
-
-// buildAPIServerEnvVars is the ConfigMap payload. ate-api-server takes the
-// connection string and the schema from it, and exits on an empty schema; an
-// unrecognized key here reaches the container as a stray environment variable,
-// so the set stays exactly what the shell installer's
-// create_api_server_env_vars writes.
-func buildAPIServerEnvVars(connString, schema string) map[string]string {
-	return map[string]string{
-		"ATE_API_POSTGRES_CONNECTION_STRING": connString,
-		"ATE_API_POSTGRES_SCHEMA":            schema,
-	}
-}
-
 // CreateAPIAuthenticationConfig writes the default ate-api-server
 // authentication config, pointing it at the cluster's service account issuer.
 func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
@@ -157,16 +131,29 @@ func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
 	}
 
 	authnConfig := buildAuthenticationConfig(e.jwtIssuer(ctx))
+	// The issuer decides which tokens the apiserver accepts at all, and a
+	// wrong one fails as an opaque 401 much later, so show what was written.
+	log.Infof("%s authentication.yaml:", ConfigMapAPIAuthn)
+	for _, line := range strings.Split(authnConfig, "\n") {
+		log.Infof("  | %s", line)
+	}
 	return e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIAuthn, map[string]string{
 		"authentication.yaml": authnConfig,
 	})
 }
 
-// jwtIssuer determines the service account token issuer to trust. On GKE it is
-// derived from the cluster coordinates; otherwise it comes from the cluster's
-// OpenID discovery document, falling back to the in-cluster default.
+// jwtIssuer determines the service account token issuer to trust.
+//
+// ate-api-server accepts a token only if its iss claim equals this string
+// exactly. EXPECTED_JWT_ISSUER, when set, is that string; the rest is for
+// clusters whose issuer follows a standard form — derived from the cluster
+// coordinates on GKE, otherwise read from the cluster's OpenID discovery
+// document, falling back to the in-cluster default.
 func (e *Env) jwtIssuer(ctx context.Context) string {
 	cfg := e.Cfg
+	if cfg.ExpectedJWTIssuer != "" {
+		return cfg.ExpectedJWTIssuer
+	}
 	if cfg.ProjectID != "" && cfg.ClusterLocation != "" && cfg.ClusterName != "" {
 		return fmt.Sprintf("https://container.googleapis.com/v1/projects/%s/locations/%s/clusters/%s",
 			cfg.ProjectID, cfg.ClusterLocation, cfg.ClusterName)

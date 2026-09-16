@@ -67,8 +67,15 @@ func init() {
 		},
 		{
 			use:   "api-server-env-vars",
-			short: "Create the ate-api-server environment ConfigMap",
-			run:   (*steps.Env).CreateAPIServerEnvVars,
+			short: "Create the ate-api-server environment ConfigMap and Secret",
+			run: func(e *steps.Env, ctx context.Context) error {
+				// The full deploy needs no guard: it updates the Deployment in
+				// the same run.
+				if err := e.EnsureEnvVarsSafeStandalone(ctx); err != nil {
+					return err
+				}
+				return e.CreateAPIServerEnvVars(ctx)
+			},
 		},
 		{
 			use:   "api-authentication-config",

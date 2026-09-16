@@ -53,6 +53,14 @@ const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-syst
 // ATE_API_POSTGRES_SCHEMA, the PostgreSQL schema holding the Substrate tables.
 const DefaultPostgresSchema = "public"
 
+// Cloud SQL Auth Proxy IP types, the values ATE_API_POSTGRES_CLOUDSQL_IP_TYPE
+// accepts.
+const (
+	CloudSQLIPTypePrivate = "private"
+	CloudSQLIPTypePublic  = "public"
+	CloudSQLIPTypePSC     = "psc"
+)
+
 // devEnvFile is the optional per-developer environment script at the repo root.
 const devEnvFile = ".ate-dev-env.sh"
 
@@ -83,6 +91,12 @@ type Config struct {
 	ClusterName     string
 	ClusterLocation string
 
+	// ExpectedJWTIssuer is the service account token issuer ate-api-server
+	// trusts (EXPECTED_JWT_ISSUER). It overrides both the GKE derivation from
+	// the coordinates above and OpenID discovery, for clusters whose issuer
+	// follows neither form.
+	ExpectedJWTIssuer string
+
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
 
@@ -103,6 +117,19 @@ type Config struct {
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
+	// PostgresPoolMaxConns sizes the apiserver's pgxpool
+	// (ATE_API_POSTGRES_POOL_MAX_CONNS). It is spliced into the DSN rather
+	// than passed separately, because that is the only place pgxpool reads it
+	// from. Empty leaves the pgxpool default in place.
+	PostgresPoolMaxConns string
+	// PostgresServerCAFile is a local PEM file holding the server CA of an
+	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
+	// published as the postgres-server-ca Secret, which ate-api-server mounts
+	// at /run/postgres-server-ca/server-ca.pem for sslmode=verify-ca DSNs.
+	PostgresServerCAFile string
+	// CloudSQL points the apiserver at a Cloud SQL instance through the Auth
+	// Proxy sidecar instead of a directly reachable PostgreSQL.
+	CloudSQL CloudSQLConfig
 
 	// RolloutTimeout is the timeout duration for rollout status checks.
 	RolloutTimeout time.Duration
@@ -135,6 +162,33 @@ type Config struct {
 	shellEnv map[string]string
 }
 
+// CloudSQLConfig is the operator's Cloud SQL intent, as expressed by the
+// ATE_API_POSTGRES_CLOUDSQL_* variables.
+//
+// Every field is empty-means-unspecified except Instance, which is three-way:
+// a non-empty instance selects Cloud SQL, an explicitly empty one removes it,
+// and an unset one (InstanceSet false) adopts whatever the target cluster
+// already records. Without that distinction a redeploy from a shell that
+// simply never exported the variable would tear the proxy sidecar out from
+// under a working installation.
+type CloudSQLConfig struct {
+	// Instance is the instance connection name, PROJECT:REGION:INSTANCE.
+	Instance string
+	// InstanceSet records whether ATE_API_POSTGRES_CLOUDSQL_INSTANCE was
+	// present in the environment at all, empty value included.
+	InstanceSet bool
+
+	// GSA is the Google service account the proxy authenticates as, and whose
+	// email (minus the .gserviceaccount.com suffix) is the IAM database user.
+	GSA string
+	// IAMAuth enables automatic IAM database authentication ("true" or
+	// "false"). Empty defaults to enabled.
+	IAMAuth string
+	// IPType selects which instance address the proxy dials: one of the
+	// CloudSQLIPType constants. Empty defaults to private.
+	IPType string
+}
+
 // Options carries the raw flag values the root command collects, before
 // defaulting and validation.
 type Options struct {
@@ -146,6 +200,7 @@ type Options struct {
 	PodcertWorkersPerSigner        int
 	ExperimentalUseSDSMint         bool
 	AdditionalEgressExtprocService string
+	OtlpEndpoint                   string
 
 	// Image source selection.
 	ImageRepo string
@@ -165,10 +220,14 @@ func Load(opts Options) (*Config, error) {
 
 	env := environ()
 
+	// ATE_INSTALL_KIND is read as well as --kind: hack/install-ate-kind.sh
+	// selects the Kind profile by exporting it.
+	kind := opts.Kind || env["ATE_INSTALL_KIND"] == "true"
+
 	// Sourcing is skipped for Kind installs the same way the shell kind installer
 	// exports NO_DEV_ENV: the GKE-shaped variables in a developer's file would
 	// otherwise point a local install at a cloud project.
-	if !opts.NoDevEnv && !opts.Kind && os.Getenv("NO_DEV_ENV") == "" {
+	if !opts.NoDevEnv && !kind && os.Getenv("NO_DEV_ENV") == "" {
 		path := filepath.Join(root, devEnvFile)
 		if _, statErr := os.Stat(path); statErr == nil {
 			sourced, srcErr := sourceShellEnv(path, root)
@@ -208,32 +267,47 @@ func Load(opts Options) (*Config, error) {
 	sdsmint := opts.ExperimentalUseSDSMint || env["ATE_EXPERIMENTAL_USE_SDSMINT"] == "true"
 	extproc := firstNonEmpty(opts.AdditionalEgressExtprocService, env["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"])
 
+	// Read with the two-value form: an exported but empty
+	// ATE_API_POSTGRES_CLOUDSQL_INSTANCE means "remove Cloud SQL", which an
+	// absent one does not. See CloudSQLConfig.
+	cloudsqlInstance, cloudsqlInstanceSet := env["ATE_API_POSTGRES_CLOUDSQL_INSTANCE"]
+
 	cfg := &Config{
-		Root:                           root,
-		Kind:                           opts.Kind,
-		Kubeconfig:                     firstNonEmpty(opts.Kubeconfig, env["KUBECONFIG"]),
-		Context:                        firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
-		ProjectID:                      env["PROJECT_ID"],
-		ClusterName:                    env["CLUSTER_NAME"],
-		ClusterLocation:                env["CLUSTER_LOCATION"],
-		BucketName:                     env["BUCKET_NAME"],
-		KODockerRepo:                   env["KO_DOCKER_REPO"],
-		KODefaultPlatforms:             env["KO_DEFAULTPLATFORMS"],
-		Images:                         loadImageSource(opts, env),
-		PostgresConnectionString:       env["ATE_API_POSTGRES_CONNECTION_STRING"],
-		PostgresSchema:                 env["ATE_API_POSTGRES_SCHEMA"],
+		Root:                     root,
+		Kind:                     kind,
+		Kubeconfig:               firstNonEmpty(opts.Kubeconfig, env["KUBECONFIG"]),
+		Context:                  firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
+		ProjectID:                env["PROJECT_ID"],
+		ClusterName:              env["CLUSTER_NAME"],
+		ClusterLocation:          env["CLUSTER_LOCATION"],
+		ExpectedJWTIssuer:        env["EXPECTED_JWT_ISSUER"],
+		BucketName:               env["BUCKET_NAME"],
+		KODockerRepo:             env["KO_DOCKER_REPO"],
+		KODefaultPlatforms:       env["KO_DEFAULTPLATFORMS"],
+		Images:                   loadImageSource(opts, env),
+		PostgresConnectionString: env["ATE_API_POSTGRES_CONNECTION_STRING"],
+		PostgresSchema:           env["ATE_API_POSTGRES_SCHEMA"],
+		PostgresPoolMaxConns:     env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
+		PostgresServerCAFile:     env["ATE_API_POSTGRES_SERVER_CA_FILE"],
+		CloudSQL: CloudSQLConfig{
+			Instance:    cloudsqlInstance,
+			InstanceSet: cloudsqlInstanceSet,
+			GSA:         env["ATE_API_POSTGRES_CLOUDSQL_GSA"],
+			IAMAuth:     env["ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH"],
+			IPType:      env["ATE_API_POSTGRES_CLOUDSQL_IP_TYPE"],
+		},
 		RolloutTimeout:                 rolloutTimeout,
 		rolloutTimeoutSet:              timeoutStr != "",
 		PodcertWorkersPerSigner:        podcertWorkers,
 		ExperimentalUseSDSMint:         sdsmint,
 		AdditionalEgressExtprocService: extproc,
 		AnthropicAPIKey:                env["ANTHROPIC_API_KEY"],
-		OtlpEndpoint:                   env["ATE_OTLP_ENDPOINT"],
+		OtlpEndpoint:                   firstNonEmpty(opts.OtlpEndpoint, env["ATE_OTLP_ENDPOINT"]),
 		BenchmarkActorMemory:           env["BENCHMARK_ACTOR_MEMORY"],
 		shellEnv:                       env,
 	}
 
-	if opts.Kind {
+	if kind {
 		applyKindDefaults(cfg)
 	}
 
@@ -274,6 +348,15 @@ func validate(cfg *Config) error {
 	}
 	if cfg.PodcertWorkersPerSigner < 0 {
 		return fmt.Errorf("--podcert-workers-per-signer must be a positive integer, got %d", cfg.PodcertWorkersPerSigner)
+	}
+	// Only an explicitly supplied value is checked. One adopted from the
+	// cluster is derived from the recorded CSQL_PROXY_* keys and so is always
+	// one of these by construction.
+	switch cfg.CloudSQL.IPType {
+	case "", CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC:
+	default:
+		return fmt.Errorf("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE must be %s, %s, or %s, got %q",
+			CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC, cfg.CloudSQL.IPType)
 	}
 	if cfg.AdditionalEgressExtprocService != "" {
 		if err := validateExtprocService(cfg.AdditionalEgressExtprocService); err != nil {
@@ -398,6 +481,7 @@ func (c *Config) ScriptEnv() []string {
 		"PROJECT_ID":          c.ProjectID,
 		"CLUSTER_NAME":        c.ClusterName,
 		"CLUSTER_LOCATION":    c.ClusterLocation,
+		"ATE_OTLP_ENDPOINT":   c.OtlpEndpoint,
 	} {
 		if value == "" {
 			// An empty value means "not configured". Leaving the variable set
