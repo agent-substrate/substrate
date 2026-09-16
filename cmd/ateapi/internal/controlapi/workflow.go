@@ -162,6 +162,7 @@ type actorWorkflowStore interface {
 	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error)
+	ListTagBorrowers(ctx context.Context, tagUID string, opts store.ListOptions) (store.ListResponse[string], error)
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)

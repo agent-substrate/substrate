@@ -89,10 +89,11 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // row, in that order: the row is the only handle on that snapshot, so dropping
 // it first would leak.
 //
-// The workflow is built in 3 phases:
+// The workflow is built in 4 phases:
 //  1. Load the tag (which names the snapshot to collect).
-//  2. Release that snapshot, tolerating a previous attempt partly collected.
-//  3. Finalize: drop the row.
+//  2. Check that no Actor is still borrowing that snapshot.
+//  3. Release the snapshot, tolerating a previous attempt partly collected.
+//  4. Finalize: drop the row.
 //
 // Idempotent: a failure at any phase leaves the row in place, so the same
 // delete run again rediscovers the work from it and resumes over whatever is
@@ -102,9 +103,9 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // CreateActor racing this delete can seed an Actor from content that is going
 // away. That race is accepted for now.
 //
-// Note that this destroys the external snapshot: an Actor created from the tag
-// and never suspended is still borrowing it and becomes unrecoverable. Do not
-// delete a tag while clones of it exist.
+// The delete is refused with FailedPrecondition while at least one Actor is
+// still borrowing the tag's snapshot: releasing it would leave that Actor
+// unrecoverable.
 func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
@@ -125,6 +126,9 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
 		}
 		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+	}
+	if err := w.checkTagBorrowers(ctx, tag); err != nil {
+		return nil, err
 	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
 		return nil, err
@@ -147,6 +151,25 @@ func (w *ActorWorkflow) loadTagForDelete(ctx context.Context, tagRef resources.T
 		return nil, fmt.Errorf("while getting tag %s: %w", tagRef, err)
 	}
 	return tag, nil
+}
+
+// checkTagBorrowers refuses the delete while an Actor is still using the tag's
+// external snapshot as its own. Collecting it would leave that Actor with no
+// guest state to resume from.
+func (w *ActorWorkflow) checkTagBorrowers(ctx context.Context, tag *ateapipb.Tag) (err error) {
+	ctx, done := stepSpan(ctx, "CheckTagBorrowers")
+	defer func() { err = done(err) }()
+
+	tagRef := resources.TagRefFromTag(tag)
+	borrowers, err := w.store.ListTagBorrowers(ctx, tag.GetMetadata().GetUid(), store.ListOptions{PageSize: 1})
+	if err != nil {
+		return fmt.Errorf("while listing the borrowers of tag %s: %w", tagRef, err)
+	}
+	if len(borrowers.Items) == 0 {
+		return nil
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"Tag %s cannot be deleted because its snapshot is still in use by at least one Actor created from it", tagRef)
 }
 
 // ensureTagSnapshotReleased deletes the objects the tag's external snapshot is

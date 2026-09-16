@@ -2337,6 +2337,16 @@ func TestSuspendActor(t *testing.T) {
 	assertSnapshotCollected(t, tc, snapshotURI)
 	assertSnapshotPresent(t, tc, tagSnapshotURI)
 
+	// The cross-atespace clone never suspended, so the tag's snapshot is still
+	// its starting state. A borrow holds the tag back from whichever atespace it
+	// was taken out in.
+	if _, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteTag while other/cross-atespace borrows it = %v, want FailedPrecondition", err)
+	}
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "other", Name: "cross-atespace"}}); err != nil {
+		t.Fatalf("DeleteActor(other/cross-atespace) failed: %v", err)
+	}
+
 	if deleted, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef}); err != nil || deleted.GetMetadata().GetName() != tagRef.GetName() {
 		t.Fatalf("DeleteTag = (%v, %v)", deleted, err)
 	}
