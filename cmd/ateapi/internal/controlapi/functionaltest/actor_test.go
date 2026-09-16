@@ -3502,3 +3502,112 @@ func TestMintActorJWT_Success(t *testing.T) {
 		t.Fatalf("Error while calling MintActorJWT: %v", err)
 	}
 }
+
+// TestRevertActor returns a running actor to the snapshot its last suspend
+// wrote, without taking a new one.
+func TestRevertActor(t *testing.T) {
+	ns := namespaceForTest("ns-revert")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// Run and suspend once, so the revert has a snapshot to return the actor to.
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if snapshotURI == "" {
+		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
+	}
+
+	// Run it again, then throw that second execution away.
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("second ResumeActor failed: %v", err)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.CheckpointCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+
+	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("RevertActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+
+	got := reverted.GetActor().GetStatus()
+	if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state = %v, want SUSPENDED", got.GetState())
+	}
+	if uri := got.GetExternalSnapshot().GetSnapshotUri(); uri != snapshotURI {
+		t.Errorf("external snapshot = %q, want it untouched at %q", uri, snapshotURI)
+	}
+	assertSnapshotPresent(t, tc, snapshotURI)
+	if got.GetWorkerAssignment() != nil {
+		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected atelet Terminate to be called, the workload was still running")
+	}
+	// The difference from suspend: the execution is discarded, not captured.
+	if tc.fakeAtelet.CheckpointCalled {
+		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
+	}
+}
+
+// TestRevertActor_RejectsSuspended pins the rejection a lost race produces: a
+// suspend that won left the actor SUSPENDED, and reporting success there would
+// claim the opposite of what the revert asked for.
+func TestRevertActor_RejectsSuspended(t *testing.T) {
+	ns := namespaceForTest("ns-revert-suspended")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	ctx := context.Background()
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RevertActor = %v, want FailedPrecondition", err)
+	}
+}
+
+func TestRevertActor_NotFound(t *testing.T) {
+	ns := namespaceForTest("ns-revert-missing")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.RevertActor(context.Background(), &ateapipb.RevertActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "nope"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("RevertActor = %v, want NotFound", err)
+	}
+}
