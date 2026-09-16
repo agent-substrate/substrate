@@ -159,6 +159,10 @@ type Interface interface {
 	// tag the caller observed.
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapipb.Tag, error)
 
+	// ListTagBorrowers returns a page of the UIDs of the Actors recorded as
+	// borrowing the external snapshot of the Tag with tagUID, ordered by UID.
+	ListTagBorrowers(ctx context.Context, tagUID string, opts ListOptions) (ListResponse[string], error)
+
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
 	// ErrAlreadyExists if the name is taken.

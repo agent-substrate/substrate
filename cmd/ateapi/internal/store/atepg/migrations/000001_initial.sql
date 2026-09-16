@@ -86,6 +86,15 @@ CREATE TABLE worker_assignments (
 CREATE INDEX worker_assignments_worker_idx
     ON worker_assignments (worker_name);
 
+-- One row per Actor that borrows a Tag's external snapshot. Updated
+-- on every actor write.
+CREATE TABLE tag_borrows (
+    actor_uid  text PRIMARY KEY,
+    tag_uid    text NOT NULL
+);
+
+CREATE INDEX tag_borrows_tag_idx ON tag_borrows (tag_uid);
+
 -- Transactional outbox backing WatchWorkers.
 --
 -- 1. Ordering (xid): writeAndAppendEvent guarantees exactly one row per tx,
