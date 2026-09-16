@@ -110,6 +110,9 @@ spec:
         args:
         - -f
         - /etc/agentgateway/config.yaml
+        env:
+        - name: RUST_LOG
+          value: debug
         ports:
         - name: https
           containerPort: 8443
