@@ -57,6 +57,26 @@ function codegen::protobuf() {
     for dir in "${proto_dirs[@]}"; do
         local protoc_gen_go
         protoc_gen_go="$(./hack/run-tool.sh --print-bin-path protoc-gen-go)"
+        if [[ "${dir}" == "internal/sandboxd/sandboxapi" ]]; then
+            local protoc_gen_go_ttrpc
+            protoc_gen_go_ttrpc="$(./hack/run-tool.sh --print-bin-path protoc-gen-go-ttrpc)"
+            (
+                cd "${dir}" || exit 1
+                "${ROOT}"/hack/protoc.sh \
+                    -I "${ROOT}/vendor/github.com/containerd/containerd/api" -I . \
+                    --plugin=protoc-gen-go="${protoc_gen_go}" \
+                    --plugin=protoc-gen-go-ttrpc="${protoc_gen_go_ttrpc}" \
+                    --go_out=paths=source_relative:. \
+                    --go-ttrpc_out=paths=source_relative:. \
+                    --go-ttrpc_opt=prefix=TTRPC \
+                    ./*.proto
+                for generated in ./*_ttrpc.pb.go; do
+                    cat "${ROOT}/${GO_BOILERPLATE}" "${generated}" > "${generated}.tmp"
+                    mv "${generated}.tmp" "${generated}"
+                done
+            )
+            continue
+        fi
         local protoc_gen_go_rpc
         protoc_gen_go_rpc="$(./hack/run-tool.sh --print-bin-path protoc-gen-go-grpc)"
         (
