@@ -58,13 +58,13 @@ func TestParsePKCS8PrivateKeyBlock(t *testing.T) {
 	}
 }
 
-func TestParseRejectsNonPKCS8PrivateKeyBlock(t *testing.T) {
+func TestParseRSAPrivateKeyBlock(t *testing.T) {
 	certDER := generateCertificate(t, 1)
 	bundle := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(generateRSAKey(t))})...)
 
 	bundlePath := writeBundle(t, bundle)
-	if _, err := Parse(bundlePath); err == nil {
-		t.Fatalf("Parse() error = nil, want unsupported private key block error")
+	if _, err := Parse(bundlePath); err != nil {
+		t.Fatalf("Parse() error = %v", err)
 	}
 }
 

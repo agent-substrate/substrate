@@ -20,6 +20,7 @@
 package credbundle
 
 import (
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -112,6 +113,7 @@ func Parse(bundlePath string) (*tls.Certificate, error) {
 	}
 
 	var leafKeyBytes []byte
+	var leafKeyBlockType string
 	var chainBytes [][]byte
 
 	for {
@@ -124,8 +126,9 @@ func Parse(bundlePath string) (*tls.Certificate, error) {
 		switch block.Type {
 		case "CERTIFICATE":
 			chainBytes = append(chainBytes, block.Bytes)
-		case "PRIVATE KEY":
+		case "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY":
 			leafKeyBytes = block.Bytes
+			leafKeyBlockType = block.Type
 		default:
 			return nil, fmt.Errorf("unknown PEM block type %q", block.Type)
 		}
@@ -139,7 +142,7 @@ func Parse(bundlePath string) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("no CERTIFICATE blocks found")
 	}
 
-	leafKey, err := x509.ParsePKCS8PrivateKey(leafKeyBytes)
+	leafKey, err := parsePrivateKey(leafKeyBlockType, leafKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing private key: %w", err)
 	}
@@ -154,4 +157,17 @@ func Parse(bundlePath string) (*tls.Certificate, error) {
 		Leaf:        leafCert,
 		PrivateKey:  leafKey,
 	}, nil
+}
+
+func parsePrivateKey(blockType string, keyBytes []byte) (crypto.PrivateKey, error) {
+	switch blockType {
+	case "PRIVATE KEY":
+		return x509.ParsePKCS8PrivateKey(keyBytes)
+	case "RSA PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(keyBytes)
+	case "EC PRIVATE KEY":
+		return x509.ParseECPrivateKey(keyBytes)
+	default:
+		return nil, fmt.Errorf("unsupported private key block type %q", blockType)
+	}
 }
