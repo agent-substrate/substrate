@@ -72,6 +72,10 @@ These are head sampling ratios that bound what leaves the process. Keep decision
 
 ### Disabling tracing (perf/load tests)
 
+`OTEL_TRACES_EXPORTER=none` turns the exporter off and leaves the spans, thus
+the component keeps its trace IDs for the logs and sends nothing. To stop the
+spans themselves, which is what a load test wants, use the sampler:
+
 Set `OTEL_TRACES_SAMPLER=always_off` on the components under test (for ateom workers, via the controller's `--otel-traces-sampler` flag). `parentbased_always_off` is not enough under a load generator: boomer and locust send ratio-sampled trace context, and parent based samplers honor it. Alternatively set the generator's `trace_probability` to 0 and leave the servers alone. On kind, also override ateapi's `parentbased_always_on` pin.
 
 The YAML manifest for your server needs `OTEL_EXPORTER_OTLP_ENDPOINT` set so the
@@ -92,12 +96,16 @@ address for whichever environment it is deployed to:
                 name: ate-otel-config
 ```
 
-The ConfigMap is defined in
-[`manifests/ate-install/ate-otel-config.yaml`](../../../manifests/ate-install/ate-otel-config.yaml)
-for GKE, with a kind replacement of the same name in
-[`manifests/ate-install/kind/ate-otel-config.yaml`](../../../manifests/ate-install/kind/ate-otel-config.yaml)
-that points at the in-cluster collector. Editing either one does not restart the
-pods that consume it; follow a change with `kubectl rollout restart`.
+One file supplies the ConfigMap for each `--observability` mode of the install:
+[`manifests/ate-install/otel/none/ate-otel-config.yaml`](../../../manifests/ate-install/otel/none/ate-otel-config.yaml)
+names no collector,
+[`manifests/ate-install/otel/gke/ate-otel-config.yaml`](../../../manifests/ate-install/otel/gke/ate-otel-config.yaml)
+names the GKE managed collector, and
+[`manifests/ate-install/otel/kind/ate-otel-config.yaml`](../../../manifests/ate-install/otel/kind/ate-otel-config.yaml)
+names the in-cluster kind collector. Read
+[Selecting a collector](../../observability.md#selecting-a-collector). Editing
+one of them does not restart the pods that consume it; follow a change with
+`kubectl rollout restart`.
 
 For how to deploy that collector — the GKE managed option, a self-managed DaemonSet, and the constraints on what endpoints Substrate can talk to — see [OpenTelemetry Collector Best Practices](otel-collector.md).
 

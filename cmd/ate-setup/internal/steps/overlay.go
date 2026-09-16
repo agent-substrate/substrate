@@ -252,21 +252,5 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 	return nil
 }
 
-// otelConfigPath returns the environment's ate-otel-config ConfigMap.
-//
-// Every control plane component pulls this ConfigMap in via envFrom. A full
-// install gets it as part of the rendered bundle, but the single-component
-// redeploys apply raw manifests with no kustomize, so they have to select the
-// right copy themselves: applying the base file on a kind cluster would
-// overwrite it with the GKE endpoint and break telemetry everywhere at once.
-func (e *Env) otelConfigPath() string {
-	if e.Cfg.Kind {
-		return e.Cfg.Manifest("kind", "ate-otel-config.yaml")
-	}
-	return e.Cfg.Manifest("ate-otel-config.yaml")
-}
-
-// applyOtelConfig applies the environment's ate-otel-config ConfigMap.
-func (e *Env) applyOtelConfig(ctx context.Context) error {
-	return e.Kube.ApplyPath(ctx, e.otelConfigPath())
-}
+// The ate-otel-config ConfigMap and the telemetry modes that supply it live in
+// observability.go.

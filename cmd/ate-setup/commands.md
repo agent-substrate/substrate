@@ -30,12 +30,15 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--context NAME` | `KUBECTL_CONTEXT=NAME` | Kubeconfig context; still defaults to `KUBECTL_CONTEXT` |
 | `--kubeconfig PATH` | `KUBECONFIG=PATH` | Explicit kubeconfig path |
 | `--no-dev-env` | `NO_DEV_ENV=1` | Skip `.ate-dev-env.sh` at the repository root |
+| `--observability none\|otlp\|gke\|kind` | — | New. Telemetry mode (default `kind` with `--kind`, `gke` when the cluster has the managed OTel addon, else `none`). With no flag the mode of the cluster is kept; read [docs/observability.md](../../docs/observability.md#selecting-a-collector) |
+| `--otlp-endpoint URL` | `--otlp-endpoint URL` | Collector address for `--observability=otlp`. The shell flag patches the ConfigMap after the install; `ate-setup` applies the address with it |
 | `--version` / `-v` | — | New; the shell installer had no version |
 | `--image-repo REPO` | — | New. Install pre-built images from `REPO` instead of building them with `ko` |
 | `--image-tag TAG` | — | New. The tag those images carry. Each of the two requires the other |
 
-Both have an environment equivalent, read when the flag is absent:
-`ATE_IMAGE_REPO` and `ATE_IMAGE_TAG`.
+`--image-repo` and `--image-tag` have an environment equivalent, read when the
+flag is absent: `ATE_IMAGE_REPO` and `ATE_IMAGE_TAG`. So do `--observability`
+and `--otlp-endpoint`: `ATE_OBSERVABILITY` and `ATE_OTLP_ENDPOINT`.
 
 ## Installing a release
 
