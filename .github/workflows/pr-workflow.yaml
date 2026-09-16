@@ -60,15 +60,11 @@ jobs:
   e2e-test-matrix:
     name: E2E (${{ matrix.dataplane }})
     runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
     strategy:
       fail-fast: false
       matrix:
         include:
-        - dataplane: envoy
-          experimental: false
         - dataplane: agentgateway
-          experimental: true
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
     steps:
@@ -102,7 +98,7 @@ jobs:
     - name: Install Agent Substrate (${{ matrix.dataplane }})
       # The dataplane selection applies to both the ingress router and egress
       # gateway.
-      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }}
+      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }} --rollout-timeout=300s
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -112,11 +108,8 @@ jobs:
       run: hack/install-ate-kind.sh --setup-csi=nfs
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and deploys the
-      # counter-microvm demo onto the control plane installed above. The demo
-      # redeploys the control plane, so retain the selected dataplane.
-      env:
-        ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      run: hack/run-microvm-demo-kind.sh
+      # counter-microvm demo onto the control plane installed above.
+      run: hack/run-microvm-demo-kind.sh --skip-control-plane
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Deploy egress demos
@@ -196,8 +189,7 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
-  # Preserve the required-check name while the concrete Envoy and AgentGateway
-  # executions run as entries in the shared matrix above.
+  # Preserve the required-check name for the dataplane matrix above.
   e2e-test:
     name: e2e-test
     needs: e2e-test-matrix

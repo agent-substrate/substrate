@@ -55,10 +55,18 @@ KO_DOCKER_REPO="${KO_DOCKER_REPO:-}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
-if [[ $# -gt 0 ]]; then
-  echo "Error: unknown argument $1" >&2
-  exit 1
-fi
+SKIP_CONTROL_PLANE=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-control-plane) SKIP_CONTROL_PLANE=true ;;
+    *)
+      echo "Error: unknown argument $1" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 if [[ -z "${KO_DOCKER_REPO}" ]]; then
   echo "Error: KO_DOCKER_REPO is required (set it in .ate-dev-env.sh for GKE," >&2
@@ -75,13 +83,15 @@ log() {
 }
 
 # --- 1. deploy the control plane -------------------------------------------
-log "Deploying the ate control plane (--deploy-ate-system)..."
-if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
-  # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system
-else
-  # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system
+if [[ "${SKIP_CONTROL_PLANE}" != "true" ]]; then
+  log "Deploying the ate control plane (--deploy-ate-system)..."
+  if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
+    # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
+    KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system
+  else
+    # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
+    KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system
+  fi
 fi
 
 # --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------

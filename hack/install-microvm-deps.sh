@@ -174,6 +174,7 @@ fi
 # in-cluster rustfs (S3 API) on kind, or the GCS bucket on GKE.
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   log "Staging assets to in-cluster rustfs bucket ${BUCKET_NAME} (kata-assets/)..."
+  run_kubectl wait --for=condition=complete job/rustfs-bucket-init -n ate-system --timeout=120s
   OUT="${OUT}" BUCKET="${BUCKET_NAME}" KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/microvm-assets/stage-to-rustfs.sh
 else
   log "Uploading assets to gs://${BUCKET_NAME}/kata-assets/ ..."
