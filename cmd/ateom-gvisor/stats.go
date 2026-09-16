@@ -84,9 +84,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // floor. Splitting the actor's share out would need the sentry's own
 // accounting, which the proto already says is not reported here.
 //
-// The name has to agree with the cgroupsPath convention in
-// ocispec.ShapeGVisor, which is "/" + containerName relative to the same
-// scope.
+// ocispec.GVisorCgroupLeaf supplies the leaf name for both shaping and stats.
 const sandboxCgroupContainer = ocispec.PauseContainer
 
 // GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
@@ -208,7 +206,7 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 		read = cgroupstats.Read
 	}
 	observedAt := time.Now()
-	sample, err := read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
+	sample, err := read(filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(active.UID, sandboxCgroupContainer)))
 	if err != nil {
 		return nil, err
 	}

@@ -470,3 +470,41 @@ func eventually(t *testing.T, condition func() bool, timeout time.Duration) {
 		t.Fatal("condition not met within timeout")
 	}
 }
+
+// The watch may replay an event or deliver one out of order, so an event
+// older than what the cache already holds must not regress it.
+func TestCache_WatchEventsAreFenced(t *testing.T) {
+	w := makeWorker("ns", "pod1", 1)
+	fs := newFakeStore(w)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	updated := makeWorker("ns", "pod1", 2)
+	updated.Status.Allocated = &ateapipb.WorkerResources{Actors: 1}
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	eventually(t, func() bool {
+		w, err := c.Worker(workerName("ns", "pod1"))
+		return err == nil && w.GetMetadata().GetVersion() == 2 && w.GetStatus().GetAllocated().GetActors() == 1
+	}, 2*time.Second)
+
+	// A replayed and an older event must both be no-ops.
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
+	// Ordering on the channel means observing a later event proves the two
+	// above were already applied.
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod2", 1)})
+	eventually(t, func() bool {
+		_, err := c.Worker(workerName("ns", "pod2"))
+		return err == nil
+	}, 2*time.Second)
+
+	got, err := c.Worker(workerName("ns", "pod1"))
+	if err != nil {
+		t.Fatalf("Worker: %v", err)
+	}
+	if got.GetMetadata().GetVersion() != 2 || got.GetStatus().GetAllocated().GetActors() != 1 {
+		t.Fatalf("stale event regressed the cache to version %d", got.GetMetadata().GetVersion())
+	}
+}

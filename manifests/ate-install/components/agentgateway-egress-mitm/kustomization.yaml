@@ -33,6 +33,13 @@ patches:
             accessLog:
               add:
                 substrate.connect.authority: source.connectHeaders["host"]
+            substrateEgressActorResolution:
+              host: api.ate-system.svc:443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns-ca/trust-bundle.pem
 
           binds:
           - port: 8443
@@ -53,21 +60,11 @@ patches:
                 cert: /run/egress-mitm/tls.crt
                 key: /run/egress-mitm/tls.key
               routes:
-              - policies:
-                  substrateEgress:
-                    host: api.ate-system.svc:443
-                    policies:
-                      backendTLS:
-                        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        root: /run/servicedns-ca/trust-bundle.pem
-                backends:
+              - backends:
                 - dynamic: {}
                   policies:
                     backendTLS: {}
-            - protocol: HTTP
-              routes:
-              - policies:
+                policies:
                   substrateEgress:
                     host: api.ate-system.svc:443
                     policies:
@@ -75,9 +72,19 @@ patches:
                         cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                         key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                         root: /run/servicedns-ca/trust-bundle.pem
-                backends:
+            - protocol: HTTP
+              routes:
+              - backends:
                 - dynamic:
                     target: source.connectHeaders["host"]
+                policies:
+                  substrateEgress:
+                    host: api.ate-system.svc:443
+                    policies:
+                      backendTLS:
+                        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                        root: /run/servicedns-ca/trust-bundle.pem
             - protocol: TCP
               tcpRoutes:
               - backends:

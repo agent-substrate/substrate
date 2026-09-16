@@ -299,7 +299,7 @@ func withFailed(reason string) func(*ateapipb.ActorTemplate) {
 }
 
 func newTestTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
-	return NewActorTemplateReconciler(persistence, control)
+	return NewActorTemplateReconciler(persistence, control, 7*time.Second)
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {
@@ -467,8 +467,8 @@ func TestReconcileOne(t *testing.T) {
 			name:           "unspecified actor state checks back later",
 			template:       testTemplate(),
 			control:        &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED},
-			wantRequeueMin: templateResyncInterval,
-			wantRequeueMax: templateResyncInterval,
+			wantRequeueMin: 7 * time.Second,
+			wantRequeueMax: 7 * time.Second,
 		},
 		{
 			name:     "lease conflict yields without error",

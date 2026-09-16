@@ -385,8 +385,8 @@ func TestWorkerEvents_OneRowPerTransaction(t *testing.T) {
 }
 
 // TestWatchWorkers_DeliveryFencedByOldestTransaction documents the xmin
-// fence's real bound: one old transaction anywhere holds back delivery of
-// everything committed after it, for as long as it lives.
+// fence's real bound: one old transaction anywhere holds back outbox delivery
+// of everything committed after it, for as long as it lives.
 func TestWatchWorkers_DeliveryFencedByOldestTransaction(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
@@ -403,6 +403,7 @@ func TestWatchWorkers_DeliveryFencedByOldestTransaction(t *testing.T) {
 		t.Fatalf("Begin blocker failed: %v", err)
 	}
 	defer blocker.Rollback(ctx) //nolint:errcheck // released below
+
 	if _, err := blocker.Exec(ctx, `SELECT pg_current_xact_id()`); err != nil {
 		t.Fatalf("assigning blocker xid failed: %v", err)
 	}
@@ -417,9 +418,17 @@ func TestWatchWorkers_DeliveryFencedByOldestTransaction(t *testing.T) {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 
+	// The commit-time copy is published in-process and never sees the fence.
+	// The fence governs the outbox copy that follows it.
+	select {
+	case <-watch.Events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("commit-time copy not delivered")
+	}
+
 	select {
 	case event := <-watch.Events:
-		t.Fatalf("event %+v delivered through the fence while an older transaction was in flight", event)
+		t.Fatalf("outbox copy of %+v delivered through the fence while an older transaction was in flight", event)
 	case <-time.After(600 * time.Millisecond):
 		// Expected: committed but fenced behind the blocker's xid.
 	}
@@ -1015,5 +1024,133 @@ func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
 		// Closed: the loss signal fired.
 	case <-time.After(5 * time.Second):
 		t.Fatal("watch stayed open past a corrupt payload (silent skip)")
+	}
+}
+
+// TestLocalPublishReachesWatchers pins the local fast-path contract: every
+// worker event — create, update, and delete — is on an active watcher's
+// channel by the time the write call returns, carrying the committed state.
+// Each read is non-blocking, so it can only be satisfied by the commit-time
+// publish; the poller needs at least one outboxPollInterval tick.
+func TestLocalPublishReachesWatchers(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN, "public")
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	watch, err := p.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+	defer watch.Close()
+
+	// nextEvent takes the next buffered event of type want, skipping outbox
+	// copies of earlier writes. It never blocks, so only the commit-time
+	// publish can satisfy it: the poller needs at least one tick to run.
+	nextEvent := func(what string, want store.WorkerEventType) store.WorkerEvent {
+		t.Helper()
+		for {
+			select {
+			case ev, ok := <-watch.Events:
+				if !ok {
+					t.Fatalf("after %s: watch closed", what)
+				}
+				if ev.Type == want {
+					return ev
+				}
+			default:
+				t.Fatalf("after %s: no %v on the watch channel; the commit-time publish did not reach the watcher", what, want)
+				return store.WorkerEvent{}
+			}
+		}
+	}
+
+	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "local-publish-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	ev := nextEvent("create", store.WorkerEventCreated)
+	if got, want := ev.Worker.GetMetadata().GetVersion(), created.GetMetadata().GetVersion(); got != want {
+		t.Errorf("created event version = %d, want committed version %d", got, want)
+	}
+
+	updated, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Ip = "10.0.0.9"
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+	ev = nextEvent("update", store.WorkerEventUpdated)
+	if got, want := ev.Worker.GetMetadata().GetVersion(), updated.GetMetadata().GetVersion(); got != want {
+		t.Errorf("updated event version = %d, want committed version %d", got, want)
+	}
+	if ev.Worker.GetIp() != "10.0.0.9" {
+		t.Errorf("updated event carries Ip %q, want the committed mutation", ev.Worker.GetIp())
+	}
+	// The watcher's copy must be isolated from the caller's returned Worker.
+	if ev.Worker == updated {
+		t.Error("locally published Worker aliases the caller's returned Worker; it must be a copy")
+	}
+
+	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker failed: %v", err)
+	}
+	ev = nextEvent("delete", store.WorkerEventDeleted)
+	if ev.Worker.GetMetadata().GetName() != created.GetMetadata().GetName() {
+		t.Errorf("deleted event names worker %q, want %q", ev.Worker.GetMetadata().GetName(), created.GetMetadata().GetName())
+	}
+}
+
+// TestLocalPublishSurvivesWatchClose covers the close race the watcher
+// registry exists to prevent: a write publishing concurrently with a watch
+// shutting down must not send on a closed channel.
+func TestLocalPublishSurvivesWatchClose(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN, "public")
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	for i := range 20 {
+		watch, err := p.WatchWorkers(ctx)
+		if err != nil {
+			t.Fatalf("WatchWorkers failed: %v", err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			watch.Close()
+		}()
+		name := fmt.Sprintf("close-race-worker-%d", i)
+		w, err := p.CreateWorker(ctx, &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: name},
+			WorkerNamespace: "ns",
+			WorkerPool:      "pool",
+			WorkerPod:       "pod",
+		})
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		if _, err := p.DeleteWorker(ctx, w.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteWorker failed: %v", err)
+		}
+		<-done
 	}
 }

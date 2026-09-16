@@ -49,7 +49,7 @@ diversity during project evaluations.
 
 ---
 
-This list must be kept in sync with the [CNCF Project Maintainers list](https://github.com/cncf/foundation/blob/main/project-maintainers.csv).
+<!--This list must be kept in sync with the [CNCF Project Maintainers list](https://github.com/cncf/foundation/blob/main/project-maintainers.csv).-->
 
 See [the project Governance](GOVERNANCE.md) for how maintainers are selected,
 replaced, and removed.

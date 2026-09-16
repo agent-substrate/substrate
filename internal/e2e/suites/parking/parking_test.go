@@ -62,11 +62,12 @@ func TestRequestParking(t *testing.T) {
 		t.Fatalf("creating router client: %v", err)
 	}
 	defer router.Close()
-	statusz, err := e2e.NewStatuszClient(ctx)
+	dataplane := e2e.CurrentAtenetDataplane()
+	parking, err := dataplane.NewParkingObserver(ctx)
 	if err != nil {
-		t.Fatalf("creating statusz client: %v", err)
+		t.Fatalf("creating parking observer: %v", err)
 	}
-	defer statusz.Close()
+	defer parking.Close()
 
 	t.Run("ParkThenServed", func(t *testing.T) {
 		// Occupy the only worker with actor A.
@@ -104,8 +105,9 @@ func TestRequestParking(t *testing.T) {
 			}()
 			if attempt == 1 {
 				// Free the worker only once the request is observably parked —
-				// the statusz gauge, not a sleep, is the synchronization point.
-				waitForParkedCount(ctx, t, statusz, func(active int) bool { return active >= 1 })
+				// the dataplane's active-parking gauge, not a sleep, is the
+				// synchronization point.
+				waitForParkedCount(ctx, t, parking, func(active int) bool { return active >= 1 })
 				suspendActor(ctx, t, clients, actorA)
 			}
 			res = <-resCh
@@ -113,9 +115,9 @@ func TestRequestParking(t *testing.T) {
 			if res.err != nil {
 				t.Fatalf("parked request failed transport-level: %v", res.err)
 			}
-			if res.resp.StatusCode == http.StatusServiceUnavailable &&
-				strings.Contains(res.body, "no free workers available") && attempt < 3 {
-				t.Logf("attempt %d budget-exhausted while the worker was still freeing (503 after %v); retrying", attempt, elapsed)
+			retryableBudgetExhaustion := dataplane.IsRetryableParkingBudgetExhaustion(res.resp.StatusCode, res.body)
+			if retryableBudgetExhaustion && attempt < 3 {
+				t.Logf("attempt %d budget-exhausted while the worker was still freeing (HTTP %d after %v); retrying", attempt, res.resp.StatusCode, elapsed)
 				continue
 			}
 			break
@@ -146,7 +148,7 @@ func TestRequestParking(t *testing.T) {
 		}
 
 		// The slot must be released once served.
-		waitForParkedCount(ctx, t, statusz, func(active int) bool { return active == 0 })
+		waitForParkedCount(ctx, t, parking, func(active int) bool { return active == 0 })
 	})
 
 	t.Run("BudgetExhaustion", func(t *testing.T) {
@@ -163,14 +165,17 @@ func TestRequestParking(t *testing.T) {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
 
-		if resp.StatusCode != http.StatusServiceUnavailable {
-			t.Fatalf("status = %d (body %q), want 503", resp.StatusCode, string(body))
+		wantStatus := dataplane.ParkingBudgetStatus()
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("status = %d (body %q), want %d", resp.StatusCode, string(body), wantStatus)
 		}
-		if !strings.Contains(string(body), "no free workers available") {
+		if wantStatus == http.StatusServiceUnavailable && !strings.Contains(string(body), "no free workers available") {
 			t.Errorf("body = %q, want the router's capacity verdict", string(body))
 		}
-		if ct := resp.Header.Get("content-type"); ct != "text/plain" {
-			t.Errorf("content-type = %q, want text/plain", ct)
+		if wantStatus == http.StatusServiceUnavailable {
+			if ct := resp.Header.Get("content-type"); ct != "text/plain" {
+				t.Errorf("content-type = %q, want text/plain", ct)
+			}
 		}
 		// Lower bound proves the request parked (fail-fast would answer in
 		// milliseconds); upper bound proves the router's own verdict landed
@@ -181,7 +186,7 @@ func TestRequestParking(t *testing.T) {
 		if elapsed > routerParkBudget+4*time.Second {
 			t.Errorf("503 after %v: too slow, likely an Envoy timeout rather than the router's verdict", elapsed)
 		}
-		t.Logf("budget exhausted after %v", elapsed)
+		t.Logf("budget exhausted after %v with HTTP %d", elapsed, wantStatus)
 	})
 }
 
@@ -265,22 +270,13 @@ func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 	t.Fatalf("timed out waiting for actor %q to reach %v", name, want)
 }
 
-// waitForParkedCount polls the router's statusz parking gauge until cond holds.
+// waitForParkedCount polls the dataplane's active-parking gauge until cond holds.
 // The deadline is short: a parking request becomes visible within its first
 // retry interval (~100ms), and a served one releases its slot immediately.
-func waitForParkedCount(ctx context.Context, t *testing.T, statusz *e2e.StatuszClient, cond func(active int) bool) {
+func waitForParkedCount(ctx context.Context, t *testing.T, parking e2e.ParkingObserver, cond func(active int) bool) {
 	t.Helper()
-	deadline := time.Now().Add(4 * time.Second)
-	var last int
-	for time.Now().Before(deadline) {
-		p, err := statusz.Parking(ctx)
-		if err == nil {
-			last = p.Active
-			if cond(p.Active) {
-				return
-			}
-		}
-		time.Sleep(150 * time.Millisecond)
+	last, err := parking.WaitForCount(ctx, cond)
+	if err != nil {
+		t.Fatalf("waiting for parking gauge (last active=%d): %v", last, err)
 	}
-	t.Fatalf("timed out waiting for the parking gauge to satisfy the condition (last active=%d)", last)
 }

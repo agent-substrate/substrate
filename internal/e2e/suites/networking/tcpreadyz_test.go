@@ -72,7 +72,11 @@ func TestTCPReadiness(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !proto.Equal(stored.GetContainers()[0].GetReadyz(), tmpl.Containers[0].Readyz) {
+		wantReadyz := proto.CloneOf(tmpl.Containers[0].Readyz)
+		if timeout == 0 {
+			wantReadyz.TimeoutSeconds = 30
+		}
+		if !proto.Equal(stored.GetContainers()[0].GetReadyz(), wantReadyz) {
 			t.Fatalf("stored readiness changed: %v", stored.GetContainers()[0].GetReadyz())
 		}
 		return created
@@ -80,7 +84,8 @@ func TestTCPReadiness(t *testing.T) {
 
 	t.Run("delayed listener and restore", func(t *testing.T) {
 		started := time.Now()
-		tmpl := newTemplate(t, "tcp-delayed", 80, 30)
+		// The API must default a TCP-only probe before validating and storing it.
+		tmpl := newTemplate(t, "tcp-delayed", 80, 0)
 		// The cold-start gate must not produce a golden snapshot while the
 		// non-HTTP server is still in its five-second pre-listen delay.
 		for time.Since(started) < 5*time.Second {
@@ -155,14 +160,20 @@ func TestTCPReadiness(t *testing.T) {
 					t.Errorf("deleting failed worker: %v", err)
 					return
 				}
+				// Pod deletion and API worker reconciliation are separate steps.
+				// Wait for the actor's assignment to be released before deleting it.
 				for {
-					_, err := clients.K8s.CoreV1().Pods(atespace).Get(cleanupCtx, pod, metav1.GetOptions{})
-					if apierrors.IsNotFound(err) {
+					actor, err := clients.SubstrateAPI.GetActor(cleanupCtx, &ateapipb.GetActorRequest{Actor: ref})
+					if err != nil {
+						t.Errorf("waiting for failed worker reconciliation: %v", err)
+						return
+					}
+					if actor.GetStatus().GetWorkerAssignment() == nil && actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
 						break
 					}
 					select {
 					case <-cleanupCtx.Done():
-						t.Errorf("waiting for failed worker deletion: %v", cleanupCtx.Err())
+						t.Errorf("waiting for failed worker reconciliation: %v", cleanupCtx.Err())
 						return
 					case <-time.After(100 * time.Millisecond):
 					}

@@ -36,11 +36,13 @@ import (
 // again or deleted cannot collect it. The work is a workflow because it spans
 // two transactions around an object copy; see TagActorSnapshot.
 func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagRequest) (*ateapipb.Tag, error) {
-	// First scrub any fields that users are not allowed to set.
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	inTag := req.Tag
 	if inTag != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inTag.Metadata)
 		inTag.Status = nil
+		defaultTag(inTag)
 	}
 
 	if errs := validateCreateTagRequest(ctx, req); len(errs) > 0 {
@@ -168,6 +170,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 		// Restore the server-owned fields, discarding whatever the request
 		// carried in them.
 		toUpdate.Metadata, toUpdate.Status = metadata, tagStatus
+		defaultTag(toUpdate)
 		return nil
 	})
 	if err != nil {

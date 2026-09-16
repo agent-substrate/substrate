@@ -129,18 +129,35 @@ const defaultExtProcMaxRequests = 2048
 // response. It bounds the actor's own handling time, not the resume that
 // precedes it — parking and the ext_proc timeout cover that part.
 //
-// The drain sequence also sizes its Envoy-drain window and derived
-// drain-timeout from this DEFAULT — deliberately not from the configured
-// --route-timeout, so raising the route ceiling for long-running actor turns
-// does not silently stretch every shutdown past terminationGracePeriodSeconds.
-// Operators who raise --route-timeout and want such turns to survive a drain
-// must raise --drain-timeout (and the grace period) explicitly.
+// It is generous because the workloads this platform exists for are agents
+// relaying a model completion, which holds the request open for the whole
+// generation. A ceiling below that turns an ordinary turn into a 504 the
+// caller cannot retry: the actor received the turn and is still working, so a
+// retry runs it twice. gRPC server-streaming and bidi RPCs are bounded by the
+// same ceiling and need the same headroom.
 //
-// TODO(liorlieberman): this ceiling also cuts off gRPC server-streaming and
-// bidi RPCs longer than 10s, so streaming gRPC effectively requires raising
-// --route-timeout today. We need to fix it so streaming works without
-// inflating the timeout for all workloads.
-const defaultRouteTimeout = 10 * time.Second
+// This is not the drain sizing. See drainRouteBudget.
+//
+// TODO(liorlieberman): a high default is the blunt instrument, not the fix.
+// Streaming and bidi RPCs need a ceiling this generous, and ordinary turns do
+// not; a per-route timeout would give the first without imposing it on every
+// workload. Tracked with the rest of the timeout consolidation in #1291.
+const defaultRouteTimeout = 5 * time.Minute
+
+// drainRouteBudget is how much in-flight route time the shutdown sequence
+// plans for: the Envoy-drain window and the derived drain-timeout are both
+// sized from it.
+//
+// It is deliberately a separate constant from defaultRouteTimeout, and
+// deliberately not the configured --route-timeout. Shutdown has to fit inside
+// terminationGracePeriodSeconds, so it cannot scale with a route ceiling set
+// for the longest turn a workload might take; sizing it that way would stretch
+// every rollout to the worst case and then be hard-killed by the kubelet
+// anyway. The cost of the split is that a turn still running after this budget
+// does not survive a drain. Operators who need long turns to survive one raise
+// --drain-timeout and terminationGracePeriodSeconds together, which the router
+// manifest documents.
+const drainRouteBudget = 10 * time.Second
 
 // envoyDefaultStreamIdleTimeout is the stream idle timeout Envoy applies when
 // the HTTP connection manager does not set one. We never set it, so this is
@@ -154,6 +171,12 @@ const defaultRouteTimeout = 10 * time.Second
 // override a route timeout above five minutes would never be reached. See
 // routeIdleTimeout.
 const envoyDefaultStreamIdleTimeout = 5 * time.Minute
+
+// routeIdleTimeoutMargin holds the route-level idle timeout strictly later than
+// the route timeout, so the response deadline is the limit that fires and the
+// caller gets a 504 rather than a torn stream. Any positive gap would do; this
+// one is wide enough to read as deliberate in a config dump.
+const routeIdleTimeoutMargin = 30 * time.Second
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
@@ -266,11 +289,10 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 	}
 }
 
-// SetRouteTimeout sets Envoy's end-to-end timeout on the workload route. Raise
-// it for actors whose turns legitimately run long — a harness relaying an LLM
-// completion holds the request open for the whole generation, and at the
-// default the client sees a 504 mid-turn. A non-positive value leaves the
-// default unchanged.
+// SetRouteTimeout sets Envoy's end-to-end timeout on the workload route.
+// Lower it to cap how long a single turn may hold a request open, or raise it
+// past the default for workloads whose turns run longer still. A non-positive
+// value leaves the default unchanged.
 func (x *XdsServer) SetRouteTimeout(d time.Duration) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -282,18 +304,22 @@ func (x *XdsServer) SetRouteTimeout(d time.Duration) {
 // routeIdleTimeout resolves the route-level idle timeout that accompanies the
 // route timeout. Caller must hold x.mu.
 //
-// Raising --route-timeout on its own would not work: the stream a long turn
-// runs on is idle for the whole turn whenever the actor sends nothing until it
-// is done, and Envoy would reset it at the five-minute stream idle default
-// before the requested timeout was ever reached. The idle timer must therefore
-// never be the limit that bites first.
+// The two bound different things and are not two spellings of one limit. The
+// route timeout is an upper bound on the upstream response time; the idle
+// timeout bounds how long the request's stream may go with no activity at all.
+// The idle timer is the liveness backstop, and the route timeout is the
+// deadline the caller is meant to observe.
 //
-// Taking the larger of the two keeps the operator's ceiling honest without
-// making the idle timer stricter than it already is: below five minutes the
-// route timeout fires first anyway, so this leaves today's behavior alone.
+// They do have to be ordered, because a turn that emits nothing while the actor
+// works is idle by the second measure even though it is progressing. An idle
+// timer at or below the route timeout resets such a stream before the ceiling
+// the operator asked for is ever reached, and an idle reset arrives at the
+// client as a torn stream rather than a 504. So the backstop is held a margin
+// past the route timeout, and never tightened below the five minutes Envoy
+// applies today.
 func (x *XdsServer) routeIdleTimeout() time.Duration {
-	if x.routeTimeout > envoyDefaultStreamIdleTimeout {
-		return x.routeTimeout
+	if backstop := x.routeTimeout + routeIdleTimeoutMargin; backstop > envoyDefaultStreamIdleTimeout {
+		return backstop
 	}
 	return envoyDefaultStreamIdleTimeout
 }
@@ -826,11 +852,13 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: OriginalDstClusterName,
 								},
-								// Also serves CONNECT-tunneled traffic re-injected via
-								// main_internal: Envoy applies Timeout to the whole tunnel
-								// lifetime, so a long-lived tunnel needs --route-timeout raised
-								// like a long LLM turn does; routeIdleTimeout keeps the idle
-								// timer from cutting it first.
+								// Two separate limits: Timeout bounds the upstream response,
+								// IdleTimeout bounds a stream with no activity on it, and
+								// routeIdleTimeout keeps the second from firing before the
+								// first. This route also serves CONNECT-tunneled traffic
+								// re-injected via main_internal, where Envoy applies Timeout to
+								// the whole tunnel lifetime, so a long-lived tunnel needs
+								// --route-timeout raised like a long LLM turn does.
 								Timeout:     durationpb.New(x.routeTimeout),
 								IdleTimeout: durationpb.New(x.routeIdleTimeout()),
 							},
