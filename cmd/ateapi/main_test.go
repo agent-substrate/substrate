@@ -19,6 +19,7 @@ import (
 	"context"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 )
@@ -154,5 +155,53 @@ func TestLogFlagValuesDoesNotLogThePostgresPassword(t *testing.T) {
 	}
 	if !strings.Contains(got, `"postgres-connection-string":{"host":"db.example.internal"`) {
 		t.Errorf("startup line missing the structured connection summary: %s", got)
+	}
+}
+
+func TestLoadFlagsFromEnv(t *testing.T) {
+	oldDSN, oldSchema := *postgresConnectionString, *postgresSchema
+	t.Cleanup(func() {
+		*postgresConnectionString, *postgresSchema = oldDSN, oldSchema
+	})
+
+	for _, tc := range []struct {
+		name, flag, value, want string
+		unset                   bool
+	}{
+		{name: "sentinel", flag: "@env", value: "from-env", want: "from-env"},
+		{name: "explicit flag", flag: "explicit", value: "from-env", want: "explicit"},
+		{name: "empty flag", value: "from-env"},
+		{name: "empty environment", flag: "@env"},
+		{name: "unset environment", flag: "@env", unset: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"ATE_API_POSTGRES_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"} {
+				t.Setenv(name, tc.value)
+				if tc.unset {
+					if err := os.Unsetenv(name); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			*postgresConnectionString, *postgresSchema = tc.flag, tc.flag
+			loadFlagsFromEnv()
+			if *postgresConnectionString != tc.want || *postgresSchema != tc.want {
+				t.Fatalf("resolved flags = (%q, %q), want (%q, %q)", *postgresConnectionString, *postgresSchema, tc.want, tc.want)
+			}
+		})
+	}
+}
+
+func TestS3PathStyleEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{
+		{"true", true}, {"TRUE", false}, {"1", false}, {"false", false}, {"", false}, {"invalid", false},
+	} {
+		t.Setenv("AWS_S3_USE_PATH_STYLE", tc.raw)
+		if got := s3PathStyleEnv.Get(); got != tc.want {
+			t.Errorf("AWS_S3_USE_PATH_STYLE=%q: got %v, want %v", tc.raw, got, tc.want)
+		}
 	}
 }

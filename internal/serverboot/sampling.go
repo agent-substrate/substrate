@@ -18,10 +18,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/env"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -29,6 +29,26 @@ const (
 	tracesSamplerEnv    = "OTEL_TRACES_SAMPLER"
 	tracesSamplerArgEnv = "OTEL_TRACES_SAMPLER_ARG"
 )
+
+var traceSampler = env.Var[string]{
+	Name:               tracesSamplerEnv,
+	Default:            "",
+	Component:          "ateapi, atecontroller, atelet, ateom-gvisor, ateom-microvm, atenet router; glutton also uses this shared resolver",
+	Description:        "Selects trace sampling. Names are trimmed and case-insensitive. Empty keeps the component default; invalid settings warn and keep that default.",
+	AcceptedValues:     "always_on, always_off, traceidratio, parentbased_always_on, parentbased_always_off, parentbased_traceidratio.",
+	Precedence:         "Overrides the default passed to serverboot.ResolveTraceSampling; no CLI flag for the process's own sampler.",
+	DefaultDescription: "parentbased_traceidratio with ratio 0.1 for control-plane components and ateoms, 0.01 for atenet router; parentbased_always_off for glutton.",
+}
+
+var traceSamplerArg = env.Var[string]{
+	Name:               tracesSamplerArgEnv,
+	Default:            "",
+	Component:          "ateapi, atecontroller, atelet, ateom-gvisor, ateom-microvm, atenet router; glutton also uses this shared resolver",
+	Description:        "Ratio for traceidratio and parentbased_traceidratio. Trimmed before parsing; missing, empty, or invalid arguments warn and keep the component default.",
+	AcceptedValues:     "Floating-point ratio in [0, 1]; ignored by other sampler types.",
+	Precedence:         "Used only with a ratio sampler selected by OTEL_TRACES_SAMPLER.",
+	DefaultDescription: "Empty; effective component defaults are listed under OTEL_TRACES_SAMPLER.",
+}
 
 // ControlPlaneTraceRatio is the default root sampling ratio for the control
 // plane binaries: low volume, and their traces are what lifecycle debugging
@@ -69,8 +89,8 @@ func ParentNeverSampling() TraceSampling {
 // to 100% sampling on invalid values where this keeps the default and logs.
 // That includes a ratio sampler without an arg, which the spec reads as 1.0.
 func ResolveTraceSampling(ctx context.Context, def TraceSampling) TraceSampling {
-	name, nameSet := os.LookupEnv(tracesSamplerEnv)
-	arg, argSet := os.LookupEnv(tracesSamplerArgEnv)
+	name, nameSet := traceSampler.Lookup()
+	arg, argSet := traceSamplerArg.Lookup()
 	resolved, err := resolveTraceSampling(name, nameSet, arg, argSet, def)
 	if err != nil {
 		slog.WarnContext(ctx, "Invalid trace sampler environment, keeping the component default",

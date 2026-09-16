@@ -943,7 +943,7 @@ func TestUpstreamHeadersSignalOverride(t *testing.T) {
 	t.Setenv(headersEnv, "api-key=generic")
 	t.Setenv(tracesHeadersEnv, "x-tenant=traces")
 
-	traces, err := upstreamHeaders(tracesHeadersEnv)
+	traces, err := upstreamHeaders(tracesHeadersVar)
 	if err != nil {
 		t.Fatalf("upstreamHeaders(traces): %v", err)
 	}
@@ -955,7 +955,7 @@ func TestUpstreamHeadersSignalOverride(t *testing.T) {
 	}
 
 	// metrics has no override, so it falls back to the generic variable.
-	metrics, err := upstreamHeaders(metricsHeadersEnv)
+	metrics, err := upstreamHeaders(metricsHeadersVar)
 	if err != nil {
 		t.Fatalf("upstreamHeaders(metrics): %v", err)
 	}
