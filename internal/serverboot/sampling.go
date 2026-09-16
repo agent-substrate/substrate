@@ -31,9 +31,13 @@ const (
 )
 
 var traceSampler = env.Var[string]{
-	Name:        tracesSamplerEnv,
-	Default:     "",
-	Description: "Trace sampler override. Empty or invalid settings keep the parent-based defaults: 10% for control-plane components and ateoms, 1% for atenet router, and no root sampling for glutton.",
+	Name:    tracesSamplerEnv,
+	Default: "",
+	Description: `Overrides trace sampling. Accepted names: always_on, always_off, traceidratio,
+parentbased_always_on, parentbased_always_off, parentbased_traceidratio. Names are case-insensitive
+and surrounding whitespace is ignored. Ratio samplers require OTEL_TRACES_SAMPLER_ARG.
+Unset, empty, or invalid settings keep the parent-based defaults: 10% for control-plane components
+and ateoms, 1% for atenet router, and no root sampling for glutton.`,
 }
 
 var traceSamplerArg = env.Var[string]{

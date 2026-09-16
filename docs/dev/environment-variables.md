@@ -16,7 +16,9 @@ to `Default` on invalid input. Unset variables return `Default`; explicitly
 empty values are parsed. Like `pflag`, boolean settings accept `1`, `t`, `T`,
 `TRUE`, `true`, `True`, `0`, `f`, `F`, `FALSE`, `false`, and `False`.
 
-Use `Description` for relevant defaults, accepted values, and flag precedence.
+Use `Description` for accepted values, units, unset/empty/invalid behavior, and
+flag precedence where relevant. Descriptions can span multiple sentences or use
+multiline raw string literals; keep the details beside the declaration.
 The generator links each declaration to its source, so shared names can have
 different descriptions in different consumers. System-injected inputs such as
 `NODE_NAME` are listed in `systemVariables` in `tools/envdoc/main.go`, keeping

@@ -86,15 +86,18 @@ import (
 )
 
 var storageBackendEnv = env.Var[string]{
-	Name:        "ATE_STORAGE_BACKEND",
-	Default:     "",
-	Description: "Snapshot backend: exact s3 selects S3; every other value uses GCS.",
+	Name:    "ATE_STORAGE_BACKEND",
+	Default: "",
+	Description: `Selects the snapshot storage backend. The exact, case-sensitive value s3 selects S3.
+Unset, empty, and all other values select GCS.`,
 }
 
 var s3PathStyleEnv = env.Var[bool]{
-	Name:        "AWS_S3_USE_PATH_STYLE",
-	Default:     false,
-	Description: "Enable S3 path-style addressing. Accepts Go boolean values, including true and 1.",
+	Name:    "AWS_S3_USE_PATH_STYLE",
+	Default: false,
+	Description: `Enables S3 path-style addressing when ATE_STORAGE_BACKEND=s3.
+Accepted true values: 1, t, T, TRUE, true, True. Accepted false values: 0, f, F, FALSE, false, False.
+Unset, empty, or invalid values use false. Whitespace is not trimmed.`,
 }
 
 var (

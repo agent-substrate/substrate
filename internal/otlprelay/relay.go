@@ -114,57 +114,84 @@ const (
 )
 
 var endpointVar = env.Var[string]{
-	Name:        endpointEnv,
-	Default:     "",
-	Description: "OTLP relay collector: host:port or http:// URL; HTTPS is rejected. Signal-specific endpoints override this value and must agree. Empty disables the relay.",
+	Name:    endpointEnv,
+	Default: "",
+	Description: `Collector address for the OTLP relay, as a hostname, host:port, or http:// URL.
+The default port is 4317. HTTPS and other URL schemes are rejected; the relay uses plaintext gRPC.
+Nonempty signal-specific endpoints override this value. Resolved nonempty trace and metric
+settings must match exactly. The relay is disabled when all endpoint settings are empty.`,
 }
 
 var tracesEndpointVar = env.Var[string]{
-	Name:        tracesEndpointEnv,
-	Default:     "",
-	Description: "OTLP relay traces endpoint; nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT. Resolved trace and metric settings must agree.",
+	Name:    tracesEndpointEnv,
+	Default: "",
+	Description: `Collector address for OTLP relay traces, as a hostname, host:port, or http:// URL.
+The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override
+OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric
+settings must match exactly because both signals share one connection.`,
 }
 
 var metricsEndpointVar = env.Var[string]{
-	Name:        metricsEndpointEnv,
-	Default:     "",
-	Description: "OTLP relay metrics endpoint; nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT. Resolved trace and metric settings must agree.",
+	Name:    metricsEndpointEnv,
+	Default: "",
+	Description: `Collector address for OTLP relay metrics, as a hostname, host:port, or http:// URL.
+The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override
+OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric
+settings must match exactly because both signals share one connection.`,
 }
 
 var compressionVar = env.Var[string]{
-	Name:        compressionEnv,
-	Default:     "",
-	Description: "OTLP relay compression: gzip or none; empty means none. Signal-specific settings override this value and must agree.",
+	Name:    compressionEnv,
+	Default: "",
+	Description: `Compression for the OTLP relay. Accepted values are gzip and none, with surrounding
+whitespace ignored; names are case-sensitive. Nonempty signal-specific settings override this value.
+Resolved nonempty trace and metric settings must match exactly. If all settings are empty,
+compression is disabled. Unsupported or conflicting values prevent the relay from starting.`,
 }
 
 var tracesCompressionVar = env.Var[string]{
-	Name:        tracesCompressionEnv,
-	Default:     "",
-	Description: "OTLP relay traces compression; nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION. Resolved trace and metric settings must agree.",
+	Name:    tracesCompressionEnv,
+	Default: "",
+	Description: `Compression for OTLP relay traces: gzip or none, case-sensitive, with surrounding whitespace ignored.
+Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it.
+Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values
+prevent the relay from starting.`,
 }
 
 var metricsCompressionVar = env.Var[string]{
-	Name:        metricsCompressionEnv,
-	Default:     "",
-	Description: "OTLP relay metrics compression; nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION. Resolved trace and metric settings must agree.",
+	Name:    metricsCompressionEnv,
+	Default: "",
+	Description: `Compression for OTLP relay metrics: gzip or none, case-sensitive, with surrounding whitespace ignored.
+Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it.
+Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values
+prevent the relay from starting.`,
 }
 
 var headersVar = env.Var[string]{
-	Name:        headersEnv,
-	Default:     "",
-	Description: "OTLP relay headers as comma-separated key=value pairs with percent-encoded values. Signal-specific headers replace these. May contain secrets.",
+	Name:    headersEnv,
+	Default: "",
+	Description: `Headers sent by the OTLP relay, as comma-separated key=value pairs with percent-encoded values.
+Header names are case-insensitive. For example, x-team=platform,x-label=hello%20world sets two headers.
+Nonempty signal-specific headers replace this entire list rather than merging with it.
+Empty means no headers. Malformed entries prevent the relay from starting. Values may contain secrets.`,
 }
 
 var tracesHeadersVar = env.Var[string]{
-	Name:        tracesHeadersEnv,
-	Default:     "",
-	Description: "OTLP relay traces headers; nonempty values override OTEL_EXPORTER_OTLP_HEADERS. May contain secrets.",
+	Name:    tracesHeadersEnv,
+	Default: "",
+	Description: `Headers sent with OTLP relay traces, as comma-separated key=value pairs with percent-encoded values.
+Nonempty values replace OTEL_EXPORTER_OTLP_HEADERS entirely; empty values inherit it.
+Header names are case-insensitive. Malformed entries prevent the relay from starting.
+Values may contain secrets.`,
 }
 
 var metricsHeadersVar = env.Var[string]{
-	Name:        metricsHeadersEnv,
-	Default:     "",
-	Description: "OTLP relay metrics headers; nonempty values override OTEL_EXPORTER_OTLP_HEADERS. May contain secrets.",
+	Name:    metricsHeadersEnv,
+	Default: "",
+	Description: `Headers sent with OTLP relay metrics, as comma-separated key=value pairs with percent-encoded values.
+Nonempty values replace OTEL_EXPORTER_OTLP_HEADERS entirely; empty values inherit it.
+Header names are case-insensitive. Malformed entries prevent the relay from starting.
+Values may contain secrets.`,
 }
 
 // Server is the atelet half of the relay: an OTLP receiver on a unix socket

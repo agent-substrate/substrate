@@ -57,15 +57,19 @@ var otelEndpointEnv = env.Var[string]{
 }
 
 var otelMetricExportIntervalEnv = env.Var[string]{
-	Name:        "OTEL_METRIC_EXPORT_INTERVAL",
-	Default:     "",
-	Description: "Default for --otel-metric-export-interval, forwarded to workers when an OTLP endpoint is set. Empty uses the SDK default of 60000 ms.",
+	Name:    "OTEL_METRIC_EXPORT_INTERVAL",
+	Default: "",
+	Description: `Metric export interval in milliseconds, used as the default for --otel-metric-export-interval.
+An explicit flag overrides this value. Forwarded unchanged to workers when an OTLP endpoint is set;
+validation is left to the worker SDK. Empty uses the SDK default of 60000 ms.`,
 }
 
 var otelMetricExportTimeoutEnv = env.Var[string]{
-	Name:        "OTEL_METRIC_EXPORT_TIMEOUT",
-	Default:     "",
-	Description: "Default for --otel-metric-export-timeout, forwarded to workers when an OTLP endpoint is set. Empty uses the SDK default of 30000 ms.",
+	Name:    "OTEL_METRIC_EXPORT_TIMEOUT",
+	Default: "",
+	Description: `Per-export timeout in milliseconds, used as the default for --otel-metric-export-timeout.
+An explicit flag overrides this value. Forwarded unchanged to workers when an OTLP endpoint is set;
+validation is left to the worker SDK. Empty uses the SDK default of 30000 ms.`,
 }
 
 var otelTracesSamplerEnv = env.Var[string]{

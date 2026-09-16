@@ -68,27 +68,32 @@ const maxRPCDeadline = 10 * time.Minute
 const minResyncInterval = 250 * time.Millisecond
 
 var storageBackendEnv = env.Var[string]{
-	Name:        "ATE_STORAGE_BACKEND",
-	Default:     "",
-	Description: "Snapshot backend: exact s3 selects S3; every other value uses GCS.",
+	Name:    "ATE_STORAGE_BACKEND",
+	Default: "",
+	Description: `Selects the snapshot storage backend. The exact, case-sensitive value s3 selects S3.
+Unset, empty, and all other values select GCS.`,
 }
 
 var s3PathStyleEnv = env.Var[bool]{
-	Name:        "AWS_S3_USE_PATH_STYLE",
-	Default:     false,
-	Description: "Enable S3 path-style addressing. Accepts Go boolean values, including true and 1.",
+	Name:    "AWS_S3_USE_PATH_STYLE",
+	Default: false,
+	Description: `Enables S3 path-style addressing when ATE_STORAGE_BACKEND=s3.
+Accepted true values: 1, t, T, TRUE, true, True. Accepted false values: 0, f, F, FALSE, false, False.
+Unset, empty, or invalid values use false. Whitespace is not trimmed.`,
 }
 
 var postgresConnectionStringEnv = env.Var[string]{
-	Name:        "ATE_API_POSTGRES_CONNECTION_STRING",
-	Default:     "",
-	Description: "PostgreSQL DSN or URI, read only with --postgres-connection-string=@env; empty is rejected.",
+	Name:    "ATE_API_POSTGRES_CONNECTION_STRING",
+	Default: "",
+	Description: `PostgreSQL connection string in DSN or URI form. Read only when --postgres-connection-string=@env;
+otherwise the flag supplies the value. Unset or empty values are rejected when @env is selected.`,
 }
 
 var postgresSchemaEnv = env.Var[string]{
-	Name:        "ATE_API_POSTGRES_SCHEMA",
-	Default:     "",
-	Description: "PostgreSQL schema, read only with --postgres-schema=@env; empty is rejected. The flag otherwise defaults to public.",
+	Name:    "ATE_API_POSTGRES_SCHEMA",
+	Default: "",
+	Description: `PostgreSQL schema name. Read only when --postgres-schema=@env; otherwise the flag supplies
+the value and defaults to public. Unset or empty values are rejected when @env is selected.`,
 }
 
 var (
