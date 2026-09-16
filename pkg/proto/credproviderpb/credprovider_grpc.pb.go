@@ -33,7 +33,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CredentialProvider_RequestSecret_FullMethodName = "/credprovider.CredentialProvider/RequestSecret"
+	CredentialProvider_FetchSecret_FullMethodName = "/credprovider.CredentialProvider/FetchSecret"
 )
 
 // CredentialProviderClient is the client API for CredentialProvider service.
@@ -45,9 +45,9 @@ const (
 // external credential without Substrate storing it. A provider interprets the
 // attested request context however is relevant to the store it fronts.
 type CredentialProviderClient interface {
-	// RequestSecret resolves a credential URI to its secret material, subject to
+	// FetchSecret resolves a credential URI to its secret material, subject to
 	// whatever authorization the provider applies to the request context.
-	RequestSecret(ctx context.Context, in *RequestSecretRequest, opts ...grpc.CallOption) (*RequestSecretResponse, error)
+	FetchSecret(ctx context.Context, in *FetchSecretRequest, opts ...grpc.CallOption) (*FetchSecretResponse, error)
 }
 
 type credentialProviderClient struct {
@@ -58,10 +58,10 @@ func NewCredentialProviderClient(cc grpc.ClientConnInterface) CredentialProvider
 	return &credentialProviderClient{cc}
 }
 
-func (c *credentialProviderClient) RequestSecret(ctx context.Context, in *RequestSecretRequest, opts ...grpc.CallOption) (*RequestSecretResponse, error) {
+func (c *credentialProviderClient) FetchSecret(ctx context.Context, in *FetchSecretRequest, opts ...grpc.CallOption) (*FetchSecretResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RequestSecretResponse)
-	err := c.cc.Invoke(ctx, CredentialProvider_RequestSecret_FullMethodName, in, out, cOpts...)
+	out := new(FetchSecretResponse)
+	err := c.cc.Invoke(ctx, CredentialProvider_FetchSecret_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -77,9 +77,9 @@ func (c *credentialProviderClient) RequestSecret(ctx context.Context, in *Reques
 // external credential without Substrate storing it. A provider interprets the
 // attested request context however is relevant to the store it fronts.
 type CredentialProviderServer interface {
-	// RequestSecret resolves a credential URI to its secret material, subject to
+	// FetchSecret resolves a credential URI to its secret material, subject to
 	// whatever authorization the provider applies to the request context.
-	RequestSecret(context.Context, *RequestSecretRequest) (*RequestSecretResponse, error)
+	FetchSecret(context.Context, *FetchSecretRequest) (*FetchSecretResponse, error)
 	mustEmbedUnimplementedCredentialProviderServer()
 }
 
@@ -90,8 +90,8 @@ type CredentialProviderServer interface {
 // pointer dereference when methods are called.
 type UnimplementedCredentialProviderServer struct{}
 
-func (UnimplementedCredentialProviderServer) RequestSecret(context.Context, *RequestSecretRequest) (*RequestSecretResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RequestSecret not implemented")
+func (UnimplementedCredentialProviderServer) FetchSecret(context.Context, *FetchSecretRequest) (*FetchSecretResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchSecret not implemented")
 }
 func (UnimplementedCredentialProviderServer) mustEmbedUnimplementedCredentialProviderServer() {}
 func (UnimplementedCredentialProviderServer) testEmbeddedByValue()                            {}
@@ -114,20 +114,20 @@ func RegisterCredentialProviderServer(s grpc.ServiceRegistrar, srv CredentialPro
 	s.RegisterService(&CredentialProvider_ServiceDesc, srv)
 }
 
-func _CredentialProvider_RequestSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RequestSecretRequest)
+func _CredentialProvider_FetchSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchSecretRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CredentialProviderServer).RequestSecret(ctx, in)
+		return srv.(CredentialProviderServer).FetchSecret(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CredentialProvider_RequestSecret_FullMethodName,
+		FullMethod: CredentialProvider_FetchSecret_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CredentialProviderServer).RequestSecret(ctx, req.(*RequestSecretRequest))
+		return srv.(CredentialProviderServer).FetchSecret(ctx, req.(*FetchSecretRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -140,8 +140,8 @@ var CredentialProvider_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*CredentialProviderServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "RequestSecret",
-			Handler:    _CredentialProvider_RequestSecret_Handler,
+			MethodName: "FetchSecret",
+			Handler:    _CredentialProvider_FetchSecret_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

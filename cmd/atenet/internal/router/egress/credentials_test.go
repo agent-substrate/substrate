@@ -35,20 +35,20 @@ const injectionProviderName = "k8s"
 
 // fakeProvider is a stub CredentialProviderClient recording the last request.
 type fakeProvider struct {
-	resp *credproviderpb.RequestSecretResponse
+	resp *credproviderpb.FetchSecretResponse
 	err  error
-	got  *credproviderpb.RequestSecretRequest
+	got  *credproviderpb.FetchSecretRequest
 }
 
-func (f *fakeProvider) RequestSecret(_ context.Context, req *credproviderpb.RequestSecretRequest, _ ...grpc.CallOption) (*credproviderpb.RequestSecretResponse, error) {
+func (f *fakeProvider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRequest, _ ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
 	f.got = req
 	return f.resp, f.err
 }
 
-// bearerTokenResponse is a RequestSecretResponse carrying a bearer-token
+// bearerTokenResponse is a FetchSecretResponse carrying a bearer-token
 // credential as its opaque secret bytes.
-func bearerTokenResponse(token string) *credproviderpb.RequestSecretResponse {
-	return &credproviderpb.RequestSecretResponse{OpaqueBytes: []byte(token)}
+func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
+	return &credproviderpb.FetchSecretResponse{OpaqueBytes: []byte(token)}
 }
 
 // injectionHandler builds a handler whose actor's policy injects a credential
@@ -88,7 +88,7 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 	if got := provider.got.GetUri(); got != "substrate-secret://k8s/default/token" {
 		t.Errorf("provider URI = %q", got)
 	}
-	if got := provider.got.GetActorIdentity(); got != testActorSPIFFEID {
+	if got := provider.got.GetActorSpiffeId(); got != testActorSPIFFEID {
 		t.Errorf("actor identity = %q, want %q", got, testActorSPIFFEID)
 	}
 	if got := provider.got.GetContext().GetAuthority(); got != "api.example.com" {

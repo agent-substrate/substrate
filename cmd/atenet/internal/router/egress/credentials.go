@@ -30,7 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
-// mapCredentialProviderError converts a RequestSecret failure into a
+// mapCredentialProviderError converts a FetchSecret failure into a
 // client-facing ext_proc denial, mirroring mapEgressIdentityError: a credential
 // the provider does not hold or will not release (NotFound, PermissionDenied)
 // denies as 403 — retrying cannot succeed — while a transient provider failure
@@ -80,7 +80,7 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 	// the same form the CONNECT leg verified and shared as filter state. The
 	// provider authenticates this gateway and trusts its assertion; see
 	// pkg/proto/credproviderpb.
-	actorIdentity := resources.ActorSPIFFEID(ref).String()
+	actorSpiffeID := resources.ActorSPIFFEID(ref).String()
 
 	setHeaders := make([]*corev3.HeaderValueOption, 0, len(injections))
 	for _, inj := range injections {
@@ -109,9 +109,9 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 			}
 		}
 
-		resp, err := h.provider.RequestSecret(ctx, &credproviderpb.RequestSecretRequest{
+		resp, err := h.provider.FetchSecret(ctx, &credproviderpb.FetchSecretRequest{
 			Uri:           inj.GetCredentialUri(),
-			ActorIdentity: actorIdentity,
+			ActorSpiffeId: actorSpiffeID,
 			Context: &credproviderpb.HttpRequestContext{
 				Authority: dest.Hostname,
 				Header:    inj.GetHeader(),

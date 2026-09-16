@@ -92,35 +92,35 @@ func (x *HttpRequestContext) GetHeader() string {
 	return ""
 }
 
-// RequestSecretRequest asks a provider to resolve one credential URI.
-type RequestSecretRequest struct {
+// FetchSecretRequest asks a provider to resolve one credential URI.
+type FetchSecretRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// A substrate-secret:// URI:
 	//   substrate-secret://<provider name>/<provider tail>
 	Uri string `protobuf:"bytes,1,opt,name=uri,proto3" json:"uri,omitempty"`
-	// The attested actor identity on whose behalf the secret is fetched. Today
-	// this is the actor's SPIFFE URI as verified by the egress gateway.
-	ActorIdentity string `protobuf:"bytes,2,opt,name=actor_identity,json=actorIdentity,proto3" json:"actor_identity,omitempty"`
+	// The SPIFFE ID of the actor on whose behalf the secret is fetched, as
+	// verified by the egress gateway. This field always contains a SPIFFE ID.
+	ActorSpiffeId string `protobuf:"bytes,2,opt,name=actor_spiffe_id,json=actorSpiffeId,proto3" json:"actor_spiffe_id,omitempty"`
 	// The attested context for http request.
 	Context       *HttpRequestContext `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RequestSecretRequest) Reset() {
-	*x = RequestSecretRequest{}
+func (x *FetchSecretRequest) Reset() {
+	*x = FetchSecretRequest{}
 	mi := &file_credprovider_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RequestSecretRequest) String() string {
+func (x *FetchSecretRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RequestSecretRequest) ProtoMessage() {}
+func (*FetchSecretRequest) ProtoMessage() {}
 
-func (x *RequestSecretRequest) ProtoReflect() protoreflect.Message {
+func (x *FetchSecretRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_credprovider_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -132,55 +132,55 @@ func (x *RequestSecretRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RequestSecretRequest.ProtoReflect.Descriptor instead.
-func (*RequestSecretRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use FetchSecretRequest.ProtoReflect.Descriptor instead.
+func (*FetchSecretRequest) Descriptor() ([]byte, []int) {
 	return file_credprovider_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *RequestSecretRequest) GetUri() string {
+func (x *FetchSecretRequest) GetUri() string {
 	if x != nil {
 		return x.Uri
 	}
 	return ""
 }
 
-func (x *RequestSecretRequest) GetActorIdentity() string {
+func (x *FetchSecretRequest) GetActorSpiffeId() string {
 	if x != nil {
-		return x.ActorIdentity
+		return x.ActorSpiffeId
 	}
 	return ""
 }
 
-func (x *RequestSecretRequest) GetContext() *HttpRequestContext {
+func (x *FetchSecretRequest) GetContext() *HttpRequestContext {
 	if x != nil {
 		return x.Context
 	}
 	return nil
 }
 
-// RequestSecretResponse carries the resolved credential.
-type RequestSecretResponse struct {
+// FetchSecretResponse carries the resolved credential.
+type FetchSecretResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The raw bytes contains the secret.
-	OpaqueBytes   []byte `protobuf:"bytes,1,opt,name=opaque_bytes,json=opaqueBytes,proto3,oneof" json:"opaque_bytes,omitempty"`
+	OpaqueBytes   []byte `protobuf:"bytes,1,opt,name=opaque_bytes,json=opaqueBytes,proto3" json:"opaque_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RequestSecretResponse) Reset() {
-	*x = RequestSecretResponse{}
+func (x *FetchSecretResponse) Reset() {
+	*x = FetchSecretResponse{}
 	mi := &file_credprovider_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RequestSecretResponse) String() string {
+func (x *FetchSecretResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RequestSecretResponse) ProtoMessage() {}
+func (*FetchSecretResponse) ProtoMessage() {}
 
-func (x *RequestSecretResponse) ProtoReflect() protoreflect.Message {
+func (x *FetchSecretResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_credprovider_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -192,12 +192,12 @@ func (x *RequestSecretResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RequestSecretResponse.ProtoReflect.Descriptor instead.
-func (*RequestSecretResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use FetchSecretResponse.ProtoReflect.Descriptor instead.
+func (*FetchSecretResponse) Descriptor() ([]byte, []int) {
 	return file_credprovider_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *RequestSecretResponse) GetOpaqueBytes() []byte {
+func (x *FetchSecretResponse) GetOpaqueBytes() []byte {
 	if x != nil {
 		return x.OpaqueBytes
 	}
@@ -211,16 +211,15 @@ const file_credprovider_proto_rawDesc = "" +
 	"\x12credprovider.proto\x12\fcredprovider\"J\n" +
 	"\x12HttpRequestContext\x12\x1c\n" +
 	"\tauthority\x18\x01 \x01(\tR\tauthority\x12\x16\n" +
-	"\x06header\x18\x02 \x01(\tR\x06header\"\x8b\x01\n" +
-	"\x14RequestSecretRequest\x12\x10\n" +
-	"\x03uri\x18\x01 \x01(\tR\x03uri\x12%\n" +
-	"\x0eactor_identity\x18\x02 \x01(\tR\ractorIdentity\x12:\n" +
-	"\acontext\x18\x03 \x01(\v2 .credprovider.HttpRequestContextR\acontext\"P\n" +
-	"\x15RequestSecretResponse\x12&\n" +
-	"\fopaque_bytes\x18\x01 \x01(\fH\x00R\vopaqueBytes\x88\x01\x01B\x0f\n" +
-	"\r_opaque_bytes2p\n" +
-	"\x12CredentialProvider\x12Z\n" +
-	"\rRequestSecret\x12\".credprovider.RequestSecretRequest\x1a#.credprovider.RequestSecretResponse\"\x00B?Z=github.com/agent-substrate/substrate/pkg/proto/credproviderpbb\x06proto3"
+	"\x06header\x18\x02 \x01(\tR\x06header\"\x8a\x01\n" +
+	"\x12FetchSecretRequest\x12\x10\n" +
+	"\x03uri\x18\x01 \x01(\tR\x03uri\x12&\n" +
+	"\x0factor_spiffe_id\x18\x02 \x01(\tR\ractorSpiffeId\x12:\n" +
+	"\acontext\x18\x03 \x01(\v2 .credprovider.HttpRequestContextR\acontext\"8\n" +
+	"\x13FetchSecretResponse\x12!\n" +
+	"\fopaque_bytes\x18\x01 \x01(\fR\vopaqueBytes2j\n" +
+	"\x12CredentialProvider\x12T\n" +
+	"\vFetchSecret\x12 .credprovider.FetchSecretRequest\x1a!.credprovider.FetchSecretResponse\"\x00B?Z=github.com/agent-substrate/substrate/pkg/proto/credproviderpbb\x06proto3"
 
 var (
 	file_credprovider_proto_rawDescOnce sync.Once
@@ -236,14 +235,14 @@ func file_credprovider_proto_rawDescGZIP() []byte {
 
 var file_credprovider_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_credprovider_proto_goTypes = []any{
-	(*HttpRequestContext)(nil),    // 0: credprovider.HttpRequestContext
-	(*RequestSecretRequest)(nil),  // 1: credprovider.RequestSecretRequest
-	(*RequestSecretResponse)(nil), // 2: credprovider.RequestSecretResponse
+	(*HttpRequestContext)(nil),  // 0: credprovider.HttpRequestContext
+	(*FetchSecretRequest)(nil),  // 1: credprovider.FetchSecretRequest
+	(*FetchSecretResponse)(nil), // 2: credprovider.FetchSecretResponse
 }
 var file_credprovider_proto_depIdxs = []int32{
-	0, // 0: credprovider.RequestSecretRequest.context:type_name -> credprovider.HttpRequestContext
-	1, // 1: credprovider.CredentialProvider.RequestSecret:input_type -> credprovider.RequestSecretRequest
-	2, // 2: credprovider.CredentialProvider.RequestSecret:output_type -> credprovider.RequestSecretResponse
+	0, // 0: credprovider.FetchSecretRequest.context:type_name -> credprovider.HttpRequestContext
+	1, // 1: credprovider.CredentialProvider.FetchSecret:input_type -> credprovider.FetchSecretRequest
+	2, // 2: credprovider.CredentialProvider.FetchSecret:output_type -> credprovider.FetchSecretResponse
 	2, // [2:3] is the sub-list for method output_type
 	1, // [1:2] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -256,7 +255,6 @@ func file_credprovider_proto_init() {
 	if File_credprovider_proto != nil {
 		return
 	}
-	file_credprovider_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

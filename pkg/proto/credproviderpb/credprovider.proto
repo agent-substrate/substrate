@@ -23,9 +23,9 @@ option go_package = "github.com/agent-substrate/substrate/pkg/proto/credprovider
 // external credential without Substrate storing it. A provider interprets the
 // attested request context however is relevant to the store it fronts.
 service CredentialProvider {
-  // RequestSecret resolves a credential URI to its secret material, subject to
+  // FetchSecret resolves a credential URI to its secret material, subject to
   // whatever authorization the provider applies to the request context.
-  rpc RequestSecret(RequestSecretRequest) returns (RequestSecretResponse) {}
+  rpc FetchSecret(FetchSecretRequest) returns (FetchSecretResponse) {}
 }
 
 // HttpRequestContext is the attested context Substrate passes with a http request.
@@ -39,22 +39,22 @@ message HttpRequestContext {
   string header = 2;
 }
 
-// RequestSecretRequest asks a provider to resolve one credential URI.
-message RequestSecretRequest {
+// FetchSecretRequest asks a provider to resolve one credential URI.
+message FetchSecretRequest {
   // A substrate-secret:// URI:
   //   substrate-secret://<provider name>/<provider tail>
   string uri = 1;
 
-  // The attested actor identity on whose behalf the secret is fetched. Today
-  // this is the actor's SPIFFE URI as verified by the egress gateway.
-  string actor_identity = 2;
+  // The SPIFFE ID of the actor on whose behalf the secret is fetched, as
+  // verified by the egress gateway. This field always contains a SPIFFE ID.
+  string actor_spiffe_id = 2;
 
   // The attested context for http request.
   HttpRequestContext context = 3;
 }
 
-// RequestSecretResponse carries the resolved credential.
-message RequestSecretResponse {
+// FetchSecretResponse carries the resolved credential.
+message FetchSecretResponse {
   // The raw bytes contains the secret.
-  optional bytes opaque_bytes = 1;
+  bytes opaque_bytes = 1;
 }
