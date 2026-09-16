@@ -51,18 +51,18 @@ Snapshot backend: exact s3 selects S3; every other value uses GCS.
 
 ### AWS_S3_USE_PATH_STYLE (cmd/ateapi/main.go)
 
-Enable S3 path-style addressing only for the exact string true.
+Enable S3 path-style addressing. Accepts Go boolean values, including true and 1.
 
-- Type: string
-- Declared default: ""
+- Type: bool
+- Declared default: false
 - Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L76)
 
 ### AWS_S3_USE_PATH_STYLE (cmd/atelet/main.go)
 
-Enable S3 path-style addressing only for the exact string true.
+Enable S3 path-style addressing. Accepts Go boolean values, including true and 1.
 
-- Type: string
-- Declared default: ""
+- Type: bool
+- Declared default: false
 - Source: [cmd/atelet/main.go](../cmd/atelet/main.go#L94)
 
 ### OTEL_EXPORTER_OTLP_COMPRESSION (internal/otlprelay/relay.go)
