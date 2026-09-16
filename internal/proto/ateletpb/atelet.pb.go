@@ -1859,7 +1859,6 @@ type Readyz struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// How long to keep polling before giving up and failing the actor start.
-	// Zero means the ateom's default.
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1912,7 +1911,7 @@ func (x *Readyz) GetTimeoutSeconds() int32 {
 // HTTPGetAction performs an HTTP GET against the container.
 type HTTPGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Path to access on the HTTP server. Empty means "/readyz".
+	// Path to access on the HTTP server.
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// TCP port to connect to (1..65535).
 	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`

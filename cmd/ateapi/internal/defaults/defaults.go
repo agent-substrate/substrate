@@ -76,7 +76,7 @@ func applySnapshotsConfigDefaults(sc *ateapipb.SnapshotsConfig) {
 func applyContainerDefaults(c *ateapipb.Container) {
 	const (
 		defaultReadyzTimeoutSeconds int32 = 30
-		defaultReadyzPath                 = "/readyz"
+		defaultReadyzPath                 = "/"
 	)
 	if c == nil || c.Readyz == nil {
 		return

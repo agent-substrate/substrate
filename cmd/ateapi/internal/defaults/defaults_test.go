@@ -80,7 +80,7 @@ func TestApply(t *testing.T) {
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
 			{Name: "main", Readyz: &ateapipb.ContainerReadyz{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/readyz"},
+				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/"},
 				TimeoutSeconds: 30,
 			}},
 		}},
@@ -114,9 +114,9 @@ func TestApply(t *testing.T) {
 			{Name: "c", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 3}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 1, Path: "/readyz"}, TimeoutSeconds: 30}},
+			{Name: "a", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
 			{Name: "b"},
-			{Name: "c", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 3, Path: "/readyz"}, TimeoutSeconds: 30}},
+			{Name: "c", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
 		}},
 	}, {
 		name: "actor has no defaults",
