@@ -51,6 +51,15 @@ type SubstrateTemplateOptions struct {
 	Modify func(*ateapipb.ActorTemplate)
 }
 
+// workerSizeOf is the source pool's per-worker compute, or nil when it
+// declares none.
+func workerSizeOf(wp *v1alpha1.WorkerPool) *v1alpha1.WorkerPoolPodTemplate {
+	if wp.Spec.Template == nil || wp.Spec.Template.Resources == nil {
+		return nil
+	}
+	return &v1alpha1.WorkerPoolPodTemplate{Resources: wp.Spec.Template.Resources}
+}
+
 // CreateSubstrateCounterTemplate creates a per-test WorkerPool CRD plus a
 // substrate ActorTemplate copying the resolved runtime from the substrate
 // counter demo for the sandbox class under test.
@@ -88,6 +97,10 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 			Replicas:     opts.PoolReplicas,
 			WorkerImage:  existingWp.Spec.WorkerImage,
 			SandboxClass: existingWp.Spec.SandboxClass,
+			// The worker size only: it is what the worker advertises as
+			// capacity, while the rest of the template pins the source
+			// deployment's nodes.
+			Template: workerSizeOf(existingWp),
 		},
 	}
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
