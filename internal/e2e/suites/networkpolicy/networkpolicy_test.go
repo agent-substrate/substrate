@@ -36,7 +36,6 @@ import (
 )
 
 const (
-	ateSystemNamespace  = "ate-system"
 	atenetRouterAppName = "atenet-router"
 )
 
@@ -103,8 +102,8 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 		t.Fatalf("expected exactly 1 ingress from peer, got %d", len(ingressRule.From))
 	}
 	fromPeer := ingressRule.From[0]
-	if fromPeer.NamespaceSelector == nil || fromPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != ateSystemNamespace {
-		t.Errorf("expected namespace selector for %s, got %v", ateSystemNamespace, fromPeer.NamespaceSelector)
+	if fromPeer.NamespaceSelector == nil || fromPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != e2e.SystemNamespace() {
+		t.Errorf("expected namespace selector for %s, got %v", e2e.SystemNamespace(), fromPeer.NamespaceSelector)
 	}
 	if fromPeer.PodSelector == nil || fromPeer.PodSelector.MatchLabels["app"] != atenetRouterAppName {
 		t.Errorf("expected pod selector for %s, got %v", atenetRouterAppName, fromPeer.PodSelector)

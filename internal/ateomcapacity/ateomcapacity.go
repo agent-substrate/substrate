@@ -99,6 +99,10 @@ type ReportConfig struct {
 	SocketPath           string
 	CredentialBundlePath string
 	TrustBundlePath      string
+	// AteletSPIFFEID is the identity the node-local atelet must present. It
+	// names atelet's namespace, not this worker's, so it is configured rather
+	// than derived from the downward API.
+	AteletSPIFFEID string
 }
 
 // Report tells the node-local atelet what this ateom can supply, retrying
@@ -109,7 +113,7 @@ type ReportConfig struct {
 // an ateom first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
 func Report(ctx context.Context, cfg ReportConfig) error {
-	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath)
+	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
 		return fmt.Errorf("capacity report: %w", err)
 	}

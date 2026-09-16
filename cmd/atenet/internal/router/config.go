@@ -74,18 +74,22 @@ type authConfig struct {
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
 	// Mode restricts the instance to one traffic direction. Empty means ModeAll.
-	Mode           Mode
-	AtenetRouter   string
-	Namespace      string
-	Kubeconfig     string
-	AteapiAddr     string
-	HttpPort       int
-	XdsPort        int
-	ExtprocPort    int
-	ExtprocAddr    string
-	StatusPort     int
-	HealthInterval time.Duration
-	HttpsPort      int
+	Mode         Mode
+	AtenetRouter string
+	Namespace    string
+	// RouterServiceName is the Service name of this atenet-router in the
+	// operations namespace, used by /statusz to look up its own ClusterIP.
+	// Defaults to installdefaults.RouterServiceName.
+	RouterServiceName string
+	Kubeconfig        string
+	AteapiAddr        string
+	HttpPort          int
+	XdsPort           int
+	ExtprocPort       int
+	ExtprocAddr       string
+	StatusPort        int
+	HealthInterval    time.Duration
+	HttpsPort         int
 	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS
 	// listener ports for CONNECT-tunneled traffic. Non-positive disables the
 	// corresponding listener.

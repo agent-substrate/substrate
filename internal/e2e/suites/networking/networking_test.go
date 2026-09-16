@@ -304,9 +304,9 @@ type gatewayAccessLogLine struct {
 // replica, until predicate accepts the lines written since.
 func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want string, predicate func(lines []gatewayAccessLogLine) bool) {
 	t.Helper()
+	gatewayNamespace := e2e.SystemNamespace()
 	const (
-		gatewayNamespace = "ate-system"
-		gatewaySelector  = "app=atenet-egress"
+		gatewaySelector = "app=atenet-egress"
 	)
 
 	clients := e2e.GetClients()
