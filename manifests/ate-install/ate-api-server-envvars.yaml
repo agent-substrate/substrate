@@ -22,3 +22,4 @@ metadata:
   namespace: ate-system
 data:
   ATE_API_POSTGRES_CONNECTION_STRING: "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+  ATE_API_POSTGRES_SCHEMA: "public"

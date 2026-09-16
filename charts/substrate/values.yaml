@@ -24,8 +24,10 @@
 createNamespace: false
 
 postgres:
+  enabled: true
   storageSize: 1Gi
   connectionString: ""
+  schema: public
   resources:
     requests:
       cpu: "1"

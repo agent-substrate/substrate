@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
+{{- if and (not .Values.postgres.enabled) (empty .Values.postgres.connectionString) }}
+{{- fail "postgres.connectionString is required when postgres.enabled=false" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,3 +24,4 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   ATE_API_POSTGRES_CONNECTION_STRING: {{ .Values.postgres.connectionString | default (printf "postgresql://postgres@%s.%s.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem" (include "substrate.fullname" (list "postgres" .)) .Release.Namespace) | quote }}
+  ATE_API_POSTGRES_SCHEMA: {{ .Values.postgres.schema | quote }}
