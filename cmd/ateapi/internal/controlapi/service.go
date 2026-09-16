@@ -121,6 +121,7 @@ type serviceStore interface {
 	ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Tag], error)
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 	DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
+	ListTagBorrowers(ctx context.Context, tagUID string, opts store.ListOptions) (store.ListResponse[string], error)
 	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error)
