@@ -92,3 +92,4 @@ type actor
 
     # Lifecycle Operations
     define can_suspend: [user] or editor from parent_atespace
+    define can_revert: [user] or editor from parent_atespace

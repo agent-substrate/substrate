@@ -66,6 +66,9 @@ tuples:
   - user: user:sa-runner-1
     relation: can_suspend
     object: actor:runner-1
+  - user: user:sa-runner-1
+    relation: can_revert
+    object: actor:runner-1
 
 tests:
   - name: 1. Cluster Superadmin & Viewer Propagation
@@ -206,6 +209,7 @@ tests:
           can_delete: true
           can_resume: true
           can_suspend: true
+          can_revert: true
       - user: user:bob # Editor
         object: actor:runner-1
         assertions:
@@ -214,6 +218,7 @@ tests:
           can_delete: true
           can_resume: true
           can_suspend: true
+          can_revert: true
       - user: user:dave # Viewer
         object: actor:runner-1
         assertions:
@@ -222,6 +227,7 @@ tests:
           can_delete: false
           can_resume: false
           can_suspend: false
+          can_revert: false
       - user: user:frank # Cluster Viewer
         object: actor:runner-1
         assertions:
@@ -230,14 +236,16 @@ tests:
           can_delete: false
           can_resume: false
           can_suspend: false
+          can_revert: false
       - user: user:sa-router # Ingress router proxy
         object: actor:runner-1
         assertions:
           can_resume: true
-      - user: user:sa-runner-1 # Workload identity can suspend
+      - user: user:sa-runner-1 # Workload identity can suspend and revert
         object: actor:runner-1
         assertions:
           can_suspend: true
+          can_revert: true
 
   - name: 5. Node Restriction (can_mint_ateom_actor_credential)
     check:
