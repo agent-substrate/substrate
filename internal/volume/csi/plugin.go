@@ -28,7 +28,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/volume"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -336,17 +335,23 @@ func getStandardCapabilities() []*csi.VolumeCapability {
 	}
 }
 
-// NewCSIPlugin establishes a CSI client and returns a verified Plugin instance.
-func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLister, driverName string, isController bool) (*Plugin, error) {
-	return newCSIPlugin(ctx, lister, driverName, isController, defaultTLSPaths)
+// CSIDriverConfigGetter provides access to retrieve a CSIDriverConfig by name.
+// Both listersv1alpha1.CSIDriverConfigLister and direct client getters implement this interface.
+type CSIDriverConfigGetter interface {
+	Get(name string) (*v1alpha1.CSIDriverConfig, error)
 }
 
-func newCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLister, driverName string, isController bool, paths tlsPaths) (*Plugin, error) {
-	if lister == nil {
-		return nil, fmt.Errorf("missing csiDriverConfigLister")
+// NewCSIPlugin establishes a CSI client and returns a verified Plugin instance.
+func NewCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName string, isController bool) (*Plugin, error) {
+	return newCSIPlugin(ctx, getter, driverName, isController, defaultTLSPaths)
+}
+
+func newCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName string, isController bool, paths tlsPaths) (*Plugin, error) {
+	if getter == nil {
+		return nil, fmt.Errorf("missing csiDriverConfigGetter")
 	}
 
-	cfg, err := lister.Get(driverName)
+	cfg, err := getter.Get(driverName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve CSIDriverConfig for %q: %w", driverName, err)
 	}
