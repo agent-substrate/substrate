@@ -149,11 +149,72 @@ are emitted without a tag, letting `ko resolve` supply the digest at build time.
 {{- define "substrate.componentImage" -}}
 {{- $name := index . 0 -}}
 {{- $ctx := index . 1 -}}
-{{- $registry := $ctx.Values.image.registry -}}
+{{/* image.registry used to carry the full prefix (ghcr.io/kagent-dev/substrate).
+     It is now the registry host only, joined onto image.repository -- the same
+     registry/repository split every kagent-family chart uses, so one
+     global.imageRegistry value redirects them all. A values file still carrying
+     a path in registry would render a doubled prefix that fails only at pod
+     start, so it fails the render here instead and names the split. */}}
+{{- /* A scheme'd registry (ko://...) is hack/render-manifests.sh passing an
+     importpath prefix for `ko resolve` to substitute, same as the "<none>" tag
+     sentinel below -- unambiguously not the old host+path shape, so the guard
+     lets it through. */ -}}
+{{- if and (contains "/" $ctx.Values.image.registry) (not (contains "://" $ctx.Values.image.registry)) -}}
+{{- fail (printf "image.registry (%q) carries a path. It is now the registry host only: keep the path in image.repository, e.g. registry: ghcr.io, repository: kagent-dev/substrate." $ctx.Values.image.registry) -}}
+{{- end -}}
+{{- $registry := printf "%s/%s" (default $ctx.Values.image.registry (($ctx.Values.global).imageRegistry)) $ctx.Values.image.repository -}}
 {{- $tag := $ctx.Values.image.tag | default $ctx.Chart.AppVersion -}}
 {{- if ne $tag "<none>" -}}
 {{- printf "%s/%s:%s" $registry $name $tag -}}
 {{- else -}}
 {{- printf "%s/%s" $registry $name -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Rewrite a full image reference ({registry}/{path}:{tag}) onto global.imageRegistry.
+
+The `images.*` values are single-string references, some digest-pinned, so the
+mirror knob has to edit the string. The first path segment is a registry only when
+it contains "." or ":" (the containerd rule); otherwise the reference is
+docker.io-implied and the mirror is prefixed. The repository path is preserved
+either way, so a mirror copies images under their existing paths.
+
+Usage: {{ include "substrate.thirdPartyImage" (list .Values.images.postgres .) }}
+*/}}
+{{- define "substrate.thirdPartyImage" -}}
+{{- $ref := index . 0 -}}
+{{- $ctx := index . 1 -}}
+{{- $mirror := (($ctx.Values.global).imageRegistry) -}}
+{{- if not $mirror -}}
+{{- $ref -}}
+{{- else -}}
+{{- $parts := splitList "/" $ref -}}
+{{- $first := first $parts -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first)) -}}
+{{- printf "%s/%s" $mirror (join "/" (rest $parts)) -}}
+{{- else -}}
+{{- printf "%s/%s" $mirror $ref -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+imagePullSecrets for a pod spec: the chart's own list merged (union) with
+global.imagePullSecrets. Renders nothing when both are empty.
+*/}}
+{{- define "substrate.imagePullSecrets" -}}
+{{- $merged := concat (.Values.imagePullSecrets | default list) (((.Values.global).imagePullSecrets) | default list) | uniq -}}
+{{- if $merged -}}
+imagePullSecrets:
+{{- toYaml $merged | nindent 0 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+imagePullPolicy: global.imagePullPolicy when set, IfNotPresent otherwise. One
+definition so the fallback cannot drift between pods.
+*/}}
+{{- define "substrate.imagePullPolicy" -}}
+{{- ((.Values.global).imagePullPolicy) | default "IfNotPresent" -}}
 {{- end -}}

@@ -1,0 +1,35 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Enforces the chart checks that were previously developer-run only:
+# verify-helm-template's own comment says "Used in CI", but no workflow ran
+# it -- so a chart change that broke hack/render-manifests.sh shipped a green
+# PR and was caught in review by hand.
+name: helm-verify
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  helm-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint the chart
+        run: helm lint charts/substrate charts/substrate-crds
+      - name: Verify committed manifests match the chart output
+        run: make verify-helm-template

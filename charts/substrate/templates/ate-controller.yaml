@@ -67,6 +67,7 @@ spec:
         app: ate-controller
     spec:
       serviceAccountName: {{ include "substrate.fullname" (list "ate-controller" .) }}
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: ate-controller
         image: {{ include "substrate.componentImage" (list "atecontroller" .) }}

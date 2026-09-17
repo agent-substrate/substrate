@@ -77,6 +77,7 @@ spec:
     spec:
       serviceAccountName: {{ include "substrate.fullname" (list "ate-api-server" .) }}
       terminationGracePeriodSeconds: 40
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: ate-api-server
         image: {{ include "substrate.componentImage" (list "ateapi" .) }}

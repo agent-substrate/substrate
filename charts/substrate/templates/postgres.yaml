@@ -124,7 +124,7 @@ spec:
       initContainers:
       - name: tls-reloader
         restartPolicy: Always
-        image: {{ .Values.images.postgres }}
+        image: {{ include "substrate.thirdPartyImage" (list .Values.images.postgres .) }}
         securityContext:
           runAsUser: 70
         command:
@@ -145,9 +145,10 @@ spec:
           requests:
             cpu: 10m
             memory: 32Mi
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: postgres
-        image: {{ .Values.images.postgres }}
+        image: {{ include "substrate.thirdPartyImage" (list .Values.images.postgres .) }}
         lifecycle:
           postStart:
             exec:

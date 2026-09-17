@@ -139,6 +139,7 @@ spec:
       labels:
         app: podcertificate-controller
     spec:
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: controller
         image: {{ include "substrate.componentImage" (list "podcertcontroller" .) }}

@@ -104,9 +104,10 @@ spec:
         - name: net.ipv4.ip_unprivileged_port_start
           value: "0"
       terminationGracePeriodSeconds: 60
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: agentgateway
-        image: {{ .Values.images.agentgateway }}
+        image: {{ include "substrate.thirdPartyImage" (list .Values.images.agentgateway .) }}
         args:
         - -f
         - /etc/agentgateway/config.yaml

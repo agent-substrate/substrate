@@ -57,8 +57,12 @@ jobs:
         kubectl apply -f manifests/ate-install/kind/prometheus.yaml
     - name: Build chart images
       run: |
+        # Pushed under the image's real path (kagent-dev/substrate/<component>):
+        # the chart composes {registry}/{repository}/{component}, so the local
+        # registry serves each image where the default repository expects it --
+        # the same path-preserving rule a production mirror follows.
         for component in ateapi atecontroller atelet podcertcontroller atenet; do
-          KO_DOCKER_REPO="localhost:5001/${component}" \
+          KO_DOCKER_REPO="localhost:5001/kagent-dev/substrate/${component}" \
             ./hack/run-tool.sh ko build --bare --tags helm-e2e \
               --platform linux/amd64 "./cmd/${component}"
         done

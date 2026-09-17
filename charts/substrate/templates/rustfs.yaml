@@ -63,10 +63,11 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: rustfs
-        image: {{ .Values.images.rustfs }}
-        imagePullPolicy: IfNotPresent
+        image: {{ include "substrate.thirdPartyImage" (list .Values.images.rustfs .) }}
+        imagePullPolicy: {{ include "substrate.imagePullPolicy" . }}
         ports:
         - containerPort: 9000
           name: api
@@ -103,9 +104,10 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: create-bucket
-        image: {{ .Values.images.awsCli }}
+        image: {{ include "substrate.thirdPartyImage" (list .Values.images.awsCli .) }}
         env:
         - name: AWS_ACCESS_KEY_ID
           value: {{ .Values.rustfs.accessKey | quote }}
