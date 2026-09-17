@@ -50,6 +50,7 @@ func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageC
 				VolumeName: vol.GetName(),
 				VolumeType: sc.Provisioner,
 				Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+				AccessMode: vol.GetExternalVolumeTemplate().GetAccessMode(),
 			})
 		}
 	}
@@ -126,6 +127,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			VolumeType:      sc.Provisioner,
 			Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 			VolumeContext:   volCtx,
+			AccessMode:      specVol.GetExternalVolumeTemplate().GetAccessMode(),
 		})
 	}
 	return resultVolumes, nil
@@ -242,9 +244,14 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		if err := plugin.DetachVolume(ctx, vol.GetStorageVolumeId(), node); err != nil {
 			if status.Code(err) == codes.NotFound {
 				slog.WarnContext(ctx, "Volume not found during detach, assuming already detached", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
+				vol.PublishContext = nil
+				vol.PublishContextNode = ""
 				continue
 			}
 			errs = append(errs, fmt.Errorf("failed to detach volume %q from node %q: %w", vol.GetStorageVolumeId(), node, err))
+		} else {
+			vol.PublishContext = nil
+			vol.PublishContextNode = ""
 		}
 	}
 	return errors.Join(errs...)

@@ -206,6 +206,17 @@ enum TagScope {
   TAG_SCOPE_PUBLISHED = 2;
 }
 
+// VolumeAccessMode defines the access modes for external volumes.
+enum VolumeAccessMode {
+  VOLUME_ACCESS_MODE_UNSPECIFIED = 0;
+  // ReadWriteOnce can be mounted as read-write by a single node.
+  VOLUME_ACCESS_MODE_READ_WRITE_ONCE = 1;
+  // ReadOnlyMany can be mounted as read-only by many nodes simultaneously.
+  VOLUME_ACCESS_MODE_READ_ONLY_MANY = 2;
+  // ReadWriteMany can be mounted as read-write by many nodes simultaneously.
+  VOLUME_ACCESS_MODE_READ_WRITE_MANY = 3;
+}
+
 // Selector matches worker pools by label.
 // Only equality-based matching is supported.
 message Selector {
@@ -343,6 +354,28 @@ message ExternalVolume {
   // +k8s:eachKey=+k8s:maxLength=128
   // +k8s:eachVal=+k8s:maxLength=256
   map<string, string> volume_context = 5;
+
+  // publish_context contains metadata returned by the CSI driver when the
+  // volume was attached to a node, needed by the node plugin to complete mounting.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=1024
+  map<string, string> publish_context = 6;
+
+  // publish_context_node is the node name the volume was attached to.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=253
+  string publish_context_node = 7;
+
+  // access_mode specifies how the volume should be accessed.
+  // If unspecified, defaults to VOLUME_ACCESS_MODE_READ_WRITE_ONCE.
+  //
+  // +k8s:optional
+  // +k8s:maximum=3 # keep this in sync with the VolumeAccessMode enum
+  VolumeAccessMode access_mode = 8;
 }
 
 message Actor {
@@ -1122,6 +1155,13 @@ message ExternalVolumeTemplate {
   // +k8s:required
   // +k8s:format=k8s-long-name
   string storage_class_name = 2;
+
+  // access_mode specifies the access mode for the volume.
+  // If unspecified, defaults to VOLUME_ACCESS_MODE_READ_WRITE_ONCE.
+  //
+  // +k8s:optional
+  // +k8s:maximum=3 # keep this in sync with the VolumeAccessMode enum
+  VolumeAccessMode access_mode = 3;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated

@@ -56,6 +56,7 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 				Name: "data-vol-1",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
+					AccessMode:       ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY,
 				},
 			},
 			{
@@ -79,6 +80,7 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 			VolumeName: "data-vol-1",
 			VolumeType: "mock-standard",
 			Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+			AccessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY,
 		},
 		{
 			VolumeName: "data-vol-2",
