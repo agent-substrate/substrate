@@ -72,7 +72,7 @@ func TestCreateActor_Success(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 	}
@@ -694,7 +694,7 @@ func TestUpdateActor_Success(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -841,7 +841,7 @@ func TestUpdateActor(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -1812,7 +1812,7 @@ func TestResumeActor(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
 				WorkerNamespace: ns,
@@ -2634,7 +2634,7 @@ func TestPauseActor(t *testing.T) {
 				ActorTemplateUid:          tmpl.GetMetadata().GetUid(),
 			},
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 	}
 
