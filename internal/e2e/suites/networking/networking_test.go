@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/testcert"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -531,6 +533,7 @@ func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
 func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod, encrypted bool) (e2e.Server, string, string) {
 	t.Helper()
 	spec.Namespace = e2e.CreateNamespace(t).Name
+	registerOriginDiagnostics(t, spec.Namespace, spec.Name)
 	var reserved e2e.Server
 	var rootCA string
 	if encrypted {
@@ -579,6 +582,205 @@ func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod
 	return target, address, requestCA
 }
 
+const (
+	originDiagnosticLogLines   = 80
+	originDiagnosticLogBytes   = 16 << 10
+	originDiagnosticFieldBytes = 1024
+	originDiagnosticItems      = 20
+)
+
+func registerOriginDiagnostics(t *testing.T, namespace, name string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		collectOriginDiagnostics(t, ctx, namespace, name)
+	})
+}
+
+func collectOriginDiagnostics(t *testing.T, ctx context.Context, namespace, name string) {
+	t.Helper()
+	clients := e2e.GetClients().K8s
+	observed := time.Now().UTC().Format(time.RFC3339Nano)
+	t.Logf("origin diagnostics observed_at=%s namespace=%s name=%s", observed, namespace, name)
+
+	pod, err := clients.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Logf("origin diagnostics: get Pod %s/%s: %v", namespace, name, err)
+	} else {
+		deletion := ""
+		if pod.DeletionTimestamp != nil {
+			deletion = formatOriginTimestamp(*pod.DeletionTimestamp)
+		}
+		t.Logf("origin Pod status: uid=%s phase=%s pod_ip=%s host_ip=%s reason=%s message=%q created=%s deletion=%s containers=%s", pod.UID, pod.Status.Phase, pod.Status.PodIP, pod.Status.HostIP, pod.Status.Reason, boundedOriginDiagnosticField(pod.Status.Message), formatOriginTimestamp(pod.CreationTimestamp), deletion, formatOriginContainerStatuses(pod.Status.ContainerStatuses))
+		for _, previous := range []bool{false, true} {
+			logs, logErr := clients.CoreV1().Pods(namespace).GetLogs(name, &corev1.PodLogOptions{
+				Previous:   previous,
+				TailLines:  ptrInt64(originDiagnosticLogLines),
+				LimitBytes: ptrInt64(originDiagnosticLogBytes),
+				Timestamps: true,
+			}).DoRaw(ctx)
+			label := "current"
+			if previous {
+				label = "previous"
+			}
+			if logErr != nil {
+				t.Logf("origin %s logs unavailable: %v", label, logErr)
+				continue
+			}
+			t.Logf("origin %s logs (bounded):\n%s", label, boundedOriginDiagnosticText(string(logs), originDiagnosticLogLines, originDiagnosticLogBytes))
+		}
+	}
+
+	service, err := clients.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Logf("origin diagnostics: get Service %s/%s: %v", namespace, name, err)
+	} else {
+		t.Logf("origin Service: cluster_ip=%s ports=%s selector=%s", service.Spec.ClusterIP, formatOriginServicePorts(service.Spec.Ports), formatOriginSelector(service.Spec.Selector))
+	}
+
+	slices, err := clients.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{LabelSelector: discoveryv1.LabelServiceName + "=" + name, Limit: 20})
+	if err != nil {
+		t.Logf("origin diagnostics: list EndpointSlices for %s/%s: %v", namespace, name, err)
+	} else {
+		for _, slice := range slices.Items {
+			t.Logf("origin EndpointSlice: name=%s uid=%s created=%s ports=%s endpoints=%s", slice.Name, slice.UID, formatOriginTimestamp(slice.CreationTimestamp), formatOriginEndpointPorts(slice.Ports), formatOriginEndpoints(slice.Endpoints))
+		}
+	}
+
+	events, err := clients.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{Limit: 50})
+	if err != nil {
+		t.Logf("origin diagnostics: list namespace events %s: %v", namespace, err)
+		return
+	}
+	for _, event := range events.Items {
+		if event.InvolvedObject.Name != name {
+			continue
+		}
+		t.Logf("origin event: type=%s reason=%s message=%q count=%d last=%s", event.Type, event.Reason, boundedOriginDiagnosticField(event.Message), event.Count, event.LastTimestamp.UTC().Format(time.RFC3339Nano))
+	}
+}
+
+func ptrInt64(value int) *int64 {
+	result := int64(value)
+	return &result
+}
+
+func boundedOriginDiagnosticText(value string, maxLines, maxBytes int) string {
+	lines := strings.Split(value, "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	result := strings.Join(lines, "\n")
+	if len(result) > maxBytes {
+		result = result[len(result)-maxBytes:]
+	}
+	return result
+}
+
+func boundedOriginDiagnosticField(value string) string {
+	if len(value) <= originDiagnosticFieldBytes {
+		return value
+	}
+	return value[:originDiagnosticFieldBytes-3] + "..."
+}
+
+func formatOriginServicePorts(ports []corev1.ServicePort) string {
+	values := make([]string, 0, len(ports))
+	for _, port := range ports[:min(len(ports), originDiagnosticItems)] {
+		values = append(values, fmt.Sprintf("%s/%d->%s/%s", port.Name, port.Port, port.TargetPort.String(), port.Protocol))
+	}
+	return boundedOriginDiagnosticField(strings.Join(values, ","))
+}
+
+func formatOriginSelector(selector map[string]string) string {
+	values := make([]string, 0, len(selector))
+	for key, value := range selector {
+		values = append(values, boundedOriginDiagnosticField(key)+"="+boundedOriginDiagnosticField(value))
+	}
+	slices.Sort(values)
+	if len(values) > originDiagnosticItems {
+		values = values[:originDiagnosticItems]
+	}
+	return boundedOriginDiagnosticField(strings.Join(values, ","))
+}
+
+func formatOriginEndpointPorts(ports []discoveryv1.EndpointPort) string {
+	values := make([]string, 0, len(ports))
+	for _, port := range ports {
+		protocol := ""
+		if port.Protocol != nil {
+			protocol = string(*port.Protocol)
+		}
+		values = append(values, fmt.Sprintf("%s/%d/%s", boundedOriginDiagnosticField(valueString(port.Name)), valueInt32(port.Port), protocol))
+	}
+	if len(values) > originDiagnosticItems {
+		values = values[:originDiagnosticItems]
+	}
+	return boundedOriginDiagnosticField(strings.Join(values, ","))
+}
+
+func formatOriginEndpoints(endpoints []discoveryv1.Endpoint) string {
+	values := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		ready, terminating := "unknown", "unknown"
+		if endpoint.Conditions.Ready != nil {
+			ready = strconv.FormatBool(*endpoint.Conditions.Ready)
+		}
+		if endpoint.Conditions.Terminating != nil {
+			terminating = strconv.FormatBool(*endpoint.Conditions.Terminating)
+		}
+		uid := ""
+		if endpoint.TargetRef != nil {
+			uid = string(endpoint.TargetRef.UID)
+		}
+		addresses := make([]string, 0, len(endpoint.Addresses))
+		for _, address := range endpoint.Addresses {
+			addresses = append(addresses, boundedOriginDiagnosticField(address))
+		}
+		if len(addresses) > originDiagnosticItems {
+			addresses = addresses[:originDiagnosticItems]
+		}
+		values = append(values, boundedOriginDiagnosticField(fmt.Sprintf("addresses=%s uid=%s ready=%s terminating=%s", strings.Join(addresses, ","), uid, ready, terminating)))
+	}
+	if len(values) > originDiagnosticItems {
+		values = values[:originDiagnosticItems]
+	}
+	return strings.Join(values, "; ")
+}
+
+func formatOriginTimestamp(value metav1.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func formatOriginContainerStatuses(statuses []corev1.ContainerStatus) string {
+	values := make([]string, 0, len(statuses))
+	for _, status := range statuses[:min(len(statuses), originDiagnosticItems)] {
+		values = append(values, boundedOriginDiagnosticField(fmt.Sprintf("%s ready=%t restarts=%d", status.Name, status.Ready, status.RestartCount)))
+	}
+	return strings.Join(values, "; ")
+}
+
+func valueInt32(value *int32) int32 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func valueString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 // MITM needs a DNS name for certificate minting, and the actor's projected
 // gateway roots. The outer CONNECT log still records target.Address().
 func protocolOriginRequest(target e2e.Server, service, rootCA string, mitm bool) (string, string) {
@@ -605,6 +807,16 @@ func TestProtocolOriginRequest(t *testing.T) {
 				t.Fatalf("request = (%q, %q), want (%q, %q)", address, ca, tc.wantAddress, tc.wantCA)
 			}
 		})
+	}
+}
+
+func TestBoundedOriginDiagnosticText(t *testing.T) {
+	got := boundedOriginDiagnosticText("one\ntwo\nthree\nfour", 2, 16)
+	if got != "three\nfour" {
+		t.Fatalf("bounded diagnostic text = %q, want %q", got, "three\\nfour")
+	}
+	if got := boundedOriginDiagnosticText("123456789", 10, 4); got != "6789" {
+		t.Fatalf("byte-bounded diagnostic text = %q, want %q", got, "6789")
 	}
 }
 

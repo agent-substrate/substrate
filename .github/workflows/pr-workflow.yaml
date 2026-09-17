@@ -205,6 +205,12 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
+        # Failed e2e tests retain their labeled namespaces; include ordinary
+        # origin Pods there as well as worker-labeled Pods above.
+        for ns in $(kubectl --context kind-kind get ns -l ate.dev/e2e=true -o name 2>/dev/null | cut -d/ -f2); do
+          kubectl --context kind-kind get pods -n "$ns" -o name --no-headers 2>/dev/null \
+            | while read -r name; do dump "$ns" "$name"; done
+        done
   # Preserve the required-check name while the concrete Envoy and AgentGateway
   # executions run as entries in the shared matrix above.
   e2e-test:
