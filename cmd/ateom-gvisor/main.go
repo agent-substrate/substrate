@@ -542,12 +542,15 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 // allowance and the deadline has passed. A var so tests can shorten it.
 var containerKillTimeout = 5 * time.Second
 
-// containerRuntime is the slice of *runsc that graceful shutdown needs. Narrowed
-// to an interface so killContainer's SIGTERM-then-SIGKILL escalation can be
-// exercised without executing runsc.
+// containerRuntime is the slice of *runsc that stopping and tearing down
+// containers needs. Narrowed to an interface so that code can be exercised
+// without executing runsc.
 type containerRuntime interface {
 	cmdKill(ctx context.Context, containerName, signal string) error
 	cmdWait(ctx context.Context, containerName string) error
+	cmdState(ctx context.Context, containerName string) error
+	cmdDelete(ctx context.Context, containerName string) error
+	cmdList(ctx context.Context) ([]string, error)
 }
 
 // killContainer stops a container by sending SIGTERM, waiting until deadline, and
@@ -875,16 +878,16 @@ func listSnapshotFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Container) {
+func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) {
 	for _, ctr := range containers {
-		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
-		_ = r.cmdWait(ctx, ctr.GetName())
+		_ = rcmd.cmdKill(ctx, ctr.GetName(), "SIGKILL")
+		_ = rcmd.cmdWait(ctx, ctr.GetName())
 	}
-	_ = r.cmdKill(ctx, ocispec.PauseContainer, "SIGKILL")
-	_ = r.cmdWait(ctx, ocispec.PauseContainer)
+	_ = rcmd.cmdKill(ctx, ocispec.PauseContainer, "SIGKILL")
+	_ = rcmd.cmdWait(ctx, ocispec.PauseContainer)
 }
 
-func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
+func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) error {
 	// Application containers first, the pause (root) container last.
 	names := make([]string, 0, len(containers)+1)
 	for _, ctr := range containers {
@@ -896,9 +899,9 @@ func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Con
 	// Without this, `runsc delete` occasionally throws an error.
 	present := make([]string, 0, len(names))
 	for _, name := range names {
-		if err := r.cmdState(ctx, name); err != nil {
+		if err := rcmd.cmdState(ctx, name); err != nil {
 			err = fmt.Errorf("while checking state of %q container: %w", name, err)
-			gone, listErr := r.isContainerAlreadyGone(ctx, name)
+			gone, listErr := isContainerAlreadyGone(ctx, rcmd, name)
 			if listErr != nil {
 				return errors.Join(err, listErr)
 			}
@@ -912,7 +915,7 @@ func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Con
 	}
 
 	for _, name := range present {
-		if err := r.cmdDelete(ctx, name); err != nil {
+		if err := rcmd.cmdDelete(ctx, name); err != nil {
 			return fmt.Errorf("while deleting %q container: %w", name, err)
 		}
 	}
@@ -922,8 +925,8 @@ func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Con
 
 // isContainerAlreadyGone reports whether runsc no longer has a record of the
 // container.
-func (r *runsc) isContainerAlreadyGone(ctx context.Context, name string) (bool, error) {
-	ids, err := r.cmdList(ctx)
+func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name string) (bool, error) {
+	ids, err := rcmd.cmdList(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -1163,11 +1166,11 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	// Stop the containers before deleting them, to avoid leaving a live container with no bundle on disk. Best-effort: if the containers are already stopped, the delete will succeed anyway.
-	rcmd.stopContainers(cleanupCtx, containers)
+	stopContainers(cleanupCtx, rcmd, containers)
 	// Keep this as best-effort cleanup:
 	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
 	// directories after uploading the snapshot.
-	if err := rcmd.cleanupContainers(cleanupCtx, containers); err != nil {
+	if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
 

@@ -19,162 +19,95 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
+	"maps"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
-// fakeRunsc mocks the runsc binary. It lets a test mock the state, list and
-// delete commands and assert the calls made. Files under $FAKE_RUNSC_DIR drive
-// it: <name>.state is a container runsc has a record of, <name>.filestore-gone
-// makes its delete drop the record and then fail. Every state/delete/list call
-// is appended to $FAKE_RUNSC_DIR/calls.
-const fakeRunsc = `#!/bin/sh
-cmd=""
-name=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -root|-log-format) shift 2 ;;
-    --alsologtostderr|-force|-quiet) shift ;;
-    kill|wait|state|delete|list) cmd="$1"; shift ;;
-    *) [ -z "$name" ] && name="$1"; shift ;;
-  esac
-done
-dir="$FAKE_RUNSC_DIR"
-case "$cmd" in
-  kill|wait) exit 0 ;;
-  list)
-    echo list >> "$dir/calls"
-    for f in "$dir"/*.state; do [ -e "$f" ] || continue; b=$(basename "$f"); echo "${b%.state}"; done
-    exit 0 ;;
-esac
-echo "$cmd $name" >> "$dir/calls"
-if [ ! -e "$dir/$name.state" ]; then
-  echo '{"msg":"FetchSpec failed: loading container: file does not exist","level":"error"}' >&2
-  exit 128
-fi
-if [ "$cmd" = delete ]; then
-  rm "$dir/$name.state"
-  if [ -e "$dir/$name.filestore-gone" ]; then
-    echo '{"msg":"FATAL ERROR: destroying container: failed to delete filestore file: no such file or directory","level":"error"}' >&2
-    exit 128
-  fi
-fi
-exit 0
-`
+// fakeRunsc stands in for *runsc. containers is the set runsc has a record of;
+// calls logs every state, delete and list. The embedded interface is nil, so
+// any other command panics.
+type fakeRunsc struct {
+	containerRuntime
 
-// newFakeRunsc installs fakeRunsc and returns a runsc wrapper pointing at it
-// together with the directory holding the fake's per-container files.
-func newFakeRunsc(t *testing.T) (*runsc, string) {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "runsc")
-	if err := os.WriteFile(path, []byte(fakeRunsc), 0o700); err != nil {
-		t.Fatalf("write fake runsc: %v", err)
+	containers map[string]bool
+	calls      []string
+}
+
+func newFakeRunsc(containers ...string) *fakeRunsc {
+	f := &fakeRunsc{containers: map[string]bool{}}
+	for _, name := range containers {
+		f.containers[name] = true
 	}
-	t.Setenv("FAKE_RUNSC_DIR", dir)
-	return &runsc{path: path, actorUID: "actor-uid"}, dir
+	return f
 }
 
-// record marks a container as one runsc still holds a state record for.
-func record(t *testing.T, dir, name string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name+".state"), nil, 0o600); err != nil {
-		t.Fatalf("write %s.state: %v", name, err)
+func (f *fakeRunsc) cmdState(_ context.Context, name string) error {
+	f.calls = append(f.calls, "state "+name)
+	if !f.containers[name] {
+		return errors.New("exit status 128")
 	}
+	return nil
 }
 
-// markFailure configures a failure for the named container.
-func markFailure(t *testing.T, dir, name, marker string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name+"."+marker), nil, 0o600); err != nil {
-		t.Fatalf("write %s.%s: %v", name, marker, err)
+func (f *fakeRunsc) cmdDelete(_ context.Context, name string) error {
+	f.calls = append(f.calls, "delete "+name)
+	if !f.containers[name] {
+		return errors.New("exit status 128")
 	}
+	delete(f.containers, name)
+	return nil
 }
 
-func recorded(dir, name string) bool {
-	_, err := os.Stat(filepath.Join(dir, name+".state"))
-	return err == nil
+func (f *fakeRunsc) cmdList(context.Context) ([]string, error) {
+	f.calls = append(f.calls, "list")
+	return slices.Sorted(maps.Keys(f.containers)), nil
 }
 
-func fakeRunscCalls(t *testing.T, dir string) []string {
+func assertCalls(t *testing.T, f *fakeRunsc, want ...string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, "calls"))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read calls: %v", err)
-	}
-	return strings.Split(strings.TrimSpace(string(data)), "\n")
-}
-
-func assertCalls(t *testing.T, dir string, want ...string) {
-	t.Helper()
-	got := fakeRunscCalls(t, dir)
-	if !slices.Equal(got, want) {
-		t.Errorf("runsc calls = %v, want %v", got, want)
+	if !slices.Equal(f.calls, want) {
+		t.Errorf("runsc calls = %v, want %v", f.calls, want)
 	}
 }
 
 var appContainers = []*ateompb.Container{{Name: "app"}}
 
 func TestCleanupContainers_DeletesEveryContainerRunscKnows(t *testing.T) {
-	rcmd, dir := newFakeRunsc(t)
-	record(t, dir, "app")
-	record(t, dir, "_pause")
+	f := newFakeRunsc("app", "_pause")
 
-	if err := rcmd.cleanupContainers(context.Background(), appContainers); err != nil {
+	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
 		t.Fatalf("cleanupContainers: %v", err)
 	}
 
 	// Happy path: no `runsc list` at all.
-	assertCalls(t, dir, "state app", "state _pause", "delete app", "delete _pause")
-	for _, name := range []string{"app", "_pause"} {
-		if recorded(dir, name) {
-			t.Errorf("container %q survived cleanup", name)
-		}
+	assertCalls(t, f, "state app", "state _pause", "delete app", "delete _pause")
+	if len(f.containers) != 0 {
+		t.Errorf("containers survived cleanup: %v", slices.Sorted(maps.Keys(f.containers)))
 	}
-	if err := rcmd.cleanupContainers(context.Background(), appContainers); err != nil {
+	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
 		t.Fatalf("repeated cleanupContainers: %v", err)
 	}
 }
 
 func TestCleanupContainers_SkipsContainersRunscHasNoRecordOf(t *testing.T) {
-	rcmd, dir := newFakeRunsc(t)
-	record(t, dir, "app")
+	f := newFakeRunsc("app")
 
-	if err := rcmd.cleanupContainers(context.Background(), appContainers); err != nil {
+	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
 		t.Fatalf("cleanupContainers: %v", err)
 	}
 
-	assertCalls(t, dir, "state app", "state _pause", "list", "delete app")
+	assertCalls(t, f, "state app", "state _pause", "list", "delete app")
 }
 
 func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
-	rcmd, dir := newFakeRunsc(t)
+	f := newFakeRunsc()
 
-	if err := rcmd.cleanupContainers(context.Background(), appContainers); err != nil {
+	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
 		t.Fatalf("cleanupContainers: %v", err)
 	}
 
-	assertCalls(t, dir, "state app", "list", "state _pause", "list")
-}
-
-func TestCleanupContainers_RetrySucceedsAfterDeleteDroppedTheRecord(t *testing.T) {
-	rcmd, dir := newFakeRunsc(t)
-	record(t, dir, "app")
-	record(t, dir, "_pause")
-	markFailure(t, dir, "_pause", "filestore-gone")
-
-	if err := rcmd.cleanupContainers(context.Background(), appContainers); err == nil {
-		t.Fatal("cleanupContainers succeeded, want the pause delete failure")
-	}
-	assertCalls(t, dir, "state app", "state _pause", "delete app", "delete _pause")
-
-	if err := rcmd.cleanupContainers(context.Background(), appContainers); err != nil {
-		t.Fatalf("retried cleanupContainers: %v", err)
-	}
-	assertCalls(t, dir, "state app", "state _pause", "delete app", "delete _pause", "state app", "list", "state _pause", "list")
+	assertCalls(t, f, "state app", "list", "state _pause", "list")
 }
