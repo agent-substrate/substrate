@@ -15,7 +15,7 @@
 name: pr-workflow
 on:
   pull_request:
-  merge_group:
+  merge_group: # Needed for Github Merge Queue functionality
   push:
     branches: [main]
   schedule:
@@ -208,3 +208,4 @@ jobs:
       env:
         MATRIX_RESULT: ${{ needs.e2e-test-matrix.result }}
       run: test "$MATRIX_RESULT" = success
+
