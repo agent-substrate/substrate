@@ -76,7 +76,7 @@ var (
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
+	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Required.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -105,6 +105,9 @@ func main() {
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
+	}
+	if err := validateEgressGatewayAddress(); err != nil {
+		serverboot.Fatal(ctx, "Invalid --egress-gateway-address", err)
 	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
@@ -373,6 +376,17 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 		}
 		return objectstore.NewGCS(client), nil
 	}
+}
+
+// validateEgressGatewayAddress refuses a configuration with no egress gateway.
+// An actor started without one is not tunneled through the PEP at all, so its
+// EgressPolicy goes unenforced; failing at startup keeps a cluster from
+// reaching that state by omitting a flag.
+func validateEgressGatewayAddress() error {
+	if *egressGatewayAddress == "" {
+		return fmt.Errorf("--egress-gateway-address is required")
+	}
+	return nil
 }
 
 // connectStore builds the PostgreSQL-backed store.Interface. Startup fails if

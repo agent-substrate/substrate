@@ -32,3 +32,30 @@ func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
 	}
 }
+
+func TestValidateEgressGatewayAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		address string
+		wantErr bool
+	}{
+		{name: "empty", address: "", wantErr: true},
+		{name: "set", address: "atenet-egress.ate-system.svc:443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldAddress := *egressGatewayAddress
+			t.Cleanup(func() {
+				*egressGatewayAddress = oldAddress
+			})
+			*egressGatewayAddress = tc.address
+
+			err := validateEgressGatewayAddress()
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("validateEgressGatewayAddress() error = %v, wantErr %t", err, tc.wantErr)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), "--egress-gateway-address is required") {
+				t.Errorf("validateEgressGatewayAddress() error = %v, want missing-address error", err)
+			}
+		})
+	}
+}
