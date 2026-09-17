@@ -84,7 +84,7 @@ func (s *AteomHerder) getPlugin(ctx context.Context, driverName string) (volume.
 		return plugin, nil
 	}
 
-	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, driverName, false /*isController*/)
+	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigGetter, driverName, false /*isController*/)
 	if err != nil {
 		return nil, err
 	}
