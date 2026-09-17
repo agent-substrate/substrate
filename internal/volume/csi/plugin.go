@@ -54,8 +54,12 @@ var defaultTLSPaths = tlsPaths{
 
 // Plugin implements volume.VolumePluginWorkerPlane using the CSI Client.
 type Plugin struct {
-	client           *Client
-	stagingDirPrefix string
+	client                    *Client
+	stagingDirPrefix          string
+	controllerCapsInitialized bool
+	controllerCaps            map[csi.ControllerServiceCapability_RPC_Type]bool
+	nodeCapsInitialized       bool
+	nodeCaps                  map[csi.NodeServiceCapability_RPC_Type]bool
 }
 
 // Ensure Plugin implements volume.VolumePluginControlPlane and VolumePluginWorkerPlane
@@ -67,7 +71,61 @@ func NewPlugin(client *Client) *Plugin {
 	return &Plugin{
 		client:           client,
 		stagingDirPrefix: ateompath.StagingDirPrefix(),
+		controllerCaps:   make(map[csi.ControllerServiceCapability_RPC_Type]bool),
+		nodeCaps:         make(map[csi.NodeServiceCapability_RPC_Type]bool),
 	}
+}
+
+// SupportsControllerPublish returns true if the CSI driver supports ControllerPublishVolume.
+func (p *Plugin) SupportsControllerPublish() bool {
+	return p.controllerCaps[csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME]
+}
+
+// SupportsNodeStage returns true if the CSI driver supports NodeStageVolume/NodeUnstageVolume.
+func (p *Plugin) SupportsNodeStage() bool {
+	return p.nodeCaps[csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME]
+}
+
+// InitControllerCapabilities queries and caches ControllerGetCapabilities from the driver.
+func (p *Plugin) InitControllerCapabilities(ctx context.Context) error {
+	resp, err := p.client.ControllerGetCapabilities(ctx, &csi.ControllerGetCapabilitiesRequest{})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			slog.DebugContext(ctx, "CSI ControllerGetCapabilities unimplemented by driver", slog.Any("error", err))
+			p.controllerCapsInitialized = true
+			return nil
+		}
+		return fmt.Errorf("CSI ControllerGetCapabilities failed: %w", err)
+	}
+	p.controllerCaps = make(map[csi.ControllerServiceCapability_RPC_Type]bool)
+	for _, c := range resp.GetCapabilities() {
+		if rpc := c.GetRpc(); rpc != nil {
+			p.controllerCaps[rpc.GetType()] = true
+		}
+	}
+	p.controllerCapsInitialized = true
+	return nil
+}
+
+// InitNodeCapabilities queries and caches NodeGetCapabilities from the driver.
+func (p *Plugin) InitNodeCapabilities(ctx context.Context) error {
+	resp, err := p.client.NodeGetCapabilities(ctx, &csi.NodeGetCapabilitiesRequest{})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			slog.DebugContext(ctx, "CSI NodeGetCapabilities unimplemented by driver", slog.Any("error", err))
+			p.nodeCapsInitialized = true
+			return nil
+		}
+		return fmt.Errorf("CSI NodeGetCapabilities failed: %w", err)
+	}
+	p.nodeCaps = make(map[csi.NodeServiceCapability_RPC_Type]bool)
+	for _, c := range resp.GetCapabilities() {
+		if rpc := c.GetRpc(); rpc != nil {
+			p.nodeCaps[rpc.GetType()] = true
+		}
+	}
+	p.nodeCapsInitialized = true
+	return nil
 }
 
 // DriverName returns the driver name obtained from the CSI plugin.
@@ -123,6 +181,11 @@ func (p *Plugin) DeleteVolume(ctx context.Context, volumeID string) error {
 
 // AttachVolume maps to CSI Controller ControllerPublishVolume.
 func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string) error {
+	if p.controllerCapsInitialized && !p.SupportsControllerPublish() {
+		slog.DebugContext(ctx, "Driver does not support ControllerPublishVolume; skipping attach", slog.String("volume_id", volumeID), slog.String("node", node))
+		return nil
+	}
+
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId:         volumeID,
 		NodeId:           node,
@@ -132,8 +195,6 @@ func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string)
 
 	resp, err := p.client.ControllerPublishVolume(ctx, req)
 	if err != nil {
-		// TODO: Query CSI driver capabilities ahead of time (e.g. during plugin initialization)
-		// to avoid calling unimplemented methods and generating spammy logs.
 		if status.Code(err) == codes.Unimplemented {
 			slog.WarnContext(ctx, "CSI ControllerPublishVolume is unimplemented by driver; skipping attach", slog.String("volume_id", volumeID), slog.String("node", node))
 			return nil
@@ -141,11 +202,6 @@ func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string)
 		return fmt.Errorf("CSI ControllerPublishVolume failed: %w", err)
 	}
 
-	// NOTE: CSI ControllerPublishVolume returns PublishContext (metadata needed for mounting).
-	// Currently, Substrate VolumePlugin interface does not support returning PublishContext.
-	// We might need to store this context if the driver requires it (e.g. AWS EBS attachment info).
-	// TODO: Extend Substrate's VolumePlugin interface to return and propagate
-	// PublishContext if required by the driver for mounting.
 	if resp != nil {
 		_ = resp.GetPublishContext()
 	}
@@ -155,6 +211,11 @@ func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string)
 
 // DetachVolume maps to CSI Controller ControllerUnpublishVolume.
 func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string) error {
+	if p.controllerCapsInitialized && !p.SupportsControllerPublish() {
+		slog.DebugContext(ctx, "Driver does not support ControllerPublishVolume; skipping detach", slog.String("volume_id", volumeID), slog.String("node", node))
+		return nil
+	}
+
 	req := &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: volumeID,
 		NodeId:   node,
@@ -175,25 +236,28 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 // It also handles NodeStageVolume staging if required by the driver.
 func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error {
 	// 1. Stage the volume
-	stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
-	if err := os.MkdirAll(stagingPath, 0750); err != nil {
-		return fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
-	}
+	stagingPath := ""
+	if !p.nodeCapsInitialized || p.SupportsNodeStage() {
+		stagingPath = filepath.Join(p.stagingDirPrefix, volumeID)
+		if err := os.MkdirAll(stagingPath, 0750); err != nil {
+			return fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
+		}
 
-	stageReq := &csi.NodeStageVolumeRequest{
-		VolumeId:          volumeID,
-		StagingTargetPath: stagingPath,
-		VolumeCapability:  getStandardCapabilities()[0], // Use primary capability
-		VolumeContext:     volumeContext,
-	}
+		stageReq := &csi.NodeStageVolumeRequest{
+			VolumeId:          volumeID,
+			StagingTargetPath: stagingPath,
+			VolumeCapability:  getStandardCapabilities()[0], // Use primary capability
+			VolumeContext:     volumeContext,
+		}
 
-	_, err := p.client.NodeStageVolume(ctx, stageReq)
-	if err != nil {
-		if status.Code(err) == codes.Unimplemented {
-			slog.WarnContext(ctx, "CSI NodeStageVolume is unimplemented by driver; skipping staging", slog.String("volume_id", volumeID))
-			stagingPath = ""
-		} else {
-			return fmt.Errorf("CSI NodeStageVolume failed: %w", err)
+		_, err := p.client.NodeStageVolume(ctx, stageReq)
+		if err != nil {
+			if status.Code(err) == codes.Unimplemented {
+				slog.WarnContext(ctx, "CSI NodeStageVolume is unimplemented by driver; skipping staging", slog.String("volume_id", volumeID))
+				stagingPath = ""
+			} else {
+				return fmt.Errorf("CSI NodeStageVolume failed: %w", err)
+			}
 		}
 	}
 
@@ -209,7 +273,7 @@ func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath st
 		req.StagingTargetPath = stagingPath
 	}
 
-	_, err = p.client.NodePublishVolume(ctx, req)
+	_, err := p.client.NodePublishVolume(ctx, req)
 	if err != nil {
 		return fmt.Errorf("CSI NodePublishVolume failed: %w", err)
 	}
@@ -231,24 +295,26 @@ func (p *Plugin) UnmountVolume(ctx context.Context, volumeID string, targetPath 
 	}
 
 	// 2. Unstage the volume
-	stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
-	unstageReq := &csi.NodeUnstageVolumeRequest{
-		VolumeId:          volumeID,
-		StagingTargetPath: stagingPath,
-	}
-
-	_, err = p.client.NodeUnstageVolume(ctx, unstageReq)
-	if err != nil {
-		if status.Code(err) == codes.Unimplemented {
-			slog.WarnContext(ctx, "CSI NodeUnstageVolume is unimplemented by driver; skipping unstaging", slog.String("volume_id", volumeID))
-		} else {
-			return fmt.Errorf("CSI NodeUnstageVolume failed: %w", err)
+	if !p.nodeCapsInitialized || p.SupportsNodeStage() {
+		stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
+		unstageReq := &csi.NodeUnstageVolumeRequest{
+			VolumeId:          volumeID,
+			StagingTargetPath: stagingPath,
 		}
-	}
 
-	// Clean up staging directory
-	if err := os.Remove(stagingPath); err != nil && !os.IsNotExist(err) {
-		slog.WarnContext(ctx, "failed to remove staging directory", slog.String("path", stagingPath), slog.Any("error", err))
+		_, err = p.client.NodeUnstageVolume(ctx, unstageReq)
+		if err != nil {
+			if status.Code(err) == codes.Unimplemented {
+				slog.WarnContext(ctx, "CSI NodeUnstageVolume is unimplemented by driver; skipping unstaging", slog.String("volume_id", volumeID))
+			} else {
+				return fmt.Errorf("CSI NodeUnstageVolume failed: %w", err)
+			}
+		}
+
+		// Clean up staging directory
+		if err := os.Remove(stagingPath); err != nil && !os.IsNotExist(err) {
+			slog.WarnContext(ctx, "failed to remove staging directory", slog.String("path", stagingPath), slog.Any("error", err))
+		}
 	}
 
 	return nil
@@ -320,6 +386,18 @@ func newCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLis
 	if reportedName != driverName {
 		csiClient.Close()
 		return nil, fmt.Errorf("reported driver name %q does not match requested name %q", reportedName, driverName)
+	}
+
+	if isController {
+		if err := csiPlugin.InitControllerCapabilities(ctx); err != nil {
+			csiClient.Close()
+			return nil, fmt.Errorf("failed to initialize controller capabilities for %q: %w", driverName, err)
+		}
+	} else {
+		if err := csiPlugin.InitNodeCapabilities(ctx); err != nil {
+			csiClient.Close()
+			return nil, fmt.Errorf("failed to initialize node capabilities for %q: %w", driverName, err)
+		}
 	}
 
 	return csiPlugin, nil
