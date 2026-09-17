@@ -171,10 +171,15 @@ spec:
         ports:
         - name: extproc
           containerPort: 50051
+        - name: metrics
+          containerPort: 9090
         readinessProbe:
-          tcpSocket:
-            port: extproc
-          periodSeconds: 10
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
         volumeMounts:
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
