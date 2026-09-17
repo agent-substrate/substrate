@@ -373,12 +373,13 @@ func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want
 // accessLogField returns the value of the key=value field named key in an Envoy
 // access log line whose fields are separated by spaces.
 func accessLogField(line, key string) (string, bool) {
-	_, rest, ok := strings.Cut(line, key+"=")
-	if !ok {
-		return "", false
+	for field := range strings.FieldsSeq(line) {
+		fieldKey, value, ok := strings.Cut(field, "=")
+		if ok && fieldKey == key {
+			return strings.Trim(value, `"`), true
+		}
 	}
-	value, _, _ := strings.Cut(rest, " ")
-	return value, true
+	return "", false
 }
 
 // createAndResumeActorWithEgress creates an actor from template, gives it an
@@ -609,7 +610,7 @@ func TestProtocolOriginRequest(t *testing.T) {
 
 func prepareProtocolActor(t *testing.T, ctx context.Context, prefix string) (string, *e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
-	actorName, _ := createAndResumeActor(t, ctx, prefix, egressFixture())
+	actorName, _ := createAndResumeActorWithEgress(t, ctx, prefix, egressFixture(), e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	ref := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -648,21 +649,54 @@ func postEgressOnce(t *testing.T, ctx context.Context, router *e2e.RouterClient,
 func assertProtocolGateway(t *testing.T, ctx context.Context, since metav1.Time, actorName, authority string) {
 	t.Helper()
 	identity := "spiffe://substrate-actor.local/atespace/" + networkingAtespace + "/actor/" + actorName
-	waitForAccessLog(t, ctx, since, "successful gateway traffic for "+identity+" to "+authority, func(lines []string) (bool, error) {
-		for _, line := range lines {
-			gotAuthority, _ := accessLogField(line, "authority")
-			code, _ := accessLogField(line, "code")
-			peers, _ := accessLogField(line, "peer_san")
-			if gotAuthority != authority || code != "200" {
-				continue
-			}
-			for peer := range strings.SplitSeq(peers, ",") {
-				if peer == identity {
-					t.Logf("gateway evidence: %s", line)
-					return true, nil
-				}
+	waitForAccessLog(t, ctx, since, "successful gateway traffic for "+identity+" to "+authority, func(lines []gatewayAccessLogLine) bool {
+		for _, entry := range lines {
+			if protocolGatewayAccessLogMatches(entry, actorName, identity, authority, !egressMITM()) {
+				t.Logf("gateway evidence: %s", entry.text)
+				return true
 			}
 		}
-		return false, nil
+		return false
 	})
+}
+
+func protocolGatewayAccessLogMatches(entry gatewayAccessLogLine, actorName, identity, authority string, allowOpaque bool) bool {
+	switch entry.container {
+	case "envoy":
+		gotAuthority, _ := accessLogField(entry.text, "authority")
+		code, _ := accessLogField(entry.text, "code")
+		peers, _ := accessLogField(entry.text, "peer_san")
+		if gotAuthority != authority || code != "200" {
+			return false
+		}
+		for peer := range strings.SplitSeq(peers, ",") {
+			if peer == identity {
+				return true
+			}
+		}
+	case "agentgateway":
+		gotAuthority, _ := accessLogField(entry.text, "substrate.connect.authority")
+		if allowOpaque && strings.Contains(entry.text, "CONNECT tunnel terminated") {
+			// Baseline TCP routes carry opaque CONNECT traffic and therefore do
+			// not emit an HTTP status. The accepted CONNECT record identifies the
+			// authenticated actor and destination; the operation assertion above
+			// supplies end-to-end success.
+			target, targetOK := accessLogField(entry.text, "target")
+			tunnelActor, actorOK := accessLogField(entry.text, "actor_name")
+			tunnelSpace, spaceOK := accessLogField(entry.text, "atespace")
+			_, errorOK := accessLogField(entry.text, "error")
+			return targetOK && target == authority && actorOK && tunnelActor == actorName && spaceOK && tunnelSpace == networkingAtespace && !errorOK
+		}
+		gotActor, _ := accessLogField(entry.text, "ate.actor.name")
+		gotAtespace, _ := accessLogField(entry.text, "ate.atespace")
+		status, _ := accessLogField(entry.text, "http.status")
+		if gotAuthority != authority || gotActor != actorName || gotAtespace != networkingAtespace {
+			return false
+		}
+		if status == "200" || status == "101" {
+			return true
+		}
+		return false
+	}
+	return false
 }

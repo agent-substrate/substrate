@@ -21,22 +21,38 @@ set -o errexit -o nounset -o pipefail
 # the MITM networking tests. No CA signing key is mounted on the gateway.
 context="${KUBECTL_CONTEXT:-kind-${KIND_CLUSTER_NAME:-kind}}"
 kubectl_args=(--context "${context}" -n ate-system)
-image="$(kubectl "${kubectl_args[@]}" get deployment atenet-egress -o jsonpath='{.spec.template.spec.containers[?(@.name=="envoy")].image}')"
+gateway="$(kubectl "${kubectl_args[@]}" get deployment atenet-egress -o jsonpath='{.spec.template.spec.containers[?(@.name=="envoy")].name}')"
+if [[ -z "${gateway}" ]]; then
+  gateway="$(kubectl "${kubectl_args[@]}" get deployment atenet-egress -o jsonpath='{.spec.template.spec.containers[?(@.name=="agentgateway")].name}')"
+fi
+image="$(kubectl "${kubectl_args[@]}" get deployment atenet-egress -o jsonpath="{.spec.template.spec.containers[?(@.name==\"${gateway}\")].image}")"
 sdsmint="$(kubectl "${kubectl_args[@]}" get deployment atenet-egress -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="sdsmint")].name}')"
-if [[ -z "${image}" || "${sdsmint}" != sdsmint ]]; then
+if [[ -z "${gateway}" || -z "${image}" ]]; then
+  echo "error: deploy the Envoy or AgentGateway egress before configuring E2E TLS origins" >&2
+  exit 1
+fi
+if [[ "${gateway}" == envoy && "${sdsmint}" != sdsmint ]]; then
   echo "error: deploy the Envoy sdsmint gateway before configuring E2E TLS origins" >&2
   exit 1
 fi
 
-# Use the deployed Envoy image's own public roots on every Pod start. The
-# separate init container prevents re-runs from appending to an existing bundle.
+# AgentGateway is distroless, so use the pinned Envoy image as a shell-capable
+# init helper. Its public roots plus the service-DNS CA are mounted only for
+# this E2E test setup; production keeps the gateway's normal root behavior.
+root_image="${image}"
+if [[ "${gateway}" == agentgateway ]]; then
+  root_image="envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4"
+fi
+
+# Use the helper image's public roots on every Pod start. The separate init
+# container prevents re-runs from appending to an existing bundle.
 kubectl "${kubectl_args[@]}" patch deployment atenet-egress --type=strategic --patch "$(cat <<EOF
 spec:
   template:
     spec:
       initContainers:
       - name: e2e-egress-upstream-roots
-        image: ${image}
+        image: ${root_image}
         command:
         - sh
         - -ec
@@ -53,7 +69,7 @@ spec:
         - name: e2e-egress-upstream-roots
           mountPath: /run/e2e-egress-roots
       containers:
-      - name: envoy
+      - name: ${gateway}
         volumeMounts:
         - name: e2e-egress-upstream-roots
           mountPath: /etc/ssl/certs/ca-certificates.crt

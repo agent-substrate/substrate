@@ -97,6 +97,9 @@ jobs:
           | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
+      # Envoy needs more inotify instances for the combined router and worker pods.
+    - name: Raise inotify instance limit
+      run: sudo sysctl -w fs.inotify.max_user_instances=1024
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate (${{ matrix.dataplane }})

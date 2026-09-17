@@ -123,6 +123,8 @@ data:
   config.yaml: |
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     frontendPolicies:
+      connect:
+        mode: tunnel
       accessLog:
         add:
           substrate.connect.authority: source.connectHeaders["host"]
@@ -134,18 +136,17 @@ data:
             key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
             root: /run/servicedns-ca/trust-bundle.pem
 
-    binds:
-    # Authenticate the actor before accepting CONNECT.
-    - port: 8443
-      tunnelProtocol: connect
-      listeners:
-      - protocol: HTTPS
+    gateways:
+      egress:
+        port: 8443
+        bindAddress: $POD_IP
+        protocol: HTTPS
         tls:
           cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
           key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
           root: /run/actor-id-ca-certs/ca.crt
-        # CONNECT re-enters the internal bind below.
-        routes: []
+
+    binds:
 
     # Route tunneled HTTP and pass through opaque streams.
     - mode: internal
