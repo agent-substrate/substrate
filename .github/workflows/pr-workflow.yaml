@@ -15,6 +15,7 @@
 name: pr-workflow
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
   schedule:
