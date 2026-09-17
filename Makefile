@@ -78,8 +78,8 @@ build-images:
 build-atectl:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate
 
-# The cluster installer, a Go port of hack/install-ate.sh. Both work today; see
-# cmd/ate-setup/commands.md for the flag-by-flag mapping between them.
+# The cluster installer. hack/install-ate.sh is a shim over it; see
+# cmd/ate-setup/commands.md for the flag-by-flag mapping between the two.
 .PHONY: build-ate-setup
 build-ate-setup:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATESETUP) ./cmd/ate-setup
