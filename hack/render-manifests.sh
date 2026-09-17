@@ -38,6 +38,8 @@ PRESERVED_FILES=(
   atenet-egress-with-sdsmint.yaml
   atenet-router.yaml
   atenet-router-monitoring.yaml
+  # The provider's upstream manifest lives in manifests/egress-credential-injection.
+  k8s-credential-provider.yaml
   pod-certificate-controller.yaml
   postgres.yaml
   sandboxconfig-gvisor.yaml

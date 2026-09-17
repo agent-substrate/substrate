@@ -17,19 +17,17 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 )
 
 // newHTTPCmd is a plain HTTP/1.1 origin an Actor's egress lands on. It exists so
-// a test can assert the destination port is recovered from SO_ORIGINAL_DST
-// rather than defaulted from the URL scheme: the actor fetches its /healthz on a
-// non-standard port, and the gateway's access log is expected to carry that
-// port. There is nothing to serve beyond readiness, so /healthz is all it
-// answers.
+// a test can assert the destination port is recovered from SO_ORIGINAL_DST.
+// It can also verify an injected Authorization header against a mounted token.
 func newHTTPCmd() *cobra.Command {
-	var listenAddress string
+	var listenAddress, authorizationFile string
 	cmd := &cobra.Command{
 		Use:   "http",
 		Short: "Serve a plain HTTP/1.1 origin answering /healthz.",
@@ -39,6 +37,9 @@ func newHTTPCmd() *cobra.Command {
 			mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
+			if authorizationFile != "" {
+				mux.HandleFunc("/credential", credentialHandler(authorizationFile))
+			}
 
 			server := &http.Server{
 				Addr:              listenAddress,
@@ -51,5 +52,21 @@ func newHTTPCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&listenAddress, "listen", ":8080", "Address the HTTP origin listens on.")
+	cmd.Flags().StringVar(&authorizationFile, "authorization-file", "", "Enable /credential, requiring a Bearer token matching this file.")
 	return cmd
+}
+
+func credentialHandler(path string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token, err := os.ReadFile(path)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if len(token) == 0 || r.Header.Get("Authorization") != "Bearer "+string(token) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

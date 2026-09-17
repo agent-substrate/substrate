@@ -45,6 +45,7 @@ CONTROL_PLANE_IMAGES := ./cmd/ateapi \
                         ./cmd/atecontroller \
                         ./cmd/atelet \
                         ./cmd/atenet \
+                        ./cmd/credential-provider/kubernetes-secrets \
                         ./cmd/podcertcontroller
 WORKER_IMAGES        := ./cmd/ateom-gvisor \
                         ./cmd/ateom-microvm

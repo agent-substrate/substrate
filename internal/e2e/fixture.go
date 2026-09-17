@@ -147,6 +147,16 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 			t.Fatalf("fixture %s declares templates in different atespaces (%q and %q)", manifests.Template, atespace, got)
 		}
 	}
+	t.Cleanup(func() {
+		// Remove workers before the namespace so its controller does not wait
+		// on their one-hour termination grace estimate after the Pods exit.
+		delArgs := []string{"delete", "workerpools", "--all", "--namespace=" + atespace,
+			"--ignore-not-found", "--cascade=foreground", "--timeout=2m"}
+		if KubeContext != "" {
+			delArgs = append([]string{"--context=" + KubeContext}, delArgs...)
+		}
+		RunCmd(t, "kubectl", delArgs...)
+	})
 
 	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("failed to create atespace %q: %v", atespace, err)

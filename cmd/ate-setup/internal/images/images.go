@@ -44,6 +44,7 @@ var Components = []string{
 	"cmd/atecontroller",
 	"cmd/atelet",
 	"cmd/atenet",
+	"cmd/credential-provider/kubernetes-secrets",
 	"cmd/ateom-gvisor",
 	"cmd/ateom-microvm",
 	"cmd/podcertcontroller",

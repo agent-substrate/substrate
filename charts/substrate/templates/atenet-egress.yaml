@@ -56,12 +56,33 @@ data:
     - mode: internal
       protocol: AUTO
       listeners:
-      - protocol: TLS
-        hostname: "*"
-        tcpRoutes:
+      - protocol: HTTPS
+        tls:
+          mode: dynamicCa
+          cert: /run/egress-mitm/tls.crt
+          key: /run/egress-mitm/tls.key
+        routes:
         - backends:
-          - dynamic:
-              target: source.connectHeaders["host"]
+          - dynamic: {}
+            policies:
+              backendTLS: {}
+          policies:
+            substrateEgress:
+              host: {{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+              credentialProviders:
+              - uriAuthority: kubernetes.io
+                target:
+                  host: {{ include "substrate.fullname" (list "k8s-credential-provider" .) }}.{{ .Release.Namespace }}.svc:50051
+                  policies:
+                    backendTLS:
+                      cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                      key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                      root: /run/servicedns.podcert.ate.dev/trust-bundle.pem
       - protocol: HTTP
         routes:
         - backends:
@@ -75,6 +96,15 @@ data:
                   cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                   key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                   root: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+              credentialProviders:
+              - uriAuthority: kubernetes.io
+                target:
+                  host: {{ include "substrate.fullname" (list "k8s-credential-provider" .) }}.{{ .Release.Namespace }}.svc:50051
+                  policies:
+                    backendTLS:
+                      cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                      key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                      root: /run/servicedns.podcert.ate.dev/trust-bundle.pem
       - protocol: TCP
         tcpRoutes:
         - backends:
@@ -133,6 +163,9 @@ spec:
             port: readiness
           periodSeconds: 1
         volumeMounts:
+        - name: egress-mitm
+          mountPath: /run/egress-mitm
+          readOnly: true
         - name: config
           mountPath: /etc/agentgateway
           readOnly: true
@@ -194,6 +227,14 @@ spec:
         - name: drain-signal
           mountPath: /var/run/atenet
       volumes:
+      - name: egress-mitm
+        secret:
+          secretName: egress-mitm-ca-pool
+          items:
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
       - name: config
         configMap:
           name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-config" .) }}
