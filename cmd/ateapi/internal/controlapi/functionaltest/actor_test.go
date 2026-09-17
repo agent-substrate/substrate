@@ -1485,15 +1485,15 @@ type partialFailVolumePlugin struct {
 	deleted []string
 }
 
-func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	if strings.HasSuffix(name, "fail-vol2") {
 		return "", nil, fmt.Errorf("simulated volume creation failure")
 	}
 	return "storage-" + name, parameters, nil
 }
 
-func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	return nil, nil
 }
 
 func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1621,7 +1621,7 @@ type retrySuccessVolumePlugin struct {
 	deleted  []string
 }
 
-func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if strings.HasSuffix(name, "retry-vol2") {
@@ -1633,8 +1633,8 @@ func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capac
 	return "storage-" + name, parameters, nil
 }
 
-func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	return nil, nil
 }
 
 func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {

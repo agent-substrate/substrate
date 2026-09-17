@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"sync"
 	"testing"
@@ -29,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
@@ -1802,5 +1804,133 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				t.Errorf("GoldenSnapshotUri = %q, want %q", got, tt.want.goldenURI)
 			}
 		})
+	}
+}
+
+type attachMockVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	publishContextToReturn map[string]string
+	attachErr              error
+	attachCalls            int
+}
+
+func (p *attachMockVolumePlugin) AttachVolume(ctx context.Context, volumeID string, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	p.attachCalls++
+	return p.publishContextToReturn, p.attachErr
+}
+
+type fakeWorkflowResumeStore struct {
+	actorWorkflowStore
+	actor       *ateapipb.Actor
+	updateCalls int
+}
+
+func (f *fakeWorkflowResumeStore) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	return f.actor, nil
+}
+
+func (f *fakeWorkflowResumeStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	f.updateCalls++
+	if err := mutate(f.actor); err != nil {
+		return nil, err
+	}
+	f.actor.Metadata.Version++
+	return f.actor, nil
+}
+
+func TestAttachActorVolumes_PubContextChangeOnSameNode(t *testing.T) {
+	ctx := context.Background()
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1", Version: 1},
+		Status: &ateapipb.ActorStatus{
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				{
+					VolumeName:         "vol-1",
+					StorageVolumeId:    "storage-vol-1",
+					VolumeType:         "mock",
+					Status:             ateapipb.ExternalVolume_STATUS_CREATED,
+					PublishContextNode: "node-1",
+					PublishContext:     map[string]string{"device": "/dev/sda"},
+				},
+			},
+		},
+	}
+	fakeStore := &fakeWorkflowResumeStore{
+		actor: proto.Clone(actor).(*ateapipb.Actor),
+	}
+
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{Name: "vol-1"},
+		},
+		Containers: []*ateapipb.Container{
+			{
+				VolumeMounts: []*ateapipb.VolumeMount{
+					{Name: "vol-1", MountPath: "/mnt/vol1"},
+				},
+			},
+		},
+	}
+
+	// 1. Same node, but AttachVolume returns changed PublishContext (e.g. device path remapped)
+	plugin := &attachMockVolumePlugin{
+		publishContextToReturn: map[string]string{"device": "/dev/sdb"},
+	}
+	registry := &mockPluginRegistry{
+		plugins: map[string]volume.VolumePluginControlPlane{
+			"mock": plugin,
+		},
+	}
+	w := &ActorWorkflow{
+		store:          fakeStore,
+		pluginRegistry: registry,
+	}
+
+	worker := &ateapipb.Worker{NodeName: "node-1"}
+	resActor, err := w.ensureVolumesAttached(ctx, actorRef, actor, worker, tmpl)
+	if err != nil {
+		t.Fatalf("ensureVolumesAttached failed: %v", err)
+	}
+
+	if plugin.attachCalls != 1 {
+		t.Errorf("attachCalls = %d, want 1", plugin.attachCalls)
+	}
+
+	gotPubCtx := resActor.GetStatus().GetActorVolumes()[0].GetPublishContext()
+	wantPubCtx := map[string]string{"device": "/dev/sdb"}
+	if !maps.Equal(gotPubCtx, wantPubCtx) {
+		t.Errorf("resActor publishContext = %v, want %v", gotPubCtx, wantPubCtx)
+	}
+
+	// Verify persistence was updated in store
+	stored, err := fakeStore.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if fakeStore.updateCalls != 1 {
+		t.Errorf("updateCalls = %d, want 1", fakeStore.updateCalls)
+	}
+	storedPubCtx := stored.GetStatus().GetActorVolumes()[0].GetPublishContext()
+	if !maps.Equal(storedPubCtx, wantPubCtx) {
+		t.Errorf("stored publishContext = %v, want %v", storedPubCtx, wantPubCtx)
+	}
+
+	// 2. Same node and same PublishContext returns - verify no store write occurred
+	// (version remains identical and updateCalls remains 1)
+	initialVersion := stored.GetMetadata().GetVersion()
+	resActor2, err := w.ensureVolumesAttached(ctx, actorRef, stored, worker, tmpl)
+	if err != nil {
+		t.Fatalf("second ensureVolumesAttached failed: %v", err)
+	}
+	if plugin.attachCalls != 2 {
+		t.Errorf("attachCalls = %d, want 2", plugin.attachCalls)
+	}
+	if fakeStore.updateCalls != 1 {
+		t.Errorf("updateCalls = %d, want 1 after no-op attach", fakeStore.updateCalls)
+	}
+	if resActor2.GetMetadata().GetVersion() != initialVersion {
+		t.Errorf("expected version unchanged when pubCtx identical, got %d, want %d", resActor2.GetMetadata().GetVersion(), initialVersion)
 	}
 }
