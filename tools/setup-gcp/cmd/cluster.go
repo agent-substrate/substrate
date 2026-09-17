@@ -384,6 +384,7 @@ var clusterCmd = &cobra.Command{
 	Short: "Create GKE cluster",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+		warnDeprecatedMachineTypeEnv(cmd)
 		if err := resolveProjectID(ctx, &cfg); err != nil {
 			return err
 		}
@@ -398,7 +399,7 @@ func init() {
 	clusterCmd.Flags().StringVar(&cfg.ClusterVersion, "version", getEnv("CLUSTER_VERSION", ""), "Kubernetes version [env: CLUSTER_VERSION]")
 	clusterCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
-	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", defaultMachineType, "Machine type for the node pool [env: NODE_MACHINE_TYPE]")
+	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", resolveMachineTypeDefault(), "Machine type for the node pool [env: NODE_MACHINE_TYPE]")
 	clusterCmd.Flags().BoolVar(&cfg.EnableDataplaneV2, "enable-dataplane-v2", getEnv("ENABLE_DATAPLANE_V2", true), "Enable Dataplane V2 [env: ENABLE_DATAPLANE_V2]")
 	clusterCmd.Flags().BoolVar(&cfg.EnableNestedVirtualization, "enable-nested-virtualization", getEnv("ENABLE_NESTED_VIRTUALIZATION", true), "Create the node pool with nested virtualization, exposing /dev/kvm for micro-VM workers; needs a machine type that supports it. Turn off with --enable-nested-virtualization=false [env: ENABLE_NESTED_VIRTUALIZATION]")
 	clusterCmd.Flags().Int32Var(&cfg.BootDiskSizeGB, "boot-disk-size", getEnv("BOOT_DISK_SIZE_GB", int32(0)), "Boot disk size in GB for the node pool; 0 = GKE default (100 GB) [env: BOOT_DISK_SIZE_GB]")

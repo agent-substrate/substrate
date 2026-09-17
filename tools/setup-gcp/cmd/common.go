@@ -18,6 +18,9 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"sync"
+
+	"github.com/spf13/cobra"
 )
 
 type Config struct {
@@ -51,24 +54,37 @@ type Config struct {
 	DashboardDir string
 }
 
-var defaultMachineType = resolveMachineTypeDefault()
+func machineTypeFromEnv() (machineType string, deprecated bool) {
+	if v := os.Getenv("NODE_MACHINE_TYPE"); v != "" {
+		return v, false
+	}
+	if v := os.Getenv("GVISOR_NODE_MACHINE_TYPE"); v != "" {
+		return v, true
+	}
+	return "c3-standard-4", false
+}
 
 func resolveMachineTypeDefault() string {
-	if _, ok := os.LookupEnv("NODE_MACHINE_TYPE"); !ok {
-		if v, ok := os.LookupEnv("GVISOR_NODE_MACHINE_TYPE"); ok {
-			slog.Warn("GVISOR_NODE_MACHINE_TYPE is deprecated; use NODE_MACHINE_TYPE instead")
-			return v
-		}
+	machineType, _ := machineTypeFromEnv()
+	return machineType
+}
+
+func warnDeprecatedMachineTypeEnv(cmd *cobra.Command) {
+	if cmd.Flags().Changed("machine-type") {
+		return
 	}
-	return getEnv("NODE_MACHINE_TYPE", "c3-standard-4")
+	if _, deprecated := machineTypeFromEnv(); deprecated {
+		slog.Warn("GVISOR_NODE_MACHINE_TYPE is deprecated; use NODE_MACHINE_TYPE instead")
+	}
 }
 
 type getEnvType interface {
 	string | bool | int64 | int32
 }
 
+var warnedEnvKeys sync.Map
+
 // getEnv retrieves an environment variable by key and parses it into the specified type.
-// If the environment variable is not set or parsing fails, it returns the fallback value.
 func getEnv[T getEnvType](key string, fallback T) T {
 	val, ok := os.LookupEnv(key)
 	if !ok {
@@ -91,9 +107,12 @@ func getEnv[T getEnvType](key string, fallback T) T {
 		ret = int32(v)
 	}
 
-	if err == nil {
-		return ret.(T)
+	if err != nil {
+		if _, warned := warnedEnvKeys.LoadOrStore(key, struct{}{}); !warned {
+			slog.Warn("Ignoring unparsable environment variable", "key", key, "value", val, "using", fallback, "error", err)
+		}
+		return fallback
 	}
 
-	return fallback
+	return ret.(T)
 }
