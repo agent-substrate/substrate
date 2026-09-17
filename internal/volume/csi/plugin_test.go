@@ -41,8 +41,10 @@ type mockCSIDriver struct {
 	nodePublishVolumeFunc         func(context.Context, *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error)
 	nodeUnpublishVolumeFunc       func(context.Context, *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error)
 
-	getPluginCapabilitiesFunc func(context.Context, *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error)
-	probeFunc                 func(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, error)
+	controllerGetCapabilitiesFunc func(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error)
+	nodeGetCapabilitiesFunc       func(context.Context, *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error)
+	getPluginCapabilitiesFunc     func(context.Context, *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error)
+	probeFunc                     func(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, error)
 }
 
 func (m *mockCSIDriver) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
@@ -107,6 +109,40 @@ func (m *mockCSIDriver) ControllerUnpublishVolume(ctx context.Context, req *csi.
 		return m.controllerUnpublishVolumeFunc(ctx, req)
 	}
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+func (m *mockCSIDriver) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	if m.controllerGetCapabilitiesFunc != nil {
+		return m.controllerGetCapabilitiesFunc(ctx, req)
+	}
+	return &csi.ControllerGetCapabilitiesResponse{
+		Capabilities: []*csi.ControllerServiceCapability{
+			{
+				Type: &csi.ControllerServiceCapability_Rpc{
+					Rpc: &csi.ControllerServiceCapability_RPC{
+						Type: csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func (m *mockCSIDriver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+	if m.nodeGetCapabilitiesFunc != nil {
+		return m.nodeGetCapabilitiesFunc(ctx, req)
+	}
+	return &csi.NodeGetCapabilitiesResponse{
+		Capabilities: []*csi.NodeServiceCapability{
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+					},
+				},
+			},
+		},
+	}, nil
 }
 
 func (m *mockCSIDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
@@ -406,5 +442,129 @@ func TestClient_Identity(t *testing.T) {
 	_, err = client.Probe(ctx, &csi.ProbeRequest{})
 	if err != nil {
 		t.Fatalf("Probe failed: %v", err)
+	}
+}
+
+func TestPlugin_Capabilities_SkipAttachDetachWhenUnsupported(t *testing.T) {
+	var publishCalled, unpublishCalled int
+	driver := &mockCSIDriver{
+		controllerGetCapabilitiesFunc: func(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+			// Return capabilities WITHOUT PUBLISH_UNPUBLISH_VOLUME (like hostpath driver)
+			return &csi.ControllerGetCapabilitiesResponse{
+				Capabilities: []*csi.ControllerServiceCapability{
+					{
+						Type: &csi.ControllerServiceCapability_Rpc{
+							Rpc: &csi.ControllerServiceCapability_RPC{
+								Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+							},
+						},
+					},
+				},
+			}, nil
+		},
+		controllerPublishVolumeFunc: func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+			publishCalled++
+			return &csi.ControllerPublishVolumeResponse{}, nil
+		},
+		controllerUnpublishVolumeFunc: func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+			unpublishCalled++
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
+		},
+	}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	ctx := context.Background()
+
+	if err := plugin.InitControllerCapabilities(ctx); err != nil {
+		t.Fatalf("InitControllerCapabilities failed: %v", err)
+	}
+
+	if plugin.SupportsControllerPublish() {
+		t.Errorf("expected SupportsControllerPublish to be false")
+	}
+
+	// AttachVolume should skip calling ControllerPublishVolume entirely
+	if err := plugin.AttachVolume(ctx, "test-vol", "node-1"); err != nil {
+		t.Errorf("AttachVolume failed: %v", err)
+	}
+	if publishCalled != 0 {
+		t.Errorf("expected 0 calls to ControllerPublishVolume, got %d", publishCalled)
+	}
+
+	// DetachVolume should skip calling ControllerUnpublishVolume entirely
+	if err := plugin.DetachVolume(ctx, "test-vol", "node-1"); err != nil {
+		t.Errorf("DetachVolume failed: %v", err)
+	}
+	if unpublishCalled != 0 {
+		t.Errorf("expected 0 calls to ControllerUnpublishVolume, got %d", unpublishCalled)
+	}
+}
+
+func TestPlugin_Capabilities_SkipStageUnstageWhenUnsupported(t *testing.T) {
+	var stageCalled, unstageCalled int
+	driver := &mockCSIDriver{
+		nodeGetCapabilitiesFunc: func(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+			// Return capabilities WITHOUT STAGE_UNSTAGE_VOLUME
+			return &csi.NodeGetCapabilitiesResponse{
+				Capabilities: []*csi.NodeServiceCapability{},
+			}, nil
+		},
+		nodeStageVolumeFunc: func(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+			stageCalled++
+			return &csi.NodeStageVolumeResponse{}, nil
+		},
+		nodeUnstageVolumeFunc: func(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+			unstageCalled++
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		},
+	}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	ctx := context.Background()
+
+	if err := plugin.InitNodeCapabilities(ctx); err != nil {
+		t.Fatalf("InitNodeCapabilities failed: %v", err)
+	}
+
+	if plugin.SupportsNodeStage() {
+		t.Errorf("expected SupportsNodeStage to be false")
+	}
+
+	tmpDir := t.TempDir()
+	targetPath := filepath.Join(tmpDir, "target")
+	if err := os.MkdirAll(targetPath, 0750); err != nil {
+		t.Fatalf("failed to create target path: %v", err)
+	}
+
+	// MountVolume should skip NodeStageVolume entirely
+	if err := plugin.MountVolume(ctx, "test-vol", targetPath, nil); err != nil {
+		t.Errorf("MountVolume failed: %v", err)
+	}
+	if stageCalled != 0 {
+		t.Errorf("expected 0 calls to NodeStageVolume, got %d", stageCalled)
+	}
+
+	// UnmountVolume should skip NodeUnstageVolume entirely
+	if err := plugin.UnmountVolume(ctx, "test-vol", targetPath); err != nil {
+		t.Errorf("UnmountVolume failed: %v", err)
+	}
+	if unstageCalled != 0 {
+		t.Errorf("expected 0 calls to NodeUnstageVolume, got %d", unstageCalled)
 	}
 }
