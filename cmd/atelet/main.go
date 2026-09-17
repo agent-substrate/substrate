@@ -418,8 +418,8 @@ type directCSIDriverConfigGetter struct {
 	client versioned.Interface
 }
 
-func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverConfig, error) {
-	return g.client.ApiV1alpha1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
+func (g *directCSIDriverConfigGetter) Get(ctx context.Context, name string) (*atev1alpha1.CSIDriverConfig, error) {
+	return g.client.ApiV1alpha1().CSIDriverConfigs().Get(ctx, name, metav1.GetOptions{})
 }
 
 // AteomHerder is a service that allows controlling workloads on individual

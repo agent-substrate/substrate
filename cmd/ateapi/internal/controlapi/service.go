@@ -26,6 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
@@ -137,6 +138,14 @@ type serviceStore interface {
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
+type csiDriverConfigListerAdapter struct {
+	lister listersv1alpha1.CSIDriverConfigLister
+}
+
+func (a csiDriverConfigListerAdapter) Get(_ context.Context, name string) (*atev1alpha1.CSIDriverConfig, error) {
+	return a.lister.Get(name)
+}
+
 // GetPlugin retrieves a CSI volume plugin by driver name, dynamically discovering it if not present.
 func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
 	s.mu.RLock()
@@ -146,12 +155,17 @@ func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.V
 		return plugin, nil
 	}
 
-	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, driverName, true /*isController*/)
+	csiPlugin, err := csi.NewCSIPlugin(ctx, csiDriverConfigListerAdapter{lister: s.csiDriverConfigLister}, driverName, true /*isController*/)
 	if err != nil {
 		return nil, err
 	}
 
 	s.mu.Lock()
+	if existing, ok := s.volumePlugins[driverName]; ok {
+		s.mu.Unlock()
+		csiPlugin.Close()
+		return existing, nil
+	}
 	s.volumePlugins[driverName] = csiPlugin
 	s.mu.Unlock()
 	return csiPlugin, nil

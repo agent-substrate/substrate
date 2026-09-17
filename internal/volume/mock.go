@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // Use a directory that is shared between atelet and ateom but not cleaned up by atelet
@@ -62,9 +63,9 @@ func (p *MockVolumePlugin) DriverName(ctx context.Context) (string, error) {
 }
 
 // CreateVolume simulates volume provisioning.
-func (p *MockVolumePlugin) CreateVolume(ctx context.Context, name string, capacity string, storageClass string, parameters map[string]string) (string, map[string]string, error) {
+func (p *MockVolumePlugin) CreateVolume(ctx context.Context, name string, capacity string, storageClass string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	volumeID := "mock-vol-" + name
-	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", name), slog.String("capacity", capacity), slog.String("storageClass", storageClass), slog.String("volumeID", volumeID))
+	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", name), slog.String("capacity", capacity), slog.String("storageClass", storageClass), slog.String("volumeID", volumeID), slog.String("mode", mode.String()))
 	return volumeID, parameters, nil
 }
 
@@ -75,9 +76,9 @@ func (p *MockVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) er
 }
 
 // AttachVolume simulates volume attachment to a node.
-func (p *MockVolumePlugin) AttachVolume(ctx context.Context, volumeID string, node string) error {
-	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", volumeID), slog.String("node", node))
-	return nil
+func (p *MockVolumePlugin) AttachVolume(ctx context.Context, volumeID string, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", volumeID), slog.String("node", node), slog.String("mode", mode.String()))
+	return nil, nil
 }
 
 // DetachVolume simulates volume detachment from a node.
@@ -87,7 +88,7 @@ func (p *MockVolumePlugin) DetachVolume(ctx context.Context, volumeID string, no
 }
 
 // MountVolume simulates mounting volume on the host.
-func (p *MockVolumePlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error {
+func (p *MockVolumePlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string, publishContext map[string]string, mode ateapipb.VolumeAccessMode) error {
 	slog.InfoContext(ctx, "MockVolumePlugin.MountVolume", slog.String("volumeID", volumeID), slog.String("targetPath", targetPath))
 
 	volumeDir := filepath.Join(mockVolumeDirectories, volumeID)
