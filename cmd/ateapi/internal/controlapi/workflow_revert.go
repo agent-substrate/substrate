@@ -84,7 +84,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 		return nil, err
 	}
 
-	if err = w.ensureInProgressSnapshotCollected(leaseCtx, actor, actorTemplate); err != nil {
+	if err = w.ensureInProgressSnapshotDiscarded(leaseCtx, actor, actorTemplate); err != nil {
 		return nil, err
 	}
 
@@ -192,10 +192,10 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	return w.releaseAssignmentWithoutBacklink(ctx, actor)
 }
 
-// ensureInProgressSnapshotCollected deletes the objects a suspend was partway
+// ensureInProgressSnapshotDiscarded deletes the objects a suspend was partway
 // through writing when the actor was reverted.
-func (w *ActorWorkflow) ensureInProgressSnapshotCollected(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
-	ctx, done := stepSpan(ctx, "CollectInProgressSnapshot")
+func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
 	name := actor.GetStatus().GetInProgressSnapshotName()

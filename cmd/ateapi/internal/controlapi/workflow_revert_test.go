@@ -217,11 +217,11 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 	}
 }
 
-// TestEnsureInProgressSnapshotCollected covers what a revert deletes from
+// TestEnsureInProgressSnapshotDiscarded covers what a revert deletes from
 // object storage and, more importantly, what it must not. Delete drops the
 // actor's whole prefix; revert cannot, because the snapshot it is returning the
 // actor to lives under that same prefix.
-func TestEnsureInProgressSnapshotCollected(t *testing.T) {
+func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 	const inFlightSnapshotName = "2026-01-01t00-00-00z-abandoned"
 
 	tests := []struct {
@@ -234,12 +234,12 @@ func TestEnsureInProgressSnapshotCollected(t *testing.T) {
 		// missingTemplate drops the template, leaving no way to derive the
 		// prefix: the objects leak rather than wedging the actor.
 		missingTemplate       bool
-		wantInFlightCollected bool
+		wantInFlightDiscarded bool
 	}{
 		{
-			name:                  "collects the snapshot an interrupted suspend was writing",
+			name:                  "discards the snapshot an interrupted suspend was writing",
 			inFlight:              inFlightSnapshotName,
-			wantInFlightCollected: true,
+			wantInFlightDiscarded: true,
 		},
 		{
 			name:     "leaves the actor's own external snapshot in place",
@@ -249,13 +249,13 @@ func TestEnsureInProgressSnapshotCollected(t *testing.T) {
 			name:                  "leaves a snapshot borrowed from a tag in place",
 			tagOwnedSnapshot:      true,
 			inFlight:              inFlightSnapshotName,
-			wantInFlightCollected: true,
+			wantInFlightDiscarded: true,
 		},
 		{
 			name:                  "leaks rather than wedges when the template is gone",
 			inFlight:              inFlightSnapshotName,
 			missingTemplate:       true,
-			wantInFlightCollected: false,
+			wantInFlightDiscarded: false,
 		},
 	}
 
@@ -292,8 +292,8 @@ func TestEnsureInProgressSnapshotCollected(t *testing.T) {
 			if tt.missingTemplate {
 				passedTemplate = nil
 			}
-			if err := w.ensureInProgressSnapshotCollected(ctx, actor, passedTemplate); err != nil {
-				t.Fatalf("ensureInProgressSnapshotCollected: %v", err)
+			if err := w.ensureInProgressSnapshotDiscarded(ctx, actor, passedTemplate); err != nil {
+				t.Fatalf("ensureInProgressSnapshotDiscarded: %v", err)
 			}
 
 			// The whole point: whatever else happens, the snapshot the actor
@@ -302,9 +302,9 @@ func TestEnsureInProgressSnapshotCollected(t *testing.T) {
 				t.Errorf("external snapshot %v was collected, but revert must preserve it", current)
 			}
 			if tt.inFlight != "" {
-				collected := len(objects.Snapshot(t, inFlight)) == 0
-				if collected != tt.wantInFlightCollected {
-					t.Errorf("in-flight snapshot collected = %v, want %v", collected, tt.wantInFlightCollected)
+				discarded := len(objects.Snapshot(t, inFlight)) == 0
+				if discarded != tt.wantInFlightDiscarded {
+					t.Errorf("in-flight snapshot discarded = %v, want %v", discarded, tt.wantInFlightDiscarded)
 				}
 			}
 		})
@@ -328,8 +328,8 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 		},
 	})
 
-	if err := w.ensureInProgressSnapshotCollected(ctx, actor, nil); err != nil {
-		t.Fatalf("ensureInProgressSnapshotCollected: %v", err)
+	if err := w.ensureInProgressSnapshotDiscarded(ctx, actor, nil); err != nil {
+		t.Fatalf("ensureInProgressSnapshotDiscarded: %v", err)
 	}
 
 	actorRef := resources.ActorRefFromActor(actor)
