@@ -277,8 +277,9 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
 			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
 				localInfo := &ateapipb.LocalSnapshotInfo{
-					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
-					ContentScope: contentScope,
+					SnapshotName:     toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
+					ContentScope:     contentScope,
+					ActorTemplateUid: toUpdate.GetStatus().GetCurrentActorTemplateUid(),
 				}
 				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}

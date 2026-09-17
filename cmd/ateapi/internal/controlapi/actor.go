@@ -140,6 +140,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// repoint before that first resume reads as "no guest state" instead of
 		// "replaced template", and the resume restores the old template's
 		// memory and rootfs in full instead of the volume data alone.
+		outActor.Status.ExternalSnapshot.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
 		outActor.Status.CurrentActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
 	}
 	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {

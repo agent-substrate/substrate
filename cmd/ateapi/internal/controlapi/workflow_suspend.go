@@ -391,8 +391,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	externalSnapshot := latestActor.GetStatus().GetExternalSnapshot()
 	if inProgressSnapshotURI != "" {
 		externalSnapshot = &ateapipb.ExternalSnapshot{
-			SnapshotUri:  inProgressSnapshotURI,
-			ContentScope: commitSnapshotScope(actorRef.Atespace, actorTemplate),
+			SnapshotUri:      inProgressSnapshotURI,
+			ContentScope:     commitSnapshotScope(actorRef.Atespace, actorTemplate),
+			ActorTemplateUid: latestActor.GetStatus().GetCurrentActorTemplateUid(),
 		}
 	}
 
