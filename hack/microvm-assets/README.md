@@ -8,7 +8,7 @@ overlay of a read-only lower (the OCI image, served into the guest over virtio-f
 set. The asset set is four files:
 
 - `cloud-hypervisor` — the VMM binary (fetched from its release)
-- `virtiofsd` — the virtio-fs daemon serving the RO lower (built from source; see `assemble.sh`)
+- `virtiofsd` — the virtio-fs daemon serving the RO lower (from kata-static)
 - `vmlinux` — the guest kernel (from kata-static)
 - `rootfs.img` — the guest rootfs image (from kata-static)
 
@@ -28,8 +28,6 @@ it as a device, which is what places micro-VM workers there.
    ```sh
    ARCH=arm64 hack/microvm-assets/assemble.sh
    ```
-   Copy the printed sha256 sums into the `SandboxConfig` `spec.assets` in
-   `demos/counter/counter-microvm.yaml.tmpl` (the committed values are arm64; other arches differ).
 
 2. **Bring up the cluster + control plane:**
    ```sh
