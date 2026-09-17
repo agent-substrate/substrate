@@ -157,6 +157,9 @@ func do(ctx context.Context) error {
 
 	// Create ateom dir.
 	ateomDir := ateompath.AteomPath(*podUID)
+	if err := resources.ValidateAteomUID(*podUID); err != nil {
+		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
+	}
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
