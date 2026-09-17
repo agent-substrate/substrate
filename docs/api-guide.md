@@ -116,7 +116,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP or TCP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
@@ -244,7 +244,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `command` | `[]string` | Optional. Entrypoint array. If unset, the image's `ENTRYPOINT` is used. If set, it replaces **both** the image's `ENTRYPOINT` and `CMD`. |
 | `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
 | `env` | `[]EnvVar` | Optional. Literal `value` entries. |
-| `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `readyz` | `ContainerReadyz` | Optional. HTTP or TCP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
 | `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |
@@ -301,22 +301,34 @@ Each limit is validated on its own at apply, but the sum across the actor's cont
 
 ### Container Readiness Probe (`readyz`)
 
-Each entry in `containers` may declare an optional **HTTP readiness probe** so the platform only treats the actor as "started" once the workload is actually serving traffic. This mirrors the role of `readinessProbe.httpGet` on a Kubernetes Pod container, but the gate is enforced inside ateom (the in-pod sandbox driver) rather than by the kubelet.
+Each entry in `containers` may declare an optional **readiness probe** so the platform only treats the actor as "started" after every configured probe succeeds. Each `readyz` block must specify exactly one of `httpGet` or `tcpSocket`, following the shape of Kubernetes container probes. The gate runs inside ateom (the in-pod sandbox driver).
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `readyz.httpGet.path` | `string` | Optional. URL path to GET. Defaults to `/readyz`. Must begin with `/` and contain only RFC 3986 path characters (no query string `?` or fragment `#`). |
-| `readyz.httpGet.port` | `int32` | **Required.** TCP port on the container to probe (`1..65535`). |
+| `readyz.httpGet.port` | `int32` | **Required for HTTP.** TCP port on the container to probe (`1..65535`). |
+| `readyz.tcpSocket.port` | `int32` | **Required for TCP.** TCP port on the container to connect to (`1..65535`). |
+| `readyz.timeoutSeconds` | `int32` | Optional. Overall probe deadline in seconds (`1..3600`). Unset or zero uses the default of 30 seconds. |
+
+For a container that serves only TCP or gRPC, configure:
+
+```yaml
+readyz:
+  tcpSocket:
+    port: 9090
+  timeoutSeconds: 60
+```
 
 How it behaves:
 
-- **Where the probe runs.** ateom (gVisor or microvm) reaches the container at the actor's interior IP (`169.254.17.2` today) — one network hop, no DNS, no router involved.
-- **Block-until-ready semantics.** `RunWorkload` (cold start) and `RestoreWorkload` (resume from snapshot) only return successfully after every container with a `readyz` block returns HTTP 200. A failure surfaces as a Run/Restore error and is retried by the control plane; the overall wait is bounded by an internal 30s deadline.
-- **Aggressive polling.** The poll loop is tuned for single-millisecond detection latency: a keep-alive HTTP client with a ~500µs interval and 250ms per-request timeout. While the workload is still booting, kernel `RST`s return in microseconds, so the loop spends almost no time blocked; once the listener is up, the next attempt completes on veth-local latency.
-- **Golden snapshot warm-up shortcut.** When **every** container in a template declares `readyz`, the actor template controller skips its default ~20s "give the workload time to settle" delay before taking the golden snapshot — `ResumeActor` already blocked until the workload reported 200, so the workload is known to be initialized. Templates that omit `readyz` on any container keep the 20s warm-up as a safety net.
-- **Snapshot/restore interaction.** The TCP listener is part of the checkpointed RAM, so on resume `readyz` typically returns 200 on the first attempt, with no observable latency penalty.
+- **Where the probe runs.** ateom (gVisor or microVM) reaches the container at the actor's interior IP (`169.254.17.2` today) — one network hop, no DNS, no router involved.
+- **Success criteria.** HTTP requires status 200. TCP requires a successful connection, which is immediately closed without exchanging application data. TCP does not check a gRPC health service or application-level readiness.
+- **Block-until-ready semantics.** `RunWorkload` (cold start) and `RestoreWorkload` (resume from snapshot) only return successfully after every configured probe succeeds. A failure surfaces as a Run/Restore error and is retried by the control plane. Each probe has its own overall deadline; cancellation stops pending attempts.
+- **Aggressive polling.** Probes use a 1ms polling interval and a 250ms per-attempt timeout, bounded by the overall deadline. HTTP reuses connections; TCP opens and closes a connection for each attempt. Refused or unreachable connections are retried until the deadline.
+- **Golden snapshot warm-up shortcut.** When **every** container in a template declares `readyz`, the actor template controller skips its default ~20s warm-up delay before taking the golden snapshot because `ResumeActor` already waited for all probes. Templates that omit `readyz` on any container keep the warm-up delay.
+- **Snapshot/restore interaction.** Readiness is checked again after restoration. A checkpointed listener can usually satisfy a TCP probe immediately; HTTP still requires a 200 response.
 
-If `readyz` is omitted from a container, the prior "started == ready" behavior is preserved — the platform considers the container ready as soon as `runsc start` / `vm.boot` returns.
+If `readyz` is omitted from a container, the platform considers it ready as soon as `runsc start` / `vm.boot` returns. Deploy updated control-plane, atelet, and ateom components before using TCP probes; older components only support HTTP.
 
 ### Example
 

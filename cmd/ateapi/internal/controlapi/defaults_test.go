@@ -83,7 +83,23 @@ func TestDefaultActorTemplate(t *testing.T) {
 			}},
 		}},
 	}, {
-		name: "readyz without http_get gets only the timeout",
+		name: "TCP readyz gets timeout without HTTP action",
+		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+			{Name: "main", Readyz: &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 9090}}},
+		}},
+		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+			{Name: "main", Readyz: &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 30}},
+		}},
+	}, {
+		name: "set TCP readyz timeout is kept",
+		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+			{Name: "main", Readyz: &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 5}},
+		}},
+		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+			{Name: "main", Readyz: &ateapipb.ContainerReadyz{TcpSocket: &ateapipb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 5}},
+		}},
+	}, {
+		name: "readyz without an action gets only the timeout",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
 			{Name: "main", Readyz: &ateapipb.ContainerReadyz{}},
 		}},

@@ -48,6 +48,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -656,6 +657,10 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 				},
 			},
 			{
+				Name:   "tcp-probe",
+				Readyz: &ateletpb.Readyz{TcpSocket: &ateletpb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 60},
+			},
+			{
 				Name: "without-probe",
 			},
 		},
@@ -669,14 +674,31 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 					TimeoutSeconds: 45,
 				},
 			},
+			{Name: "tcp-probe", Readyz: &ateompb.Readyz{TcpSocket: &ateompb.TCPSocketAction{Port: 9090}, TimeoutSeconds: 60}},
 			{Name: "without-probe"},
 		},
 	}
-	got, err := buildAteomWorkloadSpec(in)
+	data, err := proto.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := &ateletpb.WorkloadSpec{}
+	if err := proto.Unmarshal(data, decoded); err != nil {
+		t.Fatal(err)
+	}
+	got, err := buildAteomWorkloadSpec(decoded)
 	if err != nil {
 		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
 	}
-	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+	data, err = proto.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transported := &ateompb.WorkloadSpec{}
+	if err := proto.Unmarshal(data, transported); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, transported, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
 }

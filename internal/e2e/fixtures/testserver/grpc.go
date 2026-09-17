@@ -22,6 +22,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -123,17 +124,27 @@ func newHealthHandler() http.Handler {
 // pod's readinessProbe checks. Multiplexing readiness onto that listener as an
 // h2c handler would defeat the point of the egress fixture, where nothing
 // between the actor and here parses HTTP -- so --health-listen puts it on a
-// second port instead, off unless asked for. The ingress Actor needs it because
-// an ActorTemplate's readyz is an HTTP GET and nothing else: a gRPC server
-// answers one with a protocol error, so without it the Actor never boots.
+// second port instead, off unless asked for. Actors can instead use a TCP
+// readiness probe on the gRPC listener.
 func newGRPCCmd() *cobra.Command {
 	var listenAddress string
 	var healthAddress string
+	var listenDelay time.Duration
 	cmd := &cobra.Command{
 		Use:   "grpc",
 		Short: "Serve a cleartext HTTP/2 gRPC echo origin.",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if listenDelay > 0 {
+				log.Printf("testserver grpc: delaying listen for %s", listenDelay)
+				timer := time.NewTimer(listenDelay)
+				defer timer.Stop()
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-timer.C:
+				}
+			}
 			listener, err := net.Listen("tcp", listenAddress)
 			if err != nil {
 				return fmt.Errorf("listening on %s: %w", listenAddress, err)
@@ -157,6 +168,7 @@ func newGRPCCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&listenAddress, "listen", ":50051", "Address the gRPC server listens on, cleartext HTTP/2.")
-	cmd.Flags().StringVar(&healthAddress, "health-listen", "", "Address for an HTTP/1.1 /readyz listener. Empty serves no HTTP at all, which is what the egress fixture wants; the ingress Actor sets it because an ActorTemplate readyz is an HTTP GET.")
+	cmd.Flags().StringVar(&healthAddress, "health-listen", "", "Address for an HTTP/1.1 /readyz listener. Empty serves no HTTP readiness endpoint.")
+	cmd.Flags().DurationVar(&listenDelay, "listen-delay", 0, "Delay before opening the gRPC listener, for readiness tests.")
 	return cmd
 }
