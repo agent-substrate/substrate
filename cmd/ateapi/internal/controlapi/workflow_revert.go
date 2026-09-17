@@ -84,7 +84,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 		return nil, err
 	}
 
-	if err = w.ensureInProgressSnapshotDiscarded(leaseCtx, actor, actorTemplate); err != nil {
+	if err = w.ensureInProgressSnapshotDiscarded(leaseCtx, actor); err != nil {
 		return nil, err
 	}
 
@@ -194,32 +194,33 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 
 // ensureInProgressSnapshotDiscarded deletes the objects a suspend was partway
 // through writing when the actor was reverted.
-func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapipb.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
-	name := actor.GetStatus().GetInProgressSnapshotName()
+	inProgress := actor.GetStatus().GetInProgressSnapshotUri()
 	switch {
 	case w.objectStore == nil:
 		markSkipped(ctx, "no object store configured")
 		return nil
-	case name == "":
+	case inProgress == "":
 		markSkipped(ctx, "no in-progress snapshot recorded")
-		return nil
-	case actorTemplate == nil:
-		// The template's storage location is the only place the prefix can be
-		// derived from. Refusing here would leave the actor REVERTING forever
-		// TODO: prevent this from leaking objects in the external storage.
-		slog.WarnContext(ctx, "Leaking an in-progress external snapshot, the actor's template no longer resolves",
-			slog.String("actor", actor.GetMetadata().GetName()),
-			slog.String("in_progress_snapshot_name", name))
 		return nil
 	}
 
-	uri, err := inProgressSnapshotURI(actorTemplate, actor, name)
+	uri, err := resources.ParseSnapshotURI(inProgress)
 	if err != nil {
-		return err
+		return fmt.Errorf("while parsing the in-progress snapshot %q: %w", inProgress, err)
 	}
+	// A suspend records the in-progress URI under the actor's own prefix
+	// before atelet writes the first object, so a URI owned by anything else
+	// is a corrupted record: deleting it would collect another actor's data.
+	owner := actorSnapshotOwner(actor)
+	if !uri.OwnedBy(owner) {
+		return fmt.Errorf("the in-progress snapshot %q is not owned by actor %s", inProgress, owner)
+	}
+	// Only the abandoned snapshot goes, not the actor's whole prefix: the
+	// external snapshot the revert returns the actor to lives under it too.
 	return objectstore.DeletePrefix(ctx, w.objectStore, uri.Prefix())
 }
 
@@ -239,7 +240,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
-		toUpdate.Status.InProgressSnapshotName = ""
+		toUpdate.Status.InProgressSnapshotUri = ""
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		toUpdate.Status.LocalSnapshotInfo = nil
 		return nil

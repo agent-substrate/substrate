@@ -121,8 +121,8 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			if got := gotStatus.GetLocalSnapshotInfo(); got != nil {
 				t.Errorf("local snapshot info = %v, want nil", got)
 			}
-			if got := gotStatus.GetInProgressSnapshotName(); got != "" {
-				t.Errorf("in-progress snapshot name = %q, want empty", got)
+			if got := gotStatus.GetInProgressSnapshotUri(); got != "" {
+				t.Errorf("in-progress snapshot uri = %q, want empty", got)
 			}
 			if got := gotStatus.GetInProgressLocalSnapshotName(); got != "" {
 				t.Errorf("in-progress local snapshot name = %q, want empty", got)
@@ -231,10 +231,11 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 		tagOwnedSnapshot bool
 		// inFlight names a snapshot the interrupted suspend was writing.
 		inFlight string
-		// missingTemplate drops the template, leaving no way to derive the
-		// prefix: the objects leak rather than wedging the actor.
-		missingTemplate       bool
+		// foreignInFlight records the in-progress snapshot under another
+		// owner's prefix, which no suspend can produce.
+		foreignInFlight       bool
 		wantInFlightDiscarded bool
+		wantErr               bool
 	}{
 		{
 			name:                  "discards the snapshot an interrupted suspend was writing",
@@ -252,10 +253,10 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			wantInFlightDiscarded: true,
 		},
 		{
-			name:                  "leaks rather than wedges when the template is gone",
-			inFlight:              inFlightSnapshotName,
-			missingTemplate:       true,
-			wantInFlightDiscarded: false,
+			name:            "refuses an in-progress snapshot the actor does not own",
+			inFlight:        inFlightSnapshotName,
+			foreignInFlight: true,
+			wantErr:         true,
 		},
 	}
 
@@ -280,19 +281,30 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			}
 			objects.PutSnapshot(t, current, "manifest.json")
 			inFlight := mustActorSnapshotURI(t, template, actor, inFlightSnapshotName)
+			if tt.foreignInFlight {
+				inFlight = mustTagSnapshotURI(t, template, "team-a", "someone-elses-snapshot")
+			}
 			if tt.inFlight != "" {
 				objects.PutSnapshot(t, inFlight, "manifest.json")
 			}
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: current.String()}
-				s.InProgressSnapshotName = tt.inFlight
+				if tt.inFlight != "" {
+					s.InProgressSnapshotUri = inFlight.String()
+				}
 			})
 
-			passedTemplate := template
-			if tt.missingTemplate {
-				passedTemplate = nil
+			err := w.ensureInProgressSnapshotDiscarded(ctx, actor)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("ensureInProgressSnapshotDiscarded = nil, want an error for a snapshot the actor does not own")
+				}
+				if len(objects.Snapshot(t, inFlight)) == 0 {
+					t.Errorf("snapshot %v was discarded, but it belongs to another owner", inFlight)
+				}
+				return
 			}
-			if err := w.ensureInProgressSnapshotDiscarded(ctx, actor, passedTemplate); err != nil {
+			if err != nil {
 				t.Fatalf("ensureInProgressSnapshotDiscarded: %v", err)
 			}
 
@@ -312,7 +324,7 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 }
 
 // TestEnsureRevertedFinalized_NoObjectStore covers a workflow built without an
-// object store: the collect step skips instead of failing, so the revert still
+// object store: the discard step skips instead of failing, so the revert still
 // finalizes.
 func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	ctx := context.Background()
@@ -323,12 +335,12 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
 		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_REVERTING,
-			InProgressSnapshotName: "abandoned",
+			State:                 ateapipb.ActorState_ACTOR_STATE_REVERTING,
+			InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "abandoned"),
 		},
 	})
 
-	if err := w.ensureInProgressSnapshotDiscarded(ctx, actor, nil); err != nil {
+	if err := w.ensureInProgressSnapshotDiscarded(ctx, actor); err != nil {
 		t.Fatalf("ensureInProgressSnapshotDiscarded: %v", err)
 	}
 
@@ -340,7 +352,7 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	if got := finalized.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
 	}
-	if got := finalized.GetStatus().GetInProgressSnapshotName(); got != "" {
-		t.Errorf("in-progress snapshot name = %q, want empty", got)
+	if got := finalized.GetStatus().GetInProgressSnapshotUri(); got != "" {
+		t.Errorf("in-progress snapshot uri = %q, want empty", got)
 	}
 }
