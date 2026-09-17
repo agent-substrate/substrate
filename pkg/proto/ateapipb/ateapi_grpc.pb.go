@@ -121,9 +121,9 @@ type ControlClient interface {
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (*ListTagsResponse, error)
 	// Publish or unpublish a Tag without changing its address.
 	UpdateTag(ctx context.Context, in *UpdateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Delete a Tag and the external snapshot it owns. Rejects
+	// (FailedPrecondition) while an Actor created from the tag is still
+	// borrowing that snapshot, which it does until its own first suspend.
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
@@ -561,9 +561,9 @@ type ControlServer interface {
 	ListTags(context.Context, *ListTagsRequest) (*ListTagsResponse, error)
 	// Publish or unpublish a Tag without changing its address.
 	UpdateTag(context.Context, *UpdateTagRequest) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Delete a Tag and the external snapshot it owns. Rejects
+	// (FailedPrecondition) while an Actor created from the tag is still
+	// borrowing that snapshot, which it does until its own first suspend.
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)

@@ -357,9 +357,9 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def DeleteTag(self, request, context):
-        """Delete a Tag and the external snapshot it owns. Actors created from the
-        tag that have not yet been suspended still point at that external snapshot
-        and become unrecoverable, so do not delete a tag while such Actors exist.
+        """Delete a Tag and the external snapshot it owns. Rejects
+        (FailedPrecondition) while an Actor created from the tag is still
+        borrowing that snapshot, which it does until its own first suspend.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
