@@ -1435,11 +1435,11 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, pre store.D
 	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		// Locked rather than plainly read so the incarnation pre was evaluated
 		// against is the one the DELETE removes.
-		deleted, err := getWorkerRowForUpdate(ctx, tx, name)
+		current, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
 			return nil, err
 		}
-		if err := pre.Check(deleted.GetMetadata()); err != nil {
+		if err := pre.Check(current.GetMetadata()); err != nil {
 			return nil, err
 		}
 		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)
@@ -1449,7 +1449,7 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, pre store.D
 		if commandTag.RowsAffected() != 1 {
 			return nil, fmt.Errorf("deleting worker %s affected %d rows, want 1", name, commandTag.RowsAffected())
 		}
-		return deleted, nil
+		return current, nil
 	})
 }
 
