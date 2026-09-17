@@ -91,9 +91,9 @@ service Control {
   // Publish or unpublish a Tag without changing its address.
   rpc UpdateTag(UpdateTagRequest) returns (Tag) {}
 
-  // Delete a Tag and the external snapshot it owns. Actors created from the
-  // tag that have not yet been suspended still point at that external snapshot
-  // and become unrecoverable, so do not delete a tag while such Actors exist.
+  // Delete a Tag and the external snapshot it owns. Rejects
+  // (FailedPrecondition) while an Actor created from the tag is still
+  // borrowing that snapshot, which it does until its own first suspend.
   rpc DeleteTag(DeleteTagRequest) returns (Tag) {}
 
   // List Workers.
