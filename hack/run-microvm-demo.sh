@@ -85,8 +85,7 @@ else
 fi
 
 # --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
-# install-microvm-deps.sh handles the assemble/stage/apply flow and injects
-# the arm64 virtiofsd sha at deploy (see that script for details). Ordering
+# install-microvm-deps.sh handles the assemble/stage/apply flow. Ordering
 # matters: the control plane must be up so the SandboxConfig CRD exists.
 log "Installing micro-VM dependencies..."
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install

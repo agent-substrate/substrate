@@ -137,26 +137,23 @@ worker, and `vzNAT` gives the VM outbound networking under the vz VM type.
 
 ### 3. Assemble the arm64 assets inside the Lima VM
 
-`hack/microvm-assets/assemble.sh` must run on a Linux host of the target
-architecture (on arm64 it builds `virtiofsd` from source with cargo against
-Linux-only libraries), so run it in the Lima guest, not on macOS:
+Assemble the arm64 assets in the guest because macOS does not ship `zstd` by default:
 
 ```sh
 limactl shell docker-nested
 
-# Inside the VM — install build deps once:
-sudo apt-get update && sudo apt-get install -y git pkg-config libcap-ng-dev libseccomp-dev zstd
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # rust via rustup
-source "$HOME/.cargo/env"
+# Inside the VM — 24.04's git 2.43 can't read a reftable checkout:
+sudo add-apt-repository -y ppa:git-core/ppa
+sudo apt-get install -y git
 
 cd <your substrate checkout>    # visible via the writable home mount
 ./hack/microvm-assets/assemble.sh
 exit
 ```
 
-The assets land in `bin/microvm-assets/arm64/` in your checkout, which is
-shared with the host through the home mount — the demo script will find them
-there and skip re-assembling.
+The script downloads about 590 MB and takes a minute or two, leaving ~285 MB in
+`bin/microvm-assets/arm64/`. That directory is shared with the host through the
+home mount — the demo script will find the assets there and skip re-assembling.
 
 ### 4. Point the Docker CLI at Lima and bring everything up (on macOS)
 
@@ -190,5 +187,4 @@ requires a full guest boot and checkpoint.
 | Symptom | Root cause | Fix |
 |---|---|---|
 | `/dev/kvm: permission denied` during the kind KVM probe | Rootless Docker: the probe container's root is remapped to your user, which can't open the device (`660 root:kvm`) | Use rootful Docker, or `sudo chmod 666 /dev/kvm` before `./hack/create-kind-cluster.sh` |
-| `cargo not found` from `assemble.sh` | On arm64, `virtiofsd` is built from source | Install the build deps listed in Option B, Step 3 |
 | Lima: `[hostagent] Starting VZ ... FATA exiting` on M1/M2 | Apple's Virtualization framework supports nested virtualization only on M3 and later | Use an M3+ Mac, or a Linux/KVM host (Option A) |
