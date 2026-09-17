@@ -60,6 +60,21 @@ func TestParseEndpoint(t *testing.T) {
 			wantErr:  false,
 		},
 		{
+			name:     "dns with authority rejected",
+			endpoint: "dns://8.8.8.8/csi-service:9000",
+			wantErr:  true,
+		},
+		{
+			name:     "dns without triple slash rejected",
+			endpoint: "dns://csi-service:9000",
+			wantErr:  true,
+		},
+		{
+			name:     "dns without port rejected",
+			endpoint: "dns:///csi-service",
+			wantErr:  true,
+		},
+		{
 			name:     "invalid scheme",
 			endpoint: "http://localhost:50051",
 			wantErr:  true,
@@ -72,20 +87,51 @@ func TestParseEndpoint(t *testing.T) {
 		{
 			name:     "tcp missing port",
 			endpoint: "tcp://127.0.0.1",
-			wantSrc:  "tcp",
-			wantTgt:  "127.0.0.1",
-			wantErr:  false,
+			wantErr:  true,
 		},
 		{
 			name:     "tcp missing host",
 			endpoint: "tcp://:50051",
-			wantSrc:  "tcp",
-			wantTgt:  ":50051",
-			wantErr:  false,
+			wantErr:  true,
+		},
+		{
+			name:     "tcp invalid port out of range",
+			endpoint: "tcp://127.0.0.1:99999",
+			wantErr:  true,
+		},
+		{
+			name:     "tcp non-numeric port",
+			endpoint: "tcp://127.0.0.1:abc",
+			wantErr:  true,
+		},
+		{
+			name:     "dns invalid port out of range",
+			endpoint: "dns:///csi-service:99999",
+			wantErr:  true,
 		},
 		{
 			name:     "unix missing path",
 			endpoint: "unix://",
+			wantErr:  true,
+		},
+		{
+			name:     "unix bare root path rejected",
+			endpoint: "unix:///",
+			wantErr:  true,
+		},
+		{
+			name:     "unix with authority rejected",
+			endpoint: "unix://foo/bar",
+			wantErr:  true,
+		},
+		{
+			name:     "unix with quad-slash rejected",
+			endpoint: "unix:////foo",
+			wantErr:  true,
+		},
+		{
+			name:     "dns empty target rejected",
+			endpoint: "dns:///",
 			wantErr:  true,
 		},
 	}
@@ -103,6 +149,35 @@ func TestParseEndpoint(t *testing.T) {
 				if tgt != tt.wantTgt {
 					t.Errorf("parseEndpoint() tgt = %q, want %q", tgt, tt.wantTgt)
 				}
+			}
+		})
+	}
+}
+
+func TestValidateHostPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostport string
+		wantErr  bool
+	}{
+		{name: "hostname and port", hostport: "csi-service:9000"},
+		{name: "ipv4 and port", hostport: "127.0.0.1:50051"},
+		{name: "ipv6 and port", hostport: "[::1]:50051"},
+		{name: "min port", hostport: "host:1"},
+		{name: "max port", hostport: "host:65535"},
+		{name: "empty", hostport: "", wantErr: true},
+		{name: "missing port", hostport: "host", wantErr: true},
+		{name: "empty port", hostport: "host:", wantErr: true},
+		{name: "missing host", hostport: ":50051", wantErr: true},
+		{name: "port zero", hostport: "host:0", wantErr: true},
+		{name: "port too large", hostport: "host:65536", wantErr: true},
+		{name: "non-numeric port", hostport: "host:abc", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateHostPort(tt.hostport); (err != nil) != tt.wantErr {
+				t.Errorf("validateHostPort(%q) error = %v, wantErr %v", tt.hostport, err, tt.wantErr)
 			}
 		})
 	}
