@@ -135,7 +135,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 		t.Errorf("in-progress local checkpoint not cleared: %v", got.GetStatus())
 	}
 	// The durable one is kept: it names the prefix whatever atelet already
-	// uploaded lives under, which the actor's delete needs to collect it.
+	// uploaded lives under, which delete or revert needs to collect it.
 	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); got.GetStatus().GetInProgressSnapshotUri() != want {
 		t.Errorf("in-progress external checkpoint not preserved: %v", got.GetStatus())
 	}

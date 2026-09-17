@@ -211,12 +211,13 @@ Each warning comes back at the step where the mistake becomes possible.
 > inside that window saves its state and stays resumable. Handling
 > `SIGTERM` by exiting cleanly is not enough on its own; the suspend has
 > to reach the control plane and finish. An actor still awake when the
-> window closes moves to `ACTOR_STATE_CRASHED`, which is terminal:
-> `resume` and `suspend` are both refused, there is no recover verb,
-> and the snapshot the actor still holds cannot be used to start it. It
-> has to be deleted and recreated, losing its state. Scaling a serving
-> pool down removes pods the same way, without suspending the actors on
-> them. (Step 4 clones the pool; it never edits it.)
+> window closes moves to `ACTOR_STATE_CRASHED`: `resume` and `suspend`
+> are both refused, and everything since its last snapshot is lost. Call
+> `RevertActor` (`kubectl ate revert`) to discard the crashed run and
+> return the actor to `ACTOR_STATE_SUSPENDED` at its last external snapshot
+> so it can be resumed. Scaling a serving pool down removes pods the same
+> way, without suspending the actors on them. (Step 4 clones the pool; it
+> never edits it.)
 
 > [!WARNING]
 > **On GKE, do not touch the node pool's label until every node is

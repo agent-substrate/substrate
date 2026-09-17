@@ -74,7 +74,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		reason = ateattr.ReasonUnknown
 	}
 
-	// Release the worker before moving the actor to the terminal CRASHED state.
+	// Release the worker before moving the actor to CRASHED state.
 	// If the release fails we must not clear the actor's worker assignment or
 	// mark it CRASHED: doing so would strand the still-assigned worker with no
 	// actor referencing it, so nothing would ever retry the release and the

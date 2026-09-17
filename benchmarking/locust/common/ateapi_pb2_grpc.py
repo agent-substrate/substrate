@@ -270,7 +270,8 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def DeleteActor(self, request, context):
-        """Delete an actor. Only suspended actors can be deleted.
+        """Delete an actor. Only suspended or crashed actors can be deleted unless
+        any_state is set.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

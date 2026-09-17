@@ -532,7 +532,7 @@ func (f failingReleaseStore) ReleaseActorFromWorker(context.Context, string, str
 }
 
 // A transient failure releasing the worker must not move the actor to the
-// terminal CRASHED state: doing so would strand the still-assigned worker with
+// CRASHED state: doing so would strand the still-assigned worker with
 // no actor left to drive a retry, permanently consuming the worker slot.
 // crashActor must return the error with the actor and worker left intact so the
 // caller retries and the worker is reclaimed.
