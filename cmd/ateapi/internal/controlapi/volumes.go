@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -109,7 +110,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, status.Errorf(codes.FailedPrecondition, "volume %q has mismatched type %q (expected %q from StorageClass %q)", volName, vol.GetVolumeType(), sc.Provisioner, scName)
 		}
 
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, registry.GetPlugin, vol.GetVolumeType())
 		if err != nil {
 			return resultVolumes, status.Errorf(codes.FailedPrecondition, "failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
 		}
@@ -144,11 +145,9 @@ func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 			// to the original requested volID.
 			volID = actorVolumeID(actorUID, vol.GetVolumeName())
 		}
-		// TODO: Standardize volume plugin lookup and error handling across control plane
-		// and worker plane (e.g. via a shared helper).
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, registry.GetPlugin, vol.GetVolumeType())
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
+			errs = append(errs, err)
 			continue
 		}
 		if err := plugin.DeleteVolume(ctx, volID); err != nil {
@@ -235,9 +234,9 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 			continue
 		}
 		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, registry.GetPlugin, vol.GetVolumeType())
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
+			errs = append(errs, err)
 			continue
 		}
 		if err := plugin.DetachVolume(ctx, vol.GetStorageVolumeId(), node); err != nil {
