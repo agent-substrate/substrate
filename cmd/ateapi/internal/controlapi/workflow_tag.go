@@ -85,6 +85,99 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 	return w.ensureTagFinalized(leaseCtx, reserved, snapshot, dst)
 }
 
+// DeleteTag releases the external snapshot the tag owns and then removes the
+// row, in that order: the row is the only handle on that snapshot, so dropping
+// it first would leak.
+//
+// The workflow is built in 3 phases:
+//  1. Load the tag (which names the snapshot to collect).
+//  2. Release that snapshot, tolerating a previous attempt partly collected.
+//  3. Finalize: drop the row.
+//
+// Idempotent: a failure at any phase leaves the row in place, so the same
+// delete run again rediscovers the work from it and resumes over whatever is
+// left.
+//
+// The tag stays resolvable while its snapshot is being collected, so a
+// CreateActor racing this delete can seed an Actor from content that is going
+// away. That race is accepted for now.
+//
+// Note that this destroys the external snapshot: an Actor created from the tag
+// and never suspended is still borrowing it and becomes unrecoverable. Do not
+// delete a tag while clones of it exist.
+func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
+	// Serializes against a create of the same tag, whose copy would otherwise
+	// keep writing into the prefix this is collecting.
+	ctx, lease, err := acquireTagLease(ctx, w.store, tagRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+
+	tag, err := w.loadTagForDelete(ctx, tagRef)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
+		return nil, err
+	}
+	return w.finalizeTagDeleted(ctx, tagRef)
+}
+
+// loadTagForDelete fetches the row the delete works from. The row records where
+// the snapshot lives, so the work is rediscovered from it rather than rebuilt
+// from the source actor, which may be long gone.
+func (w *ActorWorkflow) loadTagForDelete(ctx context.Context, tagRef resources.TagRef) (_ *ateapipb.Tag, err error) {
+	ctx, done := stepSpan(ctx, "LoadTagForDelete")
+	defer func() { err = done(err) }()
+
+	tag, err := w.store.GetTag(ctx, tagRef)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
+		}
+		return nil, fmt.Errorf("while getting tag %s: %w", tagRef, err)
+	}
+	return tag, nil
+}
+
+// ensureTagSnapshotReleased deletes the objects the tag's external snapshot is
+// made of. It tolerates a partly-collected snapshot, so a retry finishes
+// cleanly. It collects the in-progress snapshot of a pending tag too.
+func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *ateapipb.Tag) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseTagSnapshot")
+	defer func() { err = done(err) }()
+
+	if w.objectStore == nil {
+		markSkipped(ctx, "no object store configured")
+		return nil
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	uri, err := resources.NewTagSnapshotURI(tag.GetStatus().GetStorageLocation(), tagRef.Atespace, tag.GetMetadata().GetUid())
+	if err != nil {
+		return fmt.Errorf("while resolving the external snapshot of tag %s: %w", tagRef, err)
+	}
+	if err := objectstore.DeletePrefix(ctx, w.objectStore, uri.Prefix()); err != nil {
+		return fmt.Errorf("while releasing the external snapshot %q of tag %s: %w", uri, tagRef, err)
+	}
+	return nil
+}
+
+// finalizeTagDeleted drops the row, once nothing it names is left behind.
+func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources.TagRef) (_ *ateapipb.Tag, err error) {
+	ctx, done := stepSpan(ctx, "FinalizeTagDeleted")
+	defer func() { err = done(err) }()
+
+	tag, err := w.store.DeleteTag(ctx, tagRef)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
+		}
+		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
+	}
+	return tag, nil
+}
+
 // loadActorForTag fetches the actor to tag and its template, and checks that
 // the actor holds an external snapshot a tag can be made from.
 func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
