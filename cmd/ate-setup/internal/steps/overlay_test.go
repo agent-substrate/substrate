@@ -53,9 +53,9 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"--credential-provider-name=ate-secret://kubernetes.io",
-		"--credential-provider-address=credprovider.ate-system.svc:50051",
-		"--credential-provider-server-name=credprovider.ate-system.svc",
+		"--credential-provider-name=ate-secret://k8s.io",
+		"--credential-provider-address=k8s-credential-provider.ate-system.svc:50051",
+		"--credential-provider-server-name=k8s-credential-provider.ate-system.svc",
 	} {
 		if !strings.Contains(string(patched), want) {
 			t.Errorf("patched manifest is missing spliced flag %q", want)
