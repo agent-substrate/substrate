@@ -2984,6 +2984,34 @@ func Validate_ExternalSnapshot(
 		errs = append(errs, fn(fldPath.Child("content_scope"), &obj.ContentScope, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ExternalSnapshot.ActorTemplateUid
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalSnapshot) *string {
+				return &oldObj.ActorTemplateUid
+			})
+		errs = append(errs, fn(fldPath.Child("actor_template_uid"), &obj.ActorTemplateUid, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -4615,6 +4643,34 @@ func Validate_LocalSnapshotInfo(
 				return &oldObj.ContentScope
 			})
 		errs = append(errs, fn(fldPath.Child("content_scope"), &obj.ContentScope, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.LocalSnapshotInfo.ActorTemplateUid
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.LocalSnapshotInfo) *string {
+				return &oldObj.ActorTemplateUid
+			})
+		errs = append(errs, fn(fldPath.Child("actor_template_uid"), &obj.ActorTemplateUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs
