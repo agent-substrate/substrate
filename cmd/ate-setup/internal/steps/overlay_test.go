@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -22,6 +23,64 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 )
+
+// Splicing credential injection into the real sdsmint manifest replaces the
+// marker and adds the provider flags to the egress sidecar. CI deploys the
+// sdsmint variant but never with injection, so this is the only automated check
+// on the spliced flags.
+func TestPatchAtenetEgressInject(t *testing.T) {
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("resolving repo root: %v", err)
+	}
+	env := &Env{Cfg: &config.Config{
+		Root:                                  root,
+		ExperimentalUseSDSMint:                true,
+		ExperimentalEgressCredentialInjection: true,
+	}}
+
+	raw, err := os.ReadFile(env.atenetEgressManifestPath())
+	if err != nil {
+		t.Fatalf("reading egress manifest: %v", err)
+	}
+	patched, err := env.patchAtenetEgressInject(raw)
+	if err != nil {
+		t.Fatalf("patchAtenetEgressInject failed: %v", err)
+	}
+	for _, line := range strings.Split(string(patched), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_INJECT_FLAGS") {
+			t.Errorf("patched manifest still contains an unreplaced marker: %q", line)
+		}
+	}
+	for _, want := range []string{
+		"--credential-provider-name=ate-secret://kubernetes.io",
+		"--credential-provider-address=credprovider.ate-system.svc:50051",
+		"--credential-provider-server-name=credprovider.ate-system.svc",
+	} {
+		if !strings.Contains(string(patched), want) {
+			t.Errorf("patched manifest is missing spliced flag %q", want)
+		}
+	}
+
+	// The result must still be valid YAML: find the atenet-egress ConfigMap's
+	// envoy.yaml and re-parse it.
+	for _, doc := range strings.Split(string(patched), "\n---\n") {
+		var obj struct {
+			Kind string            `json:"kind"`
+			Data map[string]string `json:"data"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("patched manifest document is not valid YAML: %v", err)
+		}
+		if obj.Kind == "ConfigMap" {
+			var parsed map[string]any
+			if err := yaml.Unmarshal([]byte(obj.Data["envoy.yaml"]), &parsed); err != nil {
+				t.Errorf("patched envoy.yaml is not valid YAML: %v", err)
+			}
+			break
+		}
+	}
+}
 
 // The emitted cluster must reference its TLS material through SDS: an inline
 // tls_certificates entry never picks up kubelet's certificate rotation.

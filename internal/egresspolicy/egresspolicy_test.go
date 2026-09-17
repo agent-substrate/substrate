@@ -235,7 +235,7 @@ func TestEvaluate(t *testing.T) {
 		InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
 			Header:        "authorization",
 			Prefix:        "Bearer ",
-			CredentialUri: "substrate-secret://k8s/default/token",
+			CredentialUri: "ate-secret://k8s/default/token",
 		}},
 	}
 	withEffects := &ateapipb.EgressRule{Hostnames: &ateapipb.HostnameRule{

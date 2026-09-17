@@ -71,6 +71,29 @@ type authConfig struct {
 	AteapiServerName     string
 }
 
+// credentialProviderConfig holds the egress gateway's connection to the
+// credential provider the MITM-leg injection resolves secrets through. A
+// non-empty Address enables injection; the rest configures the mTLS the gateway
+// dials the provider with. See cmd/atenet/internal/router/egress.
+type credentialProviderConfig struct {
+	// Name is the provider this gateway serves, as a ate-secret://
+	// prefix; a policy credential URI naming any other provider is refused.
+	// Empty disables the check (dev only).
+	Name string
+	// Address is the provider's gRPC dial target. Empty disables injection.
+	Address string
+	// CAFile is the CA the provider's serving certificate must chain to.
+	// Required unless Insecure is set.
+	CAFile string
+	// ClientCert is the credential bundle presented to the provider as the
+	// client certificate. Required unless Insecure is set.
+	ClientCert string
+	// ServerName is the SAN/SNI expected on the provider's serving certificate.
+	ServerName string
+	// Insecure dials the provider without TLS; explicit development-only opt-in.
+	Insecure bool
+}
+
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
 	// Mode restricts the instance to one traffic direction. Empty means ModeAll.
@@ -114,6 +137,13 @@ type routerConfig struct {
 	// EgressPolicy, and so how long a policy change takes to bite. 0 disables
 	// the cache.
 	EgressPolicyCacheTTL time.Duration
+
+	// CredentialProvider configures egress credential injection on the MITM leg.
+	// Only the egress gateway sets it, and only when injection is enabled: an
+	// empty CredentialProvider.Address leaves the injector disabled, so a rule
+	// that requires an injection is skipped and the request passes through
+	// without the credential. See egress.Handler.
+	CredentialProvider credentialProviderConfig
 
 	LogLevel    string
 	MetricsAddr string

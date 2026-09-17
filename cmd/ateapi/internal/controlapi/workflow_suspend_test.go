@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-func TestEnsureMarkedSuspending_SnapshotName(t *testing.T) {
+func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -44,21 +44,11 @@ func TestEnsureMarkedSuspending_SnapshotName(t *testing.T) {
 		t.Fatalf("ensureMarkedSuspending: %v", err)
 	}
 
-	// The field holds the snapshot's name, not its URI: FinalizeSuspended
-	// names the ActorSnapshot after it, so it has to be usable as a resource
-	// name verbatim.
-	snapshotName := marked.GetStatus().GetInProgressSnapshotName()
-	if !resources.IsValidResourceName(snapshotName) {
-		t.Fatalf("in-progress snapshot = %q, want a valid resource name", snapshotName)
+	uri := mustParseSnapshotURI(t, marked.GetStatus().GetInProgressSnapshotUri())
+	if !resources.IsValidResourceName(uri.Name()) {
+		t.Errorf("in-progress snapshot name = %q, want a valid resource name", uri.Name())
 	}
-	// The URI the later steps rebuild from that name nests under the actor's
-	// own prefix, so the objects name their owner and nothing else can collect
-	// them.
-	uri, err := inProgressSnapshotURI(tmpl, marked, snapshotName)
-	if err != nil {
-		t.Fatalf("inProgressSnapshotURI(%q): %v", snapshotName, err)
-	}
-	want := "gs://bucket/root/atespaces/team-a/actors/" + marked.GetMetadata().GetUid() + "/snapshots/" + snapshotName
+	want := "gs://bucket/root/atespaces/team-a/actors/" + marked.GetMetadata().GetUid() + "/snapshots/" + uri.Name()
 	if uri.String() != want {
 		t.Errorf("snapshot URI = %q, want %q", uri, want)
 	}
@@ -68,13 +58,15 @@ func TestEnsureMarkedSuspending_SnapshotName(t *testing.T) {
 // re-entered workflow does not mint a second snapshot location: the location
 // persisted by the first attempt stays authoritative.
 func TestEnsureMarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *testing.T) {
+	const firstAttempt = "gs://bucket/root/atespaces/team-a/actors/actor-uid/snapshots/first-attempt"
+
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			InProgressSnapshotName: "first-attempt",
+			State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotUri: firstAttempt,
 		},
 	})
 	w := &ActorWorkflow{store: persistence}
@@ -82,8 +74,8 @@ func TestEnsureMarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *testing
 	if err != nil {
 		t.Fatalf("ensureMarkedSuspending: %v", err)
 	}
-	if got := marked.GetStatus().GetInProgressSnapshotName(); got != "first-attempt" {
-		t.Errorf("InProgressSnapshotName = %q, want the first attempt's location", got)
+	if got := marked.GetStatus().GetInProgressSnapshotUri(); got != firstAttempt {
+		t.Errorf("InProgressSnapshotUri = %q, want the first attempt's location", got)
 	}
 }
 
@@ -220,6 +212,8 @@ func newDanglingDialer() *AteletDialer {
 }
 
 func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+	neverWritten := someActorSnapshotURI(t, testStorageLocation, "team-a", "never-written")
+
 	tests := []struct {
 		name         string
 		prevSnapshot string
@@ -247,8 +241,8 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 						WorkerPool:      "pool",
 						WorkerPod:       "pod-gone",
 					},
-					InProgressSnapshotName: "never-written",
-					ExternalSnapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: tt.prevSnapshot},
+					InProgressSnapshotUri: neverWritten,
+					ExternalSnapshot:      &ateapipb.ExternalSnapshot{SnapshotUri: tt.prevSnapshot},
 				},
 			}
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
@@ -265,8 +259,8 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 				t.Errorf("state = %v, want CRASHED", stored.GetStatus().GetState())
 			}
-			if got := stored.GetStatus().GetInProgressSnapshotName(); got != "never-written" {
-				t.Errorf("InProgressSnapshotName = %q, want preserved for debugging", got)
+			if got := stored.GetStatus().GetInProgressSnapshotUri(); got != neverWritten {
+				t.Errorf("InProgressSnapshotUri = %q, want preserved for debugging", got)
 			}
 			if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != tt.prevSnapshot {
 				t.Errorf("SnapshotUri = %q, want %q", got, tt.prevSnapshot)
@@ -285,22 +279,22 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 
-	const snapshotName = "2026-01-01t00-00-00z-abc"
+	snapshotURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "2026-01-01t00-00-00z-abc")
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			InProgressSnapshotName: snapshotName,
+			State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotUri: snapshotURI,
 			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
 				SnapshotName:              "actor-1-pause-snapshot",
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 			},
 		},
 	}
-	created := storetest.MustCreateActor(t, ctx, persistence, actor)
+	storetest.MustCreateActor(t, ctx, persistence, actor)
 
 	w := &ActorWorkflow{store: persistence}
-	tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"}}
+	tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: testStorageLocation}}
 	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
@@ -309,15 +303,11 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", stored.GetStatus().GetState())
 	}
-	wantURI, err := inProgressSnapshotURI(tmpl, created, snapshotName)
-	if err != nil {
-		t.Fatalf("inProgressSnapshotURI: %v", err)
+	if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
+		t.Errorf("SnapshotUri = %q, want %q", got, snapshotURI)
 	}
-	if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != wantURI.String() {
-		t.Errorf("SnapshotUri = %q, want %q", got, wantURI.String())
-	}
-	if got := stored.GetStatus().GetInProgressSnapshotName(); got != "" {
-		t.Errorf("InProgressSnapshotName = %q, want cleared", got)
+	if got := stored.GetStatus().GetInProgressSnapshotUri(); got != "" {
+		t.Errorf("InProgressSnapshotUri = %q, want cleared", got)
 	}
 	if stored.GetStatus().GetLocalSnapshotInfo() != nil {
 		t.Errorf("LocalSnapshotInfo = %v, want cleared", stored.GetStatus().GetLocalSnapshotInfo())
@@ -375,7 +365,7 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 			objects.PutSnapshot(t, fresh, "manifest.json")
 
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-				s.InProgressSnapshotName = snapshotName
+				s.InProgressSnapshotUri = fresh.String()
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
 			})
 
@@ -425,7 +415,7 @@ func TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure(t *testing.T) {
 	objects.PutSnapshot(t, fresh, "manifest.json")
 
 	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.InProgressSnapshotName = snapshotName
+		s.InProgressSnapshotUri = fresh.String()
 		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
 	})
 
@@ -497,7 +487,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 						WorkerPod:       "pod-1",
 						WorkerPodUid:    testWorkerUID("pod-1"),
 					},
-					InProgressSnapshotName: "snapshot-1",
+					InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"),
 				},
 			}
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
@@ -685,9 +675,9 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 		created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 			Status: &ateapipb.ActorStatus{
-				State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-				InProgressSnapshotName: "snap-dest",
-				LocalSnapshotInfo:      &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}},
+				State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+				InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-dest"),
+				LocalSnapshotInfo:     &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}},
 			},
 		})
 

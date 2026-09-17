@@ -1214,6 +1214,15 @@ spec:
         # drain sequence dials a closed port, reads the connection refusal as
         # "Envoy already exited", and reports a drain it never performed.
         - --envoy-admin-address=127.0.0.1:15000
+        # Egress credential-injection flags. Inert until hack/install-ate.sh
+        # --experimental-egress-credential-injection replaces this marker with
+        # the --credential-provider-* flags that point the egress handler at the
+        # credential provider. The MITM leg already calls this handler over
+        # ext_proc, so a provider address is all that is needed to turn injection
+        # on; with the flag off no provider is set and a policy rule that requires
+        # an injection is skipped, passing the request through without the
+        # credential (see egress.applyEffects).
+        #ATE_EGRESS_INJECT_FLAGS -- Don't modify this line.
         env:
         - name: POD_NAME
           valueFrom:
@@ -1239,10 +1248,19 @@ spec:
         ports:
         - name: extproc
           containerPort: 50051
+        - name: metrics
+          containerPort: 9090
+        # Probed on the metrics port, not the ext_proc port: the ext_proc server
+        # binds loopback (--extproc-address 127.0.0.1) so it is unreachable from
+        # other pods, which a pod-IP tcpSocket probe on 50051 could not reach. The
+        # metrics server binds all interfaces and /readyz reflects the process.
         readinessProbe:
-          tcpSocket:
-            port: extproc
-          periodSeconds: 10
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
         volumeMounts:
         # Trust bundle used to verify ateapi's servicedns serving cert.
         - name: servicedns

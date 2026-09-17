@@ -33,231 +33,161 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CredentialBroker_MintActorCertificate_FullMethodName = "/atelet.CredentialBroker/MintActorCertificate"
+	AteomSupport_MintActorCertificate_FullMethodName = "/atelet.AteomSupport/MintActorCertificate"
+	AteomSupport_SetWorkerCapacity_FullMethodName    = "/atelet.AteomSupport/SetWorkerCapacity"
 )
 
-// CredentialBrokerClient is the client API for CredentialBroker service.
+// AteomSupportClient is the client API for AteomSupport service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// CredentialBroker provides on-demand services to ateom.
+// AteomSupport provides callouts for ateom.
 //
-// TODO(identity): Rename to something more generic like AteomSupportService.
-type CredentialBrokerClient interface {
+// Called by individual ateom pods over a local connection, authenticated with
+// ateom's k8s pod identity mTLS certificate.
+type AteomSupportClient interface {
 	// Request an atunnel certificate for the given actor.
 	//
 	// TODO(identity): Rename to MintAtunnelCertificate, as distinct from
 	// MintActorCertificate (which would be used for certificates projected into
 	// the actor filesystem, when/if we support those).
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
+	// Report capacity and supply for this worker back to atelet.
+	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
 }
 
-type credentialBrokerClient struct {
+type ateomSupportClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewCredentialBrokerClient(cc grpc.ClientConnInterface) CredentialBrokerClient {
-	return &credentialBrokerClient{cc}
+func NewAteomSupportClient(cc grpc.ClientConnInterface) AteomSupportClient {
+	return &ateomSupportClient{cc}
 }
 
-func (c *credentialBrokerClient) MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error) {
+func (c *ateomSupportClient) MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MintActorCertificateResponse)
-	err := c.cc.Invoke(ctx, CredentialBroker_MintActorCertificate_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, AteomSupport_MintActorCertificate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// CredentialBrokerServer is the server API for CredentialBroker service.
-// All implementations must embed UnimplementedCredentialBrokerServer
+func (c *ateomSupportClient) SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetWorkerCapacityResponse)
+	err := c.cc.Invoke(ctx, AteomSupport_SetWorkerCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AteomSupportServer is the server API for AteomSupport service.
+// All implementations must embed UnimplementedAteomSupportServer
 // for forward compatibility.
 //
-// CredentialBroker provides on-demand services to ateom.
+// AteomSupport provides callouts for ateom.
 //
-// TODO(identity): Rename to something more generic like AteomSupportService.
-type CredentialBrokerServer interface {
+// Called by individual ateom pods over a local connection, authenticated with
+// ateom's k8s pod identity mTLS certificate.
+type AteomSupportServer interface {
 	// Request an atunnel certificate for the given actor.
 	//
 	// TODO(identity): Rename to MintAtunnelCertificate, as distinct from
 	// MintActorCertificate (which would be used for certificates projected into
 	// the actor filesystem, when/if we support those).
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
-	mustEmbedUnimplementedCredentialBrokerServer()
+	// Report capacity and supply for this worker back to atelet.
+	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
+	mustEmbedUnimplementedAteomSupportServer()
 }
 
-// UnimplementedCredentialBrokerServer must be embedded to have
+// UnimplementedAteomSupportServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedCredentialBrokerServer struct{}
+type UnimplementedAteomSupportServer struct{}
 
-func (UnimplementedCredentialBrokerServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
+func (UnimplementedAteomSupportServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintActorCertificate not implemented")
 }
-func (UnimplementedCredentialBrokerServer) mustEmbedUnimplementedCredentialBrokerServer() {}
-func (UnimplementedCredentialBrokerServer) testEmbeddedByValue()                          {}
+func (UnimplementedAteomSupportServer) SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetWorkerCapacity not implemented")
+}
+func (UnimplementedAteomSupportServer) mustEmbedUnimplementedAteomSupportServer() {}
+func (UnimplementedAteomSupportServer) testEmbeddedByValue()                      {}
 
-// UnsafeCredentialBrokerServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to CredentialBrokerServer will
+// UnsafeAteomSupportServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AteomSupportServer will
 // result in compilation errors.
-type UnsafeCredentialBrokerServer interface {
-	mustEmbedUnimplementedCredentialBrokerServer()
+type UnsafeAteomSupportServer interface {
+	mustEmbedUnimplementedAteomSupportServer()
 }
 
-func RegisterCredentialBrokerServer(s grpc.ServiceRegistrar, srv CredentialBrokerServer) {
-	// If the following call panics, it indicates UnimplementedCredentialBrokerServer was
+func RegisterAteomSupportServer(s grpc.ServiceRegistrar, srv AteomSupportServer) {
+	// If the following call panics, it indicates UnimplementedAteomSupportServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&CredentialBroker_ServiceDesc, srv)
+	s.RegisterService(&AteomSupport_ServiceDesc, srv)
 }
 
-func _CredentialBroker_MintActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AteomSupport_MintActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MintActorCertificateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CredentialBrokerServer).MintActorCertificate(ctx, in)
+		return srv.(AteomSupportServer).MintActorCertificate(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CredentialBroker_MintActorCertificate_FullMethodName,
+		FullMethod: AteomSupport_MintActorCertificate_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CredentialBrokerServer).MintActorCertificate(ctx, req.(*MintActorCertificateRequest))
+		return srv.(AteomSupportServer).MintActorCertificate(ctx, req.(*MintActorCertificateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// CredentialBroker_ServiceDesc is the grpc.ServiceDesc for CredentialBroker service.
-// It's only intended for direct use with grpc.RegisterService,
-// and not to be introspected or modified (even as a copy)
-var CredentialBroker_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "atelet.CredentialBroker",
-	HandlerType: (*CredentialBrokerServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "MintActorCertificate",
-			Handler:    _CredentialBroker_MintActorCertificate_Handler,
-		},
-	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "atelet.proto",
-}
-
-const (
-	WorkerCapacity_SetWorkerCapacity_FullMethodName = "/atelet.WorkerCapacity/SetWorkerCapacity"
-)
-
-// WorkerCapacityClient is the client API for WorkerCapacity service.
-//
-// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// WorkerCapacity is how a worker tells the node-local atelet what it can
-// supply to the actors it hosts, for atelet to forward to the control plane's
-// WorkerService.SetWorkerCapacity, which this mirrors. The worker is identified
-// by its mTLS certificate, never by the request.
-type WorkerCapacityClient interface {
-	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
-}
-
-type workerCapacityClient struct {
-	cc grpc.ClientConnInterface
-}
-
-func NewWorkerCapacityClient(cc grpc.ClientConnInterface) WorkerCapacityClient {
-	return &workerCapacityClient{cc}
-}
-
-func (c *workerCapacityClient) SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetWorkerCapacityResponse)
-	err := c.cc.Invoke(ctx, WorkerCapacity_SetWorkerCapacity_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// WorkerCapacityServer is the server API for WorkerCapacity service.
-// All implementations must embed UnimplementedWorkerCapacityServer
-// for forward compatibility.
-//
-// WorkerCapacity is how a worker tells the node-local atelet what it can
-// supply to the actors it hosts, for atelet to forward to the control plane's
-// WorkerService.SetWorkerCapacity, which this mirrors. The worker is identified
-// by its mTLS certificate, never by the request.
-type WorkerCapacityServer interface {
-	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
-	mustEmbedUnimplementedWorkerCapacityServer()
-}
-
-// UnimplementedWorkerCapacityServer must be embedded to have
-// forward compatible implementations.
-//
-// NOTE: this should be embedded by value instead of pointer to avoid a nil
-// pointer dereference when methods are called.
-type UnimplementedWorkerCapacityServer struct{}
-
-func (UnimplementedWorkerCapacityServer) SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetWorkerCapacity not implemented")
-}
-func (UnimplementedWorkerCapacityServer) mustEmbedUnimplementedWorkerCapacityServer() {}
-func (UnimplementedWorkerCapacityServer) testEmbeddedByValue()                        {}
-
-// UnsafeWorkerCapacityServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to WorkerCapacityServer will
-// result in compilation errors.
-type UnsafeWorkerCapacityServer interface {
-	mustEmbedUnimplementedWorkerCapacityServer()
-}
-
-func RegisterWorkerCapacityServer(s grpc.ServiceRegistrar, srv WorkerCapacityServer) {
-	// If the following call panics, it indicates UnimplementedWorkerCapacityServer was
-	// embedded by pointer and is nil.  This will cause panics if an
-	// unimplemented method is ever invoked, so we test this at initialization
-	// time to prevent it from happening at runtime later due to I/O.
-	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
-		t.testEmbeddedByValue()
-	}
-	s.RegisterService(&WorkerCapacity_ServiceDesc, srv)
-}
-
-func _WorkerCapacity_SetWorkerCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AteomSupport_SetWorkerCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetWorkerCapacityRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WorkerCapacityServer).SetWorkerCapacity(ctx, in)
+		return srv.(AteomSupportServer).SetWorkerCapacity(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WorkerCapacity_SetWorkerCapacity_FullMethodName,
+		FullMethod: AteomSupport_SetWorkerCapacity_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerCapacityServer).SetWorkerCapacity(ctx, req.(*SetWorkerCapacityRequest))
+		return srv.(AteomSupportServer).SetWorkerCapacity(ctx, req.(*SetWorkerCapacityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// WorkerCapacity_ServiceDesc is the grpc.ServiceDesc for WorkerCapacity service.
+// AteomSupport_ServiceDesc is the grpc.ServiceDesc for AteomSupport service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var WorkerCapacity_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "atelet.WorkerCapacity",
-	HandlerType: (*WorkerCapacityServer)(nil),
+var AteomSupport_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "atelet.AteomSupport",
+	HandlerType: (*AteomSupportServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "MintActorCertificate",
+			Handler:    _AteomSupport_MintActorCertificate_Handler,
+		},
+		{
 			MethodName: "SetWorkerCapacity",
-			Handler:    _WorkerCapacity_SetWorkerCapacity_Handler,
+			Handler:    _AteomSupport_SetWorkerCapacity_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -275,6 +205,11 @@ const (
 // AteomHerderClient is the client API for AteomHerder service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// AteomHerder allows ate-apiserver to issue control calls to the atelet.
+//
+// Called by ate-api-server over cluster networking.  ate-api-server
+// authenticates with its k8s pod identity mTLS certificate.
 type AteomHerderClient interface {
 	// Run tells atelet to create a new containerized workload from scratch on an
 	// ateom.
@@ -356,6 +291,11 @@ func (c *ateomHerderClient) Terminate(ctx context.Context, in *TerminateRequest,
 // AteomHerderServer is the server API for AteomHerder service.
 // All implementations must embed UnimplementedAteomHerderServer
 // for forward compatibility.
+//
+// AteomHerder allows ate-apiserver to issue control calls to the atelet.
+//
+// Called by ate-api-server over cluster networking.  ate-api-server
+// authenticates with its k8s pod identity mTLS certificate.
 type AteomHerderServer interface {
 	// Run tells atelet to create a new containerized workload from scratch on an
 	// ateom.

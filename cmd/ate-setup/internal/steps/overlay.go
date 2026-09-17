@@ -73,22 +73,98 @@ func (e *Env) atenetEgressManifestPath() string {
 
 // renderAtenetEgressManifest produces the atenet egress manifest.
 func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
+	general := e.Cfg.AdditionalEgressExtprocService != ""
+	injection := e.Cfg.ExperimentalEgressCredentialInjection
+
 	if e.Cfg.Router == config.RouterAgentgateway {
-		if e.Cfg.AdditionalEgressExtprocService != "" {
+		if general {
 			return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-dataplane=envoy")
+		}
+		if injection {
+			return nil, fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
 		}
 		return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress")
 	}
 
-	if e.Cfg.AdditionalEgressExtprocService != "" {
-		patched, err := e.patchAtenetEgressManifest()
+	if !general && !injection {
+		return e.ResolveManifest(ctx, e.atenetEgressManifestPath())
+	}
+
+	// The general additional-ext_proc filter and egress credential injection are
+	// independent splices with their own markers, so compose them.
+	var raw []byte
+	var err error
+	if general {
+		raw, err = e.patchAtenetEgressManifest()
+	} else {
+		raw, err = os.ReadFile(e.atenetEgressManifestPath())
+	}
+	if err != nil {
+		return nil, err
+	}
+	if injection {
+		raw, err = e.patchAtenetEgressInject(raw)
 		if err != nil {
 			return nil, err
 		}
-		return e.ResolveManifestBytes(ctx, patched)
+	}
+	return e.ResolveManifestBytes(ctx, raw)
+}
+
+// patchAtenetEgressInject splices the credential-provider flags into the egress
+// sidecar over the #ATE_EGRESS_INJECT_FLAGS marker. It takes the manifest bytes
+// rather than reading the file so it can run after the general patch. Mirrors
+// hack/experimental-egress-credential-injection.sh; the two must stay in sync.
+func (e *Env) patchAtenetEgressInject(raw []byte) ([]byte, error) {
+	if !e.Cfg.ExperimentalUseSDSMint {
+		return nil, fmt.Errorf("--experimental-egress-credential-injection requires --experimental-use-sdsmint")
 	}
 
-	return e.ResolveManifest(ctx, e.atenetEgressManifestPath())
+	name := e.Cfg.CredentialProviderName
+	if name == "" {
+		name = "ate-secret://kubernetes.io"
+	}
+	address := e.Cfg.CredentialProviderAddress
+	if address == "" {
+		address = "credprovider.ate-system.svc:50051"
+	}
+	serverName := address
+	if i := strings.LastIndex(address, ":"); i >= 0 {
+		serverName = address[:i]
+	}
+
+	flagsBlock := emitEgressInjectFlags(name, address, serverName)
+
+	var out []string
+	flagsReplaced := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_INJECT_FLAGS") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			for _, l := range strings.Split(flagsBlock, "\n") {
+				if l == "" {
+					out = append(out, "")
+				} else {
+					out = append(out, indent+l)
+				}
+			}
+			flagsReplaced++
+			continue
+		}
+		out = append(out, line)
+	}
+	if flagsReplaced != 1 {
+		return nil, fmt.Errorf("expected 1 #ATE_EGRESS_INJECT_FLAGS marker in %s, found %d",
+			e.atenetEgressManifestPath(), flagsReplaced)
+	}
+	return []byte(strings.Join(out, "\n")), nil
+}
+
+func emitEgressInjectFlags(name, address, serverName string) string {
+	return fmt.Sprintf(`- --credential-provider-name=%s
+- --credential-provider-address=%s
+- --credential-provider-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+- --credential-provider-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+- --credential-provider-server-name=%s`, name, address, serverName)
 }
 
 func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
@@ -244,7 +320,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 		return err
 	}
 
-	if running && e.Cfg.AdditionalEgressExtprocService != "" {
+	if running && (e.Cfg.AdditionalEgressExtprocService != "" || e.Cfg.ExperimentalEgressCredentialInjection) {
 		if err := e.Kube.RolloutRestartDeployment(ctx, NamespaceAteSystem, "atenet-egress", time.Now()); err != nil {
 			return err
 		}

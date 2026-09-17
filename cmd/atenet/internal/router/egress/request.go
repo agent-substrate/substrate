@@ -79,18 +79,19 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs()...)
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
-	if err := applyEffects(ctx, ref, dest, decision.Effects); err != nil {
+	injected, err := h.applyEffects(ctx, ref, dest, leg, decision.Effects)
+	if err != nil {
 		return extproc.Result{}, err
 	}
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		slog.DebugContext(ctx, "egress allowed", attrs()...)
+		slog.DebugContext(ctx, "egress allowed", append(attrs(), slog.Int("injectedHeaders", len(injected)))...)
 	}
 	res := allow()
 	// ext_proc only honors the clear when the response also carries a header
 	// mutation, on the assumption that nothing else can move a route, so an
-	// empty one goes along.
+	// empty one goes along — carrying any injected credential headers.
 	res.Response.Response.ClearRouteCache = true
-	res.Response.Response.HeaderMutation = &extprocv3.HeaderMutation{}
+	res.Response.Response.HeaderMutation = &extprocv3.HeaderMutation{SetHeaders: injected}
 	res.DynamicMetadata = metadataAnswer(extproc.EgressDialKey, dial)
 	return res, nil
 }
