@@ -54,7 +54,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.ConnectTLSPort, "port-connect-tls", 8444, "TCP port for CONNECT-tunneled traffic entering through the router dataplane over TLS. --port-https also defaults to 8443, and both listeners are commonly enabled at once, so --port-connect-tls defaults to a different port (8444) rather than colliding with it")
 	cmd.Flags().IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
 	cmd.Flags().IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the External Processing (ext_proc) server the dataplane calls")
-	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Host IP or address of the External Processing (ext_proc) server")
+	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Address of the External Processing (ext_proc) server: both the address it binds and the address the co-located dataplane is told to dial. Defaults to loopback, which keeps it unreachable from other pods; readiness is probed via /readyz on the metrics port, not this one. Empty binds every interface")
 	cmd.Flags().IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")
@@ -64,6 +64,16 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")
 	cmd.Flags().StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
 	cmd.Flags().DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
+	// Egress credential injection (MITM leg). Only the egress gateway sets these,
+	// and only when injection is enabled: an empty --credential-provider-address
+	// leaves injection off, so an EgressPolicy rule requiring it is skipped and
+	// the request passes through without the credential.
+	cmd.Flags().StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as a ate-secret:// prefix (e.g. ate-secret://kubernetes.io); a policy credential URI naming any other provider is refused. Empty disables the check (dev only)")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; required unless --credential-provider-insecure is set")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.ServerName, "credential-provider-server-name", "", "SAN/SNI expected on the credential provider's serving certificate")
+	cmd.Flags().BoolVar(&cfg.CredentialProvider.Insecure, "credential-provider-insecure", false, "Dial the credential provider WITHOUT TLS. Development only: secrets cross the network in the clear. Without this, a missing --credential-provider-ca-file or --credential-provider-client-cert fails startup instead of silently downgrading")
 	// Envoy learns the collector over xDS rather than from its own environment,
 	// so the router has to carry the address for it. Defaulting to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — the same variable the router's own exporter

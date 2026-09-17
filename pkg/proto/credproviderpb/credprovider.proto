@@ -1,0 +1,47 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package credprovider;
+
+option go_package = "github.com/agent-substrate/substrate/pkg/proto/credproviderpb";
+
+// CredentialProvider is the plugin API a secret backend implements so Substrate
+// infrastructure (e.g. the egress gateway's credential injector) can fetch an
+// external credential without Substrate storing it. A provider interprets the
+// attested request context however is relevant to the store it fronts.
+service CredentialProvider {
+  // FetchSecret resolves a credential URI to its secret material, subject to
+  // whatever authorization the provider applies to the request context.
+  rpc FetchSecret(FetchSecretRequest) returns (FetchSecretResponse) {}
+}
+
+// FetchSecretRequest asks a provider to resolve one credential URI.
+message FetchSecretRequest {
+  // The uri for the substrate secret to fetch.
+  // Example: ate-secret://<provider name>/<provider tail>
+  // The provider tail is provider-interpreted.
+  string uri = 1;
+
+  // The SPIFFE ID of the actor on whose behalf the secret is fetched, as
+  // verified by the egress gateway. This field always contains a SPIFFE ID.
+  string actor_spiffe_id = 2;
+}
+
+// FetchSecretResponse carries the resolved credential.
+message FetchSecretResponse {
+  // The raw bytes contains the secret.
+  bytes opaque_bytes = 1;
+}

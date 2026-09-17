@@ -269,10 +269,10 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 			}
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: current.String()}
-				s.InProgressSnapshotName = tt.inFlight
+				s.InProgressSnapshotUri = inFlight.String()
 			})
 
-			if err := w.ensureExternalSnapshotsReleased(ctx, actor, template); err != nil {
+			if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
 				t.Fatalf("ensureExternalSnapshotsReleased: %v", err)
 			}
 			if released := len(objects.Snapshot(t, current)) == 0; released != tt.wantCurrentReleased {
@@ -317,7 +317,7 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: currentSnapshot.String()}
 	})
 
-	if err := w.ensureExternalSnapshotsReleased(ctx, actor, template); err != nil {
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
 		t.Fatalf("ensureExternalSnapshotsReleased: %v", err)
 	}
 	if remaining := objects.Snapshot(t, strandedSnapshot); len(remaining) != 0 {
@@ -326,6 +326,39 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 	// Deletion should not release snapshots from other actors
 	if len(objects.Snapshot(t, otherActorsSnapshot)) == 0 {
 		t.Errorf("another actor's external snapshot %v was released", otherActorsSnapshot)
+	}
+}
+
+// TestDeleteActor_CollectsSnapshotWithoutActorTemplate checks that snapshots
+// are collected even if the actor template is gone.
+func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	objects := objectstoretest.New()
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	})
+
+	// The template that holds the storage location is gone (was never written to storage).
+	// We should still be able to access/delete the current snapshot for this actor.
+	inFlight := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: testStorageLocation},
+	}, actor, "abandoned")
+	objects.PutSnapshot(t, inFlight, "manifest.json")
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.InProgressSnapshotUri = inFlight.String()
+	})
+
+	if _, err := w.DeleteActor(ctx, actorRef, true); err != nil {
+		t.Fatalf("DeleteActor: %v", err)
+	}
+	if left := objects.Prefix(t, inFlight.OwnerPrefix()); len(left) != 0 {
+		t.Errorf("Deleting the actor left %v under its own prefix, want the in-flight snapshot collected", left)
 	}
 }
 
@@ -400,12 +433,12 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 
 			actorWorkflow := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
 			// Suspend the actor as far as it gets: MarkSuspending mints the
-			// in-progress name, and the checkpoint writes under it
+			// in-progress URI, and the checkpoint writes under it
 			actor, err := actorWorkflow.ensureMarkedSuspending(ctx, actorRef, actor, template)
 			if err != nil {
 				t.Fatalf("ensureMarkedSuspending: %v", err)
 			}
-			fresh := mustActorSnapshotURI(t, template, actor, actor.GetStatus().GetInProgressSnapshotName())
+			fresh := mustParseSnapshotURI(t, actor.GetStatus().GetInProgressSnapshotUri())
 			objects.PutSnapshot(t, fresh, "manifest.json")
 
 			// The worker's pod goes away with the commit still outstanding, so

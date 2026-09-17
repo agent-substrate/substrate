@@ -50,7 +50,7 @@ func credentialInjectionPolicySample(pattern string) *ateapipb.EgressPolicy {
 		Hostnames: &ateapipb.HostnameRule{
 			Patterns: []string{pattern},
 			Effects: &ateapipb.EgressRuleEffects{InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
-				Header: "authorization", Prefix: "Bearer ", CredentialUri: "substrate-secret://k8s/default/token",
+				Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token",
 			}}},
 		},
 	}}}
@@ -59,7 +59,7 @@ func credentialInjectionPolicySample(pattern string) *ateapipb.EgressPolicy {
 // policyHandler builds a Handler for an actor whose policy is policy (nil
 // means none) with the cache disabled, so each callout sees the mock as is.
 func policyHandler(policy *ateapipb.EgressPolicy) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0)
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, nil, "")
 }
 
 // innerMetadata builds an inner chain's callout: pseudo-headers plus the
@@ -199,7 +199,11 @@ func TestRequestLegDecidesHostAndDialedAddress(t *testing.T) {
 		{name: "dialed address without a port", policy: allowAllPolicy(), authority: "api.example.com", dialed: "93.184.216.34", want: envoy_type.StatusCode_Forbidden},
 		{name: "unparseable host", policy: allowAllPolicy(), authority: "exa mple.com", want: envoy_type.StatusCode_Forbidden},
 		{name: "empty host", policy: allowAllPolicy(), authority: "", want: envoy_type.StatusCode_Forbidden},
-		{name: "matching rule requires injection", policy: credentialInjectionPolicySample("api.example.com"), authority: "api.example.com", want: envoy_type.StatusCode_NotImplemented},
+		// On the cleartext leg a rule that requires injection is let through
+		// without the credential, not denied: the secret is never re-originated in
+		// the clear, and blocking allowed egress is worse than an unauthenticated
+		// request. See the dedicated injection tests for the TLS leg.
+		{name: "cleartext rule requires injection passes through uninjected", policy: credentialInjectionPolicySample("api.example.com"), authority: "api.example.com", dial: extproc.EgressDialName},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -264,7 +268,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.client, nil, 0)
+			h := New(tc.client, nil, 0, nil, "")
 			_, err := h.HandleRequestHeaders(context.Background(), requestMetadata("api.example.com"))
 			wantStatus(t, err, tc.want)
 		})
@@ -290,7 +294,7 @@ func TestConnectLegRequiresAPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL)
+			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL, nil, "")
 			res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 			if tc.want == 0 {
 				wantAllowed(t, res, err)
@@ -347,7 +351,7 @@ func TestDenialBodyIsUniform(t *testing.T) {
 // A caller that gives up mid-fetch is neither a denial nor an outage.
 func TestCanceledCallerIsNotAPolicyFailure(t *testing.T) {
 	client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
-	h := New(client, nil, 0)
+	h := New(client, nil, 0, nil, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {

@@ -119,6 +119,13 @@ type Config struct {
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
 
+	// ExperimentalEgressCredentialInjection points the egress gateway's MITM-leg
+	// handler at a credential provider so a matching EgressPolicy rule injects its
+	// credential. CredentialProviderName/Address configure the provider.
+	ExperimentalEgressCredentialInjection bool
+	CredentialProviderName                string
+	CredentialProviderAddress             string
+
 	// AnthropicAPIKey is required only by the claude-code-multiplex demo.
 	AnthropicAPIKey string
 
@@ -138,14 +145,17 @@ type Config struct {
 // Options carries the raw flag values the root command collects, before
 // defaulting and validation.
 type Options struct {
-	Kind                           bool
-	Kubeconfig                     string
-	Context                        string
-	Router                         string
-	RolloutTimeout                 string
-	PodcertWorkersPerSigner        int
-	ExperimentalUseSDSMint         bool
-	AdditionalEgressExtprocService string
+	Kind                                  bool
+	Kubeconfig                            string
+	Context                               string
+	Router                                string
+	RolloutTimeout                        string
+	PodcertWorkersPerSigner               int
+	ExperimentalUseSDSMint                bool
+	AdditionalEgressExtprocService        string
+	ExperimentalEgressCredentialInjection bool
+	CredentialProviderName                string
+	CredentialProviderAddress             string
 
 	// Image source selection.
 	ImageRepo string
@@ -207,30 +217,34 @@ func Load(opts Options) (*Config, error) {
 
 	sdsmint := opts.ExperimentalUseSDSMint || env["ATE_EXPERIMENTAL_USE_SDSMINT"] == "true"
 	extproc := firstNonEmpty(opts.AdditionalEgressExtprocService, env["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"])
+	injection := opts.ExperimentalEgressCredentialInjection || env["ATE_CREDENTIAL_INJECTION_ENABLED"] == "true"
 
 	cfg := &Config{
-		Root:                           root,
-		Kind:                           opts.Kind,
-		Kubeconfig:                     firstNonEmpty(opts.Kubeconfig, env["KUBECONFIG"]),
-		Context:                        firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
-		ProjectID:                      env["PROJECT_ID"],
-		ClusterName:                    env["CLUSTER_NAME"],
-		ClusterLocation:                env["CLUSTER_LOCATION"],
-		BucketName:                     env["BUCKET_NAME"],
-		KODockerRepo:                   env["KO_DOCKER_REPO"],
-		KODefaultPlatforms:             env["KO_DEFAULTPLATFORMS"],
-		Images:                         loadImageSource(opts, env),
-		PostgresConnectionString:       env["ATE_API_POSTGRES_CONNECTION_STRING"],
-		PostgresSchema:                 env["ATE_API_POSTGRES_SCHEMA"],
-		RolloutTimeout:                 rolloutTimeout,
-		rolloutTimeoutSet:              timeoutStr != "",
-		PodcertWorkersPerSigner:        podcertWorkers,
-		ExperimentalUseSDSMint:         sdsmint,
-		AdditionalEgressExtprocService: extproc,
-		AnthropicAPIKey:                env["ANTHROPIC_API_KEY"],
-		OtlpEndpoint:                   env["ATE_OTLP_ENDPOINT"],
-		BenchmarkActorMemory:           env["BENCHMARK_ACTOR_MEMORY"],
-		shellEnv:                       env,
+		Root:                                  root,
+		Kind:                                  opts.Kind,
+		Kubeconfig:                            firstNonEmpty(opts.Kubeconfig, env["KUBECONFIG"]),
+		Context:                               firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
+		ProjectID:                             env["PROJECT_ID"],
+		ClusterName:                           env["CLUSTER_NAME"],
+		ClusterLocation:                       env["CLUSTER_LOCATION"],
+		BucketName:                            env["BUCKET_NAME"],
+		KODockerRepo:                          env["KO_DOCKER_REPO"],
+		KODefaultPlatforms:                    env["KO_DEFAULTPLATFORMS"],
+		Images:                                loadImageSource(opts, env),
+		PostgresConnectionString:              env["ATE_API_POSTGRES_CONNECTION_STRING"],
+		PostgresSchema:                        env["ATE_API_POSTGRES_SCHEMA"],
+		RolloutTimeout:                        rolloutTimeout,
+		rolloutTimeoutSet:                     timeoutStr != "",
+		PodcertWorkersPerSigner:               podcertWorkers,
+		ExperimentalUseSDSMint:                sdsmint,
+		AdditionalEgressExtprocService:        extproc,
+		ExperimentalEgressCredentialInjection: injection,
+		CredentialProviderName:                firstNonEmpty(opts.CredentialProviderName, env["ATE_CREDENTIAL_PROVIDER_NAME"]),
+		CredentialProviderAddress:             firstNonEmpty(opts.CredentialProviderAddress, env["ATE_CREDENTIAL_PROVIDER_ADDRESS"]),
+		AnthropicAPIKey:                       env["ANTHROPIC_API_KEY"],
+		OtlpEndpoint:                          env["ATE_OTLP_ENDPOINT"],
+		BenchmarkActorMemory:                  env["BENCHMARK_ACTOR_MEMORY"],
+		shellEnv:                              env,
 	}
 
 	if opts.Kind {
@@ -284,6 +298,14 @@ func validate(cfg *Config) error {
 		}
 		if cfg.Router != RouterEnvoy {
 			return fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-dataplane=envoy")
+		}
+	}
+	if cfg.ExperimentalEgressCredentialInjection {
+		if !cfg.ExperimentalUseSDSMint {
+			return fmt.Errorf("--experimental-egress-credential-injection requires --experimental-use-sdsmint")
+		}
+		if cfg.Router != RouterEnvoy {
+			return fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
 		}
 	}
 	return nil
@@ -420,6 +442,15 @@ func (c *Config) ScriptEnv() []string {
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService
+	}
+	if c.ExperimentalEgressCredentialInjection {
+		merged["ATE_CREDENTIAL_INJECTION_ENABLED"] = "true"
+	}
+	if c.CredentialProviderName != "" {
+		merged["ATE_CREDENTIAL_PROVIDER_NAME"] = c.CredentialProviderName
+	}
+	if c.CredentialProviderAddress != "" {
+		merged["ATE_CREDENTIAL_PROVIDER_ADDRESS"] = c.CredentialProviderAddress
 	}
 
 	env := make([]string, 0, len(merged))

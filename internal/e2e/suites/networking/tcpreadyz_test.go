@@ -93,7 +93,7 @@ func TestTCPReadiness(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stored.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot() != nil {
+			if stored.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag().GetName() != "" {
 				t.Fatal("golden snapshot became ready before the TCP listener could open")
 			}
 			select {
