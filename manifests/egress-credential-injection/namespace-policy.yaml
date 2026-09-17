@@ -27,7 +27,7 @@ metadata:
 data:
   namespace-policy.yaml: |
     # atespace "team-a" may resolve secrets in namespace "ns1" (matches the
-    # sample policy's ate-secret://k8s.io/default/ns1/example-api).
+    # sample policy's ate-secret://k8s.io/default/ns1/example-api/token).
     policies:
     - atespace: team-a
       allowedNamespaces:

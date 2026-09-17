@@ -95,8 +95,8 @@ func ProviderName(name string) (string, error) {
 
 // providerNameFromURI returns the provider name of a ate-secret:// URI —
 // the URI host, e.g. "k8s.io" in
-// ate-secret://k8s.io/default/<namespace>/<secret>. The gateway uses it to
-// confirm a URI targets the provider it is configured to serve.
+// ate-secret://k8s.io/default/<namespace>/<secret>/<key>. The gateway reads only the host,
+// to confirm a URI targets the provider it is configured to serve.
 func providerNameFromURI(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {

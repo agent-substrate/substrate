@@ -40,19 +40,18 @@ func TestParseURI(t *testing.T) {
 			uri:  "ate-secret://k8s.io/default/ns1/example-api/token",
 			want: SecretRef{Namespace: "ns1", Name: "example-api", Key: "token"},
 		},
-		{
-			name: "local without key",
-			uri:  "ate-secret://k8s.io/default/ns1/example-api",
-			want: SecretRef{Namespace: "ns1", Name: "example-api"},
-		},
-		{name: "wrong scheme", uri: "https://k8s.io/default/ns1/example-api", wantErr: true},
-		{name: "wrong provider", uri: "ate-secret://vault.io/default/ns1/example-api", wantErr: true},
+		{name: "key required", uri: "ate-secret://k8s.io/default/ns1/example-api", wantErr: true},
+		{name: "wrong scheme", uri: "https://k8s.io/default/ns1/example-api/token", wantErr: true},
+		{name: "wrong provider", uri: "ate-secret://vault.io/default/ns1/example-api/token", wantErr: true},
 		{name: "missing locator", uri: "ate-secret://k8s.io/ns1/example-api/token", wantErr: true},
-		{name: "remote form not yet supported", uri: "ate-secret://k8s.io/cluster/remote-east/ns1/example-api", wantErr: true},
+		{name: "remote form not yet supported", uri: "ate-secret://k8s.io/cluster/remote-east/ns1/example-api/token", wantErr: true},
 		{name: "too few segments", uri: "ate-secret://k8s.io/default/ns1", wantErr: true},
 		{name: "too many segments", uri: "ate-secret://k8s.io/default/ns1/example-api/token/extra", wantErr: true},
-		{name: "query not allowed", uri: "ate-secret://k8s.io/default/ns1/example-api?cluster=remote", wantErr: true},
-		{name: "fragment not allowed", uri: "ate-secret://k8s.io/default/ns1/example-api#token", wantErr: true},
+		{name: "query not allowed", uri: "ate-secret://k8s.io/default/ns1/example-api/token?cluster=remote", wantErr: true},
+		{name: "fragment not allowed", uri: "ate-secret://k8s.io/default/ns1/example-api/token#x", wantErr: true},
+		{name: "percent-encoded separator", uri: "ate-secret://k8s.io/default/ns1/example-api/tok%2Fen", wantErr: true},
+		{name: "percent-encoding of any kind", uri: "ate-secret://k8s.io/default/ns1/example-api/tok%2Den", wantErr: true},
+		{name: "space in path", uri: "ate-secret://k8s.io/default/ns1/example-api/tok en", wantErr: true},
 		{name: "unparseable", uri: "://://", wantErr: true},
 	}
 	for _, tc := range tests {
@@ -200,14 +199,6 @@ func TestFetchSecret(t *testing.T) {
 			"token": []byte("s3cr3t"),
 		},
 	}
-	multiKey := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "multi", Namespace: "ns1"},
-		Data: map[string][]byte{
-			"a": []byte("aa"),
-			"b": []byte("bb"),
-		},
-	}
-
 	tests := []struct {
 		name     string
 		uri      string
@@ -218,16 +209,6 @@ func TestFetchSecret(t *testing.T) {
 			name: "explicit key",
 			uri:  "ate-secret://k8s.io/default/ns1/example-api/token",
 			want: "s3cr3t",
-		},
-		{
-			name: "single-key fallback",
-			uri:  "ate-secret://k8s.io/default/ns1/example-api",
-			want: "s3cr3t",
-		},
-		{
-			name:     "no key, multiple keys",
-			uri:      "ate-secret://k8s.io/default/ns1/multi",
-			wantCode: codes.NotFound,
 		},
 		{
 			name:     "missing key",
@@ -252,7 +233,7 @@ func TestFetchSecret(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			client := fake.NewSimpleClientset(secret, multiKey)
+			client := fake.NewSimpleClientset(secret)
 			srv := NewServer(client, nil)
 			resp, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{Uri: tc.uri})
 			if tc.wantCode != codes.OK {

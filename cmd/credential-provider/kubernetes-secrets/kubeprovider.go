@@ -50,16 +50,15 @@ const LocalLocator = "default"
 //
 // Only Secrets in the local cluster are addressable today:
 //
-//	ate-secret://k8s.io/default/<namespace>/<secret>[/<key>]
+//	ate-secret://k8s.io/default/<namespace>/<secret>/<key>
 //
 // Future work: the secret uri can grow a "cluster/<cluster>" locator for fetching remote Secrets.
 //
-//	ate-secret://k8s.io/cluster/<cluster>/<namespace>/<secret>[/<key>]
+//	ate-secret://k8s.io/cluster/<cluster>/<namespace>/<secret>/<key>
 type SecretRef struct {
 	Namespace string
 	Name      string
-	// Key is the data key within the Secret, or "" when the URI omits it (only
-	// allowed when the secret contains one entry).
+	// Key is the data key within the Secret to return.
 	Key string
 }
 
@@ -82,6 +81,10 @@ func ParseURI(raw string) (SecretRef, error) {
 	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return SecretRef{}, fmt.Errorf("credential URI %q: query and fragment components are not allowed", raw)
 	}
+	// Reject percent-encoding in the path of secret uri.
+	if u.EscapedPath() != u.Path {
+		return SecretRef{}, fmt.Errorf("credential URI %q: path must not contain percent-encoding", raw)
+	}
 
 	segments := strings.Split(strings.Trim(u.Path, "/"), "/")
 	for i, s := range segments {
@@ -96,19 +99,16 @@ func ParseURI(raw string) (SecretRef, error) {
 		return SecretRef{}, fmt.Errorf("credential URI %q: path must begin with %q (only local Secrets are supported), got %q", raw, LocalLocator, segments[0])
 	}
 
-	// tail is <namespace>/<secret>[/<key>].
+	// tail is <namespace>/<secret>/<key>.
 	tail := segments[1:]
-	if len(tail) < 2 || len(tail) > 3 {
-		return SecretRef{}, fmt.Errorf("credential URI %q: want %s/<namespace>/<secret>[/<key>], got %d trailing segments", raw, LocalLocator, len(tail))
+	if len(tail) != 3 {
+		return SecretRef{}, fmt.Errorf("credential URI %q: want %s/<namespace>/<secret>/<key>, got %d trailing segments", raw, LocalLocator, len(tail))
 	}
-	ref := SecretRef{
+	return SecretRef{
 		Namespace: tail[0],
 		Name:      tail[1],
-	}
-	if len(tail) == 3 {
-		ref.Key = tail[2]
-	}
-	return ref, nil
+		Key:       tail[2],
+	}, nil
 }
 
 // Server implements credproviderpb.CredentialProviderServer over the Kubernetes
@@ -184,21 +184,12 @@ func (s *Server) authorize(ctx context.Context, actorSpiffeID, namespace string)
 	return nil
 }
 
-// selectKey resolves which Secret data entry to return: the URI's explicit key,
-// else the sole key of a single-key Secret. A URI without a key resolving a
-// multi-key Secret is an error.
-func selectKey(data map[string][]byte, uriKey string) ([]byte, error) {
-	if uriKey == "" {
-		if len(data) != 1 {
-			return nil, fmt.Errorf("no key given and the secret has %d keys; specify one in the URI", len(data))
-		}
-		for _, v := range data {
-			return v, nil
-		}
-	}
-	v, ok := data[uriKey]
+// selectKey returns the named data entry, or an error when the Secret has no
+// such key.
+func selectKey(data map[string][]byte, key string) ([]byte, error) {
+	v, ok := data[key]
 	if !ok {
-		return nil, fmt.Errorf("key %q not present", uriKey)
+		return nil, fmt.Errorf("key %q not present", key)
 	}
 	return v, nil
 }
