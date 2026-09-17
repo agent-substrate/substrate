@@ -103,6 +103,12 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 
 	sourceName := "snapshot-source-" + nsObj.Name
 	cloneName := "snapshot-clone-" + nsObj.Name
+	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
+	// Registered first so it runs last: the Tag cannot be deleted while an Actor
+	// is still borrowing its snapshot.
+	t.Cleanup(func() {
+		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef})
+	})
 	for _, name := range []string{sourceName, cloneName} {
 		t.Cleanup(func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -128,10 +134,6 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	validateCounterResponse(t, response, "source", 1, 1)
 
-	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
-	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef})
-	})
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName},
 	})
@@ -205,6 +207,19 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	validateCounterResponse(t, response, "clone", 2, 2)
 
+	// The clone is running off the Tag's snapshot, so the Tag cannot be deleted
+	// out from under it.
+	if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteTag while the clone borrows the snapshot returned %v, want FailedPrecondition", err)
+	}
+
+	// Suspending the clone writes it a snapshot of its own, which releases the
+	// Tag's.
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName},
+	}); err != nil {
+		t.Fatalf("failed to suspend cloned Actor: %v", err)
+	}
 	if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef}); err != nil {
 		t.Fatalf("failed to delete Tag: %v", err)
 	}
