@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"runtime"
 	"testing"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 )
 
 // withTestNetNS runs fn with the calling thread inside a throwaway netns
@@ -415,4 +417,114 @@ func TestSetupActorNetworkSweepsInteriorLinks(t *testing.T) {
 			t.Fatalf("inspecting interior netns: %v", err)
 		}
 	})
+}
+
+func TestNamedNetNSRejectsInvalidNames(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "/absolute", "../outside", "nested/name", "ateom-actor:uid/../../outside", "nul\x00name"} {
+		t.Run(name, func(t *testing.T) {
+			if err := removeNamedNetNS(name); !errors.Is(err, os.ErrInvalid) {
+				t.Fatalf("removeNamedNetNS(%q): got %v, want invalid name", name, err)
+			}
+			handle, err := CreateNetNSWithoutSwitching(name)
+			if err == nil {
+				handle.Close()
+			}
+			if !errors.Is(err, os.ErrInvalid) {
+				t.Fatalf("CreateNetNSWithoutSwitching(%q): got %v, want invalid name", name, err)
+			}
+		})
+	}
+}
+
+func TestRemoveNamedNetNSDoesNotFollowSymlinks(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	const targetName = "ateomnet-symlink-target-test"
+	const linkName = "ateomnet-symlink-test"
+	targetPath := "/run/netns/" + targetName
+	linkPath := "/run/netns/" + linkName
+	target, err := CreateNetNSWithoutSwitching(targetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	t.Cleanup(func() { _ = removeNamedNetNS(targetName) })
+	before, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(linkPath) })
+	if err := removeNamedNetNS(linkName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(linkPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected symlink to be removed, got %v", err)
+	}
+	after, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("cleanup unmounted the symlink target")
+	}
+}
+
+func TestCreateNetNSWithoutSwitchingReplacesALeftover(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	for _, state := range []string{"mounted", "unmounted"} {
+		t.Run(state, func(t *testing.T) {
+			name := "ateomnet-leftover-test-" + state
+			path := "/run/netns/" + name
+			t.Cleanup(func() { _ = removeNamedNetNS(name) })
+
+			// Held open across the replacement below: unlinking the name
+			// must not invalidate a handle the caller still has.
+			first, err := CreateNetNSWithoutSwitching(name)
+			if err != nil {
+				t.Fatalf("first CreateNetNSWithoutSwitching: %v", err)
+			}
+			defer first.Close()
+			if state == "unmounted" {
+				if err := unix.Unmount(path, unix.MNT_DETACH); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("expected the leftover netns to remain: %v", err)
+			}
+
+			second, err := CreateNetNSWithoutSwitching(name)
+			if err != nil {
+				t.Fatalf("the name is wedged by its own leftover: %v", err)
+			}
+			defer second.Close()
+			if !second.IsOpen() {
+				t.Error("the replacement namespace is not open")
+			}
+			if second.Equal(first) {
+				t.Error("the replacement is the leftover namespace, not a new one")
+			}
+			// The retained handle still names the original namespace, which
+			// the replacement neither destroyed nor took over.
+			if !first.IsOpen() {
+				t.Error("the retained handle closed when its name was replaced")
+			}
+			if err := NetNSDo(context.Background(), first, func(context.Context) error {
+				_, err := netlink.LinkList()
+				return err
+			}); err != nil {
+				t.Errorf("the retained handle is no longer usable: %v", err)
+			}
+			for range 2 {
+				if err := removeNamedNetNS(name); err != nil {
+					t.Fatalf("removing namespace: %v", err)
+				}
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("expected namespace path to be removed, got %v", err)
+				}
+			}
+		})
+	}
 }

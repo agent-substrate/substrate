@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"syscall"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -297,9 +299,6 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 }
 
 func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
-	// token := rand.Text()
-	// logFile := "/tmp/runsc.delete." + token + ".log"
-
 	cmd := exec.CommandContext(
 		ctx,
 		r.path,
@@ -313,12 +312,10 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	err := reaper.RunCommand(cmd)
 	if err != nil {
 		return fmt.Errorf("while running `runsc delete`: %w", err)
 	}
-
 	return nil
 }
 
@@ -338,6 +335,26 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 		return fmt.Errorf("while running `runsc state`: %w", err)
 	}
 	return nil
+}
+
+// cmdList returns the container IDs runsc has a record of.
+func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
+	cmd := exec.CommandContext(
+		ctx,
+		r.path,
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
+		"list",
+		"-quiet",
+	)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = os.Stderr
+	if err := reaper.RunCommand(cmd); err != nil {
+		return nil, fmt.Errorf("while running `runsc list`: %w", err)
+	}
+	return strings.Fields(out.String()), nil
 }
 
 // killArgs builds the argv for `runsc kill <container> <signal>`. Factored out

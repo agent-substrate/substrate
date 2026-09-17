@@ -24,7 +24,9 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -381,9 +383,20 @@ func actorNonDNSUDPDropRule(table *nftables.Table, chain *nftables.Chain) *nftab
 
 // CreateNetNSWithoutSwitching creates a named netns and returns its handle,
 // restoring the caller's current netns before returning.
+//
+// The caller owns the name exclusively, so a name still present when this
+// runs was left behind by an earlier incarnation and is removed first. The
+// kernel creates the name with O_EXCL, so without that removal a single
+// failed teardown would wedge the name for good: nothing could ever create
+// it again. Removal only unmounts and unlinks the name. Anything still
+// holding the namespace keeps it alive, and existing handles stay usable.
 func CreateNetNSWithoutSwitching(name string) (netns.NsHandle, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	if err := removeNamedNetNS(name); err != nil {
+		return -1, fmt.Errorf("while removing the leftover netns %s: %w", name, err)
+	}
 
 	// We need to create the new NS, then switch back to the current netns.
 	curNetNS, err := netns.Get()
@@ -405,6 +418,20 @@ func CreateNetNSWithoutSwitching(name string) (netns.NsHandle, error) {
 		return -1, fmt.Errorf("while creating interior network namespace: %w", err)
 	}
 	return interiorNetNS, nil
+}
+
+func removeNamedNetNS(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
+		return fmt.Errorf("invalid network namespace name %q: %w", name, os.ErrInvalid)
+	}
+	path := filepath.Join("/run/netns", name)
+	if err := unix.Unmount(path, unix.MNT_DETACH|unix.UMOUNT_NOFOLLOW); err != nil && !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EINVAL) {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // NetNSDo runs do() with the OS thread switched into targetNS, then restores it.
