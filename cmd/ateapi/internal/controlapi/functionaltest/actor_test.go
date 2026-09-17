@@ -1586,15 +1586,15 @@ type partialFailVolumePlugin struct {
 	deleted []string
 }
 
-func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	if strings.HasSuffix(name, "fail-vol2") {
 		return "", nil, fmt.Errorf("simulated volume creation failure")
 	}
 	return "storage-" + name, parameters, nil
 }
 
-func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	return nil, nil
 }
 
 func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1722,7 +1722,7 @@ type retrySuccessVolumePlugin struct {
 	deleted  []string
 }
 
-func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if strings.HasSuffix(name, "retry-vol2") {
@@ -1734,8 +1734,8 @@ func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capac
 	return "storage-" + name, parameters, nil
 }
 
-func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	return nil, nil
 }
 
 func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1872,19 +1872,19 @@ type attachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	return "storage-" + name, parameters, nil
 }
 
-func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.attachAttempts++
 	if a.attachAttempts <= a.failUntil {
-		return fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
+		return nil, fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
 	}
 	a.attachedNodes = append(a.attachedNodes, node)
-	return nil
+	return nil, nil
 }
 
 func (a *attachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2117,19 +2117,19 @@ func newMultiVolAttachPlugin(failVol string, failUntil int) *multiVolAttachPlugi
 	}
 }
 
-func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	return "storage-" + name, parameters, nil
 }
 
-func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.attachAttempts[volumeID]++
 	if strings.Contains(volumeID, m.failVol) && m.attachAttempts[volumeID] <= m.failUntil {
-		return fmt.Errorf("simulated volume attach failure for %s on attempt %d", volumeID, m.attachAttempts[volumeID])
+		return nil, fmt.Errorf("simulated volume attach failure for %s on attempt %d", volumeID, m.attachAttempts[volumeID])
 	}
 	m.attachedNodes[volumeID] = append(m.attachedNodes[volumeID], node)
-	return nil
+	return nil, nil
 }
 
 func (m *multiVolAttachPlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2288,15 +2288,15 @@ type detachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string, mode ateapipb.VolumeAccessMode) (string, map[string]string, error) {
 	return "storage-" + name, parameters, nil
 }
 
-func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.attachedNodes = append(d.attachedNodes, node)
-	return nil
+	return nil, nil
 }
 
 func (d *detachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {

@@ -41,8 +41,8 @@ spec:
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `driverName` | `string` | **Required.** The standard CSI driver name (e.g. `nfs.csi.k8s.io`, `hostpath.csi.k8s.io`, `pd.csi.storage.gke.io`). Matches the `provisioner` field on the referenced Kubernetes `StorageClass`. |
-| `controllerEndpoint` | `string` | **Required.** The gRPC endpoint for the CSI Controller service. Must be a valid URI starting with `tcp://`, `dns:///`, or `unix://` (e.g., `tcp://csi-controller.kube-system.svc:50051` or `dns:///csi-svc.default.svc:9000`). |
-| `nodeSocketOverride` | `string` | **Optional.** Override for the CSI Node service Unix domain socket on worker nodes. Must begin with `unix://`. If omitted, Substrate defaults to `unix:///var/lib/kubelet/plugins/<driverName>/csi.sock`. |
+| `controllerEndpoint` | `string` | **Required.** The gRPC endpoint for the CSI Controller service. Must be a valid network URI with an explicit port starting with `tcp://` or `dns:///` (e.g., `tcp://csi-controller.kube-system.svc:50051` or `dns:///csi-svc.default.svc:9000`). Authority components (e.g., `dns://host:port`) and missing ports are rejected. |
+| `nodeSocketOverride` | `string` | **Optional.** Override for the CSI Node service Unix domain socket on worker nodes. Must begin with `unix:///` followed by an absolute path (e.g., `unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock`). If omitted, Substrate defaults to `unix:///var/lib/kubelet/plugins/<driverName>/csi.sock`. Authority components and quad-slashes are rejected. |
 | `tls` | `*CSIDriverTLSConfig` | **Optional.** Configures TLS or mTLS for the gRPC connection to the `controllerEndpoint`. |
 
 #### TLS / mTLS Configuration (`spec.tls`)
@@ -51,7 +51,7 @@ spec:
 | :--- | :--- | :--- |
 | `enabled` | `bool` | **Required.** Enables TLS/mTLS for the gRPC connection. |
 | `usePodIdentity` | `bool` | **Optional.** When `true`, reuses Substrate's SPIFFE Pod Identity certificates for mutual TLS (mTLS) with dynamic CA trust bundle verification and rotation. Must be `true` when `enabled` is `true`. |
-| `serverName` | `string` | **Optional.** Server name override for TLS certificate verification. |
+| `serverName` | `string` | **Optional.** Server name override for TLS certificate verification. Must be a valid RFC 1123 DNS subdomain (up to 253 characters). |
 
 > [!NOTE]
 > For details on exposing CSI controller endpoints over the network and configuring CSI node DaemonSets with required mount propagations, see the [CSI Driver Deployment Guide](csi-deployment.md).
@@ -77,11 +77,17 @@ volumes:
   externalVolumeTemplate:
     capacity: 10Gi
     storageClassName: standard-rwx
+    accessMode: VOLUME_ACCESS_MODE_READ_WRITE_ONCE
 ```
 
 * `name`: Unique DNS-label-compliant volume name.
 * `externalVolumeTemplate.capacity`: Quantity string representing the requested volume size (e.g. `1Gi`, `50Gi`).
 * `externalVolumeTemplate.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
+* `externalVolumeTemplate.accessMode`: Optional volume access mode enum. Defaults to `VOLUME_ACCESS_MODE_READ_WRITE_ONCE`. Supported values:
+  * `VOLUME_ACCESS_MODE_READ_WRITE_ONCE` (or `VOLUME_ACCESS_MODE_UNSPECIFIED`): Single-node read-write.
+  * `VOLUME_ACCESS_MODE_READ_ONLY_MANY`: Multi-node read-only (mount enforced; degraded read-write controller attachment if driver lacks `PUBLISH_READONLY`).
+  * `VOLUME_ACCESS_MODE_READ_WRITE_MANY`: Multi-node multi-writer.
+  * *Note*: Access mode is immutable (`NoModify`) once created.
 
 #### `containers[].volumeMounts[]`
 
@@ -187,4 +193,5 @@ volumes:
   externalVolumeTemplate:
     capacity: 5Gi
     storageClassName: csi-nfs-sc
+    accessMode: VOLUME_ACCESS_MODE_READ_WRITE_MANY
 ```
