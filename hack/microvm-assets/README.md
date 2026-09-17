@@ -5,13 +5,12 @@ toolchain at runtime — nothing kata-specific is baked into the worker image. a
 the kata-agent directly (no kata shim, no containerd). Each actor container's rootfs is an
 overlay of a read-only lower (the OCI image, served into the guest over virtio-fs by
 `virtiofsd`) and a writable upper on a guest tmpfs, so `virtiofsd` is part of the asset
-set. The asset set is five files:
+set. The asset set is four files:
 
 - `cloud-hypervisor` — the VMM binary (fetched from its release)
 - `virtiofsd` — the virtio-fs daemon serving the RO lower (built from source; see `assemble.sh`)
 - `vmlinux` — the guest kernel (from kata-static)
 - `rootfs.img` — the guest rootfs image (from kata-static)
-- `configuration-clh.toml` — the base kata config (from kata-static)
 
 These helpers assemble the asset set for your node arch, stage it into the cluster's rustfs
 S3 bucket, and the demo manifest's `SandboxConfig` points at it. When `/dev/kvm` is

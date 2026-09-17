@@ -34,7 +34,7 @@ const (
 
 // SandboxSize is the sandbox's target size, derived from the actor's declared
 // resource limits. A zero field means "unset": the caller keeps its own default
-// (the kata config for the micro-VM, unlimited for gVisor).
+// (kata.DefaultMemoryMiB / kata.DefaultVCPUs for the micro-VM, unlimited for gVisor).
 type SandboxSize struct {
 	// MilliCPU is the CPU limit in millicores (1000 = one core), or 0 if unset.
 	MilliCPU int64
