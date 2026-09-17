@@ -17,7 +17,10 @@ package csi
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
@@ -48,8 +51,37 @@ func parseEndpoint(endpoint string) (string, string, error) {
 		if u.Host == "" {
 			return "", "", fmt.Errorf("tcp endpoint missing host:port: %s", endpoint)
 		}
+		host, portStr, err := net.SplitHostPort(u.Host)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid tcp endpoint %q: %w", endpoint, err)
+		}
+		if host == "" {
+			return "", "", fmt.Errorf("tcp endpoint missing host in %q", endpoint)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return "", "", fmt.Errorf("tcp endpoint has invalid port %q in %q (must be 1-65535)", portStr, endpoint)
+		}
 		return "tcp", u.Host, nil
 	case "dns":
+		target := u.Path
+		if target == "" {
+			target = u.Host
+		} else {
+			target = strings.TrimPrefix(target, "/")
+		}
+		if target == "" {
+			return "", "", fmt.Errorf("dns endpoint missing host[:port]: %s", endpoint)
+		}
+		if host, portStr, err := net.SplitHostPort(target); err == nil {
+			if host == "" {
+				return "", "", fmt.Errorf("dns endpoint missing host in %q", endpoint)
+			}
+			port, err := strconv.Atoi(portStr)
+			if err != nil || port < 1 || port > 65535 {
+				return "", "", fmt.Errorf("dns endpoint has invalid port %q in %q (must be 1-65535)", portStr, endpoint)
+			}
+		}
 		return "dns", endpoint, nil
 	default:
 		return "", "", fmt.Errorf("unsupported scheme %q, must be unix, tcp or dns", u.Scheme)

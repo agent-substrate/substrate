@@ -31,10 +31,11 @@ type CSIDriverConfigSpec struct {
 
 	// ControllerEndpoint is the gRPC endpoint for the CSI Controller service.
 	// Must be a valid network URI (e.g. dns:///csi-service:9000 or tcp://127.0.0.1:9000).
-	// TODO: Harden endpoint validation to prevent invalid or unsafe URI inputs.
 	//
 	// +required
-	// +kubebuilder:validation:Pattern=`^(tcp|dns)://.+$`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^(tcp://([a-zA-Z0-9][-a-zA-Z0-9.]*|\[[a-fA-F0-9:]+\]):[0-9]+|dns://(/([^/]+/)?)?[a-zA-Z0-9][-a-zA-Z0-9.]*(:[0-9]+)?)$`
 	ControllerEndpoint string `json:"controllerEndpoint"`
 
 	// NodeSocketOverride is an optional override for the CSI Node service socket
