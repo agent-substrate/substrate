@@ -18,8 +18,8 @@
 # ateom-microvm fetches at runtime (fetch-not-bake). Run this on a Linux
 # host of the TARGET arch.
 #
-# Produces, under $OUT, the five assets named as the SandboxConfig expects:
-#   cloud-hypervisor  virtiofsd  vmlinux  rootfs.img  configuration-clh.toml
+# Produces, under $OUT, the four assets named as the SandboxConfig expects:
+#   cloud-hypervisor  virtiofsd  vmlinux  rootfs.img
 # The DOWNLOADED assets are reproducible, so paste their sha256 sums into the
 # manifest (demos/counter/counter-microvm.yaml.tmpl). That now includes virtiofsd on
 # amd64 (upstream prebuilt); on arm64 virtiofsd is still built from source
@@ -64,7 +64,7 @@ esac
 
 # Identifies the asset set this script produces. Cleared before the first write into
 # $OUT and re-written to $OUT/$STAMP_FILE on success; install-microvm-deps.sh compares
-# it against what the current checkout would build, because the five filenames stay the
+# it against what the current checkout would build, because the filenames stay the
 # same when a pin moves and an asset dir from an older checkout is otherwise
 # indistinguishable from a current one.
 STAMP_FILE=".asset-versions"
@@ -98,7 +98,6 @@ KROOT="kata/opt/kata"
 
 cp "$(readlink -f "${KROOT}/share/kata-containers/vmlinux.container")" "${OUT}/vmlinux"
 cp "$(readlink -f "${KROOT}/share/kata-containers/kata-containers.img")" "${OUT}/rootfs.img"
-cp "${KROOT}/share/defaults/kata-containers/configuration-clh.toml" "${OUT}/configuration-clh.toml"
 
 echo ">> Downloading cloud-hypervisor ${CH_VER} (${CH_ASSET})..."
 curl -fSL -o "${OUT}/cloud-hypervisor" \
@@ -145,10 +144,10 @@ chmod +x "${OUT}/virtiofsd"
 echo
 echo ">> Assets assembled in ${OUT}:"
 cd "${OUT}"
-for f in cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml; do
+for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
   [ -f "$f" ] || { echo "MISSING: $f" >&2; exit 1; }
 done
-# Written only once all five are present, and only after the up-front rm, so the stamp
+# Written only once all four are present, and only after the up-front rm, so the stamp
 # exists exactly when this dir was assembled end-to-end by these pins.
 asset_stamp > "${OUT}/${STAMP_FILE}"
 "${OUT}/virtiofsd" --version 2>/dev/null | head -1 || true
@@ -156,4 +155,4 @@ echo
 echo ">> sha256 (paste the DOWNLOADED assets into counter-microvm.yaml.tmpl; that"
 echo ">> includes virtiofsd on amd64 (prebuilt). The arm64 virtiofsd is built from"
 echo ">> source, so its sha is injected at deploy by run-microvm-demo.sh, not pinned):"
-sha256sum cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml
+sha256sum cloud-hypervisor virtiofsd vmlinux rootfs.img

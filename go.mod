@@ -36,7 +36,6 @@ require (
 	github.com/openfga/api/proto v0.0.0-20260319214821-f153694bfc20
 	github.com/openfga/language/pkg/go v0.3.2-0.20260730144454-83fedf8a4e70
 	github.com/openfga/openfga v1.20.0
-	github.com/pelletier/go-toml/v2 v2.4.0
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/spf13/cobra v1.10.2
@@ -203,6 +202,7 @@ require (
 	github.com/olekukonko/tablewriter v1.0.8 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
+	github.com/pelletier/go-toml/v2 v2.4.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect

@@ -63,7 +63,6 @@ import (
 var (
 	podUID        = flag.String("pod-uid", "", "The UID of the current pod")
 	chBinary      = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	kataConfig    = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
 	kataDebug     = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
 	vmmMemReserve = flag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
 	showVersion   = flag.Bool("version", false, "Print version and exit.")
@@ -266,7 +265,7 @@ func do(ctx context.Context) error {
 	}()
 	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
 
-	ateomService := NewService(*podUID, *chBinary, *kataConfig, *kataDebug, *vmmMemReserve, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle)
+	ateomService := NewService(*podUID, *chBinary, *kataDebug, *vmmMemReserve, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle)
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -418,10 +417,9 @@ type AteomService struct {
 	activeRPCMu sync.Mutex
 	activeRPC   *activeRPCInfo
 
-	podUID     string
-	chBinary   string
-	kataConfig string
-	kataDebug  bool
+	podUID    string
+	chBinary  string
+	kataDebug bool
 
 	// memReserveMiB is guest RAM (MiB) held back from the pod's memory limit for
 	// the cloud-hypervisor VMM + virtiofsd (host processes sharing the pod cgroup
@@ -502,12 +500,11 @@ type AteomService struct {
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(podUID, chBinary, kataConfig string, kataDebug bool, memReserveMiB int, interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
+func NewService(podUID, chBinary string, kataDebug bool, memReserveMiB int, interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
 	return &AteomService{
 		lock:                         newCancelableMutex(),
 		podUID:                       podUID,
 		chBinary:                     chBinary,
-		kataConfig:                   kataConfig,
 		kataDebug:                    kataDebug,
 		memReserveMiB:                memReserveMiB,
 		interiorNetNS:                interiorNetNS,

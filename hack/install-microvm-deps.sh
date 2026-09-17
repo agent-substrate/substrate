@@ -142,13 +142,13 @@ OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 
 # --- 1. assets: assemble (if missing or stale) -----------------------------
 need_assemble=false
-for f in cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml; do
+for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
   if [[ ! -f "${OUT}/${f}" ]]; then
     need_assemble=true
     break
   fi
 done
-# Presence alone is not enough. The five filenames don't change when a version pin
+# Presence alone is not enough. The filenames don't change when a version pin
 # moves, so an asset dir assembled before a bump looks complete while holding the old
 # bytes — we'd then stage those against a SandboxConfig pinning the new shas, and the
 # mismatch would only surface at runtime as an actor wedged in STATUS_RESUMING while
@@ -170,7 +170,7 @@ else
 fi
 
 # --- 2. stage assets to rustfs (kind) / GCS (GKE) --------------------------
-# Upload the five assets under kata-assets/, where atelet fetches them: the
+# Upload the four assets under kata-assets/, where atelet fetches them: the
 # in-cluster rustfs (S3 API) on kind, or the GCS bucket on GKE.
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   log "Staging assets to in-cluster rustfs bucket ${BUCKET_NAME} (kata-assets/)..."
@@ -185,7 +185,7 @@ fi
 # its binary bytes are not reproducible across toolchains and its sha can't
 # be a fixed pin in the manifest. Compute it from the freshly-staged binary
 # and inject it, so the deployed SandboxConfig always matches whatever was
-# staged. The downloaded assets (cloud-hypervisor/kernel/rootfs/config, plus
+# staged. The downloaded assets (cloud-hypervisor/kernel/rootfs, plus
 # virtiofsd on amd64 where upstream publishes a prebuilt) keep their
 # committed, reproducible per-arch shas.
 log "Applying microvm SandboxConfig from ${MANIFEST_TEMPLATE}..."

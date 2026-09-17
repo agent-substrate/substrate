@@ -109,7 +109,7 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		Containers:     srcTmpl.GetContainers(),
 		// The source's limits size the sandbox. Copying them matters most on
 		// micro-VM, where an ActorTemplate that declares none boots the guest
-		// at the kata config default (2GiB) instead of the demo's 512Mi.
+		// at ateom's default guest size (2GiB) instead of the demo's 512Mi.
 		Resources: srcTmpl.GetResources(),
 		// The source carries the sandbox_class/config_name pair for the
 		// class under test.

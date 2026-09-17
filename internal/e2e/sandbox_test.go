@@ -195,7 +195,7 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "microvm" {
 					t.Errorf("template %s configName = %q, want microvm", name, got)
 				}
-				// Undeclared limits boot the guest at the kata config default
+				// Undeclared limits boot the guest at ateom's default size
 				// (2GiB), which does not fit beside the demo pools on one kind
 				// node.
 				if memoryLimit(tmpl) == "" {

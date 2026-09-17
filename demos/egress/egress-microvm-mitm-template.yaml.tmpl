@@ -65,7 +65,7 @@ volumes:
     - trustBundle:
         name: egress-mitm.ate.dev
         path: trust-bundle.pem
-# Sandbox size: without these the guest boots at the kata config's default
+# Sandbox size: without these the guest boots at ateom's default size
 # (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
 # strings in the proto.
 resources:

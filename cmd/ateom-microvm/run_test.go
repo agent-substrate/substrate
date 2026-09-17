@@ -171,7 +171,7 @@ func TestResolveGuestMemMiB(t *testing.T) {
 	const (
 		mib      = 1024 * 1024
 		reserve  = 256  // vmmMemReserveMiB
-		fallback = 2048 // kata-config default
+		fallback = 2048 // kata.DefaultMemoryMiB
 	)
 	tests := []struct {
 		name        string
