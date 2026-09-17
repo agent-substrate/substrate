@@ -44,7 +44,7 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 		if err != nil {
 			return err
 		}
-		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext()); err != nil {
+		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext(), ext.GetPublishContext(), ext.GetAccessMode()); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
 	}
@@ -90,6 +90,11 @@ func (s *AteomHerder) getPlugin(ctx context.Context, driverName string) (volume.
 	}
 
 	s.mu.Lock()
+	if existing, ok := s.volumePlugins[driverName]; ok {
+		s.mu.Unlock()
+		csiPlugin.Close()
+		return existing, nil
+	}
 	s.volumePlugins[driverName] = csiPlugin
 	s.mu.Unlock()
 	return csiPlugin, nil

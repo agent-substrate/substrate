@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -48,7 +49,7 @@ type fakeWorkerPlugin struct {
 	mountCalls  []mountCall
 }
 
-func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, attributes map[string]string) error {
+func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, attributes map[string]string, publishContext map[string]string, mode ateapipb.VolumeAccessMode) error {
 	f.mountCalls = append(f.mountCalls, mountCall{
 		volumeID:   volumeID,
 		targetPath: targetPath,
@@ -543,6 +544,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 }
 
 func TestDirectCSIDriverConfigGetter(t *testing.T) {
+	ctx := context.Background()
 	fakeClient := fake.NewSimpleClientset(&v1alpha1.CSIDriverConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test.csi.k8s.io",
@@ -556,7 +558,7 @@ func TestDirectCSIDriverConfigGetter(t *testing.T) {
 	getter := &directCSIDriverConfigGetter{client: fakeClient}
 
 	// Existing config
-	cfg, err := getter.Get("test.csi.k8s.io")
+	cfg, err := getter.Get(ctx, "test.csi.k8s.io")
 	if err != nil {
 		t.Fatalf("getter.Get failed: %v", err)
 	}
@@ -565,7 +567,7 @@ func TestDirectCSIDriverConfigGetter(t *testing.T) {
 	}
 
 	// Missing config
-	_, err = getter.Get("missing.csi.k8s.io")
+	_, err = getter.Get(ctx, "missing.csi.k8s.io")
 	if err == nil {
 		t.Fatalf("expected error for missing driver, got nil")
 	}

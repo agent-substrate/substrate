@@ -999,6 +999,19 @@ func TestValidateExternalVolume(t *testing.T) {
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Status = ateapipb.ExternalVolume_Status(4) }),
 		want: field.ErrorList{field.Invalid(field.NewPath("status"), nil, "").WithOrigin("maximum")},
 	}, {
+		name: "negative access_mode",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AccessMode = ateapipb.VolumeAccessMode(-1) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("access_mode"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "access_mode outside the enum",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AccessMode = ateapipb.VolumeAccessMode(4) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("access_mode"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "valid access_mode read write many",
+		obj: valid(func(v *ateapipb.ExternalVolume) {
+			v.AccessMode = ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY
+		}),
+	}, {
 		name: "storage volume id at the bound",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = strings.Repeat("x", 256) }),
 	}, {
@@ -1067,6 +1080,23 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		newObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "pd.csi.storage.gke.io" }),
 		want:   field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "").WithOrigin("update")},
 	}, {
+		name: "access_mode changed is invalid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) {
+			v.AccessMode = ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY
+		}),
+		newObj: valid(func(v *ateapipb.ExternalVolume) {
+			v.AccessMode = ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("access_mode"), nil, "").WithOrigin("update")},
+	}, {
+		name: "access_mode unchanged is valid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) {
+			v.AccessMode = ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY
+		}),
+		newObj: valid(func(v *ateapipb.ExternalVolume) {
+			v.AccessMode = ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY
+		}),
+	}, {
 		name: "status and volume_context changed is valid",
 		oldObj: valid(func(v *ateapipb.ExternalVolume) {
 			v.Status = ateapipb.ExternalVolume_STATUS_PENDING
@@ -1081,6 +1111,44 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			op := operation.Operation{Type: operation.Update}
 			assertValidateErr(t, Validate_ExternalVolume(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
+		})
+	}
+}
+
+func TestValidateExternalVolumeTemplate(t *testing.T) {
+	valid := func(mutate ...func(*ateapipb.ExternalVolumeTemplate)) *ateapipb.ExternalVolumeTemplate {
+		vt := &ateapipb.ExternalVolumeTemplate{
+			Capacity:         "10Gi",
+			StorageClassName: "standard",
+			AccessMode:       ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+		}
+		for _, m := range mutate {
+			m(vt)
+		}
+		return vt
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateapipb.ExternalVolumeTemplate
+		want field.ErrorList
+	}{{
+		name: "valid template",
+		obj:  valid(),
+	}, {
+		name: "negative access_mode",
+		obj:  valid(func(vt *ateapipb.ExternalVolumeTemplate) { vt.AccessMode = ateapipb.VolumeAccessMode(-1) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("access_mode"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "access_mode outside enum",
+		obj:  valid(func(vt *ateapipb.ExternalVolumeTemplate) { vt.AccessMode = ateapipb.VolumeAccessMode(4) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("access_mode"), nil, "").WithOrigin("maximum")},
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			assertValidateErr(t, Validate_ExternalVolumeTemplate(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
 }
