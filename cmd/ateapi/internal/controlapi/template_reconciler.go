@@ -295,8 +295,8 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			}); err != nil {
 				return 0, err
 			}
-		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING:
-			// Nothing in the golden flow deletes or pauses the actor before
+		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
+			// Nothing in the golden flow deletes, pauses, or reverts the actor before
 			// the snapshot is taken; someone else interfered.
 			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, fmt.Sprintf("golden actor in unexpected state %v", state))
 
