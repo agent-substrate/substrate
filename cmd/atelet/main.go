@@ -43,6 +43,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/env"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
@@ -83,6 +84,21 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/lru"
 )
+
+var storageBackendEnv = env.Var[string]{
+	Name:    "ATE_STORAGE_BACKEND",
+	Default: "",
+	Description: `Selects the snapshot storage backend. The exact, case-sensitive value s3 selects S3.
+Unset, empty, and all other values select GCS.`,
+}
+
+var s3PathStyleEnv = env.Var[bool]{
+	Name:    "AWS_S3_USE_PATH_STYLE",
+	Default: false,
+	Description: `Enables S3 path-style addressing when ATE_STORAGE_BACKEND=s3.
+Accepted true values: 1, t, T, TRUE, true, True. Accepted false values: 0, f, F, FALSE, false, False.
+Unset, empty, or invalid values use false. Whitespace is not trimmed.`,
+}
 
 var (
 	port              = pflag.Int("port", atelet.DefaultPort, "The port to listen on")
@@ -223,7 +239,7 @@ func main() {
 	}
 
 	var wrappedGCS ategcs.ObjectStorage
-	storageBackend := os.Getenv("ATE_STORAGE_BACKEND")
+	storageBackend := storageBackendEnv.Get()
 	switch storageBackend {
 	case "s3":
 		slog.InfoContext(ctx, "Using S3 storage backend")
@@ -234,7 +250,7 @@ func main() {
 			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
 		wrappedGCS = ategcs.NewS3Client(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if usePathStyle := os.Getenv("AWS_S3_USE_PATH_STYLE"); usePathStyle == "true" {
+			if s3PathStyleEnv.Get() {
 				o.UsePathStyle = true
 			}
 		}))

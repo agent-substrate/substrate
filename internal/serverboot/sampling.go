@@ -18,10 +18,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/env"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -29,6 +29,22 @@ const (
 	tracesSamplerEnv    = "OTEL_TRACES_SAMPLER"
 	tracesSamplerArgEnv = "OTEL_TRACES_SAMPLER_ARG"
 )
+
+var traceSampler = env.Var[string]{
+	Name:    tracesSamplerEnv,
+	Default: "",
+	Description: `Overrides trace sampling. Accepted names: always_on, always_off, traceidratio,
+parentbased_always_on, parentbased_always_off, parentbased_traceidratio. Names are case-insensitive
+and surrounding whitespace is ignored. Ratio samplers require OTEL_TRACES_SAMPLER_ARG.
+Unset, empty, or invalid settings keep the parent-based defaults: 10% for control-plane components
+and ateoms, 1% for atenet router, and no root sampling for glutton.`,
+}
+
+var traceSamplerArg = env.Var[string]{
+	Name:        tracesSamplerArgEnv,
+	Default:     "",
+	Description: "Ratio in [0, 1] for traceidratio and parentbased_traceidratio samplers. Missing or invalid ratios keep the component default; other samplers ignore it.",
+}
 
 // ControlPlaneTraceRatio is the default root sampling ratio for the control
 // plane binaries: low volume, and their traces are what lifecycle debugging
@@ -69,8 +85,8 @@ func ParentNeverSampling() TraceSampling {
 // to 100% sampling on invalid values where this keeps the default and logs.
 // That includes a ratio sampler without an arg, which the spec reads as 1.0.
 func ResolveTraceSampling(ctx context.Context, def TraceSampling) TraceSampling {
-	name, nameSet := os.LookupEnv(tracesSamplerEnv)
-	arg, argSet := os.LookupEnv(tracesSamplerArgEnv)
+	name, nameSet := traceSampler.Lookup()
+	arg, argSet := traceSamplerArg.Lookup()
 	resolved, err := resolveTraceSampling(name, nameSet, arg, argSet, def)
 	if err != nil {
 		slog.WarnContext(ctx, "Invalid trace sampler environment, keeping the component default",

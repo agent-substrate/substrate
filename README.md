@@ -219,6 +219,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 6. **[Autoscaled WorkerPool](demos/autoscaled-workerpool/README.md)**: Scales a `WorkerPool` on its assigned-worker count with an HPA fed by prometheus-adapter.
 
 ### Documentation & Guides
+* [Go Environment Variables](docs/environment-variables.md): Generated reference for operator settings and system-provided runtime values.
 * [Architecture](docs/architecture.md): How the control plane, node supervisor, and networking stack fit together.
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
 * [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.

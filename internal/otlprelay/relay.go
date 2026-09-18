@@ -62,6 +62,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/env"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -111,6 +112,87 @@ const (
 	// batch processor emits far smaller messages than this.
 	maxRecvMsgSize = 16 << 20 // 16 MiB
 )
+
+var endpointVar = env.Var[string]{
+	Name:    endpointEnv,
+	Default: "",
+	Description: `Collector address for the OTLP relay, as a hostname, host:port, or http:// URL.
+The default port is 4317. HTTPS and other URL schemes are rejected; the relay uses plaintext gRPC.
+Nonempty signal-specific endpoints override this value. Resolved nonempty trace and metric
+settings must match exactly. The relay is disabled when all endpoint settings are empty.`,
+}
+
+var tracesEndpointVar = env.Var[string]{
+	Name:    tracesEndpointEnv,
+	Default: "",
+	Description: `Collector address for OTLP relay traces, as a hostname, host:port, or http:// URL.
+The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override
+OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric
+settings must match exactly because both signals share one connection.`,
+}
+
+var metricsEndpointVar = env.Var[string]{
+	Name:    metricsEndpointEnv,
+	Default: "",
+	Description: `Collector address for OTLP relay metrics, as a hostname, host:port, or http:// URL.
+The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override
+OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric
+settings must match exactly because both signals share one connection.`,
+}
+
+var compressionVar = env.Var[string]{
+	Name:    compressionEnv,
+	Default: "",
+	Description: `Compression for the OTLP relay. Accepted values are gzip and none, with surrounding
+whitespace ignored; names are case-sensitive. Nonempty signal-specific settings override this value.
+Resolved nonempty trace and metric settings must match exactly. If all settings are empty,
+compression is disabled. Unsupported or conflicting values prevent the relay from starting.`,
+}
+
+var tracesCompressionVar = env.Var[string]{
+	Name:    tracesCompressionEnv,
+	Default: "",
+	Description: `Compression for OTLP relay traces: gzip or none, case-sensitive, with surrounding whitespace ignored.
+Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it.
+Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values
+prevent the relay from starting.`,
+}
+
+var metricsCompressionVar = env.Var[string]{
+	Name:    metricsCompressionEnv,
+	Default: "",
+	Description: `Compression for OTLP relay metrics: gzip or none, case-sensitive, with surrounding whitespace ignored.
+Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it.
+Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values
+prevent the relay from starting.`,
+}
+
+var headersVar = env.Var[string]{
+	Name:    headersEnv,
+	Default: "",
+	Description: `Headers sent by the OTLP relay, as comma-separated key=value pairs with percent-encoded values.
+Header names are case-insensitive. For example, x-team=platform,x-label=hello%20world sets two headers.
+Nonempty signal-specific headers replace this entire list rather than merging with it.
+Empty means no headers. Malformed entries prevent the relay from starting. Values may contain secrets.`,
+}
+
+var tracesHeadersVar = env.Var[string]{
+	Name:    tracesHeadersEnv,
+	Default: "",
+	Description: `Headers sent with OTLP relay traces, as comma-separated key=value pairs with percent-encoded values.
+Nonempty values replace OTEL_EXPORTER_OTLP_HEADERS entirely; empty values inherit it.
+Header names are case-insensitive. Malformed entries prevent the relay from starting.
+Values may contain secrets.`,
+}
+
+var metricsHeadersVar = env.Var[string]{
+	Name:    metricsHeadersEnv,
+	Default: "",
+	Description: `Headers sent with OTLP relay metrics, as comma-separated key=value pairs with percent-encoded values.
+Nonempty values replace OTEL_EXPORTER_OTLP_HEADERS entirely; empty values inherit it.
+Header names are case-insensitive. Malformed entries prevent the relay from starting.
+Values may contain secrets.`,
+}
 
 // Server is the atelet half of the relay: an OTLP receiver on a unix socket
 // that forwards to the real collector over the node's network.
@@ -274,14 +356,14 @@ func parseHeaders(raw string) (metadata.MD, error) {
 // upstreamHeaders resolves the headers for one signal. Per the OTLP spec the
 // signal-specific variable replaces the generic one rather than merging with
 // it, so a component that sets both gets exactly what the SDK would have sent.
-func upstreamHeaders(signalEnv string) (metadata.MD, error) {
-	env, raw := signalEnv, strings.TrimSpace(os.Getenv(signalEnv))
+func upstreamHeaders(signalEnv env.Var[string]) (metadata.MD, error) {
+	name, raw := signalEnv.Name, strings.TrimSpace(signalEnv.Get())
 	if raw == "" {
-		env, raw = headersEnv, os.Getenv(headersEnv)
+		name, raw = headersEnv, headersVar.Get()
 	}
 	md, err := parseHeaders(raw)
 	if err != nil {
-		return nil, fmt.Errorf("while reading %s: %w", env, err)
+		return nil, fmt.Errorf("while reading %s: %w", name, err)
 	}
 	return md, nil
 }
@@ -377,11 +459,11 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 	// otherwise become a per-export failure against a collector that rejects the
 	// unauthenticated calls, which is harder to read than refusing to start the
 	// relay. ateom then finds no socket and exports directly.
-	traceHeaders, err := upstreamHeaders(tracesHeadersEnv)
+	traceHeaders, err := upstreamHeaders(tracesHeadersVar)
 	if err != nil {
 		return nil, err
 	}
-	metricHeaders, err := upstreamHeaders(metricsHeadersEnv)
+	metricHeaders, err := upstreamHeaders(metricsHeadersVar)
 	if err != nil {
 		return nil, err
 	}
@@ -477,9 +559,9 @@ func headerNames(md metadata.MD) []string {
 // upstreamCompression resolves the compression algorithm (gzip or none) to use
 // for upstream export.
 func upstreamCompression() (string, error) {
-	generic := strings.TrimSpace(os.Getenv(compressionEnv))
-	traces := strings.TrimSpace(os.Getenv(tracesCompressionEnv))
-	metrics := strings.TrimSpace(os.Getenv(metricsCompressionEnv))
+	generic := strings.TrimSpace(compressionVar.Get())
+	traces := strings.TrimSpace(tracesCompressionVar.Get())
+	metrics := strings.TrimSpace(metricsCompressionVar.Get())
 
 	traceComp := generic
 	if traces != "" {
@@ -517,9 +599,9 @@ func upstreamCompression() (string, error) {
 // both differently is a misconfiguration rather than something to silently pick
 // a winner for.
 func upstreamTarget() (string, error) {
-	generic := strings.TrimSpace(os.Getenv(endpointEnv))
-	traces := strings.TrimSpace(os.Getenv(tracesEndpointEnv))
-	metrics := strings.TrimSpace(os.Getenv(metricsEndpointEnv))
+	generic := strings.TrimSpace(endpointVar.Get())
+	traces := strings.TrimSpace(tracesEndpointVar.Get())
+	metrics := strings.TrimSpace(metricsEndpointVar.Get())
 
 	traceTarget := generic
 	if traces != "" {
