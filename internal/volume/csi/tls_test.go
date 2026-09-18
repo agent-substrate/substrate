@@ -391,6 +391,12 @@ func TestCAPoolCache_HitAndFileChange(t *testing.T) {
 
 	// Modify the file.
 	writeFile(t, caPath, ca.certPEM())
+	// The cache intentionally keys on mtime and size; make the file change
+	// observable on filesystems whose timestamp granularity is coarse.
+	modifiedAt := time.Now().Add(time.Second)
+	if err := os.Chtimes(caPath, modifiedAt, modifiedAt); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3rd call should detect file change and return a newly parsed pool.
 	pool3, err := cache.getCertPool()
