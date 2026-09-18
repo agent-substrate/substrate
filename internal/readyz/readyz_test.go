@@ -107,7 +107,7 @@ func TestWait_ReturnsOnFirst200(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := Wait(ctx, "main", probe, ip); err != nil {
+	if err := Wait(ctx, "main", probe, ip, nil); err != nil {
 		t.Fatalf("Wait returned error: %v", err)
 	}
 }
@@ -135,7 +135,7 @@ func TestWait_WaitsForServerToBecomeReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	start := time.Now()
-	if err := Wait(ctx, "main", probe, ip); err != nil {
+	if err := Wait(ctx, "main", probe, ip, nil); err != nil {
 		t.Fatalf("Wait returned error: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -159,7 +159,7 @@ func TestWait_ContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	err := Wait(ctx, "main", probe, "127.0.0.1")
+	err := Wait(ctx, "main", probe, "127.0.0.1", nil)
 	if err == nil {
 		t.Fatalf("Wait returned nil, expected cancellation error")
 	}
@@ -215,7 +215,7 @@ func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	err := Wait(ctx, "main", probe, "127.0.0.1")
+	err := Wait(ctx, "main", probe, "127.0.0.1", nil)
 	if err == nil {
 		t.Fatalf("Wait returned nil, expected a timeout error")
 	}
@@ -239,7 +239,7 @@ func TestWaitAll_SkipsContainersWithoutProbe(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := WaitAll(ctx, containers, "127.0.0.1"); err != nil {
+	if err := WaitAll(ctx, containers, "127.0.0.1", nil); err != nil {
 		t.Fatalf("WaitAll with no probes returned error: %v", err)
 	}
 }
@@ -285,7 +285,7 @@ func TestWaitAll_ReasonSurvivesTheRPCBoundary(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := WaitAll(ctx, containers, "127.0.0.1")
+	err := WaitAll(ctx, containers, "127.0.0.1", nil)
 	if err == nil {
 		t.Fatal("WaitAll returned nil, expected a timeout error")
 	}

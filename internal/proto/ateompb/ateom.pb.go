@@ -354,7 +354,7 @@ type RunWorkloadRequest struct {
 	// to the local on-disk path atelet fetched it to (content-addressed, like
 	// runsc_path). Empty for the gVisor runtime, which uses runsc_path.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// When absent, actor traffic uses direct egress instead of atunnel.
+	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,10,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. ateom
 	// sizes the sandbox to these (cgroup caps via the OCI spec, and for the
@@ -1220,7 +1220,7 @@ type RestoreWorkloadRequest struct {
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// What content to restore from the snapshot.
 	Scope SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
-	// When absent, actor traffic uses direct egress instead of atunnel.
+	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The object storage URI of the ActorTemplate's golden snapshot.
 	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the

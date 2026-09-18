@@ -546,7 +546,7 @@ type RunRequest struct {
 	// fetches the relevant assets and records them with the actor's on-node state
 	// so a later Checkpoint can pin the same version into the snapshot manifest.
 	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
-	// When absent, actor traffic uses direct egress instead of atunnel.
+	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. atelet
 	// passes these through to the sandbox so it is sized to the actor (not the
@@ -2464,7 +2464,7 @@ type RestoreRequest struct {
 	// of the `config` oneof: the actor's snapshot may be local (a pause
 	// checkpoint) while the golden snapshot is always external.
 	GoldenSnapshotUri string `protobuf:"bytes,12,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
-	// When absent, actor traffic uses direct egress instead of atunnel.
+	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
 	// gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;

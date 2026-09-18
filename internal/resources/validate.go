@@ -77,10 +77,9 @@ func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field
 }
 
 // ValidateAteomUID rejects a target ateom pod UID that could escape the host
-// paths built from it: the netns path (/run/netns/ateom:<uid>) and the ateom
-// control socket (.../ateoms/<uid>/ateom.sock). Kubernetes pod UIDs are UUIDs,
-// which are valid DNS-1123 labels, so a label check accepts every legitimate
-// value while rejecting separators and "..".
+// path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
+// Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
+// check accepts every legitimate value while rejecting separators and "..".
 func ValidateAteomUID(targetAteomUID string) error {
 	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
 		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))

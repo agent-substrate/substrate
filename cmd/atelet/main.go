@@ -1449,7 +1449,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			[]string{"/pause"},
 			nil,
 			nil,
-			ateompath.AteomNetNSPath(targetAteomUid),
+			ateompath.ActorNetNSPath(actorUID),
 			nil, // pause is sandbox infra; it mounts no volumes.
 			nil,
 			nil, // pause only reaps; it needs no capabilities.
@@ -1477,7 +1477,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				ctr.GetCommand(),
 				ctr.GetArgs(),
 				envs,
-				ateompath.AteomNetNSPath(targetAteomUid),
+				ateompath.ActorNetNSPath(actorUID),
 				spec.GetVolumes(),
 				ctr.GetVolumeMounts(),
 				resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),

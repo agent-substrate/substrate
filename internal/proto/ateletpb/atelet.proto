@@ -125,7 +125,7 @@ message RunRequest {
   // so a later Checkpoint can pin the same version into the snapshot manifest.
   SandboxAssets sandbox_assets = 8;
 
-  // When absent, actor traffic uses direct egress instead of atunnel.
+  // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. atelet
@@ -451,7 +451,7 @@ message RestoreRequest {
   // checkpoint) while the golden snapshot is always external.
   string golden_snapshot_uri = 12;
 
-  // When absent, actor traffic uses direct egress instead of atunnel.
+  // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 13;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For

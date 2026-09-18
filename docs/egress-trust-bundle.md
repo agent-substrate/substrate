@@ -10,6 +10,16 @@ certificate error.
 This guide covers how to project the gateway's CA into an actor's filesystem
 and how to point the actor's TLS client at it.
 
+## DNS and egress policy
+
+Actors send DNS queries to a relay at their sandbox's default gateway. The
+relay forwards UDP and TCP DNS to the worker pod's configured resolvers,
+without passing through the external egress gateway or checking egress policy.
+There is currently no per-actor setting to disable this relay or filter queries.
+
+DNS remains available when no egress gateway is configured. Other outbound TCP
+connections are captured by atunnel and refused in that configuration.
+
 ## When you need this
 
 You need it when **all** of the following hold:

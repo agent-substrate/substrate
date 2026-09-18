@@ -136,7 +136,7 @@ message RunWorkloadRequest {
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 8;
 
-  // When absent, actor traffic uses direct egress instead of atunnel.
+  // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 10;
 
   // The actor's declared size, from the ActorTemplate's resource limits. ateom
@@ -318,7 +318,7 @@ message RestoreWorkloadRequest {
   // What content to restore from the snapshot.
   SnapshotScope scope = 10;
 
-  // When absent, actor traffic uses direct egress instead of atunnel.
+  // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 12;
 
   // The object storage URI of the ActorTemplate's golden snapshot.

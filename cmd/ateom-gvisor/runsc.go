@@ -69,6 +69,7 @@ func (r *runsc) shapeSpec(containerName string) error {
 		ContainerName:  containerName,
 		DurableVolumes: r.durableVolumes,
 		Size:           r.size,
+		ResolvConf:     ateompath.ActorResolvConfPath(r.actorUID),
 	})
 	return ocispec.Save(bundle, spec)
 }

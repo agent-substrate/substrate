@@ -24,6 +24,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -32,11 +33,98 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/atenet"
 )
+
+func TestActivationDialerClosesLateConnection(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	defer client.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dial := activationDialer(ctx, func(context.Context, string, string) (net.Conn, error) {
+		cancel()
+		return client, nil
+	})
+	conn, err := dial(context.Background(), "tcp", "actor:80")
+	if conn != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("late dial returned %v, %v", conn, err)
+	}
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("late connection was not closed: %v", err)
+	}
+}
+
+func TestDeactivateIsolatesLateDials(t *testing.T) {
+	firstActor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "actor-1")
+	}))
+	defer firstActor.Close()
+	secondActor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "actor-2")
+	}))
+	defer secondActor.Close()
+	upstream, _ := url.Parse("http://127.0.0.1:80")
+	server := newTestServer(t, upstream)
+	firstReady := make(chan struct{})
+	secondReady := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var calls atomic.Int32
+	server.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if calls.Add(1) == 1 {
+			conn, err := net.Dial("tcp", firstActor.Listener.Addr().String())
+			close(firstReady)
+			<-releaseFirst
+			return conn, err
+		}
+		close(secondReady)
+		<-releaseSecond
+		return (&net.Dialer{}).DialContext(ctx, "tcp", secondActor.Listener.Addr().String())
+	}
+	if err := server.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+	firstActivation := server.active
+	request := func(actorName string, done chan string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		req := httptest.NewRequest(http.MethodGet, "http://worker/", nil).WithContext(ctx)
+		req.Header.Set(atenet.TargetActorHeader, "team-a/"+actorName)
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, req)
+		done <- recorder.Body.String()
+	}
+	firstDone := make(chan string, 1)
+	go request("actor-1", firstDone)
+	receiveWithin(t, firstReady, "first dial")
+	if err := server.Deactivate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	receiveWithin(t, firstDone, "first request cancellation")
+	if err := server.Activate("team-a", "actor-2"); err != nil {
+		t.Fatal(err)
+	}
+	if firstActivation.proxy.Transport == server.active.proxy.Transport {
+		t.Error("activations share a transport")
+	}
+	secondDone := make(chan string, 1)
+	go request("actor-2", secondDone)
+	receiveWithin(t, secondReady, "second dial")
+	close(releaseFirst)
+	close(releaseSecond)
+	if body := receiveWithin(t, secondDone, "second response"); body != "actor-2" {
+		t.Errorf("second actor received %q", body)
+	}
+	if err := server.Deactivate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestRelayIngressWithHalfClose(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -138,14 +226,14 @@ func TestServeHTTP(t *testing.T) {
 	}
 
 	s := newTestServer(t, upstreamURL)
-	s.proxy.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	setActivationTransport(s, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamHosts = append(upstreamHosts, r.Host)
 		return &http.Response{
 			StatusCode: http.StatusNoContent,
 			Header:     make(http.Header),
 			Body:       http.NoBody,
 		}, nil
-	})
+	}))
 	if err := s.Activate("team-a", "actor-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +295,7 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 
 	s := newTestServer(t, upstreamURL)
 	var gotURLHost, gotHost http.Header
-	s.proxy.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	setActivationTransport(s, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		gotURLHost = http.Header{"Host": []string{r.URL.Host}}
 		gotHost = r.Header.Clone()
 		gotHost.Set("Host", r.Host)
@@ -216,7 +304,7 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 			Header:     make(http.Header),
 			Body:       http.NoBody,
 		}, nil
-	})
+	}))
 	if err := s.Activate("team-a", "actor-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +414,7 @@ func TestDeactivateClosesIdleUpstreamConnections(t *testing.T) {
 	}
 	s := newTestServer(t, upstream)
 	transport := &idleClosingRoundTripper{}
-	s.proxy.Transport = transport
+	setActivationTransport(s, transport)
 	if err := s.Activate("team-a", "actor-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -559,15 +647,15 @@ func TestDeactivateCancelsInflightRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newTestServer(t, upstream)
-	if err := s.Activate("team-a", "actor-1"); err != nil {
-		t.Fatal(err)
-	}
 	started := make(chan struct{})
-	s.proxy.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	setActivationTransport(s, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		close(started)
 		<-r.Context().Done()
 		return nil, r.Context().Err()
-	})
+	}))
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -582,6 +670,13 @@ func TestDeactivateCancelsInflightRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	receiveWithin(t, done, "canceled in-flight request")
+}
+
+// setActivationTransport makes every activation use rt, standing in for the
+// per-activation transport the server builds in production.
+func setActivationTransport(s *Server, rt http.RoundTripper) {
+	s.newTransport = func(DialFunc) http.RoundTripper { return rt }
+	s.proxy.Transport = rt
 }
 
 func newTestServer(t *testing.T, upstream *url.URL) *Server {
@@ -847,7 +942,7 @@ func TestProtocolMirrorTransport(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			addr, protoSeen := mirrorBackend(t, tt.backendH1, tt.backendH2C)
-			transport := newProtocolMirrorTransport()
+			transport := newProtocolMirrorTransport(nil)
 			req, err := http.NewRequest(tt.method, "http://"+addr+"/", http.NoBody)
 			if err != nil {
 				t.Fatal(err)
@@ -884,5 +979,64 @@ func receiveWithin[T any](t *testing.T, channel <-chan T, description string) T 
 		t.Fatalf("timed out waiting for %s", description)
 		var zero T
 		return zero
+	}
+}
+
+// CONNECT must use the configured dialer independently of the proxy transport.
+func TestServeConnectHTTPDialsTheSandbox(t *testing.T) {
+	actor, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actor.Close()
+	go func() {
+		conn, err := actor.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.WriteString(conn, "hello from the sandbox")
+	}()
+
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	bundle, trust := makeCertFiles(t, dir)
+	var dialed string
+	s, err := NewServer(Config{
+		CredentialBundlePath: bundle,
+		TrustBundlePath:      trust,
+		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
+		Upstream:             upstreamURL,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialed = address
+			return (&net.Dialer{}).DialContext(ctx, network, actor.Addr().String())
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// HTTP/2 CONNECT supports a recorder without socket hijacking.
+	req := httptest.NewRequest(http.MethodConnect, "https://worker/", http.NoBody)
+	req.ProtoMajor, req.ProtoMinor, req.Proto = 2, 0, "HTTP/2.0"
+	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev:9090"
+	req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+	rec := httptest.NewRecorder()
+	s.ServeConnectHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: the tunnel never reached the sandbox", rec.Code, http.StatusOK)
+	}
+	if got, want := rec.Body.String(), "hello from the sandbox"; got != want {
+		t.Errorf("tunnel carried %q, want %q", got, want)
+	}
+	if want := "actor.internal:9090"; dialed != want {
+		t.Errorf("dialed %q through the sandbox dialer, want %q", dialed, want)
 	}
 }
