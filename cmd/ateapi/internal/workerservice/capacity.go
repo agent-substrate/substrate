@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package workerservice serves the RPCs a Worker uses to tell the control
-// plane about itself.
 package workerservice
 
 import (
@@ -26,7 +24,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -34,30 +31,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
-
-// Server implements ateapipb.WorkerServiceServer.
-type Server struct {
-	ateapipb.UnimplementedWorkerServiceServer
-
-	// store is where a Worker's reported capacity is recorded, and the
-	// authoritative state the report is authorized against.
-	store store.Interface
-
-	// ateletSPIFFEID is the identity the calling atelet must present.
-	ateletSPIFFEID string
-
-	actorIDCAPool localca.Pool
-}
-
-var _ ateapipb.WorkerServiceServer = (*Server)(nil)
-
-func New(store store.Interface, ateletSPIFFEID string, actorIDCAPool localca.Pool) *Server {
-	return &Server{
-		store:          store,
-		ateletSPIFFEID: ateletSPIFFEID,
-		actorIDCAPool:  actorIDCAPool,
-	}
-}
 
 // SetWorkerCapacity records a Worker's reported capacity. As with MintCert,
 // the caller must be an atelet running on the Worker's node.

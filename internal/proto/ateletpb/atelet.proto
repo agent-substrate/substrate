@@ -34,6 +34,17 @@ service AteomSupport {
 
   // Report capacity and supply for this worker back to atelet.
   rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse) {}
+
+  // RequestActorSuspend asks that the actor this worker hosts be suspended,
+  // for atelet to forward to the control plane's WorkerService, which this
+  // mirrors.
+  //
+  // Success means the control plane ran the suspend; an error is its refusal,
+  // passed through as it was given, so a worker can tell a decision from a
+  // failure to ask. Callers must not hold a lock the resulting Checkpoint
+  // would need: the control plane answers this by driving a suspend back
+  // through atelet into the calling ateom.
+  rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
 }
 
 message SetWorkerCapacityRequest {
@@ -43,6 +54,21 @@ message SetWorkerCapacityRequest {
 }
 
 message SetWorkerCapacityResponse {
+}
+
+message RequestActorSuspendRequest {
+  // The actor the calling worker is hosting. atelet forwards this to the
+  // control plane, which serves it only if the actor is assigned to the worker
+  // the caller's certificate names.
+  string actor_atespace = 1;
+  string actor_name = 2;
+
+  // The UID of the actor --- used to guard against deletion and recreation of
+  // an actor with the same name, as for MintActorCertificate.
+  string actor_uid = 3;
+}
+
+message RequestActorSuspendResponse {
 }
 
 message MintActorCertificateRequest {
