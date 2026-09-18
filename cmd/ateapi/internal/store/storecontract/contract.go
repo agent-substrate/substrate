@@ -2946,6 +2946,64 @@ func runTagBorrowContractTests(t *testing.T, setup func(t *testing.T) store.Inte
 		}
 	})
 
+	// Nothing else reclaims a borrow row, so one left behind by DeleteTag would
+	// name a Tag that no longer exists for as long as the borrower does.
+	t.Run("TagBorrow_DeleteTag", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		source, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, "actor-source"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		// The store owns the UID of a Tag it creates, so these borrowers point at
+		// the created Tags rather than at the fixed UIDs the other cases use.
+		deletedTag, err := s.CreateTag(ctx, newTestInProgressTag("tag-1", source))
+		if err != nil {
+			t.Fatalf("CreateTag(tag-1) failed: %v", err)
+		}
+		keptTag, err := s.CreateTag(ctx, newTestInProgressTag("tag-2", source))
+		if err != nil {
+			t.Fatalf("CreateTag(tag-2) failed: %v", err)
+		}
+		deletedTagUID, keptTagUID := deletedTag.GetMetadata().GetUid(), keptTag.GetMetadata().GetUid()
+
+		borrower, err := s.CreateActor(ctx, borrowingActor("session-1", deletedTagUID))
+		if err != nil {
+			t.Fatalf("CreateActor borrowing tag-1 failed: %v", err)
+		}
+		keptBorrower, err := s.CreateActor(ctx, borrowingActor("session-2", keptTagUID))
+		if err != nil {
+			t.Fatalf("CreateActor borrowing tag-2 failed: %v", err)
+		}
+		page, err := s.ListTagBorrowers(ctx, deletedTagUID, store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListTagBorrowers failed: %v", err)
+		}
+		if diff := cmp.Diff([]string{borrower.GetMetadata().GetUid()}, page.Items); diff != "" {
+			t.Fatalf("borrowers before the tag was deleted (-want +got):\n%s", diff)
+		}
+
+		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: "tag-1"}); err != nil {
+			t.Fatalf("DeleteTag failed: %v", err)
+		}
+		page, err = s.ListTagBorrowers(ctx, deletedTagUID, store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListTagBorrowers failed: %v", err)
+		}
+		if page.Items != nil {
+			t.Errorf("borrowers after the tag was deleted = %v, want none", page.Items)
+		}
+		page, err = s.ListTagBorrowers(ctx, keptTagUID, store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListTagBorrowers failed: %v", err)
+		}
+		if diff := cmp.Diff([]string{keptBorrower.GetMetadata().GetUid()}, page.Items); diff != "" {
+			t.Errorf("borrowers of the surviving tag (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("TagBorrow_ListPagination", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
