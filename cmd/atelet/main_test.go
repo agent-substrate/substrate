@@ -407,6 +407,35 @@ func TestValidateRestoreRequest(t *testing.T) {
 
 // Every valid atelet scope must map to its ateom counterpart; in particular
 // DATA_ON_GOLDEN must never silently degrade to FULL.
+func TestActorDirsFor(t *testing.T) {
+	const actorUID = "actor-uid-1"
+	dirs := actorDirsFor(actorUID)
+	if dirs.GetRootDir() != ateompath.ActorPath(actorUID) {
+		t.Fatalf("root_dir = %q, want %q", dirs.GetRootDir(), ateompath.ActorPath(actorUID))
+	}
+	under := map[string]string{
+		"oci_bundle_dir":                dirs.GetOciBundleDir(),
+		"runsc_state_dir":               dirs.GetRunscStateDir(),
+		"pid_file_dir":                  dirs.GetPidFileDir(),
+		"checkpoint_dir":                dirs.GetCheckpointDir(),
+		"restore_dir":                   dirs.GetRestoreDir(),
+		"durable_dir_volume_mounts_dir": dirs.GetDurableDirVolumeMountsDir(),
+		"system_info_volume_roots_dir":  dirs.GetSystemInfoVolumeRootsDir(),
+		"volumes_dir":                   dirs.GetVolumesDir(),
+	}
+	seen := map[string]string{}
+	for field, dir := range under {
+		rel, err := filepath.Rel(dirs.GetRootDir(), dir)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			t.Errorf("%s = %q is not a proper subdirectory of root_dir %q", field, dir, dirs.GetRootDir())
+		}
+		if other, dup := seen[dir]; dup {
+			t.Errorf("%s and %s share %q", field, other, dir)
+		}
+		seen[dir] = field
+	}
+}
+
 func TestToAteomSnapshotScope(t *testing.T) {
 	tests := []struct {
 		in   ateletpb.SnapshotScope

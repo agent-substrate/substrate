@@ -539,6 +539,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
 		ActorUid:              actorUID,
+		ActorDirs:             actorDirsFor(actorUID),
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
@@ -658,6 +659,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              actorUID,
+		ActorDirs:             actorDirsFor(actorUID),
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
@@ -1237,6 +1239,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              req.GetActorUid(),
+		ActorDirs:             actorDirsFor(actorUID),
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
@@ -1304,6 +1307,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		ActorTemplateName:     req.GetActorTemplateName(),
 		RunscPath:             runscPathFor(assetPaths),
 		Spec:                  spec,
+		ActorDirs:             actorDirsFor(actorUID),
 	}); err != nil {
 		if status.Code(err) == codes.NotFound {
 			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
@@ -1500,6 +1504,22 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 		return nil, fmt.Errorf("while getting ateom conn for %s: %w", targetAteomUid, err)
 	}
 	return ateompb.NewAteomClient(conn), nil
+}
+
+// actorDirsFor is the directory set atelet passes to ateom for an actor. ateom
+// takes these from the request rather than deriving them from the actor UID.
+func actorDirsFor(actorUID string) *ateompb.ActorDirs {
+	return &ateompb.ActorDirs{
+		RootDir:                   ateompath.ActorPath(actorUID),
+		OciBundleDir:              ateompath.OCIBundleDir(actorUID),
+		RunscStateDir:             ateompath.RunSCStateDir(actorUID),
+		PidFileDir:                ateompath.PIDFileDir(actorUID),
+		CheckpointDir:             ateompath.CheckpointStateDir(actorUID),
+		RestoreDir:                ateompath.RestoreStateDir(actorUID),
+		DurableDirVolumeMountsDir: ateompath.DurableDirVolumeMountsDir(actorUID),
+		SystemInfoVolumeRootsDir:  ateompath.SystemInfoVolumeRootsDir(actorUID),
+		VolumesDir:                ateompath.VolumesDir(actorUID),
+	}
 }
 
 // buildAteomWorkloadSpec projects the atelet-facing workload spec onto
