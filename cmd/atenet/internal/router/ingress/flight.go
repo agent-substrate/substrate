@@ -53,16 +53,20 @@ func (f *resumeActorFlight) signalRetrying() {
 
 // callerResult classifies f's completed outcome for one caller. It must only
 // be called after f.done is closed.
+//
+// Only a resume that completed without an error says whether an activation
+// ran, so the three activation labels are reserved for that case. A failed
+// resume reports "unknown": the gRPC code alone does not carry the fact. A
+// canceled leader's flight outlives its request and keeps restoring the actor,
+// and a DeadlineExceeded can land in the middle of a restore.
 func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
 	res := f.result
 	if res == nil {
-		return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
+		return nil, ResumeOutcomeUnknown, status.Error(codes.Internal, "resume call returned nil result")
 	}
 
-	// On error, return ResumeOutcomeNone ("none") so the failure is tagged
-	// under the 'outcome' label rather than misreported as an activation.
 	if res.err != nil {
-		return nil, ResumeOutcomeNone, res.err
+		return nil, ResumeOutcomeUnknown, res.err
 	}
 
 	// Disambiguate the shared-flight resume outcome:
