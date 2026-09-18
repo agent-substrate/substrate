@@ -681,7 +681,13 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor create: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
@@ -696,7 +702,45 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		}
 		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
 	}
+	if err := updateTagBorrow(ctx, tx, dbActor); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor create: %w", err)
+	}
 	return dbActor, nil
+}
+
+// updateTagBorrow upserts or clears the actor's borrow of a Tag's external
+// snapshot.
+func updateTagBorrow(ctx context.Context, tx pgx.Tx, actor *ateapipb.Actor) error {
+	actorUID := actor.GetMetadata().GetUid()
+
+	var tagUID string
+	if snapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); snapshotURI != "" {
+		uri, err := resources.ParseSnapshotURI(snapshotURI)
+		if err != nil {
+			return fmt.Errorf("reading the external snapshot of actor %s: %w", actorUID, err)
+		}
+		if owner, ok := uri.Owner().TagUID(); ok {
+			tagUID = owner
+		}
+	}
+
+	if tagUID == "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM tag_borrows WHERE actor_uid = $1`, actorUID); err != nil {
+			return fmt.Errorf("clearing the tag borrow of actor %s: %w", actorUID, err)
+		}
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tag_borrows (actor_uid, tag_uid)
+		VALUES ($1, $2)
+		ON CONFLICT (actor_uid) DO UPDATE SET tag_uid = $2`,
+		actorUID, tagUID); err != nil {
+		return fmt.Errorf("recording the borrow of tag %s by actor %s: %w", tagUID, actorUID, err)
+	}
+	return nil
 }
 
 func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
@@ -754,7 +798,13 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	commandTag, err := tx.Exec(ctx, `
 			UPDATE actors
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
@@ -767,6 +817,12 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	}
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
+	}
+	if err := updateTagBorrow(ctx, tx, dbActor); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor update: %w", err)
 	}
 	return dbActor, nil
 }
@@ -802,6 +858,9 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM actors WHERE atespace = $1 AND name = $2`, atespace, name); err != nil {
 		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tag_borrows WHERE actor_uid = $1`, out.GetMetadata().GetUid()); err != nil {
+		return nil, fmt.Errorf("clearing the tag borrow of actor %s/%s: %w", atespace, name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing actor delete: %w", err)
@@ -1279,8 +1338,14 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 
 func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning tag delete: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
 	var protoBytes []byte
-	if err := p.pool.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		DELETE FROM tags
 		WHERE atespace = $1 AND name = $2
 		RETURNING proto`, atespace, name).Scan(&protoBytes); err != nil {
@@ -1293,7 +1358,60 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*
 	if err := unmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted tag: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tag_borrows WHERE tag_uid = $1`, tag.GetMetadata().GetUid()); err != nil {
+		return nil, fmt.Errorf("clearing the borrows of tag %s/%s: %w", atespace, name, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing tag delete: %w", err)
+	}
 	return tag, nil
+}
+
+func (p *Persistence) ListTagBorrowers(ctx context.Context, tagUID string, opts store.ListOptions) (store.ListResponse[string], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[string]{}, err
+	}
+	pageSize := opts.PageSize
+	// The token is scoped to the Tag, so one cannot be replayed against another
+	// Tag's borrowers.
+	token, err := decodePageToken(opts.PageToken, kindTagBorrow, tagUID, 1)
+	if err != nil {
+		return store.ListResponse[string]{}, err
+	}
+	var last *string
+	if len(token.Last) > 0 {
+		last = &token.Last[0]
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT actor_uid FROM tag_borrows
+		WHERE tag_uid = $1 AND ($2::text IS NULL OR actor_uid > $2)
+		ORDER BY actor_uid
+		LIMIT $3`, tagUID, last, int64(pageSize)+1)
+	if err != nil {
+		return store.ListResponse[string]{}, fmt.Errorf("listing the borrowers of tag %s: %w", tagUID, err)
+	}
+	defer rows.Close()
+
+	var actorUIDs []string
+	for rows.Next() {
+		var actorUID string
+		if err := rows.Scan(&actorUID); err != nil {
+			return store.ListResponse[string]{}, fmt.Errorf("scanning tag borrow row: %w", err)
+		}
+		actorUIDs = append(actorUIDs, actorUID)
+	}
+	if err := rows.Err(); err != nil {
+		return store.ListResponse[string]{}, fmt.Errorf("listing the borrowers of tag %s: %w", tagUID, err)
+	}
+
+	var nextToken string
+	if len(actorUIDs) > int(pageSize) {
+		actorUIDs = actorUIDs[:pageSize]
+		nextToken = encodePageToken(kindTagBorrow, tagUID, []string{actorUIDs[pageSize-1]})
+	}
+	return store.ListResponse[string]{Items: actorUIDs, NextPageToken: nextToken}, nil
 }
 
 // --- Workers ---

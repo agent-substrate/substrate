@@ -255,9 +255,8 @@ func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Opera
 // CreateActor racing this delete can seed an Actor from content that is going
 // away. That race is accepted for now.
 //
-// Note that this destroys the external snapshot: an Actor created from the tag
-// and never suspended is still borrowing it and becomes unrecoverable. Do not
-// delete a tag while clones of it exist.
+// DeletaTag is refused with FailedPrecondition if at least one actor is still borrowing
+// the tag's snapshot.
 func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagRequest) (*ateapipb.Tag, error) {
 	// TODO: mode delete orchestration to a workflow.
 	if errs := validateDeleteTagRequest(ctx, req); len(errs) > 0 {
@@ -280,6 +279,9 @@ func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagReque
 		}
 		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
+	if err := s.checkTagBorrowers(ctx, stored); err != nil {
+		return nil, err
+	}
 	if err := s.releaseTagSnapshot(ctx, stored); err != nil {
 		return nil, err
 	}
@@ -292,6 +294,23 @@ func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagReque
 		return nil, fmt.Errorf("while deleting tag: %w", err)
 	}
 	return tag, nil
+}
+
+// checkTagBorrowers refuses the delete while an Actor is still using the tag's
+// external snapshot as its own.
+func (s *RPCService) checkTagBorrowers(ctx context.Context, tag *ateapipb.Tag) error {
+	atespace, name := tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName()
+
+	borrowers, err := s.impl.ListTagBorrowers(ctx, tag.GetMetadata().GetUid(), store.ListOptions{PageSize: 1})
+	if err != nil {
+		return fmt.Errorf("while listing the borrowers of tag %s/%s: %w", atespace, name, err)
+	}
+	if len(borrowers.Items) == 0 {
+		return nil
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"Tag %s/%s cannot be deleted because its snapshot is still in use by at least one Actor created from it",
+		atespace, name)
 }
 
 // releaseTagSnapshot deletes the objects the tag's external snapshot is made
@@ -315,6 +334,10 @@ func (s *RPCService) releaseTagSnapshot(ctx context.Context, tag *ateapipb.Tag) 
 func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
 	// TODO: implement this
 	return s.store.DeleteTag(ctx, tagRef)
+}
+
+func (s *ServiceImpl) ListTagBorrowers(ctx context.Context, tagUID string, opts store.ListOptions) (store.ListResponse[string], error) {
+	return s.store.ListTagBorrowers(ctx, tagUID, opts)
 }
 
 func validateDeleteTagRequest(ctx context.Context, req *ateapipb.DeleteTagRequest) field.ErrorList {

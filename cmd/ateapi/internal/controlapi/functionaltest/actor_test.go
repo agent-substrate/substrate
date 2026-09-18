@@ -72,7 +72,7 @@ func TestCreateActor_Success(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 		},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 	}
@@ -694,7 +694,7 @@ func TestUpdateActor_Success(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -841,7 +841,7 @@ func TestUpdateActor(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -1812,7 +1812,7 @@ func TestResumeActor(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
 				WorkerNamespace: ns,
@@ -2358,6 +2358,16 @@ func TestSuspendActor(t *testing.T) {
 	assertSnapshotCollected(t, tc, snapshotURI)
 	assertSnapshotPresent(t, tc, tagSnapshotURI)
 
+	// The cross-atespace clone never suspended, so the tag's snapshot is still
+	// its starting state. A borrow holds the tag back from whichever atespace it
+	// was taken out in.
+	if _, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteTag while other/cross-atespace borrows it = %v, want FailedPrecondition", err)
+	}
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "other", Name: "cross-atespace"}}); err != nil {
+		t.Fatalf("DeleteActor(other/cross-atespace) failed: %v", err)
+	}
+
 	if deleted, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef}); err != nil || deleted.GetMetadata().GetName() != tagRef.GetName() {
 		t.Fatalf("DeleteTag = (%v, %v)", deleted, err)
 	}
@@ -2558,7 +2568,7 @@ func TestPauseActor(t *testing.T) {
 				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			},
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 		},
 	}
 

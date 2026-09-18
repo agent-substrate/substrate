@@ -1390,12 +1390,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{run: true},
 		},
 		{
-			name:  "06 inherited golden snapshot rejects a malformed URI",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}, tmplUID: "current"},
-			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
-			want:  restoreWant{code: codes.DataLoss},
-		},
-		{
 			name:  "07 template repoint with a late golden still cold-boots",
 			actor: actorSeed{tmplUID: "old-template-uid"},
 			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}},
@@ -1529,11 +1523,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotURI:    actorURI,
 				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 			},
-		},
-		{
-			name:  "18 malformed durable snapshot URI fails with DataLoss",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
-			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
 			name: "19 Full pause snapshot restores locally as Full",
