@@ -109,8 +109,32 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 	}
 	defer f.Close()
 
+	if err := writeArchive(ctx, f, srcDir, skip); err != nil {
+		return err
+	}
+	// Handed to atelet for upload as soon as we return, so flush to disk rather
+	// than trusting the page cache to outlive us.
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("syncing tar %q: %w", tarPath, err)
+	}
+	return nil
+}
+
+// CreateTo is Create writing to an arbitrary destination instead of a file, for
+// callers that pipe the archive somewhere (an object-storage upload) rather
+// than staging it on disk. It does not close w.
+//
+// Errors from w surface here, so a consumer that stops reading early must make
+// its own reason for stopping the more informative one.
+func CreateTo(ctx context.Context, w io.Writer, srcDir string, skip SkipFunc) error {
+	return writeArchive(ctx, w, srcDir, skip)
+}
+
+// writeArchive streams srcDir to w through a pooled buffer, flushed before
+// returning so the whole archive has reached w by then.
+func writeArchive(ctx context.Context, w io.Writer, srcDir string, skip SkipFunc) error {
 	bw := tarWriterPool.Get().(*bufio.Writer)
-	bw.Reset(f)
+	bw.Reset(w)
 	defer func() {
 		bw.Reset(nil)
 		tarWriterPool.Put(bw)
@@ -120,17 +144,12 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 		return err
 	}
 	if err := tw.Close(); err != nil {
-		return fmt.Errorf("closing tar %q: %w", tarPath, err)
+		return fmt.Errorf("closing tar of %q: %w", srcDir, err)
 	}
-	// The buffer has to reach the file before the sync below, or the sync
-	// durably persists a truncated archive.
+	// Everything buffered has to reach w before we report success: the caller
+	// may sync, or finish an upload, the moment we return.
 	if err := bw.Flush(); err != nil {
-		return fmt.Errorf("flushing tar %q: %w", tarPath, err)
-	}
-	// Durable-dir tars are handed to atelet for upload as soon as we return, so
-	// flush to disk rather than trusting the page cache to outlive us.
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("syncing tar %q: %w", tarPath, err)
+		return fmt.Errorf("flushing tar of %q: %w", srcDir, err)
 	}
 	return nil
 }
