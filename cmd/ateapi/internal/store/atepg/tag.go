@@ -265,8 +265,14 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 
 func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning tag delete: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		DELETE FROM tags
 		WHERE atespace = $1 AND name = $2
 		  AND ($3::text = '' OR uid = $3::text)
@@ -275,7 +281,7 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	if errors.Is(err, pgx.ErrNoRows) {
 		var uid string
 		var version int64
-		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM tags WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
+		err := tx.QueryRow(ctx, `SELECT uid, version FROM tags WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
 		return nil, mapDeleteError(err, uid, version, precondition)
 	}
 	if err != nil {
@@ -284,6 +290,12 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	tag := &ateapipb.Tag{}
 	if err := unmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted tag: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tag_borrows WHERE tag_uid = $1`, tag.GetMetadata().GetUid()); err != nil {
+		return nil, fmt.Errorf("clearing the borrows of tag %s/%s: %w", atespace, name, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing tag delete: %w", err)
 	}
 	return tag, nil
 }
