@@ -18,7 +18,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 )
 
 // Teardown walks a fixed list of manifests covering every install shape, so a
@@ -51,5 +59,76 @@ func TestDeletePathReportsUnparseableManifest(t *testing.T) {
 
 	if err := (&Client{}).DeletePath(context.Background(), path); err == nil {
 		t.Error("DeletePath() = nil, want an error for an unparseable manifest")
+	}
+}
+
+// fakeResource is the slice of the dynamic client ApplyMissing reaches: Get to
+// decide, Apply to create. It records applies so the test can tell a kept
+// object from a rewritten one.
+type fakeResource struct {
+	dynamic.NamespaceableResourceInterface
+	objs    map[string]*unstructured.Unstructured
+	applied []string
+}
+
+func (f *fakeResource) Namespace(string) dynamic.ResourceInterface { return f }
+
+func (f *fakeResource) Get(_ context.Context, name string, _ metav1.GetOptions, _ ...string) (*unstructured.Unstructured, error) {
+	obj, ok := f.objs[name]
+	if !ok {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "ate.dev", Resource: "sandboxconfigs"}, name)
+	}
+	return obj, nil
+}
+
+func (f *fakeResource) Apply(_ context.Context, name string, obj *unstructured.Unstructured, _ metav1.ApplyOptions, _ ...string) (*unstructured.Unstructured, error) {
+	f.applied = append(f.applied, name)
+	f.objs[name] = obj
+	return obj, nil
+}
+
+type fakeDynamic struct{ res *fakeResource }
+
+func (f fakeDynamic) Resource(schema.GroupVersionResource) dynamic.NamespaceableResourceInterface {
+	return f.res
+}
+
+func sandboxConfig(name, marker string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "ate.dev", Version: "v1alpha1", Kind: "SandboxConfig"})
+	obj.SetName(name)
+	_ = unstructured.SetNestedField(obj.Object, marker, "spec", "marker")
+	return obj
+}
+
+// The default SandboxConfig is installed once and then belongs to the
+// operator, so a redeploy must create what is missing and leave the rest as it
+// found it, edits included.
+func TestApplyMissingKeepsExistingObjects(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "ate.dev", Version: "v1alpha1", Kind: "SandboxConfig"}
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{gvk.GroupVersion()})
+	mapper.Add(gvk, meta.RESTScopeRoot)
+	res := &fakeResource{objs: map[string]*unstructured.Unstructured{
+		"gvisor-default": sandboxConfig("gvisor-default", "operator-edited"),
+	}}
+	c := &Client{Dynamic: fakeDynamic{res}, mapper: mapper}
+
+	var kept []string
+	err := c.ApplyMissing(context.Background(),
+		[]*unstructured.Unstructured{sandboxConfig("gvisor-default", "release"), sandboxConfig("extra", "release")},
+		func(obj *unstructured.Unstructured) { kept = append(kept, obj.GetName()) })
+	if err != nil {
+		t.Fatalf("ApplyMissing() = %v", err)
+	}
+
+	if want := []string{"gvisor-default"}; !slices.Equal(kept, want) {
+		t.Errorf("kept = %v, want %v", kept, want)
+	}
+	if want := []string{"extra"}; !slices.Equal(res.applied, want) {
+		t.Errorf("applied = %v, want %v", res.applied, want)
+	}
+	marker, _, _ := unstructured.NestedString(res.objs["gvisor-default"].Object, "spec", "marker")
+	if marker != "operator-edited" {
+		t.Errorf("gvisor-default spec.marker = %q, want the operator's value kept", marker)
 	}
 }

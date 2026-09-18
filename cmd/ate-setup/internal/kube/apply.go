@@ -118,6 +118,27 @@ func (c *Client) ApplyTolerant(ctx context.Context, objs []*unstructured.Unstruc
 	return nil
 }
 
+// ApplyMissing applies only the objects that are not present yet, reporting
+// each object it leaves alone through onKeep. Unlike Apply it never touches an
+// existing object, so an operator's edits to it survive a redeploy.
+func (c *Client) ApplyMissing(ctx context.Context, objs []*unstructured.Unstructured, onKeep func(obj *unstructured.Unstructured)) error {
+	var missing []*unstructured.Unstructured
+	for _, obj := range objs {
+		present, err := c.Exists(ctx, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
+		if err != nil {
+			return err
+		}
+		if present {
+			if onKeep != nil {
+				onKeep(obj)
+			}
+			continue
+		}
+		missing = append(missing, obj)
+	}
+	return c.Apply(ctx, missing)
+}
+
 // Delete removes every object, ignoring those that are already gone. This is
 // the `kubectl delete --ignore-not-found -f` equivalent.
 func (c *Client) Delete(ctx context.Context, objs []*unstructured.Unstructured) error {

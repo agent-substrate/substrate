@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
@@ -106,11 +107,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	// Install the cluster-wide sandbox config. Sandbox binaries live on
-	// cluster-scoped SandboxConfigs each ActorTemplate names via
-	// sandboxConfig.configName; gVisor templates name this one unless they
-	// create their own SandboxConfig.
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml")); err != nil {
+	if err := e.ensureDefaultSandboxConfig(ctx); err != nil {
 		return err
 	}
 
@@ -173,6 +170,23 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		}
 	}
 	return nil
+}
+
+// ensureDefaultSandboxConfig installs the cluster-wide sandbox config where it
+// is missing. Sandbox binaries live on cluster-scoped SandboxConfigs each
+// ActorTemplate names via sandboxConfig.configName; gVisor templates name this
+// one unless they create their own.
+//
+// An existing config is left alone: for GA a system upgrade never changes the
+// sandbox runtime, that stays an explicit SandboxConfig edit by the user.
+func (e *Env) ensureDefaultSandboxConfig(ctx context.Context) error {
+	objs, err := kube.LoadPath(e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
+	if err != nil {
+		return err
+	}
+	return e.Kube.ApplyMissing(ctx, objs, func(obj *unstructured.Unstructured) {
+		log.Infof("Keeping existing %s; edit it to change the sandbox runtime", kube.Describe(obj))
+	})
 }
 
 // applyPodcertWorkersOverride sets WORKERS_PER_SIGNER on podcertificate-controller if configured.
