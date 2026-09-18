@@ -155,6 +155,12 @@ message ExternalSnapshot {
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 2;
+
+  // UID of the ActorTemplate whose sandbox this snapshot's guest state was
+  // captured from.
+  //
+  // +k8s:optional
+  string actor_template_uid = 3;
 }
 
 message LocalSnapshotInfo {

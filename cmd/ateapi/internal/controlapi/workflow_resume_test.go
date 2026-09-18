@@ -1090,25 +1090,38 @@ func TestLoadActorForResume_DoesNotDefaultGolden(t *testing.T) {
 }
 
 // TestLoadActorForResume_TemplateReplaced covers the detection of a repointed
-// actor: the actor records the template UID its guest state was built on, and
-// a mismatch with its current template marks the source TemplateReplaced,
-// forcing the restore to data-only.
+// actor: when ExternalSnapshot.actor_template_uid differs from the actor's
+// current template UID, TemplateReplaced is set so the external restore
+// downgrades to data-only.
 func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
+	// "current" stands for the created template's own UID.
+	const current = "current"
+
 	tests := []struct {
-		name string
-		// builtOnTemplateUID seeds the template UID the actor's guest state
-		// was built on; "current" stands for the created template's own UID,
-		// "" leaves the field unset (an actor from before it was recorded).
-		builtOnTemplateUID string
-		noSnapshot         bool
-		want               bool
+		name        string
+		snapshotUID string
+		noSnapshot  bool
+		want        bool
 	}{
-		{name: "snapshot taken under the current template", builtOnTemplateUID: "current", want: false},
-		{name: "snapshot taken under a replaced template", builtOnTemplateUID: "some-other-uid", want: true},
-		{name: "snapshot without a recorded template UID", builtOnTemplateUID: "", want: false},
-		{name: "no durable snapshot", noSnapshot: true, want: false},
+		{
+			name:        "snapshot taken under the current template",
+			snapshotUID: current,
+		},
+		{
+			name:        "snapshot taken under a replaced template",
+			snapshotUID: "some-other-uid",
+			want:        true,
+		},
+		{
+			name:        "snapshot without a recorded template UID",
+			snapshotUID: "",
+		},
+		{
+			name:       "no durable snapshot",
+			noSnapshot: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1124,21 +1137,23 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 				t.Fatalf("create template: %v", err)
 			}
 			if tmpl.GetMetadata().GetUid() == "" {
-				t.Fatal("created template has no UID; the matching case would be vacuous")
+				t.Fatal("created template has no UID; the matching cases would be vacuous")
+			}
+			resolve := func(uid string) string {
+				if uid == current {
+					return tmpl.GetMetadata().GetUid()
+				}
+				return uid
 			}
 
 			var seedOpts []func(*ateapipb.Actor)
 			if !tt.noSnapshot {
-				uid := tt.builtOnTemplateUID
-				if uid == "current" {
-					uid = tmpl.GetMetadata().GetUid()
-				}
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
 					a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-						SnapshotUri:  someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"),
-						ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+						SnapshotUri:      someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"),
+						ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+						ActorTemplateUid: resolve(tt.snapshotUID),
 					}
-					a.Status.CurrentActorTemplateUid = uid
 				})
 			}
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, seedOpts...)
@@ -1310,11 +1325,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		localSnapshot *ateapipb.LocalSnapshotInfo
 		// externalSnapshot seeds Status.ExternalSnapshot (the durable snapshot).
 		externalSnapshot *ateapipb.ExternalSnapshot
-		// tmplUID seeds Status.CurrentActorTemplateUid, the template UID the
-		// guest state was built on: "current" stands for the created template's
-		// store-assigned UID (unknown until runtime), "" leaves the field unset
-		// (an actor from before it was recorded), anything else mismatches (a
-		// repointed actor).
+		// tmplUID seeds the template UID the snapshot's guest state was built
+		// on (stamped onto localSnapshot, externalSnapshot, and
+		// CurrentActorTemplateUid): "current" stands for the created template's
+		// store-assigned UID (unknown until runtime), "" leaves the field unset,
+		// anything else mismatches (a repointed actor).
 		tmplUID string
 	}
 	// templateSeed is the ActorTemplate configuration a row persists.
@@ -1680,9 +1695,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// TemplateReplaced wins in the local branch too: the pause
-			// checkpoint restores as plain Data, the golden overlay dropped.
-			name: "29 template repoint beats the golden policy on the local path",
+			// An older external snapshot's template mismatch does not affect a
+			// local pause restore: templates can only be updated while
+			// SUSPENDED, so a pause checkpoint is always from the current
+			// template.
+			name: "29 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
 				localSnapshot:    &ateapipb.LocalSnapshotInfo{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
@@ -1696,7 +1713,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
+				goldenURI:      goldenURI,
 			},
 		},
 	}
@@ -1753,12 +1771,18 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, func(a *ateapipb.Actor) {
 				a.Status.WorkerAssignment = wireTestAssignment()
 				a.Status.LocalSnapshotInfo = tt.actor.localSnapshot
-				a.Status.ExternalSnapshot = tt.actor.externalSnapshot
 				uid := tt.actor.tmplUID
 				if uid == "current" {
 					uid = createdTmpl.GetMetadata().GetUid()
 				}
 				a.Status.CurrentActorTemplateUid = uid
+				if tt.actor.externalSnapshot != nil {
+					ext := proto.CloneOf(tt.actor.externalSnapshot)
+					if ext.ActorTemplateUid == "" {
+						ext.ActorTemplateUid = uid
+					}
+					a.Status.ExternalSnapshot = ext
+				}
 			})
 
 			actor, loadedTmpl, src, err := w.loadActorForResume(ctx, actorRef)

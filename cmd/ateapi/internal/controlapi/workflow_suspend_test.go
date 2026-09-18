@@ -285,8 +285,9 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status: &ateapipb.ActorStatus{
-			State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			InProgressSnapshotUri: snapshotURI,
+			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotUri:   snapshotURI,
+			CurrentActorTemplateUid: "tmpl-uid-1",
 			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
 				SnapshotName:              "actor-1-pause-snapshot",
 				NodeVmsWithLocalSnapshots: []string{"node1"},
@@ -307,6 +308,11 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	}
 	if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
 		t.Errorf("SnapshotUri = %q, want %q", got, snapshotURI)
+	}
+	// The snapshot carries the template it was captured under, so a later
+	// repoint can tell that its guest state no longer matches.
+	if got := stored.GetStatus().GetExternalSnapshot().GetActorTemplateUid(); got != "tmpl-uid-1" {
+		t.Errorf("ExternalSnapshot.ActorTemplateUid = %q, want %q", got, "tmpl-uid-1")
 	}
 	if got := stored.GetStatus().GetInProgressSnapshotUri(); got != "" {
 		t.Errorf("InProgressSnapshotUri = %q, want cleared", got)

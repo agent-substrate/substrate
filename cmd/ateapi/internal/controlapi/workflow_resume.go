@@ -48,8 +48,8 @@ type resumeSnapshotSource struct {
 	// selects the golden snapshot as the boot source for the pending restore:
 	// restore then combines the golden snapshot with the actor's data.
 	GoldenSnapshotURI resources.SnapshotURI
-	// TemplateReplaced is true when the snapshot's recorded template UID
-	// differs from the actor's current template.
+	// TemplateReplaced is true when the external snapshot's recorded template
+	// UID differs from the actor's current template.
 	TemplateReplaced bool
 }
 
@@ -184,13 +184,8 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, status.Errorf(codes.DataLoss, "Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
-		// The Actor records the template its guest state was built on; a
-		// different UID on its current template means it was repointed since
-		// the capture.
-		// TODO: Disallow updating the ActorTemplate ID for paused actors here
-		// as well; it is already disallowed at admission time.
-		builtOnTemplateUID := actor.GetStatus().GetCurrentActorTemplateUid()
-		src.TemplateReplaced = builtOnTemplateUID != "" && builtOnTemplateUID != actorTemplate.GetMetadata().GetUid()
+		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
+		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -701,8 +696,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		// loadActorForResume resolved a golden URI per the template's onResume
 		// configuration, else what the pause captured.
 		switch {
-		case src.TemplateReplaced:
-			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()

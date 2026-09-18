@@ -29,7 +29,7 @@ import (
 // different ActorTemplate: the actor runs and writes to its durable-dir data
 // volume under template A, suspends, is repointed at template B via
 // UpdateActor, and resumes. The resume must detect the template change (the
-// recorded current_actor_template_uid no longer matches) and restore
+// snapshot's recorded actor_template_uid no longer matches) and restore
 // data-only: the durable dir survives while the guest cold-boots from
 // template B.
 func TestUpdateTemplateLifecycle(t *testing.T) {
@@ -140,6 +140,9 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	if got, want := suspended.GetStatus().GetCurrentActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("suspended Actor current_actor_template_uid = %q, want template A's %q", got, want)
 	}
+	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+		t.Errorf("suspended Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
+	}
 	if suspended.GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
 		t.Error("suspended Actor has no external snapshot")
 	}
@@ -187,6 +190,54 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 		t.Errorf("[after template update] expected %q (template B validating the preserved file), got response: %s", want, resp)
 	}
 
+	//
+	// Pause under template B while status.external_snapshot still holds the last
+	// committed snapshot from template A. Resuming from PAUSED restores the
+	// local checkpoint (which was captured under template B, since templates
+	// can only be updated while SUSPENDED) and preserves the in-memory counter
+	// when onPause is FULL.
+	//
+	t.Logf("Pausing Actor %q under template B...", actorID)
+	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	}); err != nil {
+		t.Fatalf("failed to pause Actor under template B: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+
+	paused, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	})
+	if err != nil {
+		t.Fatalf("failed to get paused Actor: %v", err)
+	}
+	if got, want := paused.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+		t.Errorf("paused Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
+	}
+
+	t.Logf("Resuming Actor %q from pause under template B...", actorID)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor from pause under template B: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
+	if err != nil {
+		t.Fatalf("failed to call actor after pause/resume under template B: %v", err)
+	}
+	wantMemAfterPause := 2
+	if onCommit == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+		wantMemAfterPause = 1
+	}
+	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
+
+	// TODO: Once RevertActor is available, add a resume -> crash/revert ->
+	// resume sequence here to verify that reverting after running on template B
+	// drops B's local state and resumes from template A's external snapshot
+	// with DATA scope (since ExternalSnapshot.actor_template_uid == A != B).
+
 	// A second suspend closes the loop: the resume under B stamped B as the
 	// sprint's template, and the suspend preserves it.
 	t.Logf("Suspending Actor %q again...", actorID)
@@ -204,6 +255,9 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	}
 	if got, want := suspended.GetStatus().GetCurrentActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
 		t.Errorf("re-suspended Actor current_actor_template_uid = %q, want template B's %q", got, want)
+	}
+	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
+		t.Errorf("re-suspended Actor external_snapshot.actor_template_uid = %q, want template B's %q", got, want)
 	}
 }
 
