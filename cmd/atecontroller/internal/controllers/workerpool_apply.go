@@ -188,6 +188,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
+	maybeApplyKataPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 
@@ -306,8 +307,9 @@ var ateomMicroVMCapabilities = slices.Concat(ateomGvisorCapabilities, []corev1.C
 })
 
 // ateomSecurityContext returns the ateom container security context for a sandbox
-// class. Neither class runs privileged; they differ in their capability set.
-// Both declare seccomp Unconfined because their sandbox child pivot_root()s,
+// class. gVisor and microVM run unprivileged with different capability sets;
+// Kata currently runs privileged for shim, VM, and network setup. All classes
+// declare seccomp Unconfined because their sandbox child pivot_root()s,
 // which the default profile denies. An empty class defaults to gVisor.
 func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
 	// Both runtimes mount inside the worker — runsc pivots root and the worker
@@ -324,6 +326,9 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
 
+	if class == atev1alpha1.SandboxClassKata {
+		return sc.WithPrivileged(true)
+	}
 	if class == atev1alpha1.SandboxClassMicroVM {
 		// Give up the default seccomp profile so virtiofsd keeps its own sandbox,
 		// which pivot_root()s — a syscall the profile denies whatever capabilities
@@ -428,7 +433,48 @@ func maybeApplyMicroVMPodShape(
 const (
 	tunDeviceVolume = "dev-net-tun"
 	tunDevicePath   = "/dev/net/tun"
+	kataAssetsPath  = "/opt/ateom-kata"
+	kataVMStatePath = "/run/vc/vm"
 )
+
+// maybeApplyKataPodShape adds only resources required by the runtime-rs shim.
+// Shared WorkerPool behavior and other runtime pod shapes remain unchanged.
+func maybeApplyKataPodShape(
+	podSpec *corev1ac.PodSpecApplyConfiguration,
+	ateom *corev1ac.ContainerApplyConfiguration,
+	class atev1alpha1.SandboxClass,
+) {
+	if class != atev1alpha1.SandboxClassKata {
+		return
+	}
+	ateom.WithCommand("/ateom-kata")
+	ateom.Args = []string{
+		"--pod-uid=$(POD_UID)",
+		"--atunnel-listen-address=:443",
+		"--atunnel-connect-listen-address=:8443",
+		"--atunnel-credential-bundle=" + atunnelIdentityMountPath + "/credential-bundle.pem",
+		"--atunnel-trust-bundle=" + atunnelIdentityMountPath + "/trust-bundle.pem",
+	}
+	addDeviceResourceLimits(ateom, deviceplugin.ResourceKVM)
+	ateom.WithVolumeMounts(
+		corev1ac.VolumeMount().WithName(tunDeviceVolume).WithMountPath(tunDevicePath),
+		corev1ac.VolumeMount().WithName("run-sandboxd").WithMountPath("/run/sandboxd"),
+		corev1ac.VolumeMount().WithName("run-kata").WithMountPath("/run/kata-containers"),
+		corev1ac.VolumeMount().WithName("kata-runtime").WithMountPath(kataAssetsPath).WithReadOnly(true),
+		corev1ac.VolumeMount().WithName("vm-template").WithMountPath(kataVMStatePath),
+		corev1ac.VolumeMount().WithName("kata-shm").WithMountPath("/dev/shm"),
+	)
+	podSpec.WithVolumes(
+		corev1ac.Volume().WithName(tunDeviceVolume).WithHostPath(corev1ac.HostPathVolumeSource().WithPath(tunDevicePath).WithType(corev1.HostPathCharDev)),
+		corev1ac.Volume().WithName("run-sandboxd").WithEmptyDir(corev1ac.EmptyDirVolumeSource()),
+		corev1ac.Volume().WithName("run-kata").WithEmptyDir(corev1ac.EmptyDirVolumeSource()),
+		corev1ac.Volume().WithName("kata-runtime").WithHostPath(corev1ac.HostPathVolumeSource().WithPath(kataAssetsPath).WithType(corev1.HostPathDirectory)),
+		corev1ac.Volume().WithName("vm-template").WithHostPath(corev1ac.HostPathVolumeSource().WithPath(kataVMStatePath).WithType(corev1.HostPathDirectory)),
+		corev1ac.Volume().WithName("kata-shm").WithEmptyDir(corev1ac.EmptyDirVolumeSource().
+			WithMedium(corev1.StorageMediumMemory).
+			WithSizeLimit(resource.MustParse("4Gi"))),
+	)
+}
 
 // addDeviceResourceLimits requests one unit of each named extended resource,
 // merging into whatever limits the pod template already set.

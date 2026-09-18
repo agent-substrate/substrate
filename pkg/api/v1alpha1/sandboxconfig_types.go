@@ -28,6 +28,8 @@ const (
 	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
 	// /dev/kvm and vhost devices.
 	SandboxClassMicroVM SandboxClass = "microvm"
+	// SandboxClassKata is the Kata runtime-rs shim-v2 backend.
+	SandboxClassKata SandboxClass = "kata"
 )
 
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
@@ -56,7 +58,7 @@ type SandboxConfigSpec struct {
 	// sandbox_config.sandbox_class.
 	//
 	// +required
-	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:validation:Enum=gvisor;microvm;kata
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
 

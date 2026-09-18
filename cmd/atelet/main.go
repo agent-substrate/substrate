@@ -513,7 +513,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
+		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(), sandboxRec.SandboxClass,
 	); err != nil {
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
 	}
@@ -647,8 +647,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
 	}
 
-	tAteom := time.Now()
-	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
+	checkpointReq := &ateompb.CheckpointWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -658,7 +657,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              actorUID,
-	})
+	}
+	if sandboxRec.SandboxClass == string(atev1alpha1.SandboxClassKata) {
+		checkpointReq.OperationId = kataOperationID("checkpoint", actorUID, fmt.Sprintf("%d:%s:%s", req.GetType(), req.GetExternalConfig().GetSnapshotUri(), req.GetLocalConfig().GetSnapshotName()))
+	}
+	tAteom := time.Now()
+	resp, err := client.CheckpointWorkload(ctx, checkpointReq)
 	dAteom = time.Since(tAteom)
 	if err != nil {
 		// TODO: Ateom should classify checkpoint failures, and set "should-crash"
@@ -669,7 +673,14 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	s.systemInfoVolumes.Deregister(actorUID)
 
-	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
+	sandboxRec.SnapshotFiles = append([]string(nil), resp.GetSnapshotFiles()...)
+	if sandboxRec.SandboxClass == string(atev1alpha1.SandboxClassKata) {
+		operationID := kataOperationID("checkpoint", actorUID, fmt.Sprintf("%d:%s:%s", req.GetType(), req.GetExternalConfig().GetSnapshotUri(), req.GetLocalConfig().GetSnapshotName()))
+		if err := writeKataTransport(checkpointDir, operationID, os.Getenv("NODE_NAME"), resp.GetRuntimeCompatibility(), sandboxRec.SnapshotFiles); err != nil {
+			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidSandboxAsset, ateerrors.ReasonTerminalFileSystemError)
+		}
+		sandboxRec.SnapshotFiles = append(sandboxRec.SnapshotFiles, kataFileIndexName)
+	}
 	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), errors.New("ateom reported no snapshot files for checkpoint"))
 	}
@@ -745,8 +756,21 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 
 	// Move exactly the files ateom reported.
 	for _, fileName := range rec.SnapshotFiles {
+		if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) && fileName == kataFileIndexName {
+			continue
+		}
+		if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) {
+			if err := validateKataIndexPath(fileName); err != nil {
+				return err
+			}
+		}
 		src := filepath.Join(checkpointDir, fileName)
 		dst := filepath.Join(localCheckpointPath, fileName)
+		if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+				return fmt.Errorf("while creating checkpoint parent: %w", err)
+			}
+		}
 		recordSnapshotSize(ctx, fileName, src, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
 		if err := os.Rename(src, dst); err != nil {
@@ -759,8 +783,16 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(localCheckpointPath, sandboxManifestName), manifest, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(localCheckpointPath, snapshotAssetManifestName(rec.SandboxClass)), manifest, 0o600); err != nil {
 		return fmt.Errorf("while writing snapshot manifest: %w", err)
+	}
+	if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) && slices.Contains(rec.SnapshotFiles, kataFileIndexName) {
+		src := filepath.Join(checkpointDir, kataFileIndexName)
+		dst := filepath.Join(localCheckpointPath, kataFileIndexName)
+		recordSnapshotSize(ctx, kataFileIndexName, src, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("failed to publish Kata transport manifest: %w", err)
+		}
 	}
 
 	return nil
@@ -797,6 +829,14 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string) error {
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range rec.SnapshotFiles {
+		if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) && fileName == kataFileIndexName {
+			continue
+		}
+		if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) {
+			if err := validateKataIndexPath(fileName); err != nil {
+				return err
+			}
+		}
 		local := filepath.Join(srcDir, fileName)
 		recordSnapshotSize(ctx, fileName, local, templateAtespace, templateName)
 		g.Go(func() error {
@@ -818,12 +858,21 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
 	}
-	manifestURI, err := uri.ObjectURI(sandboxManifestName)
+	manifestURI, err := uri.ObjectURI(snapshotAssetManifestName(rec.SandboxClass))
 	if err != nil {
 		return fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
 	}
 	if err := ategcs.SendBytesToGCS(ctx, s.gcsClient, manifestURI, manifest); err != nil {
 		return fmt.Errorf("while uploading snapshot manifest: %w", err)
+	}
+	if rec.SandboxClass == string(atev1alpha1.SandboxClassKata) && slices.Contains(rec.SnapshotFiles, kataFileIndexName) {
+		indexURI, err := uri.ObjectURI(kataFileIndexName + ".zstd")
+		if err != nil {
+			return fmt.Errorf("while addressing Kata transport manifest in GCS: %w", err)
+		}
+		if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient, indexURI, filepath.Join(srcDir, kataFileIndexName)); err != nil {
+			return fmt.Errorf("while uploading Kata transport manifest: %w", err)
+		}
 	}
 	return nil
 }
@@ -882,12 +931,11 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 // returns the sandbox class recorded in the snapshot manifest (empty when the
 // manifest was not read). Parameterized by localDir for tests.
 func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, localDir string, uri resources.SnapshotURI) (string, error) {
-	manifestURI, err := uri.ObjectURI(sandboxManifestName)
-	if err != nil {
-		return "", fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
+	manifest, manifestName, err := readLocalSnapshotManifest(localDir)
+	manifestURI, uriErr := uri.ObjectURI(manifestName)
+	if uriErr != nil {
+		return "", fmt.Errorf("while addressing snapshot manifest in GCS: %w", uriErr)
 	}
-
-	manifest, err := os.ReadFile(filepath.Join(localDir, sandboxManifestName))
 	if errors.Is(err, os.ErrNotExist) {
 		// The local snapshot is gone. A previous invocation may have uploaded
 		// and pruned it: the remote manifest is uploaded last, so its presence
@@ -950,6 +998,9 @@ func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 		rec.SnapshotFiles = []string{ateompath.DurableDirTarFile}
 		rec.Scope = ateattr.SnapshotScopeData
 		return nil
+
+	case atev1alpha1.SandboxClassKata:
+		return status.Error(codes.FailedPrecondition, "kata cannot extract a Data-scope snapshot from a Full checkpoint")
 
 	default:
 		// The manifest's class is unvalidated input from disk/object storage.
@@ -1041,19 +1092,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL)
 		}
-		manifestURI, err := uri.ObjectURI(sandboxManifestName)
-		if err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL)
-		}
-		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
-		if err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while fetching snapshot manifest: %w", err), ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject)
-		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
+		if sandboxRec, err = s.fetchExternalSnapshotRecord(ctx, uri); err != nil {
+			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidSandboxAsset)
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		manifest, err := os.ReadFile(filepath.Join(ateompath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()), sandboxManifestName))
+		manifest, _, err := readLocalSnapshotManifest(ateompath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()))
 		if err != nil {
 			if isTerminalFileSystemErr(err) {
 				return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), err)
@@ -1079,16 +1122,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL)
 		}
-		manifestURI, err := goldenURI.ObjectURI(sandboxManifestName)
-		if err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL)
-		}
-		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
-		if err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while fetching golden snapshot manifest: %w", err), ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject)
-		}
-		if goldenRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling golden sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
+		if goldenRec, err = s.fetchExternalSnapshotRecord(ctx, goldenURI); err != nil {
+			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidSandboxAsset)
 		}
 		if goldenRec.SandboxClass != sandboxRec.SandboxClass {
 			return nil, status.Errorf(codes.FailedPrecondition, "golden snapshot sandbox class %q does not match actor snapshot sandbox class %q", goldenRec.SandboxClass, sandboxRec.SandboxClass)
@@ -1147,7 +1182,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 				}
-			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, sandboxRec.SandboxClass == string(atev1alpha1.SandboxClassKata)); err != nil {
 				return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
@@ -1160,14 +1195,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			// the golden's from object storage, concurrently.
 			gLocal, gLocalCtx := errgroup.WithContext(gctx)
 			gLocal.Go(func() error {
-				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles, sandboxRec.SandboxClass == string(atev1alpha1.SandboxClassKata)); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
 				}
 				return nil
 			})
 			if combineWithGolden {
 				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
+					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles), false); err != nil {
 						return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 					}
 					return nil
@@ -1193,7 +1228,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return err
 		}
 		t := time.Now()
-		err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+		err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid(), runtimeRec.SandboxClass)
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1212,6 +1247,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
+	var kataTransport *kataTransportManifest
+	if sandboxRec.SandboxClass == string(atev1alpha1.SandboxClassKata) {
+		kataTransport, err = readValidatedKataTransport(checkpointDir, sandboxRec, os.Getenv("NODE_NAME"))
+		if err != nil {
+			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidSandboxAsset)
+		}
+	}
+
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
 		return nil, err
@@ -1227,7 +1270,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
 	// this call as "Actor restore phases".
 	tAteom := time.Now()
-	_, err = client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
+	restoreReq := &ateompb.RestoreWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1244,7 +1287,15 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		// already staged into the restore dir by the combined download above;
 		// ateom restores from the shared dir and never fetches this URI.
 		GoldenSnapshotUri: req.GetGoldenSnapshotUri(),
-	})
+	}
+	if kataTransport != nil {
+		restoreReq.OperationId = kataOperationID("restore", actorUID, fmt.Sprintf("%d:%s:%s", req.GetType(), req.GetExternalConfig().GetSnapshotUri(), req.GetLocalConfig().GetSnapshotName()))
+		restoreReq.RuntimeCompatibility = &ateompb.RuntimeCompatibility{
+			Profile:            kataTransport.Profile,
+			RuntimeFingerprint: kataTransport.RuntimeFingerprint,
+		}
+	}
+	_, err = client.RestoreWorkload(ctx, restoreReq)
 	dAteom = time.Since(tAteom)
 	if err != nil {
 		// TODO: classify the errors returned by Ateom and crash the actor if needed.
@@ -1337,13 +1388,23 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	return &ateletpb.TerminateResponse{}, nil
 }
 
-func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName string, srcDir, dstDir string, files []string) error {
+func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName string, srcDir, dstDir string, files []string, kata bool) error {
 	for _, fileName := range files {
 		if ctx.Err() != nil {
 			return fmt.Errorf("context cancelled: %w", ctx.Err())
 		}
+		if kata {
+			if err := validateKataIndexPath(fileName); err != nil {
+				return err
+			}
+		}
 		src := filepath.Join(srcDir, snapshotName, fileName)
 		dst := filepath.Join(dstDir, fileName)
+		if kata {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+				return fmt.Errorf("while creating checkpoint parent: %w", err)
+			}
+		}
 		if _, err := sparsefile.CopyFile(src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
@@ -1377,15 +1438,15 @@ func goldenOnlyFiles(actorFiles, goldenFiles []string) []string {
 func (s *AteomHerder) downloadCombinedCheckpoint(ctx context.Context, actorURI, goldenURI, dstDir string, actorFiles, goldenFiles []string) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, actorURI, dstDir, actorFiles)
+		return s.downloadExternalCheckpoint(gctx, actorURI, dstDir, actorFiles, false)
 	})
 	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, goldenURI, dstDir, goldenOnlyFiles(actorFiles, goldenFiles))
+		return s.downloadExternalCheckpoint(gctx, goldenURI, dstDir, goldenOnlyFiles(actorFiles, goldenFiles), false)
 	})
 	return g.Wait()
 }
 
-func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string) error {
+func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string, kata bool) error {
 	uri, err := resources.ParseSnapshotURI(snapshotURI)
 	if err != nil {
 		return err
@@ -1393,8 +1454,18 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		fileName := fileName
+		if kata {
+			if err := validateKataIndexPath(fileName); err != nil {
+				return err
+			}
+		}
 		local := filepath.Join(dstDir, fileName)
 		g.Go(func() error {
+			if kata {
+				if err := os.MkdirAll(filepath.Dir(local), 0o700); err != nil {
+					return fmt.Errorf("while creating checkpoint parent: %w", err)
+				}
+			}
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
@@ -1424,7 +1495,12 @@ func (s *AteomHerder) prepareOCIBundles(
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
 	targetAteomUid string,
+	sandboxClass string,
 ) error {
+	if sandboxClass == string(atev1alpha1.SandboxClassKata) && len(spec.GetVolumes()) != 0 {
+		return status.Error(codes.Unimplemented, "kata workers do not yet support workload volumes")
+	}
+
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
 		switch vol.GetSource().(type) {
@@ -1438,27 +1514,30 @@ func (s *AteomHerder) prepareOCIBundles(
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Pause container.
-	g.Go(func() error {
-		if err := prepareOCIDirectory(
-			gCtx,
-			s.imageCache,
-			actorUID,
-			ocispec.PauseContainer,
-			pauseImage,
-			[]string{"/pause"},
-			nil,
-			nil,
-			ateompath.AteomNetNSPath(targetAteomUid),
-			nil, // pause is sandbox infra; it mounts no volumes.
-			nil,
-			nil, // pause only reaps; it needs no capabilities.
-			nil, // pause carries no user-declared limits.
-		); err != nil {
-			return wrapFileSystemErr("while creating pause OCI bundle", err)
-		}
-		return nil
-	})
+	// Kata's shim creates the pod sandbox; all other classes retain the
+	// shared pause-container behavior.
+	if sandboxClass != string(atev1alpha1.SandboxClassKata) {
+		g.Go(func() error {
+			if err := prepareOCIDirectory(
+				gCtx,
+				s.imageCache,
+				actorUID,
+				ocispec.PauseContainer,
+				pauseImage,
+				[]string{"/pause"},
+				nil,
+				nil,
+				ateompath.AteomNetNSPath(targetAteomUid),
+				nil, // pause is sandbox infra; it mounts no volumes.
+				nil,
+				nil, // pause only reaps; it needs no capabilities.
+				nil, // pause carries no user-declared limits.
+			); err != nil {
+				return wrapFileSystemErr("while creating pause OCI bundle", err)
+			}
+			return nil
+		})
+	}
 
 	// Application containers.
 	for _, ctr := range spec.GetContainers() {

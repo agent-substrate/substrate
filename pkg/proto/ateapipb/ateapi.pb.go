@@ -216,7 +216,8 @@ type SandboxClass int32
 const (
 	SandboxClass_SANDBOX_CLASS_UNSPECIFIED SandboxClass = 0
 	SandboxClass_SANDBOX_CLASS_GVISOR      SandboxClass = 1
-	SandboxClass_SANDBOX_CLASS_MICROVM     SandboxClass = 2 // Keep this in sync with SandboxConfig.sandbox_class's maximum.
+	SandboxClass_SANDBOX_CLASS_MICROVM     SandboxClass = 2
+	SandboxClass_SANDBOX_CLASS_KATA        SandboxClass = 3 // Keep this in sync with SandboxConfig.sandbox_class's maximum.
 )
 
 // Enum value maps for SandboxClass.
@@ -225,11 +226,13 @@ var (
 		0: "SANDBOX_CLASS_UNSPECIFIED",
 		1: "SANDBOX_CLASS_GVISOR",
 		2: "SANDBOX_CLASS_MICROVM",
+		3: "SANDBOX_CLASS_KATA",
 	}
 	SandboxClass_value = map[string]int32{
 		"SANDBOX_CLASS_UNSPECIFIED": 0,
 		"SANDBOX_CLASS_GVISOR":      1,
 		"SANDBOX_CLASS_MICROVM":     2,
+		"SANDBOX_CLASS_KATA":        3,
 	}
 )
 
@@ -2387,7 +2390,7 @@ type SandboxConfig struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SandboxClass enum
+	// +k8s:maximum=3 # keep this in sync with the SandboxClass enum
 	SandboxClass SandboxClass `protobuf:"varint,1,opt,name=sandbox_class,json=sandboxClass,proto3,enum=ateapi.SandboxClass" json:"sandbox_class,omitempty"`
 	// config_name names the cluster-scoped SandboxConfig Kubernetes object
 	// supplying the sandbox binaries. Required; must match sandbox_class.
@@ -7215,11 +7218,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13ACTOR_STATE_PAUSING\x10\x05\x12\x16\n" +
 	"\x12ACTOR_STATE_PAUSED\x10\x06\x12\x17\n" +
 	"\x13ACTOR_STATE_CRASHED\x10\a\x12\x18\n" +
-	"\x14ACTOR_STATE_DELETING\x10\b*b\n" +
+	"\x14ACTOR_STATE_DELETING\x10\b*z\n" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +
-	"\x15SANDBOX_CLASS_MICROVM\x10\x02*d\n" +
+	"\x15SANDBOX_CLASS_MICROVM\x10\x02\x12\x16\n" +
+	"\x12SANDBOX_CLASS_KATA\x10\x03*d\n" +
 	"\fResumeSource\x12\x1d\n" +
 	"\x19RESUME_SOURCE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17RESUME_SOURCE_COLD_BOOT\x10\x01\x12\x18\n" +

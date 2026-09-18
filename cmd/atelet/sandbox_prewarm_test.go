@@ -122,6 +122,10 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "microvm-default"},
 		Spec:       v1alpha1.SandboxConfigSpec{SandboxClass: v1alpha1.SandboxClassMicroVM},
 	}
+	kata := &v1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "kata-default"},
+		Spec:       v1alpha1.SandboxConfigSpec{SandboxClass: v1alpha1.SandboxClassKata},
+	}
 	gvisor := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
 
 	t.Run("node without KVM", func(t *testing.T) {
@@ -129,6 +133,7 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 
 		p.enqueue(ctx, "not a sandbox config")
 		p.enqueue(ctx, microvm)
+		p.enqueue(ctx, kata)
 		p.enqueue(ctx, &v1alpha1.SandboxConfig{
 			ObjectMeta: metav1.ObjectMeta{Name: "future-class"},
 			Spec:       v1alpha1.SandboxConfigSpec{SandboxClass: "future-class"},
@@ -151,9 +156,10 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 	t.Run("node with KVM", func(t *testing.T) {
 		p := newSandboxPrewarmer(nil, nil, nil, true)
 		p.enqueue(ctx, microvm)
+		p.enqueue(ctx, kata)
 		p.enqueue(ctx, gvisor)
-		if p.queue.Len() != 2 {
-			t.Errorf("queue holds %d configs, want both microvm and gvisor queued", p.queue.Len())
+		if p.queue.Len() != 3 {
+			t.Errorf("queue holds %d configs, want microvm, kata, and gvisor queued", p.queue.Len())
 		}
 	})
 }

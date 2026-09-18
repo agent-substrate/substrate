@@ -735,6 +735,7 @@ enum SandboxClass {
   SANDBOX_CLASS_UNSPECIFIED = 0;
   SANDBOX_CLASS_GVISOR = 1;
   SANDBOX_CLASS_MICROVM = 2;
+  SANDBOX_CLASS_KATA = 3;
   // Keep this in sync with SandboxConfig.sandbox_class's maximum.
 }
 
@@ -831,7 +832,7 @@ message SandboxConfig {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SandboxClass enum
+  // +k8s:maximum=3 # keep this in sync with the SandboxClass enum
   SandboxClass sandbox_class = 1;
 
   // config_name names the cluster-scoped SandboxConfig Kubernetes object

@@ -155,6 +155,13 @@ func (p *sandboxPrewarmer) skipConfig(ctx context.Context, cfg *v1alpha1.Sandbox
 			return true
 		}
 		return false
+	case v1alpha1.SandboxClassKata:
+		if !p.microvmCapable {
+			slog.DebugContext(ctx, "Skipping sandbox asset prewarm: node has no /dev/kvm, cannot run Kata workers",
+				slog.String("config", cfg.Name))
+			return true
+		}
+		return false
 	default:
 		// An unknown class has no backend in this atelet (likely version skew
 		// with a newer control plane); nothing to prewarm.

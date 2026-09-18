@@ -381,6 +381,8 @@ func sandboxClassLabel(c ateompb.SandboxClass) string {
 		return "gvisor"
 	case ateompb.SandboxClass_SANDBOX_CLASS_MICROVM:
 		return "microvm"
+	case ateompb.SandboxClass_SANDBOX_CLASS_KATA:
+		return "kata"
 	default:
 		return ateattr.SandboxClassUnknown
 	}

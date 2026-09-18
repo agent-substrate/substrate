@@ -109,6 +109,7 @@ const (
 	SandboxClass_SANDBOX_CLASS_GVISOR SandboxClass = 1
 	// Micro-VM (cmd/ateom-microvm).
 	SandboxClass_SANDBOX_CLASS_MICROVM SandboxClass = 2
+	SandboxClass_SANDBOX_CLASS_KATA    SandboxClass = 3
 )
 
 // Enum value maps for SandboxClass.
@@ -117,11 +118,13 @@ var (
 		0: "SANDBOX_CLASS_UNSPECIFIED",
 		1: "SANDBOX_CLASS_GVISOR",
 		2: "SANDBOX_CLASS_MICROVM",
+		3: "SANDBOX_CLASS_KATA",
 	}
 	SandboxClass_value = map[string]int32{
 		"SANDBOX_CLASS_UNSPECIFIED": 0,
 		"SANDBOX_CLASS_GVISOR":      1,
 		"SANDBOX_CLASS_MICROVM":     2,
+		"SANDBOX_CLASS_KATA":        3,
 	}
 )
 
@@ -1052,6 +1055,7 @@ type CheckpointWorkloadRequest struct {
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// What content to include in the checkpoint.
 	Scope         SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
+	OperationId   string        `protobuf:"bytes,11,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1156,19 +1160,79 @@ func (x *CheckpointWorkloadRequest) GetScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
+func (x *CheckpointWorkloadRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+type RuntimeCompatibility struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Profile            string                 `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
+	RuntimeFingerprint string                 `protobuf:"bytes,2,opt,name=runtime_fingerprint,json=runtimeFingerprint,proto3" json:"runtime_fingerprint,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *RuntimeCompatibility) Reset() {
+	*x = RuntimeCompatibility{}
+	mi := &file_ateom_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeCompatibility) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeCompatibility) ProtoMessage() {}
+
+func (x *RuntimeCompatibility) ProtoReflect() protoreflect.Message {
+	mi := &file_ateom_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeCompatibility.ProtoReflect.Descriptor instead.
+func (*RuntimeCompatibility) Descriptor() ([]byte, []int) {
+	return file_ateom_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *RuntimeCompatibility) GetProfile() string {
+	if x != nil {
+		return x.Profile
+	}
+	return ""
+}
+
+func (x *RuntimeCompatibility) GetRuntimeFingerprint() string {
+	if x != nil {
+		return x.RuntimeFingerprint
+	}
+	return ""
+}
+
 type CheckpointWorkloadResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// snapshot_files lists the files ateom wrote into the checkpoint directory
 	// (relative names) for atelet to ship to object storage. Each runtime reports
 	// its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
-	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SnapshotFiles        []string              `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
+	RuntimeCompatibility *RuntimeCompatibility `protobuf:"bytes,2,opt,name=runtime_compatibility,json=runtimeCompatibility,proto3" json:"runtime_compatibility,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *CheckpointWorkloadResponse) Reset() {
 	*x = CheckpointWorkloadResponse{}
-	mi := &file_ateom_proto_msgTypes[14]
+	mi := &file_ateom_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1180,7 +1244,7 @@ func (x *CheckpointWorkloadResponse) String() string {
 func (*CheckpointWorkloadResponse) ProtoMessage() {}
 
 func (x *CheckpointWorkloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[14]
+	mi := &file_ateom_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1193,12 +1257,19 @@ func (x *CheckpointWorkloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckpointWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*CheckpointWorkloadResponse) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{14}
+	return file_ateom_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CheckpointWorkloadResponse) GetSnapshotFiles() []string {
 	if x != nil {
 		return x.SnapshotFiles
+	}
+	return nil
+}
+
+func (x *CheckpointWorkloadResponse) GetRuntimeCompatibility() *RuntimeCompatibility {
+	if x != nil {
+		return x.RuntimeCompatibility
 	}
 	return nil
 }
@@ -1230,15 +1301,17 @@ type RestoreWorkloadRequest struct {
 	// (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
 	// FULL micro-VM restore the size baked into the snapshot is authoritative and
 	// these are ignored. Zero means "unset": keep the runtime default.
-	CpuMilli      int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
-	MemoryBytes   int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CpuMilli             int64                 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	MemoryBytes          int64                 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	OperationId          string                `protobuf:"bytes,16,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	RuntimeCompatibility *RuntimeCompatibility `protobuf:"bytes,17,opt,name=runtime_compatibility,json=runtimeCompatibility,proto3" json:"runtime_compatibility,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RestoreWorkloadRequest) Reset() {
 	*x = RestoreWorkloadRequest{}
-	mi := &file_ateom_proto_msgTypes[15]
+	mi := &file_ateom_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1250,7 +1323,7 @@ func (x *RestoreWorkloadRequest) String() string {
 func (*RestoreWorkloadRequest) ProtoMessage() {}
 
 func (x *RestoreWorkloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[15]
+	mi := &file_ateom_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1263,7 +1336,7 @@ func (x *RestoreWorkloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*RestoreWorkloadRequest) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{15}
+	return file_ateom_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RestoreWorkloadRequest) GetAtespace() string {
@@ -1364,6 +1437,20 @@ func (x *RestoreWorkloadRequest) GetMemoryBytes() int64 {
 	return 0
 }
 
+func (x *RestoreWorkloadRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *RestoreWorkloadRequest) GetRuntimeCompatibility() *RuntimeCompatibility {
+	if x != nil {
+		return x.RuntimeCompatibility
+	}
+	return nil
+}
+
 type RestoreWorkloadResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1372,7 +1459,7 @@ type RestoreWorkloadResponse struct {
 
 func (x *RestoreWorkloadResponse) Reset() {
 	*x = RestoreWorkloadResponse{}
-	mi := &file_ateom_proto_msgTypes[16]
+	mi := &file_ateom_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1384,7 +1471,7 @@ func (x *RestoreWorkloadResponse) String() string {
 func (*RestoreWorkloadResponse) ProtoMessage() {}
 
 func (x *RestoreWorkloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[16]
+	mi := &file_ateom_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1397,7 +1484,7 @@ func (x *RestoreWorkloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*RestoreWorkloadResponse) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{16}
+	return file_ateom_proto_rawDescGZIP(), []int{17}
 }
 
 type GetWorkloadStatsRequest struct {
@@ -1413,7 +1500,7 @@ type GetWorkloadStatsRequest struct {
 
 func (x *GetWorkloadStatsRequest) Reset() {
 	*x = GetWorkloadStatsRequest{}
-	mi := &file_ateom_proto_msgTypes[17]
+	mi := &file_ateom_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1425,7 +1512,7 @@ func (x *GetWorkloadStatsRequest) String() string {
 func (*GetWorkloadStatsRequest) ProtoMessage() {}
 
 func (x *GetWorkloadStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[17]
+	mi := &file_ateom_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1438,7 +1525,7 @@ func (x *GetWorkloadStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkloadStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetWorkloadStatsRequest) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{17}
+	return file_ateom_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetWorkloadStatsRequest) GetActorUid() string {
@@ -1502,7 +1589,7 @@ type WorkloadStatsSample struct {
 
 func (x *WorkloadStatsSample) Reset() {
 	*x = WorkloadStatsSample{}
-	mi := &file_ateom_proto_msgTypes[18]
+	mi := &file_ateom_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1514,7 +1601,7 @@ func (x *WorkloadStatsSample) String() string {
 func (*WorkloadStatsSample) ProtoMessage() {}
 
 func (x *WorkloadStatsSample) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[18]
+	mi := &file_ateom_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1527,7 +1614,7 @@ func (x *WorkloadStatsSample) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkloadStatsSample.ProtoReflect.Descriptor instead.
 func (*WorkloadStatsSample) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{18}
+	return file_ateom_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *WorkloadStatsSample) GetAtespace() string {
@@ -1623,7 +1710,7 @@ type GetWorkloadStatsResponse struct {
 
 func (x *GetWorkloadStatsResponse) Reset() {
 	*x = GetWorkloadStatsResponse{}
-	mi := &file_ateom_proto_msgTypes[19]
+	mi := &file_ateom_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1635,7 +1722,7 @@ func (x *GetWorkloadStatsResponse) String() string {
 func (*GetWorkloadStatsResponse) ProtoMessage() {}
 
 func (x *GetWorkloadStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[19]
+	mi := &file_ateom_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1648,7 +1735,7 @@ func (x *GetWorkloadStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkloadStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetWorkloadStatsResponse) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{19}
+	return file_ateom_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetWorkloadStatsResponse) GetSample() *WorkloadStatsSample {
@@ -1666,7 +1753,7 @@ type GetActiveWorkloadStatsRequest struct {
 
 func (x *GetActiveWorkloadStatsRequest) Reset() {
 	*x = GetActiveWorkloadStatsRequest{}
-	mi := &file_ateom_proto_msgTypes[20]
+	mi := &file_ateom_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1678,7 +1765,7 @@ func (x *GetActiveWorkloadStatsRequest) String() string {
 func (*GetActiveWorkloadStatsRequest) ProtoMessage() {}
 
 func (x *GetActiveWorkloadStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[20]
+	mi := &file_ateom_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1691,7 +1778,7 @@ func (x *GetActiveWorkloadStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveWorkloadStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetActiveWorkloadStatsRequest) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{20}
+	return file_ateom_proto_rawDescGZIP(), []int{21}
 }
 
 type GetActiveWorkloadStatsResponse struct {
@@ -1711,7 +1798,7 @@ type GetActiveWorkloadStatsResponse struct {
 
 func (x *GetActiveWorkloadStatsResponse) Reset() {
 	*x = GetActiveWorkloadStatsResponse{}
-	mi := &file_ateom_proto_msgTypes[21]
+	mi := &file_ateom_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1723,7 +1810,7 @@ func (x *GetActiveWorkloadStatsResponse) String() string {
 func (*GetActiveWorkloadStatsResponse) ProtoMessage() {}
 
 func (x *GetActiveWorkloadStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[21]
+	mi := &file_ateom_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1736,7 +1823,7 @@ func (x *GetActiveWorkloadStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveWorkloadStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetActiveWorkloadStatsResponse) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{21}
+	return file_ateom_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetActiveWorkloadStatsResponse) GetSamples() []*WorkloadStatsSample {
@@ -1820,7 +1907,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
-	"\x13RunWorkloadResponse\"\xa1\x04\n" +
+	"\x13RunWorkloadResponse\"\xc4\x04\n" +
 	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -1834,12 +1921,17 @@ const file_ateom_proto_rawDesc = "" +
 	"\fsnapshot_uri\x18\b \x01(\tR\vsnapshotUri\x12g\n" +
 	"\x13runtime_asset_paths\x18\t \x03(\v27.ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
 	"\x05scope\x18\n" +
-	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x1aD\n" +
+	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12!\n" +
+	"\foperation_id\x18\v \x01(\tR\voperationId\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"a\n" +
+	"\x14RuntimeCompatibility\x12\x18\n" +
+	"\aprofile\x18\x01 \x01(\tR\aprofile\x12/\n" +
+	"\x13runtime_fingerprint\x18\x02 \x01(\tR\x12runtimeFingerprint\"\x95\x01\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xe0\x05\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12P\n" +
+	"\x15runtime_compatibility\x18\x02 \x01(\v2\x1b.ateom.RuntimeCompatibilityR\x14runtimeCompatibility\"\xd5\x06\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -1857,7 +1949,9 @@ const file_ateom_proto_rawDesc = "" +
 	"\x0eegress_gateway\x18\f \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12.\n" +
 	"\x13golden_snapshot_uri\x18\r \x01(\tR\x11goldenSnapshotUri\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
-	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x1aD\n" +
+	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12!\n" +
+	"\foperation_id\x18\x10 \x01(\tR\voperationId\x12P\n" +
+	"\x15runtime_compatibility\x18\x11 \x01(\v2\x1b.ateom.RuntimeCompatibilityR\x14runtimeCompatibility\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
@@ -1889,11 +1983,12 @@ const file_ateom_proto_rawDesc = "" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_DATA\x10\x02\x12!\n" +
-	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x03*b\n" +
+	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x03*z\n" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +
-	"\x15SANDBOX_CLASS_MICROVM\x10\x02*b\n" +
+	"\x15SANDBOX_CLASS_MICROVM\x10\x02\x12\x16\n" +
+	"\x12SANDBOX_CLASS_KATA\x10\x03*b\n" +
 	"\vStatsSource\x12\x1c\n" +
 	"\x18STATS_SOURCE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13STATS_SOURCE_CGROUP\x10\x01\x12\x1c\n" +
@@ -1919,7 +2014,7 @@ func file_ateom_proto_rawDescGZIP() []byte {
 }
 
 var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_ateom_proto_goTypes = []any{
 	(SnapshotScope)(0),                     // 0: ateom.SnapshotScope
 	(SandboxClass)(0),                      // 1: ateom.SandboxClass
@@ -1938,22 +2033,23 @@ var file_ateom_proto_goTypes = []any{
 	(*HTTPGetAction)(nil),                  // 14: ateom.HTTPGetAction
 	(*RunWorkloadResponse)(nil),            // 15: ateom.RunWorkloadResponse
 	(*CheckpointWorkloadRequest)(nil),      // 16: ateom.CheckpointWorkloadRequest
-	(*CheckpointWorkloadResponse)(nil),     // 17: ateom.CheckpointWorkloadResponse
-	(*RestoreWorkloadRequest)(nil),         // 18: ateom.RestoreWorkloadRequest
-	(*RestoreWorkloadResponse)(nil),        // 19: ateom.RestoreWorkloadResponse
-	(*GetWorkloadStatsRequest)(nil),        // 20: ateom.GetWorkloadStatsRequest
-	(*WorkloadStatsSample)(nil),            // 21: ateom.WorkloadStatsSample
-	(*GetWorkloadStatsResponse)(nil),       // 22: ateom.GetWorkloadStatsResponse
-	(*GetActiveWorkloadStatsRequest)(nil),  // 23: ateom.GetActiveWorkloadStatsRequest
-	(*GetActiveWorkloadStatsResponse)(nil), // 24: ateom.GetActiveWorkloadStatsResponse
-	nil,                                    // 25: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 26: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 27: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(*RuntimeCompatibility)(nil),           // 17: ateom.RuntimeCompatibility
+	(*CheckpointWorkloadResponse)(nil),     // 18: ateom.CheckpointWorkloadResponse
+	(*RestoreWorkloadRequest)(nil),         // 19: ateom.RestoreWorkloadRequest
+	(*RestoreWorkloadResponse)(nil),        // 20: ateom.RestoreWorkloadResponse
+	(*GetWorkloadStatsRequest)(nil),        // 21: ateom.GetWorkloadStatsRequest
+	(*WorkloadStatsSample)(nil),            // 22: ateom.WorkloadStatsSample
+	(*GetWorkloadStatsResponse)(nil),       // 23: ateom.GetWorkloadStatsResponse
+	(*GetActiveWorkloadStatsRequest)(nil),  // 24: ateom.GetActiveWorkloadStatsRequest
+	(*GetActiveWorkloadStatsResponse)(nil), // 25: ateom.GetActiveWorkloadStatsResponse
+	nil,                                    // 26: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 27: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 28: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 }
 var file_ateom_proto_depIdxs = []int32{
 	7,  // 0: ateom.TerminateWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
 	7,  // 1: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	25, // 2: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	26, // 2: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
 	6,  // 3: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	8,  // 4: ateom.WorkloadSpec.containers:type_name -> ateom.Container
 	13, // 5: ateom.Container.readyz:type_name -> ateom.Readyz
@@ -1963,33 +2059,35 @@ var file_ateom_proto_depIdxs = []int32{
 	12, // 9: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
 	14, // 10: ateom.Readyz.http_get:type_name -> ateom.HTTPGetAction
 	7,  // 11: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	26, // 12: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	27, // 12: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 13: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	7,  // 14: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	27, // 15: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 16: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	6,  // 17: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
-	1,  // 18: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass
-	2,  // 19: ateom.WorkloadStatsSample.source:type_name -> ateom.StatsSource
-	21, // 20: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
-	21, // 21: ateom.GetActiveWorkloadStatsResponse.samples:type_name -> ateom.WorkloadStatsSample
-	5,  // 22: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
-	16, // 23: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
-	18, // 24: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
-	20, // 25: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
-	23, // 26: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
-	3,  // 27: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
-	15, // 28: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
-	17, // 29: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
-	19, // 30: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
-	22, // 31: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
-	24, // 32: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
-	4,  // 33: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
-	28, // [28:34] is the sub-list for method output_type
-	22, // [22:28] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	17, // 14: ateom.CheckpointWorkloadResponse.runtime_compatibility:type_name -> ateom.RuntimeCompatibility
+	7,  // 15: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	28, // 16: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	0,  // 17: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
+	6,  // 18: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
+	17, // 19: ateom.RestoreWorkloadRequest.runtime_compatibility:type_name -> ateom.RuntimeCompatibility
+	1,  // 20: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass
+	2,  // 21: ateom.WorkloadStatsSample.source:type_name -> ateom.StatsSource
+	22, // 22: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
+	22, // 23: ateom.GetActiveWorkloadStatsResponse.samples:type_name -> ateom.WorkloadStatsSample
+	5,  // 24: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
+	16, // 25: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
+	19, // 26: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
+	21, // 27: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
+	24, // 28: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
+	3,  // 29: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
+	15, // 30: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
+	18, // 31: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
+	20, // 32: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
+	23, // 33: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
+	25, // 34: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
+	4,  // 35: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
+	30, // [30:36] is the sub-list for method output_type
+	24, // [24:30] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_ateom_proto_init() }
@@ -1998,14 +2096,14 @@ func file_ateom_proto_init() {
 		return
 	}
 	file_ateom_proto_msgTypes[2].OneofWrappers = []any{}
-	file_ateom_proto_msgTypes[15].OneofWrappers = []any{}
+	file_ateom_proto_msgTypes[16].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateom_proto_rawDesc), len(file_ateom_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   25,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

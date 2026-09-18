@@ -287,6 +287,12 @@ message CheckpointWorkloadRequest {
 
   // What content to include in the checkpoint.
   SnapshotScope scope = 10;
+  string operation_id = 11;
+}
+
+message RuntimeCompatibility {
+  string profile = 1;
+  string runtime_fingerprint = 2;
 }
 
 message CheckpointWorkloadResponse {
@@ -294,6 +300,7 @@ message CheckpointWorkloadResponse {
   // (relative names) for atelet to ship to object storage. Each runtime reports
   // its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
   repeated string snapshot_files = 1;
+  RuntimeCompatibility runtime_compatibility = 2;
 }
 
 message RestoreWorkloadRequest {
@@ -332,6 +339,8 @@ message RestoreWorkloadRequest {
   // these are ignored. Zero means "unset": keep the runtime default.
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.
+  string operation_id = 16;
+  RuntimeCompatibility runtime_compatibility = 17;
 }
 
 message RestoreWorkloadResponse {
@@ -354,6 +363,7 @@ enum SandboxClass {
   SANDBOX_CLASS_GVISOR = 1;
   // Micro-VM (cmd/ateom-microvm).
   SANDBOX_CLASS_MICROVM = 2;
+  SANDBOX_CLASS_KATA = 3;
 }
 
 // StatsSource is how a sample's measurements were obtained. The two are not

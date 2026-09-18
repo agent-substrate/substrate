@@ -1,0 +1,233 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/*
+   Copyright The containerd Authors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
+syntax = "proto3";
+
+package containerd.runtime.sandbox.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+import "types/metrics.proto";
+import "types/mount.proto";
+import "types/platform.proto";
+
+option go_package = "github.com/agent-substrate/substrate/internal/sandboxd/sandboxapi;sandbox";
+
+// Sandbox is an optional interface that shim may implement to support sandboxes environments.
+// A typical example of sandbox is microVM or pause container - an entity that groups containers and/or
+// holds resources relevant for this group.
+service Sandbox {
+  // CreateSandbox will be called right after sandbox shim instance launched.
+  // It is a good place to initialize sandbox environment.
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+
+  // StartSandbox will start a previously created sandbox.
+  rpc StartSandbox(StartSandboxRequest) returns (StartSandboxResponse);
+
+  // Platform queries the platform the sandbox is going to run containers on.
+  // containerd will use this to generate a proper OCI spec.
+  rpc Platform(PlatformRequest) returns (PlatformResponse);
+
+  // StopSandbox will stop existing sandbox instance
+  rpc StopSandbox(StopSandboxRequest) returns (StopSandboxResponse);
+
+  // WaitSandbox blocks until sandbox exits.
+  rpc WaitSandbox(WaitSandboxRequest) returns (WaitSandboxResponse);
+
+  // SandboxStatus will return current status of the running sandbox instance
+  rpc SandboxStatus(SandboxStatusRequest) returns (SandboxStatusResponse);
+
+  // PingSandbox is a lightweight API call to check whether sandbox alive.
+  rpc PingSandbox(PingRequest) returns (PingResponse);
+
+  // ShutdownSandbox must shutdown shim instance.
+  rpc ShutdownSandbox(ShutdownSandboxRequest) returns (ShutdownSandboxResponse);
+
+  // SandboxMetrics retrieves metrics about a sandbox instance.
+  rpc SandboxMetrics(SandboxMetricsRequest) returns (SandboxMetricsResponse);
+}
+
+// Checkpoint is an optional sandbox-shim capability. It is a separate service
+// so existing Sandbox implementations do not need to implement checkpoint and
+// restore methods.
+service Checkpoint {
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse);
+  rpc Restore(RestoreRequest) returns (RestoreResponse);
+}
+
+message CreateSandboxRequest {
+  string sandbox_id = 1;
+  string bundle_path = 2;
+  repeated containerd.types.Mount rootfs = 3;
+  google.protobuf.Any options = 4;
+  string netns_path = 5;
+  map<string, string> annotations = 6;
+}
+
+message CreateSandboxResponse {}
+
+message StartSandboxRequest {
+  string sandbox_id = 1;
+}
+
+message StartSandboxResponse {
+  uint32 pid = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Any spec = 3;
+}
+
+message PlatformRequest {
+  string sandbox_id = 1;
+}
+
+message PlatformResponse {
+  containerd.types.Platform platform = 1;
+}
+
+message StopSandboxRequest {
+  string sandbox_id = 1;
+  uint32 timeout_secs = 2;
+}
+
+message StopSandboxResponse {}
+
+message UpdateSandboxRequest {
+  string sandbox_id = 1;
+  google.protobuf.Any resources = 2;
+  map<string, string> annotations = 3;
+}
+
+message WaitSandboxRequest {
+  string sandbox_id = 1;
+}
+
+message WaitSandboxResponse {
+  uint32 exit_status = 1;
+  google.protobuf.Timestamp exited_at = 2;
+}
+
+message UpdateSandboxResponse {}
+
+message SandboxStatusRequest {
+  string sandbox_id = 1;
+  bool verbose = 2;
+}
+
+message SandboxStatusResponse {
+  string sandbox_id = 1;
+  uint32 pid = 2;
+  string state = 3;
+  map<string, string> info = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp exited_at = 6;
+  google.protobuf.Any extra = 7;
+}
+
+message PingRequest {
+  string sandbox_id = 1;
+}
+
+message PingResponse {}
+
+message ShutdownSandboxRequest {
+  string sandbox_id = 1;
+}
+
+message ShutdownSandboxResponse {}
+
+message SandboxMetricsRequest {
+  string sandbox_id = 1;
+}
+
+message SandboxMetricsResponse {
+  containerd.types.Metric metrics = 1;
+}
+
+message CheckpointContainer {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Any config = 3;
+  google.protobuf.Any status = 4;
+}
+
+message CheckpointRequest {
+  string sandbox_id = 1;
+  string output_path = 2;
+  google.protobuf.Any sandbox_config = 3;
+  repeated CheckpointContainer containers = 4;
+  map<string, string> options = 5;
+}
+
+message CheckpointResponse {}
+
+message RestoreContainer {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Any config = 3;
+  // checkpoint_key identifies this container in the checkpoint manifest.
+  // The shim uses it to match restore tasks to checkpoint artifacts.
+  string checkpoint_key = 4;
+  // Absolute path to the container bundle on the host.
+  string bundle_path = 5;
+  // Whether the container has a terminal (TTY).
+  bool terminal = 6;
+  // Stdio paths for the container.
+  string stdin = 7;
+  string stdout = 8;
+  string stderr = 9;
+}
+
+enum TaskRestoreMode {
+  TASK_RESTORE_MODE_UNSPECIFIED = 0;
+  TASK_RESTORE_MODE_VM_RESTORED = 1;
+}
+
+message RestoreRequest {
+  string sandbox_id = 1;
+  string checkpoint_path = 2;
+  google.protobuf.Any sandbox_config = 3;
+  repeated RestoreContainer containers = 4;
+  map<string, string> options = 5;
+  // Path to the network namespace for the restored sandbox.
+  string netns_path = 6;
+  repeated TaskRestoreMode accepted_task_restore_modes = 7;
+}
+
+message RestoredContainer {
+  string name = 1;
+  // Ownership transfers from the controller to the caller when Restore
+  // succeeds. Empty when no containerd task checkpoint is required.
+  string task_checkpoint_image = 2;
+  TaskRestoreMode task_restore_mode = 3;
+}
+
+message RestoreResponse {
+  repeated RestoredContainer containers = 1;
+}
