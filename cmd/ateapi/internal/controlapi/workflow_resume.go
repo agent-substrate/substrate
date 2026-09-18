@@ -576,6 +576,7 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 		WorkerPod:       w.GetWorkerPod(),
 		WorkerPodUid:    w.GetWorkerPodUid(),
 		WorkerPodIp:     w.GetIp(),
+		NodeName:        w.GetNodeName(),
 	}
 }
 
@@ -657,7 +658,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
-	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
+	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
 		return tele, err
 	}

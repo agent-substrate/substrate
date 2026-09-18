@@ -362,6 +362,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_uid"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ip"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "node_name"), ""),
 		},
 	}, {
 		"invalid actor.status.worker_assignment",
@@ -373,6 +374,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			wa.WorkerPod = "invalid pod"
 			wa.WorkerPodUid = "invalid UUID"
 			wa.WorkerPodIp = "invalid IP"
+			wa.NodeName = "invalid node"
 		}))),
 		field.ErrorList{
 			field.Forbidden(field.NewPath("status", "worker_assignment", "worker", "atespace"), ""),
@@ -382,6 +384,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod"), nil, "").WithOrigin("format=k8s-long-name"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "node_name"), nil, "").WithOrigin("format=k8s-long-name"),
 		},
 	}, {
 		// because we have manual IP format validation, let's be sure
@@ -1275,6 +1278,7 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 			WorkerPod:       "pod",
 			WorkerPodUid:    "12345678-1234-1234-1234-123456789abc",
 			WorkerPodIp:     "1.2.3.4",
+			NodeName:        "node1",
 		}
 		for _, m := range mods {
 			m(s.WorkerAssignment)

@@ -212,62 +212,6 @@ func (StatsSource) EnumDescriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{2}
 }
 
-// NoSampleReason is why the discovery read has no sample to give -- every
-// value is a normal state a caller with no prior knowledge routinely finds,
-// never an error.
-type NoSampleReason int32
-
-const (
-	NoSampleReason_NO_SAMPLE_REASON_UNSPECIFIED NoSampleReason = 0
-	// Nothing is executing: the ateom is "available".
-	NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD NoSampleReason = 1
-	// A workload is executing but there are no numbers to give yet: a poll
-	// landing in a boot or a restore, a teardown in progress, or a lifecycle
-	// transition underneath the read. Transient -- take the next sample.
-	NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET NoSampleReason = 2
-)
-
-// Enum value maps for NoSampleReason.
-var (
-	NoSampleReason_name = map[int32]string{
-		0: "NO_SAMPLE_REASON_UNSPECIFIED",
-		1: "NO_SAMPLE_REASON_NO_WORKLOAD",
-		2: "NO_SAMPLE_REASON_NOT_MEASURABLE_YET",
-	}
-	NoSampleReason_value = map[string]int32{
-		"NO_SAMPLE_REASON_UNSPECIFIED":        0,
-		"NO_SAMPLE_REASON_NO_WORKLOAD":        1,
-		"NO_SAMPLE_REASON_NOT_MEASURABLE_YET": 2,
-	}
-)
-
-func (x NoSampleReason) Enum() *NoSampleReason {
-	p := new(NoSampleReason)
-	*p = x
-	return p
-}
-
-func (x NoSampleReason) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (NoSampleReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateom_proto_enumTypes[3].Descriptor()
-}
-
-func (NoSampleReason) Type() protoreflect.EnumType {
-	return &file_ateom_proto_enumTypes[3]
-}
-
-func (x NoSampleReason) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use NoSampleReason.Descriptor instead.
-func (NoSampleReason) EnumDescriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{3}
-}
-
 type TerminateWorkloadRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
 	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
@@ -1752,17 +1696,15 @@ func (*GetActiveWorkloadStatsRequest) Descriptor() ([]byte, []int) {
 
 type GetActiveWorkloadStatsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Exactly one of the two is set: either a measurement, or the reason there
-	// is none. An ateom serves one actor at a time, so the sample slot is
-	// singular; the sample is self-describing (see the attribution rule on the
-	// rpc), and a sample being present is itself the statement that a workload
-	// is executing.
-	//
-	// Types that are valid to be assigned to Result:
-	//
-	//	*GetActiveWorkloadStatsResponse_Sample
-	//	*GetActiveWorkloadStatsResponse_NoSampleReason
-	Result        isGetActiveWorkloadStatsResponse_Result `protobuf_oneof:"result"`
+	// One entry per workload this ateom is executing; empty when it is
+	// "available". Each sample is self-describing (see the attribution rule on
+	// the rpc); an entry with source = STATS_SOURCE_UNSPECIFIED is a workload
+	// with no numbers to give yet (boot, restore, teardown, or a lifecycle
+	// transition underneath the read) -- skip its measurements and take the
+	// next sample. An ateom serves one actor at a time today, so the list holds
+	// at most one entry until multi-actor workers land; consumers must not
+	// assume that.
+	Samples       []*WorkloadStatsSample `protobuf:"bytes,1,rep,name=samples,proto3" json:"samples,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1797,46 +1739,12 @@ func (*GetActiveWorkloadStatsResponse) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{21}
 }
 
-func (x *GetActiveWorkloadStatsResponse) GetResult() isGetActiveWorkloadStatsResponse_Result {
+func (x *GetActiveWorkloadStatsResponse) GetSamples() []*WorkloadStatsSample {
 	if x != nil {
-		return x.Result
+		return x.Samples
 	}
 	return nil
 }
-
-func (x *GetActiveWorkloadStatsResponse) GetSample() *WorkloadStatsSample {
-	if x != nil {
-		if x, ok := x.Result.(*GetActiveWorkloadStatsResponse_Sample); ok {
-			return x.Sample
-		}
-	}
-	return nil
-}
-
-func (x *GetActiveWorkloadStatsResponse) GetNoSampleReason() NoSampleReason {
-	if x != nil {
-		if x, ok := x.Result.(*GetActiveWorkloadStatsResponse_NoSampleReason); ok {
-			return x.NoSampleReason
-		}
-	}
-	return NoSampleReason_NO_SAMPLE_REASON_UNSPECIFIED
-}
-
-type isGetActiveWorkloadStatsResponse_Result interface {
-	isGetActiveWorkloadStatsResponse_Result()
-}
-
-type GetActiveWorkloadStatsResponse_Sample struct {
-	Sample *WorkloadStatsSample `protobuf:"bytes,1,opt,name=sample,proto3,oneof"`
-}
-
-type GetActiveWorkloadStatsResponse_NoSampleReason struct {
-	NoSampleReason NoSampleReason `protobuf:"varint,2,opt,name=no_sample_reason,json=noSampleReason,proto3,enum=ateom.NoSampleReason,oneof"`
-}
-
-func (*GetActiveWorkloadStatsResponse_Sample) isGetActiveWorkloadStatsResponse_Result() {}
-
-func (*GetActiveWorkloadStatsResponse_NoSampleReason) isGetActiveWorkloadStatsResponse_Result() {}
 
 var File_ateom_proto protoreflect.FileDescriptor
 
@@ -1974,11 +1882,9 @@ const file_ateom_proto_rawDesc = "" +
 	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\"N\n" +
 	"\x18GetWorkloadStatsResponse\x122\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleR\x06sample\"\x1f\n" +
-	"\x1dGetActiveWorkloadStatsRequest\"\xa3\x01\n" +
+	"\x1dGetActiveWorkloadStatsRequest\"V\n" +
 	"\x1eGetActiveWorkloadStatsResponse\x124\n" +
-	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleH\x00R\x06sample\x12A\n" +
-	"\x10no_sample_reason\x18\x02 \x01(\x0e2\x15.ateom.NoSampleReasonH\x00R\x0enoSampleReasonB\b\n" +
-	"\x06result*\x84\x01\n" +
+	"\asamples\x18\x01 \x03(\v2\x1a.ateom.WorkloadStatsSampleR\asamples*\x84\x01\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
@@ -1991,11 +1897,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\vStatsSource\x12\x1c\n" +
 	"\x18STATS_SOURCE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13STATS_SOURCE_CGROUP\x10\x01\x12\x1c\n" +
-	"\x18STATS_SOURCE_GUEST_AGENT\x10\x02*}\n" +
-	"\x0eNoSampleReason\x12 \n" +
-	"\x1cNO_SAMPLE_REASON_UNSPECIFIED\x10\x00\x12 \n" +
-	"\x1cNO_SAMPLE_REASON_NO_WORKLOAD\x10\x01\x12'\n" +
-	"#NO_SAMPLE_REASON_NOT_MEASURABLE_YET\x10\x022\x9a\x04\n" +
+	"\x18STATS_SOURCE_GUEST_AGENT\x10\x022\x9a\x04\n" +
 	"\x05Ateom\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
 	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +
@@ -2016,80 +1918,78 @@ func file_ateom_proto_rawDescGZIP() []byte {
 	return file_ateom_proto_rawDescData
 }
 
-var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_ateom_proto_goTypes = []any{
 	(SnapshotScope)(0),                     // 0: ateom.SnapshotScope
 	(SandboxClass)(0),                      // 1: ateom.SandboxClass
 	(StatsSource)(0),                       // 2: ateom.StatsSource
-	(NoSampleReason)(0),                    // 3: ateom.NoSampleReason
-	(*TerminateWorkloadRequest)(nil),       // 4: ateom.TerminateWorkloadRequest
-	(*TerminateWorkloadResponse)(nil),      // 5: ateom.TerminateWorkloadResponse
-	(*RunWorkloadRequest)(nil),             // 6: ateom.RunWorkloadRequest
-	(*EgressGateway)(nil),                  // 7: ateom.EgressGateway
-	(*WorkloadSpec)(nil),                   // 8: ateom.WorkloadSpec
-	(*Container)(nil),                      // 9: ateom.Container
-	(*VolumeMount)(nil),                    // 10: ateom.VolumeMount
-	(*DurableDirVolumeMount)(nil),          // 11: ateom.DurableDirVolumeMount
-	(*SystemInfoVolumeMount)(nil),          // 12: ateom.SystemInfoVolumeMount
-	(*ImageVolumeMount)(nil),               // 13: ateom.ImageVolumeMount
-	(*Readyz)(nil),                         // 14: ateom.Readyz
-	(*HTTPGetAction)(nil),                  // 15: ateom.HTTPGetAction
-	(*RunWorkloadResponse)(nil),            // 16: ateom.RunWorkloadResponse
-	(*CheckpointWorkloadRequest)(nil),      // 17: ateom.CheckpointWorkloadRequest
-	(*CheckpointWorkloadResponse)(nil),     // 18: ateom.CheckpointWorkloadResponse
-	(*RestoreWorkloadRequest)(nil),         // 19: ateom.RestoreWorkloadRequest
-	(*RestoreWorkloadResponse)(nil),        // 20: ateom.RestoreWorkloadResponse
-	(*GetWorkloadStatsRequest)(nil),        // 21: ateom.GetWorkloadStatsRequest
-	(*WorkloadStatsSample)(nil),            // 22: ateom.WorkloadStatsSample
-	(*GetWorkloadStatsResponse)(nil),       // 23: ateom.GetWorkloadStatsResponse
-	(*GetActiveWorkloadStatsRequest)(nil),  // 24: ateom.GetActiveWorkloadStatsRequest
-	(*GetActiveWorkloadStatsResponse)(nil), // 25: ateom.GetActiveWorkloadStatsResponse
-	nil,                                    // 26: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 27: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 28: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(*TerminateWorkloadRequest)(nil),       // 3: ateom.TerminateWorkloadRequest
+	(*TerminateWorkloadResponse)(nil),      // 4: ateom.TerminateWorkloadResponse
+	(*RunWorkloadRequest)(nil),             // 5: ateom.RunWorkloadRequest
+	(*EgressGateway)(nil),                  // 6: ateom.EgressGateway
+	(*WorkloadSpec)(nil),                   // 7: ateom.WorkloadSpec
+	(*Container)(nil),                      // 8: ateom.Container
+	(*VolumeMount)(nil),                    // 9: ateom.VolumeMount
+	(*DurableDirVolumeMount)(nil),          // 10: ateom.DurableDirVolumeMount
+	(*SystemInfoVolumeMount)(nil),          // 11: ateom.SystemInfoVolumeMount
+	(*ImageVolumeMount)(nil),               // 12: ateom.ImageVolumeMount
+	(*Readyz)(nil),                         // 13: ateom.Readyz
+	(*HTTPGetAction)(nil),                  // 14: ateom.HTTPGetAction
+	(*RunWorkloadResponse)(nil),            // 15: ateom.RunWorkloadResponse
+	(*CheckpointWorkloadRequest)(nil),      // 16: ateom.CheckpointWorkloadRequest
+	(*CheckpointWorkloadResponse)(nil),     // 17: ateom.CheckpointWorkloadResponse
+	(*RestoreWorkloadRequest)(nil),         // 18: ateom.RestoreWorkloadRequest
+	(*RestoreWorkloadResponse)(nil),        // 19: ateom.RestoreWorkloadResponse
+	(*GetWorkloadStatsRequest)(nil),        // 20: ateom.GetWorkloadStatsRequest
+	(*WorkloadStatsSample)(nil),            // 21: ateom.WorkloadStatsSample
+	(*GetWorkloadStatsResponse)(nil),       // 22: ateom.GetWorkloadStatsResponse
+	(*GetActiveWorkloadStatsRequest)(nil),  // 23: ateom.GetActiveWorkloadStatsRequest
+	(*GetActiveWorkloadStatsResponse)(nil), // 24: ateom.GetActiveWorkloadStatsResponse
+	nil,                                    // 25: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 26: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 27: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 }
 var file_ateom_proto_depIdxs = []int32{
-	8,  // 0: ateom.TerminateWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	8,  // 1: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	26, // 2: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	7,  // 3: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
-	9,  // 4: ateom.WorkloadSpec.containers:type_name -> ateom.Container
-	14, // 5: ateom.Container.readyz:type_name -> ateom.Readyz
-	11, // 6: ateom.Container.durable_dir_volume_mounts:type_name -> ateom.DurableDirVolumeMount
-	10, // 7: ateom.Container.csi_volume_mounts:type_name -> ateom.VolumeMount
-	12, // 8: ateom.Container.system_info_volume_mounts:type_name -> ateom.SystemInfoVolumeMount
-	13, // 9: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
-	15, // 10: ateom.Readyz.http_get:type_name -> ateom.HTTPGetAction
-	8,  // 11: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	27, // 12: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	7,  // 0: ateom.TerminateWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	7,  // 1: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	25, // 2: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	6,  // 3: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
+	8,  // 4: ateom.WorkloadSpec.containers:type_name -> ateom.Container
+	13, // 5: ateom.Container.readyz:type_name -> ateom.Readyz
+	10, // 6: ateom.Container.durable_dir_volume_mounts:type_name -> ateom.DurableDirVolumeMount
+	9,  // 7: ateom.Container.csi_volume_mounts:type_name -> ateom.VolumeMount
+	11, // 8: ateom.Container.system_info_volume_mounts:type_name -> ateom.SystemInfoVolumeMount
+	12, // 9: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
+	14, // 10: ateom.Readyz.http_get:type_name -> ateom.HTTPGetAction
+	7,  // 11: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	26, // 12: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 13: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	8,  // 14: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	28, // 15: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	7,  // 14: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	27, // 15: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 16: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	7,  // 17: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
+	6,  // 17: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	1,  // 18: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass
 	2,  // 19: ateom.WorkloadStatsSample.source:type_name -> ateom.StatsSource
-	22, // 20: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
-	22, // 21: ateom.GetActiveWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
-	3,  // 22: ateom.GetActiveWorkloadStatsResponse.no_sample_reason:type_name -> ateom.NoSampleReason
-	6,  // 23: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
-	17, // 24: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
-	19, // 25: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
-	21, // 26: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
-	24, // 27: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
-	4,  // 28: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
-	16, // 29: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
-	18, // 30: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
-	20, // 31: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
-	23, // 32: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
-	25, // 33: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
-	5,  // 34: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
-	29, // [29:35] is the sub-list for method output_type
-	23, // [23:29] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	21, // 20: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
+	21, // 21: ateom.GetActiveWorkloadStatsResponse.samples:type_name -> ateom.WorkloadStatsSample
+	5,  // 22: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
+	16, // 23: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
+	18, // 24: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
+	20, // 25: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
+	23, // 26: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
+	3,  // 27: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
+	15, // 28: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
+	17, // 29: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
+	19, // 30: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
+	22, // 31: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
+	24, // 32: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
+	4,  // 33: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
+	28, // [28:34] is the sub-list for method output_type
+	22, // [22:28] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_ateom_proto_init() }
@@ -2099,16 +1999,12 @@ func file_ateom_proto_init() {
 	}
 	file_ateom_proto_msgTypes[2].OneofWrappers = []any{}
 	file_ateom_proto_msgTypes[15].OneofWrappers = []any{}
-	file_ateom_proto_msgTypes[21].OneofWrappers = []any{
-		(*GetActiveWorkloadStatsResponse_Sample)(nil),
-		(*GetActiveWorkloadStatsResponse_NoSampleReason)(nil),
-	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateom_proto_rawDesc), len(file_ateom_proto_rawDesc)),
-			NumEnums:      4,
+			NumEnums:      3,
 			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,

@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -40,9 +41,215 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-var followLogs bool
-var logsAtespaceFlag string
-var logsContainerFlag string
+var (
+	getActorAtespaceFlag     string
+	getActorAllAtespacesFlag bool
+	createActorAtespaceFlag  string
+	createActorTemplateFlag  string
+	createActorTagFlag       string
+	deleteActorAtespaceFlag  string
+	deleteActorAnyStateFlag  bool
+	pauseActorAtespaceFlag   string
+	resumeActorAtespaceFlag  string
+	suspendActorAtespaceFlag string
+	logsActorAtespaceFlag    string
+	logsActorFollowFlag      bool
+	logsActorContainerFlag   string
+)
+
+var getActorsCmd = &cobra.Command{
+	Use:     "actors <actor-name ...>",
+	Aliases: []string{"actor"},
+	Short:   "List all actors or get one or more actors",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		if len(args) > 0 {
+			// An actor is addressed by (atespace, name), so the atespace is
+			// mandatory and "all atespaces" is meaningless here.
+			if getActorAllAtespacesFlag {
+				return fmt.Errorf("-A/--all-atespaces cannot be used when getting actors; pass --atespace")
+			}
+			if getActorAtespaceFlag == "" {
+				return fmt.Errorf("--atespace is required when getting actors")
+			}
+
+			actors := make([]*ateapipb.Actor, 0, len(args))
+			for _, actorName := range args {
+				actorRef := resources.ActorRef{Atespace: getActorAtespaceFlag, Name: actorName}
+				resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+				if err != nil {
+					return fmt.Errorf("failed to get actor %q: %w", actorName, err)
+				}
+				actors = append(actors, resp)
+			}
+			if len(actors) == 1 {
+				return printer.PrintActorTo(cmd.OutOrStdout(), actors[0], outputFmt)
+			}
+			return printer.PrintActorsTo(cmd.OutOrStdout(), actors, outputFmt)
+		}
+
+		// Listing requires exactly one of --atespace (one atespace) or -A (all
+		// atespaces). There is no default atespace to fall back on.
+		if getActorAllAtespacesFlag && getActorAtespaceFlag != "" {
+			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
+		}
+		if !getActorAllAtespacesFlag && getActorAtespaceFlag == "" {
+			return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
+		}
+
+		var allActors []*ateapipb.Actor
+		pageToken := ""
+		for {
+			resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{
+				PageSize:  1000,
+				PageToken: pageToken,
+				Atespace:  getActorAtespaceFlag,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to list actors: %w", err)
+			}
+			allActors = append(allActors, resp.GetActors()...)
+
+			pageToken = resp.GetNextPageToken()
+			if pageToken == "" {
+				break
+			}
+		}
+
+		return printer.PrintActorsTo(cmd.OutOrStdout(), allActors, outputFmt)
+	},
+}
+
+var createActorCmd = &cobra.Command{
+	Use:   "actor <actor-name>",
+	Short: "Create an actor",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag)
+		if err != nil {
+			return err
+		}
+
+		ctx := cmd.Context()
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		resp, err := apiClient.CreateActor(ctx, request)
+		if err != nil {
+			return fmt.Errorf("failed to create actor: %w", err)
+		}
+
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp, outputFmt)
+	},
+}
+
+var deleteActorCmd = &cobra.Command{
+	Use:   "actor <actor-name>",
+	Short: "Delete an actor",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+
+		actorRef := resources.ActorRef{Atespace: deleteActorAtespaceFlag, Name: args[0]}
+		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+			Actor:    actorRef.ToObjectRef(),
+			AnyState: deleteActorAnyStateFlag,
+		})
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("actor %q deleted\n", actorRef.Name)
+		return nil
+	},
+}
+
+var pauseActorCmd = &cobra.Command{
+	Use:   "actor <actor-name>",
+	Short: "Pause an actor",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		actorRef := resources.ActorRef{Atespace: pauseActorAtespaceFlag, Name: args[0]}
+		resp, err := apiClient.PauseActor(ctx, &ateapipb.PauseActorRequest{
+			Actor: actorRef.ToObjectRef(),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to pause actor: %w", err)
+		}
+
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
+	},
+}
+
+var resumeActorCmd = &cobra.Command{
+	Use:   "actor <actor-name>",
+	Short: "Resume an actor",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		actorRef := resources.ActorRef{Atespace: resumeActorAtespaceFlag, Name: args[0]}
+		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+			Actor: actorRef.ToObjectRef(),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to resume actor: %w", err)
+		}
+
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
+	},
+}
+
+var suspendActorCmd = &cobra.Command{
+	Use:   "actor <actor-name>",
+	Short: "Suspend an actor",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		actorRef := resources.ActorRef{Atespace: suspendActorAtespaceFlag, Name: args[0]}
+		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor: actorRef.ToObjectRef(),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to suspend actor: %w", err)
+		}
+
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
+	},
+}
 
 var logsActorsCmd = &cobra.Command{
 	Use:     "actors <actor-name>",
@@ -52,12 +259,27 @@ var logsActorsCmd = &cobra.Command{
 	RunE:    runLogsActor,
 }
 
-func init() {
-	logsActorsCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Specify if the logs should be streamed.")
-	logsActorsCmd.Flags().StringVarP(&logsAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = logsActorsCmd.MarkFlagRequired("atespace")
-	logsActorsCmd.Flags().StringVarP(&logsContainerFlag, "container", "c", "", "Show only logs from this container.")
-	logsCmd.AddCommand(logsActorsCmd)
+func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {
+	templateRef, err := parseAtespacedName(template, atespace)
+	if err != nil {
+		return nil, err
+	}
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: atespace,
+			Name:     actorName,
+		},
+		ActorTemplate: templateRef,
+	}
+
+	if tag != "" {
+		ref, err := parseAtespacedName(tag, atespace)
+		if err != nil {
+			return nil, err
+		}
+		actor.SourceTag = ref
+	}
+	return &ateapipb.CreateActorRequest{Actor: actor}, nil
 }
 
 // AteAPIClient abstracts the gRPC client calls.
@@ -303,11 +525,11 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	runner := &LogsActorRunner{
 		apiClient:         apiClient,
 		streamer:          &k8sPodLogsStreamer{clientset: k8sClient},
-		actorRef:          resources.ActorRef{Atespace: logsAtespaceFlag, Name: args[0]},
+		actorRef:          resources.ActorRef{Atespace: logsActorAtespaceFlag, Name: args[0]},
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
-		follow:            followLogs,
-		container:         logsContainerFlag,
+		follow:            logsActorFollowFlag,
+		container:         logsActorContainerFlag,
 		pollInterval:      2 * time.Second,
 		reconnectInterval: 1 * time.Second,
 		tickerInterval:    2 * time.Second,
@@ -415,4 +637,40 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 	}
 
 	return logTime, true
+}
+
+func init() {
+	getActorsCmd.Flags().StringVarP(&getActorAtespaceFlag, "atespace", "a", "", "Atespace to list/get actors in. Required when getting actors; for listing, use this or -A.")
+	getActorsCmd.Flags().BoolVarP(&getActorAllAtespacesFlag, "all-atespaces", "A", false, "List actors across all atespaces (listing only; mutually exclusive with --atespace)")
+	getCmd.AddCommand(getActorsCmd)
+
+	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "The name of the ActorTemplate to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (--atespace)")
+	_ = createActorCmd.MarkFlagRequired("template")
+	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "Atespace to create the actor in")
+	_ = createActorCmd.MarkFlagRequired("atespace")
+	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "The name of a Tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (--atespace)")
+	createCmd.AddCommand(createActorCmd)
+
+	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
+	_ = deleteActorCmd.MarkFlagRequired("atespace")
+	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "Delete the actor from any state")
+	deleteCmd.AddCommand(deleteActorCmd)
+
+	pauseActorCmd.Flags().StringVarP(&pauseActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
+	_ = pauseActorCmd.MarkFlagRequired("atespace")
+	pauseCmd.AddCommand(pauseActorCmd)
+
+	resumeActorCmd.Flags().StringVarP(&resumeActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
+	_ = resumeActorCmd.MarkFlagRequired("atespace")
+	resumeCmd.AddCommand(resumeActorCmd)
+
+	suspendActorCmd.Flags().StringVarP(&suspendActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
+	_ = suspendActorCmd.MarkFlagRequired("atespace")
+	suspendCmd.AddCommand(suspendActorCmd)
+
+	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "Specify if the logs should be streamed.")
+	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
+	_ = logsActorsCmd.MarkFlagRequired("atespace")
+	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container.")
+	logsCmd.AddCommand(logsActorsCmd)
 }

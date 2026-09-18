@@ -228,8 +228,8 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
-	if got.GetSample() == nil {
-		t.Fatalf("GetActiveWorkloadStats() = %v, want a sample", got)
+	if len(got.GetSamples()) != 1 {
+		t.Fatalf("GetActiveWorkloadStats() = %v, want one sample", got)
 	}
 
 	// The keyed read against the same fixture is the reference: the discovery
@@ -239,7 +239,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
-	sample := got.GetSample()
+	sample := got.GetSamples()[0]
 	sample.ObservedAtUnixNano = 0
 	want.GetSample().ObservedAtUnixNano = 0
 	if diff := cmp.Diff(want.GetSample(), sample, protocmp.Transform()); diff != "" {
@@ -248,7 +248,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 }
 
 // TestGetActiveWorkloadStatsAvailable pins the contract that makes the
-// discovery read scrapeable: an idle ateom is a reason, never an error.
+// discovery read scrapeable: an idle ateom is an empty list, never an error.
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 
@@ -256,15 +256,30 @@ func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
 	}
-	if got.GetNoSampleReason() != ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD {
-		t.Errorf("GetActiveWorkloadStats() = %v, want NO_WORKLOAD reason", got)
+	if n := len(got.GetSamples()); n != 0 {
+		t.Errorf("GetActiveWorkloadStats() on an available ateom = %v, want no samples", got)
+	}
+}
+
+// pendingFor is the entry the discovery read answers for a workload with no
+// numbers yet: attribution and the runtime family, source UNSPECIFIED,
+// measurements absent. observed_at is zeroed by the caller before comparing.
+func pendingFor(attr resources.ActorAttribution) *ateompb.WorkloadStatsSample {
+	return &ateompb.WorkloadStatsSample{
+		Atespace:              attr.Ref.Atespace,
+		ActorName:             attr.Ref.Name,
+		ActorUid:              attr.UID,
+		ActorTemplateAtespace: attr.TemplateAtespace,
+		ActorTemplateName:     attr.TemplateName,
+		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
 	}
 }
 
 // TestGetActiveWorkloadStatsBooting: executing but nothing to measure yet is
-// a NOT_MEASURABLE_YET reason, not an error, unlike the keyed read's
-// FAILED_PRECONDITION. A blind caller finds boots as routinely as idle
-// workers.
+// a pending entry -- attribution without measurements -- not an error, unlike
+// the keyed read's FAILED_PRECONDITION. A blind caller finds boots as
+// routinely as idle workers, and the entry keeps a workload that dies during
+// boot attributable.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 	s := newStatsService(t, nil) // no cgroup directory: a poll landing mid-boot
 	s.activeActor.Store(&testActor)
@@ -273,8 +288,16 @@ func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() mid-boot: error = %v, want nil", err)
 	}
-	if got.GetNoSampleReason() != ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET {
-		t.Errorf("GetActiveWorkloadStats() mid-boot = %v, want NOT_MEASURABLE_YET reason", got)
+	if len(got.GetSamples()) != 1 {
+		t.Fatalf("GetActiveWorkloadStats() mid-boot = %v, want one pending entry", got)
+	}
+	entry := got.GetSamples()[0]
+	if entry.GetObservedAtUnixNano() == 0 {
+		t.Error("pending entry observed_at_unix_nano = 0, want set")
+	}
+	entry.ObservedAtUnixNano = 0
+	if diff := cmp.Diff(pendingFor(testActor), entry, protocmp.Transform()); diff != "" {
+		t.Errorf("pending entry mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -290,13 +313,16 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 	tests := []struct {
 		name string
 		to   *resources.ActorAttribution
-		want ateompb.NoSampleReason
+		// want is the expected samples list: a pending entry for the new
+		// occupant, or nothing when the slot emptied.
+		want []*ateompb.WorkloadStatsSample
 	}{
 		// A new actor took the slot: there is a workload, its numbers are just
-		// not attributable this tick.
-		{name: "to another actor", to: &otherActor, want: ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET},
+		// not attributable this tick, so it answers as that actor's pending
+		// entry.
+		{name: "to another actor", to: &otherActor, want: []*ateompb.WorkloadStatsSample{pendingFor(otherActor)}},
 		// A checkpoint emptied the slot: report what is true now.
-		{name: "to available", to: nil, want: ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD},
+		{name: "to available", to: nil, want: nil},
 	}
 
 	for _, tc := range tests {
@@ -312,11 +338,11 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetActiveWorkloadStats() during transition: error = %v, want nil", err)
 			}
-			if got.GetSample() != nil {
-				t.Errorf("GetActiveWorkloadStats() during transition returned sample %v, want none", got.GetSample())
+			for _, entry := range got.GetSamples() {
+				entry.ObservedAtUnixNano = 0
 			}
-			if got.GetNoSampleReason() != tc.want {
-				t.Errorf("GetActiveWorkloadStats() during transition = %v, want %v reason", got, tc.want)
+			if diff := cmp.Diff(tc.want, got.GetSamples(), protocmp.Transform()); diff != "" {
+				t.Errorf("GetActiveWorkloadStats() during transition mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

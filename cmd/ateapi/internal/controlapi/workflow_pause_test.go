@@ -264,7 +264,7 @@ func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 	}
 }
 
-func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 	tests := []struct {
 		name         string
 		prevSnapshot string
@@ -292,6 +292,7 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 						WorkerNamespace: "worker-ns",
 						WorkerPool:      "pool",
 						WorkerPod:       "pod-gone",
+						NodeName:        "node-gone",
 					},
 					InProgressLocalSnapshotName: "actor-1-never-written",
 					ExternalSnapshot:            &ateapipb.ExternalSnapshot{SnapshotUri: tt.prevSnapshot},
@@ -301,15 +302,15 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
 			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
-				t.Fatal("ensureAteletPaused: want error for dangling worker, got nil")
+				t.Fatal("ensureAteletPaused: want error when atelet is unreachable, got nil")
 			}
 
 			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
-			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-				t.Errorf("state = %v, want CRASHED", stored.GetStatus().GetState())
+			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSING {
+				t.Errorf("state = %v, want unchanged PAUSING", stored.GetStatus().GetState())
 			}
 			if got := stored.GetStatus().GetInProgressLocalSnapshotName(); got != "actor-1-never-written" {
 				t.Errorf("InProgressLocalSnapshotName = %q, want preserved for debugging", got)

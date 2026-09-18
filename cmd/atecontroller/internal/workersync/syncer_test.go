@@ -450,11 +450,6 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Shrink the retry backoff so the test's single retry is fast.
-	prev := storedWorkerListBackoff
-	storedWorkerListBackoff = time.Millisecond
-	defer func() { storedWorkerListBackoff = prev }()
-
 	api := newFakeControl()
 	api.put(registeredWorker("ns-enq-retry", "pool1", "worker-1", testPodUID, "10.0.0.10"))
 
@@ -468,6 +463,8 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 	})
 
 	s, _, _ := setupReconcileTest(t, api)
+	// Shrink the retry backoff so the test's single retry is fast.
+	s.listBackoff = time.Millisecond
 	s.enqueueRegisteredWorkers(ctx)
 
 	if failsLeft != 0 {
@@ -481,15 +478,12 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 // listWorkersPageWithRetry must stop retrying and return once the context is
 // cancelled, rather than spinning forever, when the API stays unavailable.
 func TestSyncer_ListWorkersPageWithRetry_StopsOnContextCancel(t *testing.T) {
-	prev := storedWorkerListBackoff
-	storedWorkerListBackoff = time.Millisecond
-	defer func() { storedWorkerListBackoff = prev }()
-
 	api := newFakeControl()
 	api.setListHook(func(*ateapipb.ListWorkersRequest) error {
 		return status.Error(codes.Unavailable, "still down")
 	})
 	s, _, _ := setupReconcileTest(t, api)
+	s.listBackoff = time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -505,10 +499,6 @@ func TestSyncer_ListWorkersPageWithRetry_StopsOnContextCancel(t *testing.T) {
 func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	prev := storedWorkerListBackoff
-	storedWorkerListBackoff = time.Millisecond
-	defer func() { storedWorkerListBackoff = prev }()
 
 	api := newFakeControl()
 	api.listPageSize = 1
@@ -531,6 +521,7 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 	})
 
 	s, _, _ := setupReconcileTest(t, api)
+	s.listBackoff = time.Millisecond
 	s.enqueueRegisteredWorkers(ctx)
 
 	if !failed {

@@ -37,12 +37,9 @@ import (
 	"k8s.io/utils/lru"
 )
 
-var ErrWorkerPodNotFound = errors.New("worker pod not found")
-
 // ErrNoAteletOnNode reports that the informer cache holds no atelet pod for
 // the requested node — e.g. the atelet is restarting, or the node is gone.
-// Distinct from ErrWorkerPodNotFound, which callers treat as crash-worthy;
-// this one is retryable.
+// Retryable.
 var ErrNoAteletOnNode = errors.New("no atelet pod found on node")
 
 // The SPIFFE identity that atelet serving certs carry, as minted by the
@@ -55,7 +52,6 @@ const (
 
 // AteletDialer handles gRPC connections to Atelet pods.
 type AteletDialer struct {
-	workerIndexer cache.Indexer
 	ateletIndexer cache.Indexer
 	ateletConns   *lru.Cache
 	// dialCredentials builds the transport credentials used to dial a given
@@ -76,9 +72,8 @@ func WithDialCredentials(build func(expectedPodUID string) (credentials.Transpor
 
 // NewAteletDialer creates a new AteletDialer. clientBundlePath and serverCAPath
 // are used to build the per-atelet mTLS credentials used for every atelet connection.
-func NewAteletDialer(workerIndexer cache.Indexer, ateletIndexer cache.Indexer, clientBundlePath, serverCAPath string, opts ...DialerOption) *AteletDialer {
+func NewAteletDialer(ateletIndexer cache.Indexer, clientBundlePath, serverCAPath string, opts ...DialerOption) *AteletDialer {
 	d := &AteletDialer{
-		workerIndexer: workerIndexer,
 		ateletIndexer: ateletIndexer,
 		ateletConns:   newAteletConnCache(1024),
 		dialCredentials: func(expectedPodUID string) (credentials.TransportCredentials, error) {
@@ -113,38 +108,9 @@ func newAteletConnCache(size int) *lru.Cache {
 	})
 }
 
-// DialForWorker returns a gRPC connection to the Atelet running on the same node as the specified worker pod.
-// Returns ErrWorkerPodNotFound if the worker pod is not found in the informer cache.
-func (d *AteletDialer) DialForWorker(workerPodNamespace, workerPodName string) (*grpc.ClientConn, error) {
-	workerPodKey := workerPodNamespace + "/" + workerPodName
-	matchingPods, err := d.workerIndexer.ByIndex(byNamespaceAndName, workerPodKey)
-	if err != nil {
-		return nil, fmt.Errorf("while finding pod %q: %w", workerPodKey, err)
-	}
-
-	if len(matchingPods) == 0 {
-		return nil, ErrWorkerPodNotFound
-	}
-
-	if len(matchingPods) > 1 {
-		return nil, fmt.Errorf("expected 1 pod match, got %d", len(matchingPods))
-	}
-
-	selectedWorker := matchingPods[0].(*corev1.Pod)
-
-	conn, err := d.DialForAteletOnNode(selectedWorker.Spec.NodeName)
-	if err != nil {
-		return nil, fmt.Errorf("for worker pod %q: %w", workerPodKey, err)
-	}
-	return conn, nil
-}
-
 // DialForAteletOnNode resolves the single atelet pod on nodeName and dials it
 // with per-atelet pod-UID-pinned credentials, caching the connection by the
-// atelet's pod UID. Used directly when an actor has no worker assignment but
-// its state is pinned to a node — e.g. a PAUSED actor whose local snapshot
-// lives there. Returns ErrNoAteletOnNode if the informer cache holds no
-// atelet pod for the node.
+// atelet's pod UID.
 func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, error) {
 	matchingAtelets, err := d.ateletIndexer.ByIndex(byNode, nodeName)
 	if err != nil {

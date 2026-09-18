@@ -1820,6 +1820,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPod:       "worker-1",
 				WorkerPodUid:    podUID,
 				WorkerPodIp:     "127.0.0.1",
+				NodeName:        "node1",
 			},
 		},
 	}

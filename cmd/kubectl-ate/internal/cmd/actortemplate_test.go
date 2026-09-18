@@ -25,6 +25,14 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
+func TestActorTemplateCommandArgs(t *testing.T) {
+	runCommandArgsTests(t, []commandArgsTest{
+		{name: "list", command: getActorTemplatesCmd},
+		{name: "get", command: getActorTemplatesCmd, args: []string{"counter"}},
+		{name: "get multiple", command: getActorTemplatesCmd, args: []string{"counter", "counter-microvm"}},
+	})
+}
+
 const counterTemplateManifest = `metadata:
   atespace: ate-demo-counter
   name: counter
