@@ -53,6 +53,21 @@ func ClientLoader(path string) func(*tls.CertificateRequestInfo) (*tls.Certifica
 	}
 }
 
+// PoolLoader reads a set of trust anchors from a PEM trust-bundle file, as
+// projected from a Kubernetes ClusterTrustBundle, and returns a function that
+// yields the parsed *x509.CertPool.
+//
+// A tls.Config's ClientCAs (and RootCAs) is frozen once the config is in use,
+// so a pool built at startup never sees a CA rotation. Calling the returned
+// function per connection — from GetConfigForClient on the server side — keeps
+// verification current: the parsed pool is cached and the file re-read only
+// when it changes, mirroring Loader, so a rotation is picked up on the next
+// handshake without paying the read and parse cost when nothing changed.
+func PoolLoader(path string) func() (*x509.CertPool, error) {
+	c := &poolCache{path: path}
+	return c.get
+}
+
 // certCache holds the parse of a credential bundle file together with the stat
 // of the file it was parsed from, so unchanged files are not re-parsed on
 // every TLS handshake.
@@ -101,6 +116,41 @@ func (c *certCache) get() (*tls.Certificate, error) {
 	}
 	c.fi, c.cert = fi, cert
 	return cert, nil
+}
+
+// poolCache holds the parse of a trust-bundle file together with the stat of
+// the file it was parsed from, so unchanged files are not re-parsed on every
+// TLS handshake. It mirrors certCache; see get for the change-detection and
+// concurrency reasoning.
+type poolCache struct {
+	path string
+
+	mu   sync.Mutex
+	fi   os.FileInfo
+	pool *x509.CertPool
+}
+
+// get returns the parsed trust pool, re-reading the file only when it has
+// changed since the last successful parse. Change detection and error handling
+// match certCache.get.
+func (c *poolCache) get() (*x509.CertPool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	fi, err := os.Stat(c.path)
+	if err != nil {
+		return nil, fmt.Errorf("while getting file info for trust bundle %q: %w", c.path, err)
+	}
+	if c.pool != nil && os.SameFile(c.fi, fi) && fi.ModTime().Equal(c.fi.ModTime()) && fi.Size() == c.fi.Size() {
+		return c.pool, nil
+	}
+
+	pool, err := ParsePool(c.path)
+	if err != nil {
+		return nil, err
+	}
+	c.fi, c.pool = fi, pool
+	return pool, nil
 }
 
 // Parse reads a private key and certificate chain from a credential bundle file as written by the
@@ -154,4 +204,19 @@ func Parse(bundlePath string) (*tls.Certificate, error) {
 		Leaf:        leafCert,
 		PrivateKey:  leafKey,
 	}, nil
+}
+
+// ParsePool reads a PEM trust-bundle file into an *x509.CertPool. It returns an
+// error if the file holds no certificates: an empty trust pool would silently
+// reject every peer, which is never what a workload should receive.
+func ParsePool(path string) (*x509.CertPool, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("while reading trust bundle: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("trust bundle %q contains no certificates", path)
+	}
+	return pool, nil
 }

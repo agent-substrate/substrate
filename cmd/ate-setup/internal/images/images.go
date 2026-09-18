@@ -46,6 +46,7 @@ var Components = []string{
 	"cmd/atenet",
 	"cmd/ateom-gvisor",
 	"cmd/ateom-microvm",
+	"cmd/credential-provider/kubernetes-secrets",
 	"cmd/podcertcontroller",
 	"demos/counter",
 	"demos/egress",

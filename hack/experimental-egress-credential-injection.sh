@@ -69,8 +69,8 @@ patch_atenet_egress_inject() {
     return 1
   fi
 
-  local name="${ATE_CREDENTIAL_PROVIDER_NAME:-ate-secret://kubernetes.io}"
-  local address="${ATE_CREDENTIAL_PROVIDER_ADDRESS:-credprovider.ate-system.svc:50051}"
+  local name="${ATE_CREDENTIAL_PROVIDER_NAME:-ate-secret://k8s.io}"
+  local address="${ATE_CREDENTIAL_PROVIDER_ADDRESS:-k8s-credential-provider.ate-system.svc:50051}"
   # Pin the provider's serving-cert SAN to its Service DNS name (the address
   # without the port), so a rotated cert for the same Service still validates.
   local server_name="${address%:*}"
