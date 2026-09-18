@@ -268,8 +268,7 @@ func do(ctx context.Context) error {
 	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
 
 	if err := svr.Serve(lis); err != nil {
-		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
-		os.Exit(1)
+		return fmt.Errorf("while serving: %w", err)
 	}
 
 	return nil
