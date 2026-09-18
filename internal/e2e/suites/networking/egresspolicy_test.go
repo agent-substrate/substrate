@@ -56,8 +56,8 @@ func reached(status int, _ []byte) bool { return status == http.StatusOK }
 func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
-	origin := egressHTTPTarget()
-	target := e2e.DeployServerPod(t, ctx, origin)
+	origin := sharedOrigin()
+	target := e2e.DeploySharedServerPod(t, ctx, origin)
 	allowed := fmt.Sprintf("%s.%s.svc.cluster.local", origin.Name, target.Namespace)
 
 	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-policy", egressFixture(), e2e.EgressAllowHostnames(allowed))
@@ -83,7 +83,7 @@ func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 func TestActorEgressRequiresPolicy(t *testing.T) {
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
-	target := e2e.DeployServerPod(t, ctx, egressHTTPTarget())
+	target := e2e.DeploySharedServerPod(t, ctx, sharedOrigin())
 
 	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-nopolicy", egressFixture())
 	router := mustRouterClient(t, ctx)
@@ -110,8 +110,8 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 func TestActorEgressPolicyAllowsByAddress(t *testing.T) {
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
-	origin := egressHTTPTarget()
-	target := e2e.DeployServerPod(t, ctx, origin)
+	origin := sharedOrigin()
+	target := e2e.DeploySharedServerPod(t, ctx, origin)
 	block := netip.MustParseAddr(target.ClusterIP)
 	cidr := netip.PrefixFrom(block, block.BitLen()).String()
 

@@ -17,14 +17,17 @@
 // backs all of them and a new origin-style test adds a subcommand here rather
 // than a new image to build and push:
 //
+//	testserver serve --listen=:8080 --grpc=:50051  several protocols at once
 //	testserver grpc  --listen=:50051   a cleartext HTTP/2 gRPC echo origin
 //	testserver http  --listen=:8080    a plain HTTP origin serving /healthz
 //	testserver egressprobe --listen=:8080  a client that drives the egress gateway
 //	testserver websocket --listen=:8080  a websocket server that responds to PINGs
 //
-// Each pod runs exactly one subcommand on one listener, so the wire behavior of
-// any given pod is unchanged from when these were separate binaries -- the grpc
-// pod still speaks nothing but cleartext HTTP/2, for instance.
+// Every subcommand but serve runs one listener speaking one protocol, so the
+// wire behavior of such a pod is unchanged from when these were separate
+// binaries -- the grpc pod still speaks nothing but cleartext HTTP/2. serve is
+// the shared origin several tests dial at once, and keeps that property per
+// port: a protocol there gets a port to itself rather than sharing one.
 //
 // The subcommand shape follows Kubernetes' test/images/agnhost: a single
 // extendable CLI whose modes are cobra subcommands, matching the rest of this
@@ -43,7 +46,7 @@ func main() {
 		Use:   "testserver",
 		Short: "Multi-mode helper server for the egress e2e suites.",
 	}
-	root.AddCommand(newGRPCCmd(), newHTTPCmd(), newEgressProbeCmd(), newWebsocketCmd())
+	root.AddCommand(newServeCmd(), newGRPCCmd(), newHTTPCmd(), newEgressProbeCmd(), newWebsocketCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
