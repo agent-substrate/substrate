@@ -1,0 +1,89 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package containerd.services.snapshots.v1;
+
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/agent-substrate/substrate/internal/proto/snapshots";
+
+// Snapshots is the containerd snapshotter service implemented by remote snapshotters
+// such as Google Riptide (containerd-gcfs-grpc) and AWS SOCI (soci-snapshotter-grpc).
+service Snapshots {
+  rpc Prepare(PrepareSnapshotRequest) returns (PrepareSnapshotResponse);
+  rpc View(ViewSnapshotRequest) returns (ViewSnapshotResponse);
+  rpc Mounts(MountsRequest) returns (MountsResponse);
+  rpc Remove(RemoveSnapshotRequest) returns (google.protobuf.Empty);
+  rpc Stat(StatSnapshotRequest) returns (StatSnapshotResponse);
+}
+
+message Mount {
+  string type = 1;
+  string source = 2;
+  string target = 3;
+  repeated string options = 4;
+}
+
+message PrepareSnapshotRequest {
+  string snapshotter = 1;
+  string key = 2;
+  string parent = 3;
+  map<string, string> labels = 4;
+}
+
+message PrepareSnapshotResponse {
+  repeated Mount mounts = 1;
+}
+
+message ViewSnapshotRequest {
+  string snapshotter = 1;
+  string key = 2;
+  string parent = 3;
+  map<string, string> labels = 4;
+}
+
+message ViewSnapshotResponse {
+  repeated Mount mounts = 1;
+}
+
+message MountsRequest {
+  string snapshotter = 1;
+  string key = 2;
+}
+
+message MountsResponse {
+  repeated Mount mounts = 1;
+}
+
+message RemoveSnapshotRequest {
+  string snapshotter = 1;
+  string key = 2;
+}
+
+message StatSnapshotRequest {
+  string snapshotter = 1;
+  string key = 2;
+}
+
+message Info {
+  string name = 1;
+  string parent = 2;
+  map<string, string> labels = 3;
+}
+
+message StatSnapshotResponse {
+  Info info = 1;
+}
