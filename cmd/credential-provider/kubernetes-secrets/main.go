@@ -22,11 +22,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -180,22 +178,32 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 		return nil, fmt.Errorf("--client-ca-file is required")
 	}
 
-	ca, err := os.ReadFile(*clientCAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read --client-ca-file: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(ca) {
-		return nil, fmt.Errorf("no certificates in --client-ca-file %q", *clientCAFile)
+	// Load the client CA pool once so a missing or empty projection fails the
+	// pod promptly; GetConfigForClient below reloads it for every connection.
+	loadPool := credbundle.PoolLoader(*clientCAFile)
+	if _, err := loadPool(); err != nil {
+		return nil, err
 	}
 
+	serverCert := credbundle.Loader(*serverBundle)
+	verifySAN := verifyClientSAN(injectorSPIFFEID)
+
+	// GetConfigForClient builds the config anew per connection: a certificate
+	// signed by a newly published CA verifies without a restart.
 	cfg := &tls.Config{
-		MinVersion:     tls.VersionTLS13,
-		GetCertificate: credbundle.Loader(*serverBundle),
-		// Require a client certificate that chains to the trust bundle.
-		ClientAuth:       tls.RequireAndVerifyClientCert,
-		ClientCAs:        pool,
-		VerifyConnection: verifyClientSAN(injectorSPIFFEID),
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			pool, err := loadPool()
+			if err != nil {
+				return nil, err
+			}
+			return &tls.Config{
+				MinVersion:       tls.VersionTLS13,
+				GetCertificate:   serverCert,
+				ClientAuth:       tls.RequireAndVerifyClientCert,
+				ClientCAs:        pool,
+				VerifyConnection: verifySAN,
+			}, nil
+		},
 	}
 	slog.InfoContext(ctx, "verifying caller client certificates",
 		slog.String("ca", *clientCAFile), slog.String("required_san", injectorSPIFFEID))
