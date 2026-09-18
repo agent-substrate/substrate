@@ -34,6 +34,15 @@ rules:
   - get
   - watch
   - list
+# /statusz displays the current ClusterIP of the router's own Service.
+- apiGroups:
+  - ""
+  resources:
+  - services
+  resourceNames:
+  - atenet-router
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
