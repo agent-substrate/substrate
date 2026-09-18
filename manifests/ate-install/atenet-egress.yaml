@@ -104,10 +104,7 @@ data:
               codec_type: HTTP1
               upgrade_configs:
               - upgrade_type: CONNECT
-              # TODO(liorlieberman): Can we make this cleaner?
-              forward_client_cert_details: SANITIZE_SET
-              set_current_client_cert_details:
-                chain: true
+              forward_client_cert_details: SANITIZE
               # Emit the access log as soon as the CONNECT tunnel is established
               # (atunnel keeps the tunnel open, so the default log-on-close would
               # not fire during the demo).
@@ -166,6 +163,19 @@ data:
                       text_format_source:
                         inline_string: "%DOWNSTREAM_PEER_URI_SAN%"
                       omit_empty_values: true
+              - name: envoy.filters.http.lua
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                  default_source_code:
+                    inline_string: |
+                      function envoy_on_request(handle)
+                        local ssl = handle:streamInfo():downstreamSslConnection()
+                        local chain = ""
+                        if ssl ~= nil then
+                          chain = ssl:urlEncodedPemEncodedPeerCertificateChain()
+                        end
+                        handle:streamInfo():dynamicMetadata():set("dev.ate.egress.peer_certificate", "chain", chain)
+                      end
               # The CONNECT leg. The sidecar authenticates the actor from its
               # certificate and decides the address rules against the CONNECT
               # authority (see cmd/atenet/internal/router/egress). It answers with
@@ -208,6 +218,9 @@ data:
                   # Envoy silently drops metadata from a namespace not listed
                   # here, and the filter state below would never be set.
                   metadata_options:
+                    forwarding_namespaces:
+                      untyped:
+                      - dev.ate.egress.peer_certificate
                     receiving_namespaces:
                       untyped:
                       - dev.ate.egress
