@@ -264,6 +264,18 @@ Kind — only the hostpath plugin is patched for the single-node Kind layout, an
 both reject `hostpath` and `both` there with a hard error rather than the
 shell's old warn-and-continue.
 
+**Telemetry modes are Go-only.** `ate-setup --observability` selects the
+collector, tests that the collector of the mode exists, keeps the mode that the
+cluster has when no flag gives one, and exports nothing on a cluster with no
+collector
+([`docs/observability.md`](../../docs/observability.md#selecting-a-collector)).
+`hack/install-ate.sh` has no such flag: it keeps its two cases, the kind
+collector for a kind install and the GKE managed one for each other install,
+and keeps `--otlp-endpoint` as a patch after the apply. That patch stamps the
+mode annotation too, thus a later `ate-setup` run keeps the collector it named
+instead of putting the collector of the mode before it back over one that
+works.
+
 **Cloud SQL is shell-only.** `hack/install-ate.sh` automates Cloud SQL setup
 with IAM authentication, synthesized DSNs, and the Auth Proxy sidecar
 ([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)). `ate-setup` does not yet

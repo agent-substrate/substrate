@@ -97,6 +97,10 @@ func init() {
 	f.StringVar(&opts.CredentialProviderName, "credential-provider-name", "", "Credential provider the injector serves, as a ate-secret:// prefix (default ate-secret://kubernetes.io)")
 	f.StringVar(&opts.CredentialProviderAddress, "credential-provider-address", "", "Address the egress gateway dials the credential provider at (default credprovider.ate-system.svc:50051)")
 	f.BoolVar(&opts.NoDevEnv, "no-dev-env", false, "Do not source .ate-dev-env.sh")
+	f.StringVar(&opts.Observability, "observability", "",
+		"Telemetry mode: none (no export), otlp (the collector at --otlp-endpoint), gke (the GKE managed OTel addon), or kind (the collector of a kind install)")
+	f.StringVar(&opts.OtlpEndpoint, "otlp-endpoint", "",
+		"Address of the collector for --observability=otlp (e.g. http://opentelemetry-collector.otel-system.svc:4317)")
 
 	f.StringVar(&opts.ImageRepo, "image-repo", "",
 		"Install pre-built images from this registry path instead of building them from source (e.g. registry.example.com/substrate)")
