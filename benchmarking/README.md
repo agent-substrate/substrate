@@ -79,6 +79,16 @@ not a local entry point. See [automation/README.md](automation/README.md).
 python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
 ```
 
+Two flags control the optional post-run measurements described in
+[Benchmark output files](#benchmark-output-files):
+
+* `--cluster-facts` / `--no-cluster-facts`: read node capacity and worker pod
+  count from the Kubernetes API once the run ends, to derive density frontiers.
+  On by default. Pass `--no-cluster-facts` to skip Kubernetes API discovery.
+* `--prometheus-url`: the Prometheus to harvest server-side telemetry from.
+  Defaults to the in-cluster service installed by
+  [Optional: Prometheus + Grafana](#optional-prometheus--grafana).
+
 Test-specific flags are appended to the same command; see the sections below.
 
 ### DurDir Benchmark
@@ -114,6 +124,83 @@ You must have enabled otel tracing for your cluster to view traces.
 
 You can find trace IDs by viewing the `logs` tab in the Locust UI
 
+## Benchmark output files
+
+A run writes the following to `--dest`. Each run produces them fresh; none of
+them are checked into the repository.
+
+* `status.json`: `locust_exit_code` and `stats_generated`. Deliberately just
+  those two keys, because it is what CI orchestration reads to decide whether a
+  trial ran at all.
+* `stats.csv`, `stats_history.csv`, `failures.csv`, `exceptions.csv`: Locust's
+  own CSV output.
+* `logs.txt`, `traces.txt`: the runner log, and the trace IDs seen during the run.
+* `stats.jsonl`: one JSON object per line, one per metric. Every row carries
+  the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
+  `measurements` map holding that metric's numbers.
+* `server_summary.json`: server-side telemetry harvested from Prometheus,
+  including the per-sample bin-packing timeseries.
+
+### Density frontiers
+
+With cluster discovery enabled, `stats.jsonl` gains a `trial_summary` row
+describing how densely actors packed onto the hardware. Its `measurements`
+map holds the raw facts and the derived numbers side by side.
+
+* `machine_type`, `node_count`, `allocatable_cores`, `allocatable_ram_gb`
+  (GiB), `worker_pod_count`: the measured facts, before any arithmetic.
+  Capacity covers the nodes the worker pods are running on rather than the
+  whole cluster, so a separate infrastructure pool is not counted. They are
+  recorded so the ratios below can be re-derived later, or recomputed against
+  a different denominator.
+* `actors_per_node`, `actors_per_vcpu`, `actors_per_gb_ram`: the most users
+  Locust reported running, over the matching capacity. The `-u` flag only
+  stands in when no sample was read.
+* `actors_per_pod_p50`, `actors_per_pod_p90`, `actors_per_pod_p99`: users per
+  worker pod across the run. Reported as a distribution rather than one
+  average, and it spans ramp-up too, because a custom load shape has no
+  single user count to call steady.
+* `aggregate_failure_ratio`: failures over requests for the run.
+* `<operation>_failure_ratio`: the same ratio for every operation Locust
+  reported, so each test carries its own names through. The operation name is
+  lowercased with underscores, so `DurDirWrite` becomes
+  `dur_dir_write_failure_ratio`. A key is absent when the test has no such
+  row, and null when the row ran no requests.
+
+### Server ground truth
+
+With a reachable Prometheus, `server_summary.json` records what the server
+actually did, independent of what the load generator reported.
+
+* `cluster_packing`: assigned workers over total workers, as a percentile
+  `summary` plus the per-sample `timeseries` it was computed from.
+* `node_psi.cpu_stall_pct`, `mem_stall_pct`, `io_stall_pct`: kernel pressure
+  stall percentages on the nodes under test.
+* `snapshots.size_p50_mb`, `size_p90_mb`, `size_p95_mb`: actor snapshot sizes.
+* `snapshots.size_avg_mb`: mean snapshot size, taken from the histogram's
+  own sum and count, so it is exact rather than bucket-interpolated.
+* `snapshots.checkpoint_p50_s`, `checkpoint_p95_s`, `restore_p50_s`,
+  `restore_p95_s`: checkpoint and restore latency.
+* `snapshots.checkpoints_in_window`, `checkpoints_cumulative`: checkpoint
+  volume over the steady-state window.
+* `snapshots.checkpoint_mb_s`: bytes written over the seconds spent writing
+  them, taken from the histogram sums, so it reads as how fast a checkpoint
+  writes rather than how many bytes the cluster moved per second of wall
+  clock.
+
+A flattened subset of the same numbers goes into the `measurements` map of a
+`server_summary` row in `stats.jsonl`, so both metrics can be read from the
+one file.
+
+The `metadata.start_ts` the file records is when the runner started, not when
+load did, so the window it covers includes setup. That is deliberate, it gives
+the percentiles an idle stretch to sit against, but it does mean the window is
+a little longer than the test. The steady-state window is reported separately.
+
+Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
+or discovery was skipped, the affected fields are written as `null` and the run
+still succeeds. A `null` means the value was not measured. It never means zero.
+
 ## Optional: Prometheus + Grafana
 
 Locust provides graphs, statistics, etc. via the UI. However, you
@@ -138,3 +225,12 @@ Once installed:
 code; it manages its own virtual environment under `locust/codegen/venv`.
 `hack/verify/codegen.sh` fails if the checked-in clients have drifted from the
 protos.
+
+### Unit tests
+
+`locust/unit_tests` covers the runner's helpers and needs no cluster. From the
+repository root:
+
+```bash
+python3 -m unittest discover -s benchmarking/locust/unit_tests
+```
