@@ -242,6 +242,9 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	if err != nil {
 		return nil, err
 	}
+	if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_REVERTING {
+		return nil, status.Errorf(codes.FailedPrecondition, "FinalizeReverted prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_REVERTING)
+	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
