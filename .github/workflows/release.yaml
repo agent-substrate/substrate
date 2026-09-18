@@ -88,8 +88,8 @@ jobs:
         run: |
           set -o errexit -o nounset -o pipefail
 
-          for component in ateapi atecontroller atelet ateom-gvisor ateom-microvm podcertcontroller atenet; do
-            KO_DOCKER_REPO="${IMAGE_REPOSITORY}/${component}" \
+          for component in ateapi atecontroller atelet ateom-gvisor ateom-microvm podcertcontroller atenet credential-provider/kubernetes-secrets; do
+            KO_DOCKER_REPO="${IMAGE_REPOSITORY}/${component##*/}" \
             ./hack/run-tool.sh ko build \
               --tags "${IMAGE_TAGS}" \
               --platform linux/amd64,linux/arm64 \
