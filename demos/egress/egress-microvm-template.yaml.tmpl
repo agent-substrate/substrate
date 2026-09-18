@@ -38,7 +38,7 @@ containers:
     # See ../counter/counter-microvm-template.yaml.tmpl: a micro-VM guest needs
     # more than readyz's 30s default once CI's single kind node is under load.
     timeoutSeconds: 120
-# Sandbox size: without these the guest boots at the kata config's default
+# Sandbox size: without these the guest boots at ateom's default size
 # (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
 # strings in the proto.
 resources:

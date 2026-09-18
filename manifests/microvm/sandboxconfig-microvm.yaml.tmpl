@@ -64,9 +64,6 @@ spec:
       kata-image:
         url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
         sha256: "24d77700749846355f3be25b87974c1fdea9fd2a9534256b4e4bbdde5df23588"
-      kata-config:
-        url: "gs://${BUCKET_NAME}/kata-assets/configuration-clh.toml"
-        sha256: "20f5de4f705423ddd1ee93318c784c6aede30c07c78dc6b311a771cc2f6859c7"
     # amd64 assets are kata 4.0.0 + virtiofsd v1.14.0 (assemble.sh ARCH=amd64).
     amd64:
       cloud-hypervisor:
@@ -84,6 +81,3 @@ spec:
       kata-image:
         url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
         sha256: "fbbd40de605ab2f99dc82c777dc5b41f9a00dad3a0f699f2247c306ac9c1204d"
-      kata-config:
-        url: "gs://${BUCKET_NAME}/kata-assets/configuration-clh.toml"
-        sha256: "1e67eabdfb9d900bf95a00edb52cacc1efe64f23ea095f8b49ee81c7434bce90"

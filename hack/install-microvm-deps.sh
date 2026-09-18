@@ -142,7 +142,7 @@ OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 
 # --- 1. assets: assemble (if missing or stale) -----------------------------
 need_assemble=false
-for f in cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml; do
+for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
   if [[ ! -f "${OUT}/${f}" ]]; then
     need_assemble=true
     break
@@ -170,7 +170,7 @@ else
 fi
 
 # --- 2. stage assets to rustfs (kind) / GCS (GKE) --------------------------
-# Upload the five assets under kata-assets/, where atelet fetches them: the
+# Upload the four assets under kata-assets/, where atelet fetches them: the
 # in-cluster rustfs (S3 API) on kind, or the GCS bucket on GKE.
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   log "Staging assets to in-cluster rustfs bucket ${BUCKET_NAME} (kata-assets/)..."
