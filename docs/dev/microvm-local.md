@@ -145,7 +145,8 @@ Linux-only libraries), so run it in the Lima guest, not on macOS:
 limactl shell docker-nested
 
 # Inside the VM — install build deps once:
-sudo apt-get update && sudo apt-get install -y git pkg-config libcap-ng-dev libseccomp-dev zstd
+sudo add-apt-repository ppa:git-core/ppa
+sudo apt-get update && sudo apt-get install -y git build-essential pkg-config libcap-ng-dev libseccomp-dev zstd
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # rust via rustup
 source "$HOME/.cargo/env"
 
@@ -191,4 +192,5 @@ requires a full guest boot and checkpoint.
 |---|---|---|
 | `/dev/kvm: permission denied` during the kind KVM probe | Rootless Docker: the probe container's root is remapped to your user, which can't open the device (`660 root:kvm`) | Use rootful Docker, or `sudo chmod 666 /dev/kvm` before `./hack/create-kind-cluster.sh` |
 | `cargo not found` from `assemble.sh` | On arm64, `virtiofsd` is built from source | Install the build deps listed in Option B, Step 3 |
+| `assemble.sh` hangs on `cargo build`, then `spurious network error ... transfer too slow ... (transferred 0 bytes)`, while `curl` to the same host is fast | Path-MTU black hole: the path allows less than the guest's 1500-byte MTU, and the ICMP `fragmentation needed` replies are filtered, so the kernel keeps retransmitting a segment that cannot get through | `sudo sysctl -w net.ipv4.tcp_mtu_probing=1`, persisted in `/etc/sysctl.d/99-pmtu.conf` |
 | Lima: `[hostagent] Starting VZ ... FATA exiting` on M1/M2 | Apple's Virtualization framework supports nested virtualization only on M3 and later | Use an M3+ Mac, or a Linux/KVM host (Option A) |
