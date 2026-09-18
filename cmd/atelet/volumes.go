@@ -40,11 +40,11 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
 		slog.InfoContext(ctx, "Mounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
-		plugin, err := s.getPlugin(ctx, ext.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, s.getPlugin, ext.GetVolumeType())
 		if err != nil {
-			return fmt.Errorf("failed to get volume plugin for %q: %w", ext.GetVolumeType(), err)
+			return err
 		}
-		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext()); err != nil {
+		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext(), ext.GetPublishContext(), ext.GetAccessMode(), ext.GetReadonly()); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
 	}
@@ -60,11 +60,9 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 		}
 		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
 		slog.InfoContext(ctx, "Unmounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
-		// TODO: Standardize volume plugin lookup and error handling across control plane
-		// and worker plane (e.g. via a shared helper).
-		plugin, err := s.getPlugin(ctx, ext.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, s.getPlugin, ext.GetVolumeType())
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q (volume %q): %w", ext.GetVolumeType(), ext.GetStorageVolumeId(), err))
+			errs = append(errs, fmt.Errorf("%w (volume %q)", err, ext.GetStorageVolumeId()))
 			continue
 		}
 		if err := plugin.UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
@@ -86,7 +84,7 @@ func (s *AteomHerder) getPlugin(ctx context.Context, driverName string) (volume.
 		return plugin, nil
 	}
 
-	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, driverName, false /*isController*/)
+	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigGetter, driverName, false /*isController*/)
 	if err != nil {
 		return nil, err
 	}

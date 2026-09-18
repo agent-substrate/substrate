@@ -1492,8 +1492,8 @@ func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capaci
 	return "storage-" + name, parameters, nil
 }
 
-func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	return nil, nil
 }
 
 func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1633,8 +1633,8 @@ func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capac
 	return "storage-" + name, parameters, nil
 }
 
-func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string, mode ateapipb.VolumeAccessMode) (map[string]string, error) {
+	return nil, nil
 }
 
 func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {

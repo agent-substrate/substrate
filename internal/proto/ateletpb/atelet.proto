@@ -189,6 +189,9 @@ message ExternalVolumeSource {
   string storage_volume_id = 1;
   string volume_type = 2;
   map<string, string> volume_context = 3;
+  map<string, string> publish_context = 4;
+  ateapi.VolumeAccessMode access_mode = 5;
+  bool readonly = 6;
 }
 
 message ImageVolumeSource {

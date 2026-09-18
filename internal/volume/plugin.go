@@ -16,6 +16,8 @@ package volume
 
 import (
 	"context"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // VolumePluginControlPlane abstracts storage operations performed on the control plane.
@@ -23,12 +25,12 @@ type VolumePluginControlPlane interface {
 	DriverName(ctx context.Context) (string, error)
 	CreateVolume(ctx context.Context, name string, capacity string, driverName string, parameters map[string]string) (volumeID string, volumeContext map[string]string, err error)
 	DeleteVolume(ctx context.Context, volumeID string) error
-	AttachVolume(ctx context.Context, volumeID string, node string) error
+	AttachVolume(ctx context.Context, volumeID string, node string, mode ateapipb.VolumeAccessMode) (publishContext map[string]string, err error)
 	DetachVolume(ctx context.Context, volumeID string, node string) error
 }
 
 // VolumePluginWorkerPlane abstracts storage operations performed on worker nodes.
 type VolumePluginWorkerPlane interface {
-	MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error
+	MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string, publishContext map[string]string, mode ateapipb.VolumeAccessMode, readonly bool) error
 	UnmountVolume(ctx context.Context, volumeID string, targetPath string) error
 }

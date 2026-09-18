@@ -60,6 +60,20 @@ func TestParseEndpoint(t *testing.T) {
 			wantErr:  false,
 		},
 		{
+			name:     "valid dns authority",
+			endpoint: "dns://8.8.8.8/csi-service:9000",
+			wantSrc:  "dns",
+			wantTgt:  "dns://8.8.8.8/csi-service:9000",
+			wantErr:  false,
+		},
+		{
+			name:     "valid dns without port",
+			endpoint: "dns:///csi-service",
+			wantSrc:  "dns",
+			wantTgt:  "dns:///csi-service",
+			wantErr:  false,
+		},
+		{
 			name:     "invalid scheme",
 			endpoint: "http://localhost:50051",
 			wantErr:  true,
@@ -72,16 +86,27 @@ func TestParseEndpoint(t *testing.T) {
 		{
 			name:     "tcp missing port",
 			endpoint: "tcp://127.0.0.1",
-			wantSrc:  "tcp",
-			wantTgt:  "127.0.0.1",
-			wantErr:  false,
+			wantErr:  true,
 		},
 		{
 			name:     "tcp missing host",
 			endpoint: "tcp://:50051",
-			wantSrc:  "tcp",
-			wantTgt:  ":50051",
-			wantErr:  false,
+			wantErr:  true,
+		},
+		{
+			name:     "tcp invalid port out of range",
+			endpoint: "tcp://127.0.0.1:99999",
+			wantErr:  true,
+		},
+		{
+			name:     "tcp non-numeric port",
+			endpoint: "tcp://127.0.0.1:abc",
+			wantErr:  true,
+		},
+		{
+			name:     "dns invalid port out of range",
+			endpoint: "dns:///csi-service:99999",
+			wantErr:  true,
 		},
 		{
 			name:     "unix missing path",

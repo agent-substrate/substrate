@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -40,6 +41,8 @@ type mockCSIDriver struct {
 	nodeUnstageVolumeFunc         func(context.Context, *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error)
 	nodePublishVolumeFunc         func(context.Context, *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error)
 	nodeUnpublishVolumeFunc       func(context.Context, *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error)
+	controllerGetCapabilitiesFunc func(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error)
+	nodeGetCapabilitiesFunc       func(context.Context, *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error)
 
 	getPluginCapabilitiesFunc func(context.Context, *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error)
 	probeFunc                 func(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, error)
@@ -137,6 +140,40 @@ func (m *mockCSIDriver) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUn
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
+func (m *mockCSIDriver) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	if m.controllerGetCapabilitiesFunc != nil {
+		return m.controllerGetCapabilitiesFunc(ctx, req)
+	}
+	return &csi.ControllerGetCapabilitiesResponse{
+		Capabilities: []*csi.ControllerServiceCapability{
+			{
+				Type: &csi.ControllerServiceCapability_Rpc{
+					Rpc: &csi.ControllerServiceCapability_RPC{
+						Type: csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func (m *mockCSIDriver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+	if m.nodeGetCapabilitiesFunc != nil {
+		return m.nodeGetCapabilitiesFunc(ctx, req)
+	}
+	return &csi.NodeGetCapabilitiesResponse{
+		Capabilities: []*csi.NodeServiceCapability{
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
 func startMockCSIDriver(t *testing.T, driver *mockCSIDriver) (string, func()) {
 	tmpDir, err := os.MkdirTemp("", "csi-test-*")
 	if err != nil {
@@ -215,7 +252,15 @@ func TestPlugin_DeleteVolume(t *testing.T) {
 }
 
 func TestPlugin_AttachVolume(t *testing.T) {
-	driver := &mockCSIDriver{}
+	var receivedReq *csi.ControllerPublishVolumeRequest
+	driver := &mockCSIDriver{
+		controllerPublishVolumeFunc: func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+			receivedReq = req
+			return &csi.ControllerPublishVolumeResponse{
+				PublishContext: map[string]string{"device_path": "/dev/xvda"},
+			}, nil
+		},
+	}
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
@@ -228,18 +273,30 @@ func TestPlugin_AttachVolume(t *testing.T) {
 	plugin := NewPlugin(client)
 
 	ctx := context.Background()
-	err = plugin.AttachVolume(ctx, "test-vol", "node-1")
+	pubCtx, err := plugin.AttachVolume(ctx, "test-vol", "node-1", ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY)
 	if err != nil {
 		t.Fatalf("AttachVolume failed: %v", err)
+	}
+	if pubCtx["device_path"] != "/dev/xvda" {
+		t.Errorf("expected publish context device_path to be /dev/xvda, got %v", pubCtx)
+	}
+	if !receivedReq.GetReadonly() {
+		t.Errorf("expected Readonly to be true for ReadOnlyMany")
+	}
+	if receivedReq.GetVolumeCapability().GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
+		t.Errorf("expected MULTI_NODE_READER_ONLY, got %v", receivedReq.GetVolumeCapability().GetAccessMode().GetMode())
 	}
 
 	// Test Unimplemented warning bypass
 	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 		return nil, status.Error(codes.Unimplemented, "unimplemented")
 	}
-	err = plugin.AttachVolume(ctx, "test-vol", "node-1")
+	pubCtx, err = plugin.AttachVolume(ctx, "test-vol", "node-1", ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE)
 	if err != nil {
 		t.Errorf("AttachVolume should have ignored Unimplemented error, got: %v", err)
+	}
+	if pubCtx != nil {
+		t.Errorf("expected nil publish context on unimplemented, got %v", pubCtx)
 	}
 }
 
@@ -273,7 +330,18 @@ func TestPlugin_DetachVolume(t *testing.T) {
 }
 
 func TestPlugin_MountVolume(t *testing.T) {
-	driver := &mockCSIDriver{}
+	var receivedStageReq *csi.NodeStageVolumeRequest
+	var receivedPublishReq *csi.NodePublishVolumeRequest
+	driver := &mockCSIDriver{
+		nodeStageVolumeFunc: func(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+			receivedStageReq = req
+			return &csi.NodeStageVolumeResponse{}, nil
+		},
+		nodePublishVolumeFunc: func(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+			receivedPublishReq = req
+			return &csi.NodePublishVolumeResponse{}, nil
+		},
+	}
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
@@ -284,17 +352,14 @@ func TestPlugin_MountVolume(t *testing.T) {
 	defer client.Close()
 
 	plugin := NewPlugin(client)
-	tmpDir, err := os.MkdirTemp("", "csi-mount-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
 	targetPath := filepath.Join(tmpDir, "target")
 
 	ctx := context.Background()
-	err = plugin.MountVolume(ctx, "test-vol", targetPath, nil)
+	pubCtx := map[string]string{"device_path": "/dev/xvda"}
+	err = plugin.MountVolume(ctx, "test-vol", targetPath, nil, pubCtx, ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY, false)
 	if err != nil {
 		t.Fatalf("MountVolume failed: %v", err)
 	}
@@ -305,6 +370,25 @@ func TestPlugin_MountVolume(t *testing.T) {
 		t.Errorf("staging directory %q was not created", stagingPath)
 	}
 
+	// Verify publishContext and access mode were propagated to NodeStageVolume
+	if receivedStageReq == nil || receivedStageReq.GetPublishContext()["device_path"] != "/dev/xvda" {
+		t.Errorf("expected publishContext to be propagated to NodeStageVolume, got %v", receivedStageReq)
+	}
+	if receivedStageReq.GetVolumeCapability().GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
+		t.Errorf("expected MULTI_NODE_READER_ONLY in stage, got %v", receivedStageReq.GetVolumeCapability().GetAccessMode().GetMode())
+	}
+
+	// Verify publishContext, access mode, and readonly were propagated to NodePublishVolume
+	if receivedPublishReq == nil || receivedPublishReq.GetPublishContext()["device_path"] != "/dev/xvda" {
+		t.Errorf("expected publishContext to be propagated to NodePublishVolume, got %v", receivedPublishReq)
+	}
+	if !receivedPublishReq.GetReadonly() {
+		t.Errorf("expected Readonly to be true in NodePublishVolume for ReadOnlyMany")
+	}
+	if receivedPublishReq.GetVolumeCapability().GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
+		t.Errorf("expected MULTI_NODE_READER_ONLY in publish, got %v", receivedPublishReq.GetVolumeCapability().GetAccessMode().GetMode())
+	}
+
 	// Test NodeStageVolume Unimplemented bypass
 	driver.nodeStageVolumeFunc = func(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 		return nil, status.Error(codes.Unimplemented, "unimplemented")
@@ -313,7 +397,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	os.RemoveAll(tmpDir)
 	os.MkdirAll(plugin.stagingDirPrefix, 0750)
 
-	err = plugin.MountVolume(ctx, "test-vol-2", targetPath, nil)
+	err = plugin.MountVolume(ctx, "test-vol-2", targetPath, nil, nil, ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE, false)
 	if err != nil {
 		t.Errorf("MountVolume should have succeeded when NodeStageVolume is unimplemented, got: %v", err)
 	}
@@ -406,5 +490,210 @@ func TestClient_Identity(t *testing.T) {
 	_, err = client.Probe(ctx, &csi.ProbeRequest{})
 	if err != nil {
 		t.Fatalf("Probe failed: %v", err)
+	}
+}
+
+func TestPlugin_Capabilities_SkipAttachDetachWhenUnsupported(t *testing.T) {
+	var publishCalled, unpublishCalled int
+	driver := &mockCSIDriver{
+		controllerGetCapabilitiesFunc: func(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+			// Return capabilities WITHOUT PUBLISH_UNPUBLISH_VOLUME (like hostpath driver)
+			return &csi.ControllerGetCapabilitiesResponse{
+				Capabilities: []*csi.ControllerServiceCapability{
+					{
+						Type: &csi.ControllerServiceCapability_Rpc{
+							Rpc: &csi.ControllerServiceCapability_RPC{
+								Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+							},
+						},
+					},
+				},
+			}, nil
+		},
+		controllerPublishVolumeFunc: func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+			publishCalled++
+			return &csi.ControllerPublishVolumeResponse{}, nil
+		},
+		controllerUnpublishVolumeFunc: func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+			unpublishCalled++
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
+		},
+	}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	ctx := context.Background()
+
+	if err := plugin.InitControllerCapabilities(ctx); err != nil {
+		t.Fatalf("InitControllerCapabilities failed: %v", err)
+	}
+
+	if plugin.SupportsControllerPublish() {
+		t.Errorf("expected SupportsControllerPublish to be false")
+	}
+
+	// AttachVolume should skip calling ControllerPublishVolume entirely
+	if _, err := plugin.AttachVolume(ctx, "test-vol", "node-1", ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE); err != nil {
+		t.Errorf("AttachVolume failed: %v", err)
+	}
+	if publishCalled != 0 {
+		t.Errorf("expected 0 calls to ControllerPublishVolume, got %d", publishCalled)
+	}
+
+	// DetachVolume should skip calling ControllerUnpublishVolume entirely
+	if err := plugin.DetachVolume(ctx, "test-vol", "node-1"); err != nil {
+		t.Errorf("DetachVolume failed: %v", err)
+	}
+	if unpublishCalled != 0 {
+		t.Errorf("expected 0 calls to ControllerUnpublishVolume, got %d", unpublishCalled)
+	}
+}
+
+func TestPlugin_Capabilities_SkipStageUnstageWhenUnsupported(t *testing.T) {
+	var stageCalled, unstageCalled int
+	driver := &mockCSIDriver{
+		nodeGetCapabilitiesFunc: func(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+			// Return capabilities WITHOUT STAGE_UNSTAGE_VOLUME
+			return &csi.NodeGetCapabilitiesResponse{
+				Capabilities: []*csi.NodeServiceCapability{},
+			}, nil
+		},
+		nodeStageVolumeFunc: func(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+			stageCalled++
+			return &csi.NodeStageVolumeResponse{}, nil
+		},
+		nodeUnstageVolumeFunc: func(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+			unstageCalled++
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		},
+	}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	ctx := context.Background()
+
+	if err := plugin.InitNodeCapabilities(ctx); err != nil {
+		t.Fatalf("InitNodeCapabilities failed: %v", err)
+	}
+
+	if plugin.SupportsNodeStage() {
+		t.Errorf("expected SupportsNodeStage to be false")
+	}
+
+	tmpDir := t.TempDir()
+	targetPath := filepath.Join(tmpDir, "target")
+	if err := os.MkdirAll(targetPath, 0750); err != nil {
+		t.Fatalf("failed to create target path: %v", err)
+	}
+
+	// MountVolume should skip NodeStageVolume entirely
+	if err := plugin.MountVolume(ctx, "test-vol", targetPath, nil, nil, ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE, false); err != nil {
+		t.Errorf("MountVolume failed: %v", err)
+	}
+	if stageCalled != 0 {
+		t.Errorf("expected 0 calls to NodeStageVolume, got %d", stageCalled)
+	}
+
+	// UnmountVolume should skip NodeUnstageVolume entirely
+	if err := plugin.UnmountVolume(ctx, "test-vol", targetPath); err != nil {
+		t.Errorf("UnmountVolume failed: %v", err)
+	}
+	if unstageCalled != 0 {
+		t.Errorf("expected 0 calls to NodeUnstageVolume, got %d", unstageCalled)
+	}
+}
+
+func TestPlugin_VolumeCapability(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     ateapipb.VolumeAccessMode
+		wantMode csi.VolumeCapability_AccessMode_Mode
+	}{
+		{
+			name:     "unspecified defaults to SINGLE_NODE_WRITER",
+			mode:     ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_UNSPECIFIED,
+			wantMode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+		{
+			name:     "ReadWriteOnce maps to SINGLE_NODE_WRITER",
+			mode:     ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+			wantMode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+		{
+			name:     "ReadOnlyMany maps to MULTI_NODE_READER_ONLY",
+			mode:     ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY,
+			wantMode: csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
+		},
+		{
+			name:     "ReadWriteMany maps to MULTI_NODE_MULTI_WRITER",
+			mode:     ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY,
+			wantMode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cap := VolumeCapability(tt.mode)
+			if cap == nil {
+				t.Fatalf("VolumeCapability returned nil")
+			}
+			if cap.GetAccessMode().GetMode() != tt.wantMode {
+				t.Errorf("VolumeCapability(%v) mode = %v, want %v", tt.mode, cap.GetAccessMode().GetMode(), tt.wantMode)
+			}
+			if cap.GetMount() == nil {
+				t.Errorf("VolumeCapability(%v) mount is nil", tt.mode)
+			}
+		})
+	}
+}
+
+func TestPlugin_AttachVolume_ReadWriteMany(t *testing.T) {
+	var receivedReq *csi.ControllerPublishVolumeRequest
+	driver := &mockCSIDriver{
+		controllerPublishVolumeFunc: func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+			receivedReq = req
+			return &csi.ControllerPublishVolumeResponse{
+				PublishContext: map[string]string{"shared_disk": "true"},
+			}, nil
+		},
+	}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	ctx := context.Background()
+
+	pubCtx, err := plugin.AttachVolume(ctx, "shared-vol", "node-1", ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY)
+	if err != nil {
+		t.Fatalf("AttachVolume failed: %v", err)
+	}
+	if pubCtx["shared_disk"] != "true" {
+		t.Errorf("expected publish context shared_disk=true, got %v", pubCtx)
+	}
+	if receivedReq.GetReadonly() {
+		t.Errorf("expected Readonly=false for ReadWriteMany")
+	}
+	if receivedReq.GetVolumeCapability().GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+		t.Errorf("expected MULTI_NODE_MULTI_WRITER, got %v", receivedReq.GetVolumeCapability().GetAccessMode().GetMode())
 	}
 }
