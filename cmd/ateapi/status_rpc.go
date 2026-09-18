@@ -63,8 +63,7 @@ func (r *rpcFailureRecorder) UnaryServerInterceptor() grpc.UnaryServerIntercepto
 		if err == nil || !strings.HasPrefix(info.FullMethod, controlMethodPrefix) {
 			return resp, err
 		}
-		p, ok := principal.FromContext(ctx)
-		if !ok {
+		if _, ok := principal.FromContext(ctx); !ok {
 			return resp, err
 		}
 		elapsed := completedAt.Sub(startedAt)
@@ -72,12 +71,10 @@ func (r *rpcFailureRecorder) UnaryServerInterceptor() grpc.UnaryServerIntercepto
 			elapsed = 0
 		}
 		r.add(completedAt, statusz.RPCFailure{
-			CompletedAt:   completedAt.UTC().Format(time.RFC3339Nano),
-			Method:        boundedUTF8(info.FullMethod),
-			PrincipalKind: boundedUTF8(p.Kind),
-			PrincipalID:   boundedUTF8(p.ID),
-			Code:          status.Code(err).String(),
-			Elapsed:       elapsed.String(),
+			CompletedAt: completedAt.UTC().Format(time.RFC3339Nano),
+			Method:      boundedUTF8(info.FullMethod),
+			Code:        status.Code(err).String(),
+			Elapsed:     elapsed.String(),
 		})
 		return resp, err
 	}

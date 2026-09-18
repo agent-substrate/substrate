@@ -28,14 +28,11 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func TestSnapshotGroupsAndBoundsKnownWorkers(t *testing.T) {
+func TestSnapshotCountsKnownWorkersWithoutNames(t *testing.T) {
 	workers := []*ateapipb.Worker{
-		worker("zeta", "pool-b"),
-		worker("alpha", "pool-a"),
-		worker("alpha", "pool-a"),
-	}
-	for i := range 100 {
-		workers = append(workers, worker("middle", "pool-"+threeDigits(i)))
+		worker("private-namespace", "private-pool"),
+		nil,
+		worker("another-private-namespace", "another-private-pool"),
 	}
 	original := slices.Clone(workers)
 
@@ -49,30 +46,15 @@ func TestSnapshotGroupsAndBoundsKnownWorkers(t *testing.T) {
 	if !snapshot.Workers.Available {
 		t.Fatal("workers available = false, want true")
 	}
-	if intValue(snapshot.Workers.TotalWorkers) != 103 || intValue(snapshot.Workers.TotalGroups) != 102 {
-		t.Fatalf("worker totals = %v workers in %v groups, want 103 workers in 102 groups", snapshot.Workers.TotalWorkers, snapshot.Workers.TotalGroups)
+	if intValue(snapshot.Workers.TotalWorkers) != 2 || snapshot.Workers.Empty {
+		t.Fatalf("worker total = %v, empty = %t; want 2, false", snapshot.Workers.TotalWorkers, snapshot.Workers.Empty)
 	}
-	if len(snapshot.Workers.Groups) != 100 || !snapshot.Workers.Truncated {
-		t.Fatalf("displayed groups = %d, truncated = %t; want 100, true", len(snapshot.Workers.Groups), snapshot.Workers.Truncated)
-	}
-	if got := snapshot.Workers.Groups[0]; got.Namespace != "alpha" || got.Pool != "pool-a" || got.Count != 2 {
-		t.Fatalf("first worker group = %#v, want alpha/pool-a count 2", got)
+	encoded, _ := json.Marshal(snapshot)
+	if strings.Contains(string(encoded), "private-") || strings.Contains(string(encoded), "groups") {
+		t.Fatalf("worker names or groups leaked: %s", encoded)
 	}
 	if !slices.Equal(workers, original) {
 		t.Fatal("snapshot assembly reordered the worker-cache slice")
-	}
-}
-
-func TestCollectWorkersDetachesTruncatedGroupStorage(t *testing.T) {
-	workers := make([]*ateapipb.Worker, 0, maxWorkerGroups+10)
-	for i := range maxWorkerGroups + 10 {
-		workers = append(workers, worker("tenant", "pool-"+threeDigits(i)))
-	}
-	snapshot := collectWorkers(func() ([]*ateapipb.Worker, error) {
-		return workers, nil
-	})
-	if len(snapshot.Groups) != maxWorkerGroups || cap(snapshot.Groups) != maxWorkerGroups {
-		t.Fatalf("retained worker groups have len=%d cap=%d, want %d/%d", len(snapshot.Groups), cap(snapshot.Groups), maxWorkerGroups, maxWorkerGroups)
 	}
 }
 
@@ -115,14 +97,11 @@ func TestSnapshotDistinguishesEmptyAndUnavailableWorkerCache(t *testing.T) {
 				t.Fatalf("workers available = %t, want %t", snapshot.Workers.Available, tt.available)
 			}
 			if tt.available {
-				if snapshot.Workers.TotalWorkers == nil || *snapshot.Workers.TotalWorkers != 0 || snapshot.Workers.TotalGroups == nil || *snapshot.Workers.TotalGroups != 0 {
+				if snapshot.Workers.TotalWorkers == nil || *snapshot.Workers.TotalWorkers != 0 {
 					t.Fatalf("ready empty workers = %#v, want explicit zero counts", snapshot.Workers)
 				}
-			} else if snapshot.Workers.TotalWorkers != nil || snapshot.Workers.TotalGroups != nil {
+			} else if snapshot.Workers.TotalWorkers != nil {
 				t.Fatalf("unavailable workers = %#v, want omitted counts", snapshot.Workers)
-			}
-			if len(snapshot.Workers.Groups) != 0 {
-				t.Fatalf("unpopulated workers = %#v, want no groups", snapshot.Workers)
 			}
 		})
 	}
@@ -168,7 +147,7 @@ func TestHandlerFormatsAndEscapesOneSnapshot(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 	body := recorder.Body.String()
-	for _, want := range []string{"ateapi Status", "v1.2.3", "abc123", "tenant-a", "general", "Not ready", "2h3m4s", "Configuration", "Known workers"} {
+	for _, want := range []string{"ateapi Status", "v1.2.3", "abc123", "Not ready", "2h3m4s", "Configuration", "Known workers", "1 workers"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
 		}
@@ -204,7 +183,11 @@ func TestHandlerReadsFreshDiagnosticsForEachRequest(t *testing.T) {
 	failureCalls := 0
 	handler := NewHandler(testConfig(), func() ([]*ateapipb.Worker, error) {
 		workerCalls++
-		return []*ateapipb.Worker{worker("tenant", "pool-"+threeDigits(workerCalls))}, nil
+		workers := []*ateapipb.Worker{worker("tenant", "pool-a")}
+		if workerCalls > 1 {
+			workers = append(workers, worker("tenant", "pool-b"))
+		}
+		return workers, nil
 	}, func() bool { return true }, func() (PoolCounts, PoolCounts) {
 		poolCalls++
 		return PoolCounts{AcquiredConns: int32(poolCalls)}, PoolCounts{}
@@ -218,8 +201,8 @@ func TestHandlerReadsFreshDiagnosticsForEachRequest(t *testing.T) {
 	if workerCalls != 2 || poolCalls != 2 || failureCalls != 2 {
 		t.Fatalf("reader calls = [%d %d %d], want [2 2 2]", workerCalls, poolCalls, failureCalls)
 	}
-	if got := second.Workers.Groups[0].Pool; got != "pool-002" {
-		t.Fatalf("second request worker pool = %q, want pool-002", got)
+	if got := intValue(second.Workers.TotalWorkers); got != 2 {
+		t.Fatalf("second request worker count = %d, want 2", got)
 	}
 	if got := second.PostgreSQLPools.Pools[0].AcquiredConns; got != 2 {
 		t.Fatalf("second request acquired connections = %d, want 2", got)
@@ -292,12 +275,10 @@ func TestSnapshotDistinguishesUnavailableAndZeroPoolUsage(t *testing.T) {
 func TestDiagnosticsHTMLJSONParityAndSafeFields(t *testing.T) {
 	completed := "2026-09-12T04:05:06.025Z"
 	failures := []RPCFailure{{
-		CompletedAt:   completed,
-		Method:        "/ateapi.Control/<script>bad()</script>",
-		PrincipalKind: "jwt",
-		PrincipalID:   "<img src=x onerror=\"bad()\">",
-		Code:          "Internal",
-		Elapsed:       "25ms",
+		CompletedAt: completed,
+		Method:      "/ateapi.Control/<script>bad()</script>",
+		Code:        "Internal",
+		Elapsed:     "25ms",
 	}}
 	handler := NewHandler(testConfig(), func() ([]*ateapipb.Worker, error) { return nil, nil }, func() bool { return true }, func() (PoolCounts, PoolCounts) {
 		return PoolCounts{AcquiredConns: 2, IdleConns: 3, MaxConns: 10}, PoolCounts{AcquiredConns: 1, IdleConns: 2, MaxConns: 3}
@@ -330,7 +311,7 @@ func TestDiagnosticsHTMLJSONParityAndSafeFields(t *testing.T) {
 		"PostgreSQL pool occupancy", "Operational", "Watch", "2", "3", "10",
 		"Recent failed Control RPCs", completed, "Internal", "25ms",
 		"read for this request", "replica-local", "resets on process restart", "not a connectivity health check", "not an error rate",
-		"&lt;script&gt;bad()&lt;/script&gt;", "&lt;img src=x onerror=&#34;bad()&#34;&gt;",
+		"&lt;script&gt;bad()&lt;/script&gt;",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
@@ -371,8 +352,8 @@ func TestRenderSeededDashboard(t *testing.T) {
 		return PoolCounts{AcquiredConns: 7, IdleConns: 13, MaxConns: 40}, PoolCounts{AcquiredConns: 1, IdleConns: 2, MaxConns: 3}
 	}, func() []RPCFailure {
 		return []RPCFailure{
-			{CompletedAt: "2026-09-11T01:38:10Z", Method: "/ateapi.Control/ResumeActor", PrincipalKind: "jwt", PrincipalID: "operator@example.com", Code: "FailedPrecondition", Elapsed: "187ms"},
-			{CompletedAt: "2026-09-11T01:37:42Z", Method: "/ateapi.Control/CreateActor", PrincipalKind: "mtls", PrincipalID: "spiffe://cluster.local/ns/ate-system/sa/controller", Code: "Unavailable", Elapsed: "1.204s"},
+			{CompletedAt: "2026-09-11T01:38:10Z", Method: "/ateapi.Control/ResumeActor", Code: "FailedPrecondition", Elapsed: "187ms"},
+			{CompletedAt: "2026-09-11T01:37:42Z", Method: "/ateapi.Control/CreateActor", Code: "Unavailable", Elapsed: "1.204s"},
 		}
 	}, func() time.Time {
 		return testConfig().StartedAt.Add(37*time.Minute + 12*time.Second)

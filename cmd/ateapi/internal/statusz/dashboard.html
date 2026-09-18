@@ -140,17 +140,7 @@
       {{else if .Workers.Empty}}
         <div class="empty">The worker cache is ready and contains no workers.</div>
       {{else}}
-        <p class="note">{{.Workers.TotalWorkers}} workers across {{.Workers.TotalGroups}} namespace/pool groups.{{if .Workers.Truncated}} Showing the first 100 groups.{{end}}</p>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Namespace</th><th>Pool</th><th>Workers</th></tr></thead>
-            <tbody>
-            {{range .Workers.Groups}}
-              <tr><td>{{.Namespace}}</td><td>{{.Pool}}</td><td>{{.Count}}</td></tr>
-            {{end}}
-            </tbody>
-          </table>
-        </div>
+        <p class="note">{{.Workers.TotalWorkers}} workers in the local cache.</p>
       {{end}}
     </section>
 
@@ -181,13 +171,12 @@
       {{else}}
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Completed</th><th>Method</th><th>Principal</th><th>Status</th><th>Elapsed</th></tr></thead>
+            <thead><tr><th>Completed</th><th>Method</th><th>Status</th><th>Elapsed</th></tr></thead>
             <tbody>
             {{range .RecentControlFailures.Failures}}
               <tr>
                 <td>{{.CompletedAt}}</td>
                 <td><code>{{.Method}}</code></td>
-                <td>{{.PrincipalKind}}: <code>{{.PrincipalID}}</code></td>
                 <td>{{.Code}}</td>
                 <td>{{.Elapsed}}</td>
               </tr>

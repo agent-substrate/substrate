@@ -57,11 +57,11 @@ func TestRPCFailureRecorderRecordsAuthenticatedControlFailure(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("recorded failures = %d, want 1", len(got))
 	}
-	if got[0].CompletedAt != "2026-09-12T04:05:06.025Z" || got[0].Method != "/ateapi.Control/SuspendActor" || got[0].PrincipalKind != "jwt" || got[0].PrincipalID != "operator@example.com" || got[0].Code != "FailedPrecondition" || got[0].Elapsed != "25ms" {
+	if got[0].CompletedAt != "2026-09-12T04:05:06.025Z" || got[0].Method != "/ateapi.Control/SuspendActor" || got[0].Code != "FailedPrecondition" || got[0].Elapsed != "25ms" {
 		t.Fatalf("recorded failure = %#v", got[0])
 	}
 	blob := fmt.Sprintf("%#v", got[0])
-	for _, forbidden := range []string{"must-not-be-retained", "request payload", "response payload", "raw error"} {
+	for _, forbidden := range []string{"operator@example.com", "jwt", "must-not-be-retained", "request payload", "response payload", "raw error"} {
 		if strings.Contains(blob, forbidden) {
 			t.Errorf("recorded failure contains %q", forbidden)
 		}
@@ -121,8 +121,8 @@ func TestRPCFailureRecorderAuthOrdering(t *testing.T) {
 	_, _ = invokeUnaryInterceptors(interceptors, context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/GetActor"}, func(context.Context, any) (any, error) {
 		return nil, status.Error(codes.PermissionDenied, "denied")
 	})
-	if got := recorder.Failures(); len(got) != 1 || got[0].PrincipalID != "authorized" {
-		t.Fatalf("post-auth failures = %#v, want one authorized principal", got)
+	if got := recorder.Failures(); len(got) != 1 {
+		t.Fatalf("post-auth failures = %#v, want one authenticated failure", got)
 	}
 }
 
@@ -166,7 +166,7 @@ func TestRPCFailureRecorderEvictsOldestAndBoundsText(t *testing.T) {
 	if !strings.Contains(got[0].Method, "Call100") || !strings.Contains(got[99].Method, "Call001") {
 		t.Fatalf("retained order newest=%q oldest=%q, want Call100 through Call001", got[0].Method, got[99].Method)
 	}
-	for _, field := range []string{got[0].Method, got[0].PrincipalKind, got[0].PrincipalID} {
+	for _, field := range []string{got[0].Method} {
 		if len(field) > maxRetainedTextBytes || !utf8.ValidString(field) {
 			t.Errorf("bounded field has %d bytes, valid UTF-8=%t", len(field), utf8.ValidString(field))
 		}

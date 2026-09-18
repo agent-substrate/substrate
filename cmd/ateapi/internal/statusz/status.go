@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -29,8 +28,6 @@ import (
 )
 
 const (
-	maxWorkerGroups = 100
-
 	poolCoverage = "Connection occupancy read for this request; replica-local and not a connectivity health check."
 	rpcCoverage  = "Completed non-OK authenticated unary Control RPCs retained on this replica and read for this request."
 	rpcRetention = "Newest 100 matching completions; resets on process restart; not an error rate."
@@ -91,12 +88,10 @@ type RPCFailureList func() []RPCFailure
 // this process. Its fields are bounded and omit request, response, and error
 // details.
 type RPCFailure struct {
-	CompletedAt   string `json:"completed_at"`
-	Method        string `json:"method"`
-	PrincipalKind string `json:"principal_kind"`
-	PrincipalID   string `json:"principal_id"`
-	Code          string `json:"code"`
-	Elapsed       string `json:"elapsed"`
+	CompletedAt string `json:"completed_at"`
+	Method      string `json:"method"`
+	Code        string `json:"code"`
+	Elapsed     string `json:"elapsed"`
 }
 
 // Snapshot is the common response model rendered as JSON or HTML.
@@ -123,23 +118,13 @@ type ConfigurationSnapshot struct {
 	Flags     []Flag    `json:"flags"`
 }
 
-// WorkerGroup is the number of cached workers in one namespace and pool.
-type WorkerGroup struct {
-	Namespace string `json:"namespace"`
-	Pool      string `json:"pool"`
-	Count     int    `json:"count"`
-}
-
 // WorkersSnapshot describes the current worker-cache view. Counts are absent
 // when the cache is unavailable, distinguishing that state from a ready empty
 // cache with explicit zero counts.
 type WorkersSnapshot struct {
-	Available    bool          `json:"available"`
-	Empty        bool          `json:"empty"`
-	TotalWorkers *int          `json:"total_workers,omitempty"`
-	TotalGroups  *int          `json:"total_groups,omitempty"`
-	Truncated    bool          `json:"truncated"`
-	Groups       []WorkerGroup `json:"groups"`
+	Available    bool `json:"available"`
+	Empty        bool `json:"empty"`
+	TotalWorkers *int `json:"total_workers,omitempty"`
 }
 
 // ReadinessSnapshot mirrors the existing process readiness predicate.
@@ -278,48 +263,15 @@ func collectRPCFailures(list RPCFailureList) RecentControlFailuresSnapshot {
 func collectWorkers(list WorkerList) WorkersSnapshot {
 	workers, err := list()
 	if err != nil {
-		return WorkersSnapshot{Groups: []WorkerGroup{}}
+		return WorkersSnapshot{}
 	}
-
-	counts := make(map[string]int)
-	groupsByKey := make(map[string]WorkerGroup)
+	totalWorkers := 0
 	for _, worker := range workers {
-		if worker == nil {
-			continue
+		if worker != nil {
+			totalWorkers++
 		}
-		key := worker.GetWorkerNamespace() + "\x00" + worker.GetWorkerPool()
-		counts[key]++
-		groupsByKey[key] = WorkerGroup{Namespace: worker.GetWorkerNamespace(), Pool: worker.GetWorkerPool()}
 	}
-	groups := make([]WorkerGroup, 0, len(counts))
-	for key, count := range counts {
-		group := groupsByKey[key]
-		group.Count = count
-		groups = append(groups, group)
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Namespace != groups[j].Namespace {
-			return groups[i].Namespace < groups[j].Namespace
-		}
-		return groups[i].Pool < groups[j].Pool
-	})
-
-	totalWorkers := len(workers)
-	totalGroups := len(groups)
-	truncated := totalGroups > maxWorkerGroups
-	if truncated {
-		boundedGroups := make([]WorkerGroup, maxWorkerGroups)
-		copy(boundedGroups, groups)
-		groups = boundedGroups
-	}
-	return WorkersSnapshot{
-		Available:    true,
-		Empty:        totalWorkers == 0,
-		TotalWorkers: &totalWorkers,
-		TotalGroups:  &totalGroups,
-		Truncated:    truncated,
-		Groups:       groups,
-	}
+	return WorkersSnapshot{Available: true, Empty: totalWorkers == 0, TotalWorkers: &totalWorkers}
 }
 
 //go:embed dashboard.html
