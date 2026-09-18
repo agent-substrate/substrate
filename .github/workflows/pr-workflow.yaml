@@ -146,6 +146,8 @@ jobs:
       # TLS is intercepted, their passthrough assumptions
       # (TestActorEgressHTTPS's end-to-end TLS with the origin) no longer hold.
       run: hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=${{ matrix.dataplane }} --experimental-use-sdsmint
+    - name: Run E2E tests (egress certificate identity, sdsmint)
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressauthz -count=1 -v -args --no-color
     - name: Run E2E tests (egress MITM trust)
       # The consumption half of the trust-bundle chain: an actor does TLS with
       # the MITM gateway's minted leaf using ONLY the projected bundle, plus a

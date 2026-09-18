@@ -84,6 +84,28 @@ func newTestCA(t *testing.T, commonName string) *testCA {
 	return &testCA{cert: cert, key: key}
 }
 
+func issueIntermediateCA(t *testing.T, parent *testCA, commonName string) *testCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating intermediate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: commonName},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, parent.cert, &key.PublicKey, parent.key)
+	if err != nil {
+		t.Fatalf("creating intermediate certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parsing intermediate certificate: %v", err)
+	}
+	return &testCA{cert: cert, key: key}
+}
+
 func (ca *testCA) roots() *x509.CertPool {
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.cert)
@@ -852,10 +874,11 @@ func TestEncodedCertificateChainPreservesPlusInPEM(t *testing.T) {
 }
 
 func TestEncodedCertificateChainIncludesIntermediates(t *testing.T) {
-	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, actorCertOptions{})
+	root := newTestCA(t, "actor-identity-root")
+	intermediate := issueIntermediateCA(t, root, "actor-identity-intermediate")
+	leaf := intermediate.issueActorCert(t, actorCertOptions{})
 
-	decoded, err := url.PathUnescape(encodedCertificateChain(leaf, ca.cert))
+	decoded, err := url.PathUnescape(encodedCertificateChain(leaf, intermediate.cert))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -869,4 +892,10 @@ func TestEncodedCertificateChainIncludesIntermediates(t *testing.T) {
 	if !chain[0].Equal(leaf) {
 		t.Error("encoded certificate chain did not return the leaf first")
 	}
+	h := egressHandler(root.roots(), runningActor(), nil)
+	if _, err := h.HandleRequestHeaders(context.Background(), egressMetadata(encodedCertificateChain(leaf, intermediate.cert))); err != nil {
+		t.Fatalf("leaf plus intermediate was denied: %v", err)
+	}
+	_, err = h.HandleRequestHeaders(context.Background(), egressMetadata(encodedCertificateChain(leaf)))
+	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 }
