@@ -38,7 +38,7 @@ package imagecache
 //
 // Deletion is two-phase: the only steps that contend with the pull path
 // are one os.Remove of a record and one rename of a layer dir to a ".rm-*"
-// name inside the layer's singleflight (see retireLayer); the slow
+// name under the layer's interlock (see retireLayer); the slow
 // RemoveAll of multi-GB trees happens afterwards, on dirs nothing can
 // reach by diffID. A crash in between leaves a ".rm-*" dir for the
 // startup sweep.
