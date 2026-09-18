@@ -105,11 +105,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
 	ra := s.running[actorUID]
-	chSocket := kata.CLHSocketPath(actorUID)
-	if ra != nil && ra.apiSocket != "" {
-		chSocket = ra.apiSocket
-	}
-	client := ch.NewClient(chSocket)
+	client := ch.NewClient(chSocketFor(actorUID, ra))
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
 	}
@@ -266,6 +262,34 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	return dSnapshot, nil
 }
 
+// chSocketFor returns the actor's recorded API socket, or the first existing candidate
+// path on disk when ateom has no in-memory state for the actor (e.g. after a restart).
+func chSocketFor(actorUID string, ra *runningActor) string {
+	return firstExistingPath(chSocketCandidates(actorUID, ra))
+}
+
+// chSocketCandidates returns potential API socket paths for the actor.
+func chSocketCandidates(actorUID string, ra *runningActor) []string {
+	if ra != nil && ra.apiSocket != "" {
+		return []string{ra.apiSocket}
+	}
+	return []string{kata.CLHSocketPath(actorUID), kata.RestoredCLHSocketPath(actorUID)}
+}
+
+// firstExistingPath returns the first existing path among candidates, or the
+// first candidate if none exist on disk.
+func firstExistingPath(candidates []string) string {
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
+}
+
 // listFiles returns the (relative) names of regular files directly under dir.
 func listFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
@@ -374,11 +398,7 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorUID string) e
 	}
 
 	ra := s.running[actorUID]
-	chSocket := kata.CLHSocketPath(actorUID)
-	if ra != nil && ra.apiSocket != "" {
-		chSocket = ra.apiSocket
-	}
-	client := ch.NewClient(chSocket)
+	client := ch.NewClient(chSocketFor(actorUID, ra))
 
 	if err := s.teardownActor(ctx, actorUID, ra, client); err != nil {
 		errs = append(errs, fmt.Errorf("while tearing down actor: %w", err))
