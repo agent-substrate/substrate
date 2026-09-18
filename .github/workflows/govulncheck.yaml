@@ -14,6 +14,9 @@
 
 name: govulncheck
 on:
+  # On pull requests too: a vulnerable dependency caught only by the post-merge
+  # run is already on main, and the weekly cron can delay that by a week.
+  pull_request:
   push:
     branches:
       - main

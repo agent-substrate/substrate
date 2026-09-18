@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -59,6 +61,31 @@ func PreflightChecks() error {
 	_, err = clients.SubstrateAPI.ListActors(listCtx, &ateapipb.ListActorsRequest{})
 	if err != nil {
 		return fmt.Errorf("ListActors RPC failed: %v", err)
+	}
+
+	// The micro-VM class needs a SandboxConfig and a node advertising /dev/kvm.
+	// Without either, worker pods stay Pending and every suite fails on its own
+	// timeout minutes later, naming neither cause.
+	if IsMicroVM() {
+		if _, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Get(ctx, SandboxClassMicroVM, metav1.GetOptions{}); err != nil {
+			return fmt.Errorf("E2E_SANDBOX_CLASS=%s but SandboxConfig/%s is missing (apply manifests/microvm/sandboxconfig-microvm.yaml.tmpl): %w",
+				SandboxClassMicroVM, SandboxClassMicroVM, err)
+		}
+
+		nodes, err := clients.K8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("listing nodes for the %s preflight check: %w", deviceplugin.ResourceKVM, err)
+		}
+		var kvm int64
+		for _, node := range nodes.Items {
+			if q, ok := node.Status.Allocatable[corev1.ResourceName(deviceplugin.ResourceKVM)]; ok {
+				kvm += q.Value()
+			}
+		}
+		if kvm < 1 {
+			return fmt.Errorf("E2E_SANDBOX_CLASS=%s but no node advertises %s across %d node(s); expose /dev/kvm on the host so atelet's device plugin can advertise it",
+				SandboxClassMicroVM, deviceplugin.ResourceKVM, len(nodes.Items))
+		}
 	}
 
 	return nil

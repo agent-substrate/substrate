@@ -58,3 +58,30 @@ func TestConfigurePreservesEnvironment(t *testing.T) {
 		t.Errorf("DOCKER_HOST = %q, want %q", got, want)
 	}
 }
+
+func TestRequired(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ci            string
+		requireDocker string
+		want          bool
+	}{
+		{name: "unset", want: false},
+		{name: "CI true", ci: "true", want: true},
+		{name: "REQUIRE_DOCKER true", requireDocker: "true", want: true},
+		{name: "both true", ci: "true", requireDocker: "true", want: true},
+		// GitHub Actions sets CI=true; a bare "1" is not the contract, and
+		// treating it as one would fail closed on unrelated CI systems.
+		{name: "CI 1 is not true", ci: "1", want: false},
+		{name: "CI false", ci: "false", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CI", tc.ci)
+			t.Setenv("REQUIRE_DOCKER", tc.requireDocker)
+
+			if got := Required(); got != tc.want {
+				t.Errorf("Required() = %v, want %v (CI=%q REQUIRE_DOCKER=%q)", got, tc.want, tc.ci, tc.requireDocker)
+			}
+		})
+	}
+}
