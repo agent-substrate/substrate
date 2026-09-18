@@ -60,3 +60,18 @@ func Configure(ctx context.Context) error {
 	}
 	return nil
 }
+
+// Required reports whether an unavailable container must fail the test rather
+// than skip it. Skipping is right on a workstation without Docker and wrong in
+// CI, where it turns every container-backed package into a silent pass.
+// REQUIRE_DOCKER opts a local run into the CI behavior.
+//
+// TODO: consider requiring a container runtime unconditionally and dropping
+// the skip entirely. Docker is already a stated prerequisite for developing
+// substrate, and skipping locally hides that these packages went untested.
+// Configure's `docker context inspect` probe is also a detection step rather
+// than an attempt to run anything, so a podman setup fails it even where
+// testcontainers would have resolved a socket on its own.
+func Required() bool {
+	return os.Getenv("CI") == "true" || os.Getenv("REQUIRE_DOCKER") == "true"
+}

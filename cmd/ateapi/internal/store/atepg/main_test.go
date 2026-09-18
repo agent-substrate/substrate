@@ -103,6 +103,9 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 		containerPool = pool
 	})
 	if containerErr != nil {
+		if dockerenv.Required() {
+			t.Fatalf("PostgreSQL testcontainer unavailable and required (CI or REQUIRE_DOCKER is set): %v", containerErr)
+		}
 		t.Skipf("PostgreSQL testcontainer unavailable (requires Docker): %v", containerErr)
 	}
 	return containerPool

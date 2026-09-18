@@ -589,13 +589,32 @@ create_podcertificate_controller_cas() {
     --secret-namespace=podcertificate-controller-system
 }
 
+# The deadline is shared across both bundles: the signer produces them from the
+# same CA pools, so a partial result means the same fault as none at all.
 wait_for_podcertificate_trust_bundles() {
-  echo "Waiting for podcertificate ClusterTrustBundles to be ready..."
-  until run_kubectl get clustertrustbundles podidentity.podcert.ate.dev:identity:primary-bundle >/dev/null 2>&1; do
-    sleep 1
-  done
-  until run_kubectl get clustertrustbundles servicedns.podcert.ate.dev:identity:primary-bundle >/dev/null 2>&1; do
-    sleep 1
+  local timeout_secs="${ATE_INSTALL_TRUST_BUNDLE_TIMEOUT:-120}"
+  local deadline=$((SECONDS + timeout_secs))
+  local bundles=(
+    "podidentity.podcert.ate.dev:identity:primary-bundle"
+    "servicedns.podcert.ate.dev:identity:primary-bundle"
+  )
+  local bundle
+
+  echo "Waiting up to ${timeout_secs}s for podcertificate ClusterTrustBundles to be ready..."
+  for bundle in "${bundles[@]}"; do
+    while ! run_kubectl get clustertrustbundles "${bundle}" >/dev/null 2>&1; do
+      if ((SECONDS >= deadline)); then
+        echo "timed out after ${timeout_secs}s waiting for clustertrustbundle ${bundle}" >&2
+        # The signer is the usual cause; dump what it produced and why it stopped.
+        run_kubectl get clustertrustbundles -o wide >&2 || true
+        run_kubectl get pods -n podcertificate-controller-system -o wide >&2 || true
+        run_kubectl describe pods -n podcertificate-controller-system >&2 || true
+        run_kubectl logs -n podcertificate-controller-system -l app=podcertificate-controller \
+          --all-containers --tail=100 >&2 || true
+        return 1
+      fi
+      sleep 1
+    done
   done
 }
 
