@@ -76,6 +76,58 @@ func TestPreconditionCheck(t *testing.T) {
 	}
 }
 
+func TestDeletePreconditionsCheck(t *testing.T) {
+	tests := []struct {
+		name         string
+		precondition DeletePreconditions
+		wantErr      error
+	}{
+		{
+			name:         "the guarded object is still the stored one",
+			precondition: DeletePreconditions{UID: storedUID, Version: storedVer},
+			wantErr:      nil,
+		},
+		{
+			name:         "the name now addresses a different incarnation",
+			precondition: DeletePreconditions{UID: staleUID, Version: storedVer},
+			wantErr:      ErrUIDConflict,
+		},
+		{
+			name:         "the version moved under the caller",
+			precondition: DeletePreconditions{UID: storedUID, Version: staleVer},
+			wantErr:      ErrVersionConflict,
+		},
+		{
+			name:         "both stale reports the uid conflict",
+			precondition: DeletePreconditions{UID: staleUID, Version: staleVer},
+			wantErr:      ErrUIDConflict,
+		},
+		{
+			name:         "no guards accept whatever is stored",
+			precondition: DeletePreconditions{},
+			wantErr:      nil,
+		},
+		{
+			name:         "a uid alone guards only the incarnation",
+			precondition: DeletePreconditions{UID: storedUID},
+			wantErr:      nil,
+		},
+		{
+			name:         "a version alone guards only the revision",
+			precondition: DeletePreconditions{Version: storedVer},
+			wantErr:      nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.precondition.Check(storedMetadata); !errors.Is(err, tt.wantErr) {
+				t.Errorf("Check(storedMetadata) = %v, want one matching %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestPreconditionValidate(t *testing.T) {
 	tests := []struct {
 		name         string

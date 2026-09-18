@@ -127,11 +127,14 @@ func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.
 		return nil, toGRPCStatusError(errs)
 	}
 
-	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), store.DeletePreconditions{
+		UID:     req.GetOptions().GetUid(),
+		Version: req.GetOptions().GetVersion(),
+	})
 }
 
-func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
-	deleted, err := s.store.DeleteEgressPolicy(ctx, actorRef)
+func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, pre store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {
+	deleted, err := s.store.DeleteEgressPolicy(ctx, actorRef, pre)
 	return mapEgressPolicyWrite(deleted, err)
 }
 

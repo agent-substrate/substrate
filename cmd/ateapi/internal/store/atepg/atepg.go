@@ -994,21 +994,36 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
-	var version int64
-	var uid string
-	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
-		DELETE FROM actor_egress_policies
-		WHERE atespace = $1 AND actor_name = $2
-		RETURNING uid, version, proto`, actorRef.Atespace, actorRef.Name).Scan(&uid, &version, &protoBytes)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
+func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, pre store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning egress policy delete: %w", err)
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	// Lock and read the current policy, refuse the delete if the caller
+	// pinned a different uid or version, then delete that same row.
+	current, err := getEgressPolicyRow(ctx, tx, `
+		SELECT uid, version, proto FROM actor_egress_policies
+		WHERE atespace = $1 AND actor_name = $2
+		FOR UPDATE`, actorRef.Atespace, actorRef.Name)
+	if err != nil {
+		return nil, err
+	}
+	if err := pre.Check(current.GetMetadata()); err != nil {
+		return nil, err
+	}
+	commandTag, err := tx.Exec(ctx, `DELETE FROM actor_egress_policies WHERE atespace = $1 AND actor_name = $2`, actorRef.Atespace, actorRef.Name)
 	if err != nil {
 		return nil, fmt.Errorf("deleting egress policy for %s: %w", actorRef, err)
 	}
-	return unmarshalEgressPolicy(uid, version, protoBytes)
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("deleting egress policy for %s affected %d rows, want 1", actorRef, commandTag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing egress policy delete: %w", err)
+	}
+	return current, nil
 }
 
 func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...any) (*ateapipb.EgressPolicy, error) {
@@ -1420,11 +1435,11 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, pre store.D
 	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		// Locked rather than plainly read so the incarnation pre was evaluated
 		// against is the one the DELETE removes.
-		deleted, err := getWorkerRowForUpdate(ctx, tx, name)
+		current, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
 			return nil, err
 		}
-		if err := pre.Check(deleted.GetMetadata()); err != nil {
+		if err := pre.Check(current.GetMetadata()); err != nil {
 			return nil, err
 		}
 		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)
@@ -1434,7 +1449,7 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, pre store.D
 		if commandTag.RowsAffected() != 1 {
 			return nil, fmt.Errorf("deleting worker %s affected %d rows, want 1", name, commandTag.RowsAffected())
 		}
-		return deleted, nil
+		return current, nil
 	})
 }
 
