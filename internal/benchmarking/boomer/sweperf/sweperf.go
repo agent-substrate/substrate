@@ -29,8 +29,6 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -136,41 +134,23 @@ type sweperfRuntime struct {
 }
 
 // resolveConfig returns the template, total step count and cycle count for a
-// new session. Each is taken from the first source that supplies it.
+// new session. Values come from dynconfig, which the master populates from
+// the --sweperf-* locust flags (common/sweperf_config.py); an unset field
+// falls back to the built-in default below.
 func (r *sweperfRuntime) resolveConfig() (string, int, int) {
 	dyn := r.cfg.Dyn.Load()
 
 	template := dyn.SweperfTemplate
 	if template == "" {
-		if val := os.Getenv("WORKLOAD_TEMPLATE"); val != "" {
-			template = val
-		} else if val := os.Getenv("WORKLOAD_REPO"); val != "" {
-			template = val
-		} else {
-			template = defaultSweperfTemplate
-		}
+		template = defaultSweperfTemplate
 	}
 
 	totalSteps := dyn.SweperfTotalSteps
-	if totalSteps <= 0 {
-		if val := os.Getenv("TOTAL_STEPS"); val != "" {
-			if i, err := strconv.Atoi(val); err == nil && i > 0 {
-				totalSteps = i
-			}
-		}
-	}
 	if totalSteps <= 0 {
 		totalSteps = defaultSweperfTotalSteps
 	}
 
 	numCycles := dyn.SweperfNumCycles
-	if numCycles <= 0 {
-		if val := os.Getenv("NUM_CYCLES"); val != "" {
-			if i, err := strconv.Atoi(val); err == nil && i > 0 {
-				numCycles = i
-			}
-		}
-	}
 	if numCycles <= 0 {
 		numCycles = defaultSweperfNumCycles
 	}

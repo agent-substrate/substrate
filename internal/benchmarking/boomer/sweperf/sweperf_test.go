@@ -244,28 +244,6 @@ func TestResolveConfig(t *testing.T) {
 			t.Errorf("numCycles = %d, want 5", cycles)
 		}
 	})
-
-	t.Run("environment variable fallbacks", func(t *testing.T) {
-		t.Setenv("WORKLOAD_TEMPLATE", "env-template")
-		t.Setenv("TOTAL_STEPS", "30")
-		t.Setenv("NUM_CYCLES", "3")
-
-		rt := &sweperfRuntime{
-			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{}),
-			},
-		}
-		tmpl, steps, cycles := rt.resolveConfig()
-		if tmpl != "env-template" {
-			t.Errorf("template = %q, want %q", tmpl, "env-template")
-		}
-		if steps != 30 {
-			t.Errorf("totalSteps = %d, want 30", steps)
-		}
-		if cycles != 3 {
-			t.Errorf("numCycles = %d, want 3", cycles)
-		}
-	})
 }
 
 func TestSweperfUserCycleSequence(t *testing.T) {
