@@ -93,16 +93,21 @@ ${K} -n "${TARGET_NS}" rollout status deployment/whoami --timeout=120s
 TARGET_IP=$(${K} -n "${TARGET_NS}" get svc whoami -o jsonpath='{.spec.clusterIP}')
 info "target = ${TARGET_IP}:${TARGET_PORT}"
 
-log "create + resume Actor ${ATESPACE}/${ACTOR}"
+log "create + resume Actor ${ATESPACE}/${ACTOR}, allow all its egress"
 ${KATE} create atespace "${ATESPACE}" >/dev/null 2>&1 || true
 ${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 ${KATE} resume actor "${ACTOR}" -a "${ATESPACE}" >/dev/null 2>&1 || true
+printf 'rules:\n- all: {}\n' | ${KATE} create egress-policy "${ACTOR}" -a "${ATESPACE}" -f - >/dev/null 2>&1 || true
+# Avoid 'grep -q': its early exit triggers SIGPIPE (exit 141) under pipefail while kubectl writes.
+actor_running() {
+  ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep "${ACTOR}" | grep ACTOR_STATE_RUNNING >/dev/null
+}
 for _ in $(seq 1 30); do
-  ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "ACTOR_STATE_RUNNING" && break
+  actor_running && break
   sleep 3
 done
 ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep "${ACTOR}" || true
-${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "ACTOR_STATE_RUNNING" || { echo "actor did not reach RUNNING"; exit 1; }
+actor_running || { echo "actor did not reach RUNNING"; exit 1; }
 
 egress_log_since() { ${K} -n ate-system logs deployment/atenet-egress -c "${DATAPLANE}" --tail=-1 2>/dev/null | grep -E "${ACCESS_LOG_PATTERN}" | tail -n +"$(( $1 + 1 ))"; }
 egress_log_count() { ${K} -n ate-system logs deployment/atenet-egress -c "${DATAPLANE}" --tail=-1 2>/dev/null | grep -Ec "${ACCESS_LOG_PATTERN}" || true; }
