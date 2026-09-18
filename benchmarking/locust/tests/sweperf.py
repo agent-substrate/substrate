@@ -15,10 +15,11 @@
 """Stub SweperfUser declaration.
 
 The real load implementation lives in the boomer-Go worker at
-cmd/benchmarking/boomer-worker/; this Python class is declared only so the
-master recognizes the name and attributes boomer's stats rows to it. The
-master loads this stub file, selected by ${BENCHMARK_USER_CLASS} in
-locust/manifests/locust.yaml. The Python worker container sets
+internal/benchmarking/boomer/sweperf/ (registered by the boomer-worker
+binary in cmd/benchmarking/boomer-worker/); this Python class is declared
+only so the master recognizes the name and attributes boomer's stats rows
+to it. The master loads this stub file, selected by ${BENCHMARK_USER_CLASS}
+in locust/manifests/locust.yaml. The Python worker container sets
 LOCUST_NO_SWEPERF_USER=1 to skip loading this file, leaving boomer as the
 sole owner of SweperfUser load.
 """
@@ -29,9 +30,9 @@ if os.environ.get("LOCUST_NO_SWEPERF_USER") != "1":
     from locust import User, task
     from common.boomer_config import init_boomer_config
 
-    # Master serves /boomer-config so the boomer-glutton workers can fetch
+    # Master serves /boomer-config so the boomer-worker workers can fetch
     # runtime flag values (trace probability, wait times) the operator set
-    # in the web UI form.
+    # in the web UI form. No-op on workers without a web UI.
     init_boomer_config()
 
     class SweperfUser(User):
