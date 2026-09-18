@@ -7410,6 +7410,38 @@ func Validate_WorkerAssignment(
 		errs = append(errs, fn(fldPath.Child("worker_pod_ip"), &obj.WorkerPodIp, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.WorkerAssignment.NodeName
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.LongName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerAssignment) *string {
+				return &oldObj.NodeName
+			})
+		errs = append(errs, fn(fldPath.Child("node_name"), &obj.NodeName, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

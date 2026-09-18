@@ -1666,7 +1666,12 @@ type WorkerAssignment struct {
 	//
 	// +k8s:required
 	// +k8s:customValidation # until `format=k8s-ip` is supported
-	WorkerPodIp   string `protobuf:"bytes,5,opt,name=worker_pod_ip,json=workerPodIp,proto3" json:"worker_pod_ip,omitempty"`
+	WorkerPodIp string `protobuf:"bytes,5,opt,name=worker_pod_ip,json=workerPodIp,proto3" json:"worker_pod_ip,omitempty"`
+	// node_name is the Kubernetes node hosting worker_pod.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-long-name
+	NodeName      string `protobuf:"bytes,7,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1739,6 +1744,13 @@ func (x *WorkerAssignment) GetWorkerPodUid() string {
 func (x *WorkerAssignment) GetWorkerPodIp() string {
 	if x != nil {
 		return x.WorkerPodIp
+	}
+	return ""
+}
+
+func (x *WorkerAssignment) GetNodeName() string {
+	if x != nil {
+		return x.NodeName
 	}
 	return ""
 }
@@ -6920,7 +6932,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13local_snapshot_info\x18\x05 \x01(\v2\x19.ateapi.LocalSnapshotInfoR\x11localSnapshotInfo\x12;\n" +
 	"\ractor_volumes\x18\a \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\x12D\n" +
 	"\x1fin_progress_local_snapshot_name\x18\b \x01(\tR\x1binProgressLocalSnapshotName\x12;\n" +
-	"\x1acurrent_actor_template_uid\x18\v \x01(\tR\x17currentActorTemplateUid\"\xf2\x01\n" +
+	"\x1acurrent_actor_template_uid\x18\v \x01(\tR\x17currentActorTemplateUid\"\x8f\x02\n" +
 	"\x10WorkerAssignment\x12)\n" +
 	"\x06worker\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -6929,7 +6941,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
-	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xc4\x01\n" +
+	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\x12\x1b\n" +
+	"\tnode_name\x18\a \x01(\tR\bnodeName\"\xc4\x01\n" +
 	"\tTagStatus\x124\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x18.ateapi.ExternalSnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\x12)\n" +

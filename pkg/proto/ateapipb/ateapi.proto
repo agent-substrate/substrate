@@ -639,6 +639,12 @@ message WorkerAssignment {
   // +k8s:required
   // +k8s:customValidation # until `format=k8s-ip` is supported
   string worker_pod_ip = 5;
+
+  // node_name is the Kubernetes node hosting worker_pod.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  string node_name = 7;
 }
 
 // TagStatus is the server-owned state of a Tag.
