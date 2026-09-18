@@ -93,22 +93,24 @@ const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 // pool is node state every actor shares. For the same reason it is the only
 // ate.* label on its counter.
 const (
-	ActorOperationNameKey   = attribute.Key("ate.actor.operation.name")
-	WorkerPoolNamespaceKey  = attribute.Key("ate.workerpool.namespace")
-	WorkerPoolNameKey       = attribute.Key("ate.workerpool.name")
-	WorkerStateKey          = attribute.Key("ate.worker.state")
-	SandboxClassKey         = attribute.Key("ate.sandbox.class")
-	SnapshotKindKey         = attribute.Key("ate.snapshot.kind")
-	SnapshotScopeKey        = attribute.Key("ate.snapshot.scope")
-	SnapshotPhaseKey        = attribute.Key("ate.snapshot.phase")
-	ImageCacheOutcomeKey    = attribute.Key("ate.imagecache.outcome")
-	SchedulerOutcomeKey     = attribute.Key("ate.scheduler.outcome")
-	SchedulingConstraintKey = attribute.Key("ate.scheduling.constraint")
-	RouterResumeKey         = attribute.Key("ate.router.resume")
-	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
-	FailureReasonKey        = attribute.Key("ate.failure.reason")
-	FailureDomainKey        = attribute.Key("ate.failure.domain")
-	StatsSourceKey          = attribute.Key("ate.stats.source")
+	ActorOperationNameKey     = attribute.Key("ate.actor.operation.name")
+	WorkerPoolNamespaceKey    = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey         = attribute.Key("ate.workerpool.name")
+	WorkerStateKey            = attribute.Key("ate.worker.state")
+	SandboxClassKey           = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey           = attribute.Key("ate.snapshot.kind")
+	SnapshotScopeKey          = attribute.Key("ate.snapshot.scope")
+	SnapshotPhaseKey          = attribute.Key("ate.snapshot.phase")
+	ImageCacheOutcomeKey      = attribute.Key("ate.imagecache.outcome")
+	ImageStreamingOutcomeKey  = attribute.Key("ate.imagestreaming.outcome")
+	ImageStreamingProviderKey = attribute.Key("ate.imagestreaming.provider")
+	SchedulerOutcomeKey       = attribute.Key("ate.scheduler.outcome")
+	SchedulingConstraintKey   = attribute.Key("ate.scheduling.constraint")
+	RouterResumeKey           = attribute.Key("ate.router.resume")
+	RouterOutcomeKey          = attribute.Key("ate.router.outcome")
+	FailureReasonKey          = attribute.Key("ate.failure.reason")
+	FailureDomainKey          = attribute.Key("ate.failure.domain")
+	StatsSourceKey            = attribute.Key("ate.stats.source")
 )
 
 // Values for FailureDomainKey. A strict function of the reason, so it costs no
@@ -208,6 +210,15 @@ const (
 	ImageCacheOutcomeError     = "error"
 	ImageCacheOutcomeCancelled = "cancelled"
 	ImageCacheOutcomeTimeout   = "timeout"
+)
+
+// Values for ImageStreamingOutcomeKey. Success means layers were prepared via
+// image streaming; fallback means streaming was unsupported or failed and fell
+// back to the local image cache; error means both streaming and fallback failed.
+const (
+	ImageStreamingOutcomeSuccess  = "success"
+	ImageStreamingOutcomeFallback = "fallback"
+	ImageStreamingOutcomeError    = "error"
 )
 
 // ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into

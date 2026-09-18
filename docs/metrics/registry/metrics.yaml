@@ -509,6 +509,33 @@ groups:
               value: timeout
               brief: The time limit of the caller ended.
 
+  - id: registry.ate.imagestreaming
+    type: attribute_group
+    brief: The labels of image streaming on the node.
+    attributes:
+      - id: ate.imagestreaming.outcome
+        stability: development
+        brief: The result of an image streaming layer preparation.
+        type:
+          members:
+            - id: success
+              stability: development
+              value: success
+              brief: Image layers were prepared and mounted via streaming.
+            - id: fallback
+              stability: development
+              value: fallback
+              brief: Streaming was unsupported or failed; fell back to the image cache.
+            - id: error
+              stability: development
+              value: error
+              brief: Both streaming and local cache fallback failed.
+      - id: ate.imagestreaming.provider
+        stability: development
+        brief: The identifier of the image streaming provider (e.g. riptide, soci).
+        type: string
+        examples: [riptide, soci]
+
   - id: registry.ate.stats
     type: attribute_group
     brief: The labels of the resource measurements of the actors.
@@ -1032,6 +1059,51 @@ groups:
             The outcome is error. The key holds the HTTP status of the registry.
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
+
+  - id: metric.ate.imagestreaming.requests
+    type: metric
+    metric_name: ate.imagestreaming.requests
+    instrument: counter
+    unit: "{request}"
+    stability: development
+    brief: The number of image streaming preparation requests on the node, by provider and outcome.
+    note: >
+      Counts requests evaluated by image streaming providers. A high fallback
+      count indicates workloads are using images without streaming artifacts or
+      the streaming daemon is unavailable.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [traffic, errors]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: Are container images being accelerated by the streaming provider?
+    attributes:
+      - ref: ate.imagestreaming.provider
+        requirement_level: required
+      - ref: ate.imagestreaming.outcome
+        requirement_level: required
+
+  - id: metric.ate.imagestreaming.duration
+    type: metric
+    metric_name: ate.imagestreaming.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: Duration in seconds to prepare streamed image layers on the node.
+    note: >
+      Measures the latency of mounting and preparing virtual layer trees via the
+      streaming provider daemon.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: How long does image streaming layer preparation take?
+    attributes:
+      - ref: ate.imagestreaming.provider
+        requirement_level: required
+      - ref: ate.imagestreaming.outcome
+        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. atecontroller
