@@ -2631,7 +2631,6 @@ func TestPauseActor(t *testing.T) {
 			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				ActorTemplateUid:          tmpl.GetMetadata().GetUid(),
 			},
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			ExternalSnapshot:        &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},

@@ -190,12 +190,6 @@ message LocalSnapshotInfo {
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 3;
-
-  // UID of the ActorTemplate whose sandbox this checkpoint's guest state was
-  // captured from.
-  //
-  // +k8s:optional
-  string actor_template_uid = 4;
 }
 
 enum SnapshotContentScope {

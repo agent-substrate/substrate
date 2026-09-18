@@ -48,13 +48,9 @@ type resumeSnapshotSource struct {
 	// selects the golden snapshot as the boot source for the pending restore:
 	// restore then combines the golden snapshot with the actor's data.
 	GoldenSnapshotURI resources.SnapshotURI
-	// LocalTemplateReplaced and ExternalTemplateReplaced are true when the
-	// actor's local pause checkpoint, respectively its external snapshot, was
-	// captured under a template other than the actor's current one. They are
-	// tracked separately because the two can have been captured under
-	// different templates, and each restore path reads only its own.
-	LocalTemplateReplaced    bool
-	ExternalTemplateReplaced bool
+	// TemplateReplaced is true when the external snapshot's recorded template
+	// UID differs from the actor's current template.
+	TemplateReplaced bool
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -183,22 +179,13 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
-	// Each captured guest state records the template whose sandbox it came
-	// from, so judge each against the actor's current template on its own: a
-	// repointed Actor's local checkpoint and its external snapshot need not
-	// have been captured under the same one.
-	templateReplaced := func(capturedUnder string) bool {
-		return capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
-	}
-	if local := actor.GetStatus().GetLocalSnapshotInfo(); local != nil {
-		src.LocalTemplateReplaced = templateReplaced(local.GetActorTemplateUid())
-	}
 	if uri := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); uri != "" {
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(uri); err != nil {
 			return nil, nil, src, status.Errorf(codes.DataLoss, "Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
-		src.ExternalTemplateReplaced = templateReplaced(actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid())
+		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
+		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -708,8 +695,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		// loadActorForResume resolved a golden URI per the template's onResume
 		// configuration, else what the pause captured.
 		switch {
-		case src.LocalTemplateReplaced:
-			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
@@ -731,7 +716,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		var scope ateletpb.SnapshotScope
 		var goldenSnapshotURI string
 		switch {
-		case src.ExternalTemplateReplaced:
+		case src.TemplateReplaced:
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN

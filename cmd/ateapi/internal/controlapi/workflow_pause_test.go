@@ -134,7 +134,6 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 						WorkerPodUid:    workerName,
 					},
 					InProgressLocalSnapshotName: "snap-prefix",
-					CurrentActorTemplateUid:     "tmpl-uid-1",
 				},
 			})
 			if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
@@ -167,9 +166,6 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			}
 			if scope := got.GetStatus().GetLocalSnapshotInfo().GetContentScope(); scope != tc.want {
 				t.Errorf("LocalSnapshotInfo.ContentScope = %v, want %v", scope, tc.want)
-			}
-			if uid := got.GetStatus().GetLocalSnapshotInfo().GetActorTemplateUid(); uid != "tmpl-uid-1" {
-				t.Errorf("LocalSnapshotInfo.ActorTemplateUid = %q, want %q", uid, "tmpl-uid-1")
 			}
 		})
 	}

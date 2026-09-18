@@ -191,11 +191,11 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	}
 
 	//
-	// Pause under template B while the external snapshot is still from
-	// template A: LocalSnapshotInfo records template B while ExternalSnapshot
-	// retains template A. Resuming from PAUSED must judge by the local
-	// checkpoint's provenance (template B) and restore in FULL when onPause is
-	// FULL, preserving the in-memory counter rather than resetting it.
+	// Pause under template B while status.external_snapshot still holds the last
+	// committed snapshot from template A. Resuming from PAUSED restores the
+	// local checkpoint (which was captured under template B, since templates
+	// can only be updated while SUSPENDED) and preserves the in-memory counter
+	// when onPause is FULL.
 	//
 	t.Logf("Pausing Actor %q under template B...", actorID)
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
@@ -210,9 +210,6 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	})
 	if err != nil {
 		t.Fatalf("failed to get paused Actor: %v", err)
-	}
-	if got, want := paused.GetStatus().GetLocalSnapshotInfo().GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
-		t.Errorf("paused Actor local_snapshot_info.actor_template_uid = %q, want template B's %q", got, want)
 	}
 	if got, want := paused.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("paused Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
