@@ -1,0 +1,151 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# On-demand SLO-knee sweep for the substrate row.
+#
+# This is NOT the standing hourly tests.yaml -- point the orchestrator at it
+# explicitly for a dedicated substrate-row measurement run:
+#
+#   orchestrator.py --tests /path/to/tests-slo-ladder.yaml --dest <dest>
+#
+# It runs the warm-path AteAPIUser (tests/ate_api.py) at a ladder of
+# concurrency levels, once per sandbox class (gvisor + microvm). Each rung
+# is a distinct concurrency point; together they form the throughput/latency
+# sweep that benchmarking/analysis/slo_knee.py reduces to a knee.
+#
+# Analysis. Stats land at <dest>/runs/<name>/.../stats.jsonl -- partitioned
+# by test NAME. slo_knee.py groups sweep points by (tag, metric), and both
+# sandbox classes share the same tag (build commit) and metric
+# (grpc_ResumeActor), so they MUST be analysed as two separate globs, one
+# per class -- the name prefix makes this a one-liner:
+#
+#   # gvisor knee
+#   python3 -m benchmarking.analysis.slo_knee \
+#     '<dest>/runs/slo_gvisor_*/' \
+#     --tests-yaml benchmarking/automation/tests-slo-ladder.yaml \
+#     --metric-filter grpc_ResumeActor -p p95 -p p99
+#   # microvm knee
+#   python3 -m benchmarking.analysis.slo_knee \
+#     '<dest>/runs/slo_microvm_*/' \
+#     --tests-yaml benchmarking/automation/tests-slo-ladder.yaml \
+#     --metric-filter grpc_ResumeActor -p p95 -p p99
+#
+# --tests-yaml points slo_knee back at THIS file so it reads the per-rung
+# `users` count for the "knee @ N users" reporting column. Default SLO
+# ceilings are 1000ms (@<1s) and 5000ms (@<5s).
+#
+# Cost note. Every rung triggers a full substrate deploy + teardown, so this
+# ladder (5 rungs x 2 classes = 10 deploys) is a deliberate on-demand run,
+# not something to fold into the hourly cadence. Trim rungs to bound wall
+# time; the knee still resolves with as few as 3-4 well-spaced rungs.
+#
+# workerCount tracks users 1:1 so the WorkerPool scales with offered load;
+# the knee then reflects per-actor latency scaling under concurrency rather
+# than a fixed-pool exhaustion artifact. The top rung is deliberately past
+# the expected knee so the sweep brackets it (latency crosses the ceiling).
+
+tests:
+  # ---- gvisor ladder ----
+  - name: slo_gvisor_01u
+    description: "SLO ladder (gvisor): 1 user"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 1
+    workerCount: 1
+    sandboxClass: gvisor
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_gvisor_05u
+    description: "SLO ladder (gvisor): 5 users"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 5
+    workerCount: 5
+    sandboxClass: gvisor
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_gvisor_10u
+    description: "SLO ladder (gvisor): 10 users"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 10
+    workerCount: 10
+    sandboxClass: gvisor
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_gvisor_25u
+    description: "SLO ladder (gvisor): 25 users"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 25
+    workerCount: 25
+    sandboxClass: gvisor
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_gvisor_50u
+    description: "SLO ladder (gvisor): 50 users (past expected knee)"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 50
+    workerCount: 50
+    sandboxClass: gvisor
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+
+  # ---- microvm ladder ----
+  - name: slo_microvm_01u
+    description: "SLO ladder (microvm): 1 user"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 1
+    workerCount: 1
+    sandboxClass: microvm
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_microvm_05u
+    description: "SLO ladder (microvm): 5 users"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 5
+    workerCount: 5
+    sandboxClass: microvm
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_microvm_10u
+    description: "SLO ladder (microvm): 10 users"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 10
+    workerCount: 10
+    sandboxClass: microvm
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_microvm_25u
+    description: "SLO ladder (microvm): 25 users"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 25
+    workerCount: 25
+    sandboxClass: microvm
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
+  - name: slo_microvm_50u
+    description: "SLO ladder (microvm): 50 users (past expected knee)"
+    targetCluster: dev
+    file: /app/tests/ate_api.py
+    duration: 2m
+    users: 50
+    workerCount: 50
+    sandboxClass: microvm
+    flags: ["--min-wait-time", "0.5", "--max-wait-time", "1.0"]
