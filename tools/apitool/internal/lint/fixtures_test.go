@@ -101,3 +101,21 @@ func updateMethodAPI(reqFields []model.Field) *model.API {
 		},
 	}
 }
+
+// subResourceMethodAPI builds a minimal API with one
+// Control.{verb}ActorEgressPolicy method - "EgressPolicy" is a sub-resource
+// of "Actor" (see model.ParentResourceName) - with the given request fields.
+func subResourceMethodAPI(verb string, reqFields []model.Field) *model.API {
+	return &model.API{
+		Services: []model.Service{{
+			Name: "Control",
+			Methods: []model.Method{
+				{Name: verb + "ActorEgressPolicy", ServiceName: "Control", InputName: "test." + verb + "ActorEgressPolicyRequest", OutputName: "test.EgressPolicy"},
+			},
+		}},
+		Messages: []model.Message{
+			{FullName: "test.EgressPolicy", Name: "EgressPolicy"},
+			{FullName: "test." + verb + "ActorEgressPolicyRequest", Name: verb + "ActorEgressPolicyRequest", Fields: reqFields},
+		},
+	}
+}

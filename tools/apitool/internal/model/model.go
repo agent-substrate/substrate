@@ -550,7 +550,8 @@ func Resources(api *API) ([]Resource, error) {
 }
 
 // TODO: We should consider adding proto options to attach this (and other)
-// metadata in the proto service descriptor itself.
+// metadata, including subResourceParents below, in the proto service
+// descriptor itself.
 var resourceNames = []string{
 	"Actor",
 	"ActorSnapshot",
@@ -558,6 +559,26 @@ var resourceNames = []string{
 	"ActorTemplate",
 	"Atespace",
 	"Worker",
+	"EgressPolicy",
+}
+
+// subResourceParents maps a sub-resource's short name to the short name of
+// the resource it's nested directly under (one level - a sub-resource of a
+// sub-resource isn't represented here). For example, "EgressPolicy" is
+// nested under "Actor": its standard methods are named GetActorEgressPolicy,
+// not GetEgressPolicy, and its Get/Delete requests identify the parent
+// Actor rather than the (fixed-name) EgressPolicy itself. A name absent
+// from this map is a top-level resource.
+var subResourceParents = map[string]string{
+	"EgressPolicy": "Actor",
+}
+
+// ParentResourceName returns the short name of the resource resourceName is
+// nested under, and true - or "", false if resourceName is a top-level
+// resource.
+func ParentResourceName(resourceName string) (string, bool) {
+	parent, ok := subResourceParents[resourceName]
+	return parent, ok
 }
 
 func resourceForMethodName(methodName string) (string, error) {
