@@ -21,19 +21,28 @@ These were treated as contracts and reproduced exactly:
   `demo-counter_deploy (with_external_volume=true)`), so CI log scrapers keep
   working.
 - **Manifest ordering.** Applying a directory is non-recursive and lexical, as
-  `kubectl apply -f <dir>` was. `deploy_ate_system` depended on that ordering
+  `kubectl apply -f <dir>` was. `delete_ate_system` depends on that ordering
   and the shell comments called out specific filename hazards, so
   `kube.LoadPath` keeps it.
 - **Overlay selection.** `steps.SystemOverlay` is the same product of
   kind × router that `render_ate_system_manifests` computed with
-  nested `if`s.
+  nested `if`s, including the plain GKE install rendering the `base`
+  kustomization rather than the raw directory, which would re-apply the
+  podcertificate-controller and undo its size10 flags and worker override.
 - **Timeouts.** 60s namespace, 60s rollout (`--rollout-timeout` /
   `ATE_INSTALL_ROLLOUT_TIMEOUT`, as in the scripts), 120s for the
-  podcertificate-controller and CSI waits the scripts fixed there, 300s demo.
-  `--rollout-timeout` now reaches the 120s waits too, which it did not in the
-  shell, but only when it is passed: `Config.WaitTimeout` leaves each site at
-  its historical value otherwise, so the 60s default cannot shorten the slow
-  bootstrap paths.
+  podcertificate-controller and CSI waits the scripts fixed there, 300s for the
+  trust bundles, one deadline shared across both as in the shell, 300s demo.
+  `--rollout-timeout` now reaches the 120s and 300s waits too, which it did not
+  in the shell, but only when it is passed: `Config.WaitTimeout` leaves each
+  site at its historical value otherwise, so the 60s default cannot shorten the
+  slow bootstrap paths.
+- **Cluster profiles.** `--cluster-size` and `--cordon-control-plane` select
+  the same manifests the shell does: the `podcert-size10` overlay, the
+  `postgres-size10` config patch, and the `cordon-control-plane` component,
+  composed over every control plane apply path exactly as `render_manifests`
+  wraps them. The component and the patch file are the single source of truth
+  for both installers.
 - **Rendered bytes.** `authentication.yaml` is trimmed of its trailing newline
   because the shell built it inside `$(...)`, which strips them. Switching
   between the two installers must not rewrite the ConfigMap.
@@ -169,7 +178,24 @@ observed status (`3/5 replicas available`) instead of only a timeout.
 
 **Deletes are more precise.** `kubectl delete --ignore-not-found -f` was the
 model, so NotFound is ignored — and so is a kind that no longer resolves, since
-teardown after the CRDs are gone must not fail. Beyond that, deletes are strict.
+teardown after the CRDs are gone must not fail (the shell needs a separate
+`kubectl_delete_tolerant` wrapper for that case). Beyond that, deletes are
+strict.
+
+**size10 PostgreSQL is rendered, not patched.** The shell applies the base
+StatefulSet, then `kubectl patch`es the ConfigMap and the container resources,
+so a size10 install rolls PostgreSQL out twice and the first pod is the size0
+one. `ate-setup` makes the same two changes to the decoded objects before the
+one server-side apply: one rollout, the rollout wait sees the resized pod, and
+there is no second field manager for a later apply to fight with. The tuning
+values are the same, read from the same `postgres-config-patch.yaml`.
+
+**Timing lines go to stdout.** The shell prints `(kubectl apply took 1.234s)`
+after every kubectl, ko, and gcloud call, on stderr so a pipeline's stdout
+stays clean. `ate-setup` prints the same shape after each apply, delete,
+rollout wait, trust bundle wait, `ko` invocation, and `gcloud` call, but on
+stdout with the rest of the progress output, since nothing downstream consumes
+it.
 
 **`|| true` is gone.** The CSI hostpath bundle ships a `VolumeSnapshotClass`
 whose CRD is absent on a stock Kind cluster; the shell script handled that by
@@ -278,4 +304,6 @@ to the in-cluster database, leaving behind an orphaned proxy. Use
 The shell installer had no tests. `cmd/ate-setup` has unit tests for template
 rendering, overlay selection, config resolution, the authentication config, the
 apiserver environment ConfigMap, delegated script arguments, manifest deletion,
-per-demo rendering, and image reference rewriting.
+per-demo rendering, image reference rewriting, kustomize composition, the
+control plane pinning on every apply path, and the size10 PostgreSQL resize
+against the real manifests.

@@ -27,6 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
 // crdKind is the kind whose creation invalidates discovery for later objects.
@@ -40,6 +42,7 @@ const crdKind = "CustomResourceDefinition"
 // avoids the last-applied-configuration annotation growing unboundedly on the
 // large generated CRDs.
 func (c *Client) Apply(ctx context.Context, objs []*unstructured.Unstructured) error {
+	defer log.Elapsed(time.Now(), fmt.Sprintf("apply of %d objects", len(objs)))
 	sawCRD := false
 	for _, obj := range objs {
 		if sawCRD && obj.GetKind() != crdKind {
@@ -121,6 +124,7 @@ func (c *Client) ApplyTolerant(ctx context.Context, objs []*unstructured.Unstruc
 // Delete removes every object, ignoring those that are already gone. This is
 // the `kubectl delete --ignore-not-found -f` equivalent.
 func (c *Client) Delete(ctx context.Context, objs []*unstructured.Unstructured) error {
+	defer log.Elapsed(time.Now(), fmt.Sprintf("delete of %d objects", len(objs)))
 	for _, obj := range objs {
 		if err := c.DeleteOne(ctx, obj); err != nil {
 			return err

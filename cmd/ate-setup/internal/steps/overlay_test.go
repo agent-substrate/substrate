@@ -16,6 +16,7 @@ package steps
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -280,4 +281,193 @@ func extProcCluster(filter map[string]any) string {
 	envoyGRPC, _ := grpcService["envoy_grpc"].(map[string]any)
 	name, _ := envoyGRPC["cluster_name"].(string)
 	return name
+}
+
+// The plain GKE install renders the base kustomization, not the raw
+// directory: the directory would re-apply pod-certificate-controller.yaml and
+// undo the size10 flags and the WORKERS_PER_SIGNER override.
+func TestSystemOverlayDefaultIsBase(t *testing.T) {
+	if got := SystemOverlay(&config.Config{Router: config.RouterEnvoy}); got != installDir+"/base" {
+		t.Errorf("SystemOverlay(envoy, GKE) = %q, want %s/base", got, installDir)
+	}
+}
+
+// pinnedWorkloads returns the Deployment and StatefulSet names in a rendered
+// manifest that carry the cordon-control-plane node pinning, and every
+// workload name seen.
+func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
+	t.Helper()
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var obj struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						NodeSelector map[string]string `json:"nodeSelector"`
+						Tolerations  []map[string]any  `json:"tolerations"`
+						Affinity     map[string]any    `json:"affinity"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		if obj.Kind != "Deployment" && obj.Kind != "StatefulSet" {
+			continue
+		}
+		all = append(all, obj.Metadata.Name)
+		podSpec := obj.Spec.Template.Spec
+		if podSpec.NodeSelector["ate.dev/workloadType"] == "ate-control-plane" &&
+			len(podSpec.Tolerations) > 0 && podSpec.Affinity["podAntiAffinity"] != nil {
+			pinned = append(pinned, obj.Metadata.Name)
+		}
+	}
+	return pinned, all
+}
+
+// Under --cordon-control-plane every control plane apply path has to carry the
+// pinning, since each workload reaches the cluster through a different one:
+// the system bundle, the lone redeploy files, the podcert overlay, the
+// postgres file, and the egress variants.
+func TestRenderCordonControlPlane(t *testing.T) {
+	root := repoRoot(t)
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+		path func(e *Env) string
+		want []string
+	}{
+		{
+			name: "base bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			want: []string{"ate-api-server", "ate-controller", "atenet-router"},
+		},
+		{
+			name: "kind bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy, Kind: true},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			want: []string{"ate-api-server", "ate-controller", "atenet-router"},
+		},
+		{
+			name: "agentgateway bundle",
+			cfg:  config.Config{Router: config.RouterAgentgateway},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			want: []string{"ate-api-server", "ate-controller", "atenet-router"},
+		},
+		{
+			name: "api server file",
+			path: func(e *Env) string { return e.Cfg.Manifest("ate-api-server.yaml") },
+			want: []string{"ate-api-server"},
+		},
+		{
+			name: "podcert file",
+			path: func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
+			want: []string{"podcertificate-controller"},
+		},
+		{
+			name: "podcert size10 overlay",
+			cfg:  config.Config{ClusterSize: config.ClusterSizeSize10},
+			path: func(e *Env) string { return e.Cfg.Manifest("podcert-size10") },
+			want: []string{"podcertificate-controller"},
+		},
+		{
+			name: "postgres file",
+			path: func(e *Env) string { return e.postgresManifestPath() },
+			want: []string{"postgres"},
+		},
+		{
+			name: "egress file",
+			path: func(e *Env) string { return e.atenetEgressManifestPath() },
+			want: []string{"atenet-egress"},
+		},
+		{
+			name: "egress sdsmint file",
+			cfg:  config.Config{ExperimentalUseSDSMint: true},
+			path: func(e *Env) string { return e.atenetEgressManifestPath() },
+			want: []string{"atenet-egress"},
+		},
+		{
+			name: "agentgateway egress overlay",
+			path: func(e *Env) string { return e.Cfg.Path(installDir + "/agentgateway-egress") },
+			want: []string{"atenet-egress"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			cfg.CordonControlPlane = true
+			e := &Env{Cfg: &cfg}
+
+			rendered, err := e.render(tc.path(e))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			pinned, all := pinnedWorkloads(t, rendered)
+			for _, name := range tc.want {
+				if !slices.Contains(all, name) {
+					t.Errorf("rendered manifest has no workload %s (found %v)", name, all)
+				}
+				if !slices.Contains(pinned, name) {
+					t.Errorf("workload %s is not pinned to the control plane pool", name)
+				}
+			}
+			// The DaemonSet-shaped and demo workloads stay off the pool; only
+			// the named control plane workloads are pinned.
+			for _, name := range pinned {
+				if !slices.Contains(tc.want, name) {
+					t.Errorf("workload %s is pinned but is not a control plane workload", name)
+				}
+			}
+		})
+	}
+}
+
+// The extproc-patched egress manifest arrives as bytes, and the pinning has to
+// reach it too.
+func TestRenderBytesCordonControlPlane(t *testing.T) {
+	e := &Env{Cfg: &config.Config{
+		Root:                           repoRoot(t),
+		CordonControlPlane:             true,
+		ExperimentalUseSDSMint:         true,
+		AdditionalEgressExtprocService: "ate-system/foo:50051",
+	}}
+	patched, err := e.patchAtenetEgressManifest()
+	if err != nil {
+		t.Fatalf("patchAtenetEgressManifest: %v", err)
+	}
+	rendered, err := e.renderBytes(patched)
+	if err != nil {
+		t.Fatalf("renderBytes: %v", err)
+	}
+	pinned, _ := pinnedWorkloads(t, rendered)
+	if !slices.Contains(pinned, "atenet-egress") {
+		t.Errorf("atenet-egress is not pinned in the composed extproc manifest (pinned: %v)", pinned)
+	}
+	if !strings.Contains(string(rendered), additionalEgressExtprocCluster) {
+		t.Error("composition dropped the spliced extproc cluster")
+	}
+}
+
+// Without the flag, render is a plain read or build and adds nothing.
+func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
+	rendered, err := e.render(e.Cfg.Manifest("ate-api-server.yaml"))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if pinned, _ := pinnedWorkloads(t, rendered); len(pinned) != 0 {
+		t.Errorf("render without --cordon-control-plane pinned %v", pinned)
+	}
+	raw, err := os.ReadFile(e.Cfg.Manifest("ate-api-server.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rendered) != string(raw) {
+		t.Error("render of a plain file without --cordon-control-plane is not the file's bytes")
+	}
 }
