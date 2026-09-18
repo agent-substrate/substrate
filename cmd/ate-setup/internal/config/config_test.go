@@ -44,6 +44,7 @@ func loadEnv(t *testing.T) {
 		"ATE_CREDENTIAL_PROVIDER_ADDRESS",
 		"ATE_CREDENTIAL_PROVIDER_NAME",
 		"ATE_API_POSTGRES_CONNECTION_STRING",
+		"ATE_API_POSTGRES_DDL_CONNECTION_STRING",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_EXPERIMENTAL_USE_SDSMINT",
@@ -78,8 +79,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Router != RouterEnvoy {
 		t.Errorf("Router = %q, want %q", cfg.Router, RouterEnvoy)
 	}
-	if cfg.PostgresConnString() != DefaultPostgresConnectionString {
-		t.Errorf("PostgresConnString() = %q, want %q", cfg.PostgresConnString(), DefaultPostgresConnectionString)
+	if cfg.PostgresConnectionString != "" {
+		t.Errorf("PostgresConnectionString = %q, want bundled PostgreSQL", cfg.PostgresConnectionString)
 	}
 	if cfg.RolloutTimeout != DefaultRolloutTimeout {
 		t.Errorf("RolloutTimeout = %v, want %v", cfg.RolloutTimeout, DefaultRolloutTimeout)
@@ -114,8 +115,34 @@ func TestLoadPostgresConnectionStringOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresConnString() != dsn {
-		t.Errorf("PostgresConnString() = %q, want %q", cfg.PostgresConnString(), dsn)
+	if cfg.PostgresConnectionString != dsn {
+		t.Errorf("PostgresConnectionString = %q, want %q", cfg.PostgresConnectionString, dsn)
+	}
+}
+
+func TestLoadPostgresDDLConnectionString(t *testing.T) {
+	loadEnv(t)
+	const runtimeDSN = "postgresql://runtime@db.example:5432/atepg?sslmode=disable"
+	const dsn = "postgresql://owner@db.example:5432/atepg?sslmode=disable"
+	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", runtimeDSN)
+	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", dsn)
+
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.PostgresDDLConnectionString != dsn {
+		t.Errorf("PostgresDDLConnectionString = %q, want %q", cfg.PostgresDDLConnectionString, dsn)
+	}
+}
+
+func TestLoadRejectsPostgresDDLConnectionStringWithoutRuntime(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "postgresql://owner@db.example:5432/atepg")
+
+	_, err := Load(Options{})
+	if err == nil || !strings.Contains(err.Error(), "requires ATE_API_POSTGRES_CONNECTION_STRING") {
+		t.Fatalf("Load() error = %v, want missing runtime DSN error", err)
 	}
 }
 

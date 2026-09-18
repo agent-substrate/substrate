@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -136,7 +137,7 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			p, err := Connect(ctx, containerDSN, "concurrent-startup")
+			p, err := Connect(ctx, containerDSN, "", "concurrent-startup")
 			if p != nil {
 				p.Close()
 				p.pool.Close()
@@ -252,7 +253,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", schema)
+	persistence, err := Connect(ctx, dsn+"&search_path=public", "", schema)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -285,7 +286,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 		t.Error("migration removed an unrelated table")
 	}
 
-	if err := persistence.dropExpiredWorkerOutboxPartitions(ctx, persistence.watchPool, time.Now()); err != nil {
+	if err := persistence.dropExpiredWorkerOutboxPartitions(ctx, persistence.ownerPool, time.Now()); err != nil {
 		t.Fatalf("dropping expired partitions in the configured schema: %v", err)
 	}
 	var unrelatedPartitionExists bool
@@ -294,6 +295,104 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	}
 	if !unrelatedPartitionExists {
 		t.Error("outbox maintenance removed a partition from another schema")
+	}
+}
+
+func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
+	admin := requirePool(t)
+	ctx := t.Context()
+	const (
+		schema      = "separate-role-test"
+		runtimeRole = "atepg_runtime_test"
+		ddlRole     = "atepg_ddl_test"
+		password    = "test-password"
+	)
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`
+		DROP SCHEMA IF EXISTS %s CASCADE;
+		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		CREATE ROLE %s LOGIN PASSWORD '%s';
+		CREATE ROLE %s LOGIN PASSWORD '%s';
+		GRANT CREATE ON DATABASE atepg TO %s`,
+		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize(),
+		pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize(), password,
+		pgx.Identifier{ddlRole}.Sanitize(), password, pgx.Identifier{ddlRole}.Sanitize())); err != nil {
+		t.Fatalf("creating PostgreSQL test roles: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`
+			DROP SCHEMA IF EXISTS %s CASCADE;
+			REVOKE ALL ON DATABASE atepg FROM %s;
+			REVOKE ALL ON DATABASE atepg FROM %s;
+			DROP ROLE IF EXISTS %s;
+			DROP ROLE IF EXISTS %s`, pgx.Identifier{schema}.Sanitize(),
+			pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+			pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize()))
+	})
+
+	runtimeDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+runtimeRole+":"+password+"@", 1)
+	ddlDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+ddlRole+":"+password+"@", 1)
+	if runtimeDSN == containerDSN || ddlDSN == containerDSN {
+		t.Fatalf("unexpected test DSN format: %q", containerDSN)
+	}
+	p, err := Connect(ctx, runtimeDSN, ddlDSN, schema)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+
+	if _, err := p.CreateAtespace(ctx, newTestAtespace("runtime-write")); err != nil {
+		t.Fatalf("runtime DML failed: %v", err)
+	}
+	if _, err := p.pool.Exec(ctx, `CREATE TABLE forbidden (id integer)`); err == nil {
+		t.Fatal("runtime role created a table")
+	}
+	if _, err := p.pool.Exec(ctx, `UPDATE schema_migrations SET is_applied = false`); err == nil {
+		t.Fatal("runtime role modified the migration ledger")
+	}
+	if err := p.createWorkerOutboxPartitions(ctx, time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatalf("DDL maintenance failed: %v", err)
+	}
+}
+
+func TestConnectSingleRoleDoesNotRequireSchemaOwnership(t *testing.T) {
+	admin := requirePool(t)
+	ctx := t.Context()
+	const (
+		schema   = "single-role-test"
+		role     = "atepg_single_role_test"
+		password = "test-password"
+	)
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`
+		DROP SCHEMA IF EXISTS %s CASCADE;
+		DROP ROLE IF EXISTS %s;
+		CREATE ROLE %s LOGIN PASSWORD '%s';
+		CREATE SCHEMA %s;
+		GRANT CREATE ON DATABASE atepg TO %s;
+		GRANT USAGE, CREATE ON SCHEMA %s TO %s`,
+		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{role}.Sanitize(),
+		pgx.Identifier{role}.Sanitize(), password, pgx.Identifier{schema}.Sanitize(),
+		pgx.Identifier{role}.Sanitize(), pgx.Identifier{schema}.Sanitize(), pgx.Identifier{role}.Sanitize())); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`
+			DROP SCHEMA IF EXISTS %s CASCADE;
+			REVOKE ALL ON DATABASE atepg FROM %s;
+			DROP ROLE IF EXISTS %s`, pgx.Identifier{schema}.Sanitize(),
+			pgx.Identifier{role}.Sanitize(), pgx.Identifier{role}.Sanitize()))
+	})
+
+	dsn := strings.Replace(containerDSN, "://atepg:atepg@", "://"+role+":"+password+"@", 1)
+	p, err := Connect(ctx, dsn, "", schema)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	if _, err := p.CreateAtespace(ctx, newTestAtespace("single-role-write")); err != nil {
+		t.Fatalf("runtime DML failed: %v", err)
 	}
 }
 
@@ -309,7 +408,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`)
 		})
 
-		p, err := Connect(ctx, containerDSN, "migration-ahead")
+		p, err := Connect(ctx, containerDSN, "", "migration-ahead")
 		if err != nil {
 			t.Fatalf("creating current schema: %v", err)
 		}
@@ -319,7 +418,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			t.Fatalf("setting ahead migration state: %v", err)
 		}
 
-		p, err = Connect(ctx, containerDSN, "migration-ahead")
+		p, err = Connect(ctx, containerDSN, "", "migration-ahead")
 		if err != nil {
 			t.Fatalf("Connect with an ahead clean schema failed: %v", err)
 		}
@@ -338,7 +437,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-legacy" CASCADE`)
 		})
 
-		_, err := Connect(ctx, containerDSN, "migration-legacy")
+		_, err := Connect(ctx, containerDSN, "", "migration-legacy")
 		if err == nil || !strings.Contains(err.Error(), "Substrate tables exist without a migration ledger") {
 			t.Fatalf("Connect error = %v, want unsupported schema error", err)
 		}
@@ -873,7 +972,7 @@ func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, "", "public")
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -915,7 +1014,7 @@ func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, "", "public")
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

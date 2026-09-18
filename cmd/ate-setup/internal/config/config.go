@@ -43,12 +43,6 @@ const (
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
 const DefaultRolloutTimeout = 60 * time.Second
 
-// DefaultPostgresConnectionString mirrors default_postgres_connection_string in
-// the shell installer: the apiserver reaches PostgreSQL over mTLS using the
-// podcertificate controller's projected servicedns trust bundle and its own
-// podidentity credential bundle.
-const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-
 // DefaultPostgresSchema mirrors the shell installer's default for
 // ATE_API_POSTGRES_SCHEMA, the PostgreSQL schema holding the Substrate tables.
 const DefaultPostgresSchema = "public"
@@ -98,8 +92,12 @@ type Config struct {
 	// Router selects the atenet router dataplane.
 	Router string
 	// PostgresConnectionString is the apiserver's store connection string.
-	// Empty means use DefaultPostgresConnectionString.
+	// Empty means use the bundled PostgreSQL runtime role.
 	PostgresConnectionString string
+	// PostgresDDLConnectionString is the optional schema-owner connection
+	// string. Empty means use the runtime string for an external database; a
+	// non-empty value requires PostgresConnectionString.
+	PostgresDDLConnectionString string
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
@@ -232,6 +230,7 @@ func Load(opts Options) (*Config, error) {
 		KODefaultPlatforms:                    env["KO_DEFAULTPLATFORMS"],
 		Images:                                loadImageSource(opts, env),
 		PostgresConnectionString:              env["ATE_API_POSTGRES_CONNECTION_STRING"],
+		PostgresDDLConnectionString:           env["ATE_API_POSTGRES_DDL_CONNECTION_STRING"],
 		PostgresSchema:                        env["ATE_API_POSTGRES_SCHEMA"],
 		RolloutTimeout:                        rolloutTimeout,
 		rolloutTimeoutSet:                     timeoutStr != "",
@@ -280,6 +279,9 @@ func applyKindDefaults(cfg *Config) {
 func validate(cfg *Config) error {
 	if err := cfg.Images.Validate(); err != nil {
 		return err
+	}
+	if cfg.PostgresDDLConnectionString != "" && cfg.PostgresConnectionString == "" {
+		return fmt.Errorf("ATE_API_POSTGRES_DDL_CONNECTION_STRING requires ATE_API_POSTGRES_CONNECTION_STRING")
 	}
 	switch cfg.Router {
 	case RouterEnvoy, RouterAgentgateway:
@@ -331,15 +333,6 @@ func validateExtprocService(spec string) error {
 		return fmt.Errorf("--experimental-additional-egress-extproc-service port must be 1-65535, got %q", portStr)
 	}
 	return nil
-}
-
-// PostgresConnString returns the configured connection string, falling back to
-// the in-cluster default.
-func (c *Config) PostgresConnString() string {
-	if c.PostgresConnectionString != "" {
-		return c.PostgresConnectionString
-	}
-	return DefaultPostgresConnectionString
 }
 
 // PostgresSchemaName returns the configured schema, falling back to the

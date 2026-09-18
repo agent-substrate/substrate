@@ -41,20 +41,25 @@ import (
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
-// watchPoolMaxConns sizes the dedicated outbox watch pool: one connection
-// for the WatchWorkers poller, one for the maintenance loop, and one of headroom
-// so a transiently slow poll can never gate a maintenance pass.
+// watchPoolMaxConns sizes the dedicated outbox watch pool, leaving headroom
+// so a transiently slow poll can never gate another watcher.
 const (
 	watchPoolMaxConns = 3
 	watchPoolMinConns = 1
+	// Migrations need one connection for Goose's session lock and one for
+	// migration work. Outbox maintenance is serial after startup.
+	ownerPoolMaxConns = 2
 )
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the outbox side only: the WatchWorkers pollers
-	// and the partition-maintenance loop.
+	// watchPool serves the runtime-only WatchWorkers pollers. ownerPool is
+	// borrowed during startup for schema migrations, then serves outbox
+	// partition maintenance for the life of the process.
 	watchPool             *pgxpool.Pool
+	ownerPool             *pgxpool.Pool
 	ownsWatchPool         bool
+	ownsOwnerPool         bool
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
@@ -107,10 +112,9 @@ var _ store.Interface = (*Persistence)(nil)
 // PostgreSQL connection. Callers can retry this error before startup.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
-// Connect opens a pgxpool against dsn, creates schema if necessary, and
-// applies pending schema migrations. A dedicated watch pool isolates outbox
-// polling and maintenance from writes.
-func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
+// Connect opens runtime and DDL pools, creates schema if necessary, and
+// applies pending schema migrations. An empty ddlDSN uses dsn for both roles.
+func Connect(ctx context.Context, dsn, ddlDSN, schema string) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
@@ -127,7 +131,31 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
 	}
-	if err := createSchema(ctx, pool, schema); err != nil {
+
+	if ddlDSN == "" {
+		ddlDSN = dsn
+	}
+	ownerCfg, err := poolConfig(ddlDSN)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("parsing PostgreSQL DDL connection string: %w", err)
+	}
+	ownerCfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
+	ownerCfg.MaxConns = ownerPoolMaxConns
+	ownerCfg.MinConns = 0
+	ownerCfg.MinIdleConns = 0
+	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerCfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("opening PostgreSQL DDL pool: %w", err)
+	}
+	if err := ownerPool.Ping(ctx); err != nil {
+		ownerPool.Close()
+		pool.Close()
+		return nil, fmt.Errorf("%w: pinging PostgreSQL DDL connection: %w", ErrUnavailable, err)
+	}
+	if err := createSchema(ctx, ownerPool, schema); err != nil {
+		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
@@ -137,17 +165,20 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
 	if err != nil {
+		ownerPool.Close()
 		pool.Close()
 		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
 	}
 
-	p, err := newPersistence(ctx, pool, watchPool)
+	p, err := newPersistence(ctx, pool, watchPool, ownerPool)
 	if err != nil {
 		watchPool.Close()
+		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
 	p.ownsWatchPool = true
+	p.ownsOwnerPool = true
 	return p, nil
 }
 
@@ -208,17 +239,21 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 // Callers that already hold a pool (e.g. tests using testcontainers) use
 // this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
-	return newPersistence(ctx, pool, pool)
+	return newPersistence(ctx, pool, pool, pool)
 }
 
-func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
-	if err := applyMigrations(ctx, pool); err != nil {
+func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Pool) (*Persistence, error) {
+	if err := applyMigrations(ctx, ownerPool); err != nil {
+		return nil, err
+	}
+	if err := grantRuntimePrivileges(ctx, ownerPool, pool.Config().ConnConfig.User); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
 	p := &Persistence{
 		pool:                  pool,
 		watchPool:             watchPool,
+		ownerPool:             ownerPool,
 		leaseTTL:              defaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
@@ -245,13 +280,16 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 }
 
 // Close stops the outbox maintenance loop and waits for it to exit,
-// then closes the watch pool if Connect created one. It does not close the
-// main pool, which the caller owns.
+// then closes the auxiliary pools if Connect created them. It does not close
+// the main pool, which the caller owns.
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
 	if p.ownsWatchPool {
 		p.watchPool.Close()
+	}
+	if p.ownsOwnerPool {
+		p.ownerPool.Close()
 	}
 }
 

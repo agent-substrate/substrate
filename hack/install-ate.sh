@@ -123,11 +123,12 @@ function usage() {
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
   echo ""
-  echo "PostgreSQL configuration (either of the first two selects an external"
-  echo "database and skips the bundled instance):"
+  echo "PostgreSQL configuration (a runtime DSN or Cloud SQL instance selects an"
+  echo "external database and skips the bundled instance):"
   echo ""
-  echo "  ATE_API_POSTGRES_CONNECTION_STRING     DSN for any external PostgreSQL (stored in a Secret;"
+  echo "  ATE_API_POSTGRES_CONNECTION_STRING     Runtime/DML DSN for any external PostgreSQL (stored in a Secret;"
   echo "                                         pair with ATE_API_POSTGRES_SERVER_CA_FILE for sslmode=verify-ca)"
+  echo "  ATE_API_POSTGRES_DDL_CONNECTION_STRING DDL/migration DSN (requires a runtime DSN; defaults to it)"
   echo "  ATE_API_POSTGRES_CLOUDSQL_INSTANCE     Cloud SQL instance connection name (project:region:instance)."
   echo "                                         Deploys the Cloud SQL Auth Proxy sidecar: connector-managed TLS"
   echo "                                         and automatic IAM database auth, no passwords (see tools/setup-gcp/cloud-sql.md)."
@@ -137,7 +138,8 @@ function usage() {
   echo "  ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH     true (default) | false (password-over-proxy escape hatch)"
   echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
-  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
+  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public; use a dedicated schema"
+  echo "                                         when configuring separate runtime and DDL roles)"
   echo ""
   echo "Authentication configuration:"
   echo ""
@@ -265,7 +267,10 @@ rollout_timeout() {
 }
 
 default_postgres_connection_string() {
-  echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+  local role="$1" password="$2"
+  # pgx cannot derive tls-server-end-point channel-binding data from the
+  # Ed25519-signed service certificate. TLS, mTLS, and SCRAM remain required.
+  echo "postgresql://${role}:${password}@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
 }
 
 # True if deploying the bundled in-cluster PostgreSQL. Returns false if an
@@ -273,6 +278,15 @@ default_postgres_connection_string() {
 # (whether provided in the environment or adopted from the cluster).
 use_bundled_postgres() {
   [[ -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" && -z "$(resolve_cloudsql_instance)" ]]
+}
+
+ensure_bundled_postgres_credentials() {
+  if run_kubectl get secret -n ate-system postgres-role-passwords >/dev/null 2>&1; then
+    return
+  fi
+  run_kubectl create secret generic -n ate-system postgres-role-passwords \
+    --from-literal=runtime-password="$(openssl rand -hex 32)" \
+    --from-literal=ddl-password="$(openssl rand -hex 32)"
 }
 
 # --- Versioned dataplane rendering ---
@@ -671,7 +685,12 @@ create_api_server_env_vars() {
     | run_kubectl apply -f -
 
   local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
+  local postgres_ddl_connection_string="${ATE_API_POSTGRES_DDL_CONNECTION_STRING:-}"
   local postgres_schema="${ATE_API_POSTGRES_SCHEMA:-public}"
+  if [[ -n "${postgres_ddl_connection_string}" && -z "${postgres_connection_string}" ]]; then
+    echo "Error: ATE_API_POSTGRES_DDL_CONNECTION_STRING requires ATE_API_POSTGRES_CONNECTION_STRING" >&2
+    exit 1
+  fi
   # Distinguishes a DSN the operator supplied on this run from one
   # synthesized, defaulted, or adopted back from the Secret: only the former
   # outranks ATE_API_POSTGRES_POOL_MAX_CONNS below.
@@ -704,6 +723,10 @@ create_api_server_env_vars() {
         postgres_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
           -o jsonpath='{.data.ATE_API_POSTGRES_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
       fi
+      if [[ -z "${postgres_ddl_connection_string}" ]]; then
+        postgres_ddl_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
+          -o jsonpath='{.data.ATE_API_POSTGRES_DDL_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
+      fi
     fi
   fi
   if [[ -z "${postgres_connection_string}" ]]; then
@@ -730,7 +753,16 @@ create_api_server_env_vars() {
       fi
       postgres_connection_string="user=${cloudsql_gsa%.gserviceaccount.com} host=127.0.0.1 port=5432 dbname=atepg sslmode=disable"
     else
-      postgres_connection_string="$(default_postgres_connection_string)"
+      ensure_bundled_postgres_credentials
+      local runtime_password ddl_password
+      runtime_password="$(run_kubectl get secret -n ate-system postgres-role-passwords \
+        -o jsonpath='{.data.runtime-password}' | base64 --decode)"
+      ddl_password="$(run_kubectl get secret -n ate-system postgres-role-passwords \
+        -o jsonpath='{.data.ddl-password}' | base64 --decode)"
+      postgres_connection_string="$(default_postgres_connection_string ateapi_runtime "${runtime_password}")"
+      if [[ -z "${postgres_ddl_connection_string}" ]]; then
+        postgres_ddl_connection_string="$(default_postgres_connection_string ateapi_ddl "${ddl_password}")"
+      fi
     fi
   fi
   # Appends pgxpool sizing (pool_max_conns) to the DSN to prevent silent client
@@ -752,8 +784,16 @@ create_api_server_env_vars() {
     fi
   fi
 
+  # A separate DDL credential is optional for external databases so existing
+  # installs retain their single-role behavior.
+  if [[ -z "${postgres_ddl_connection_string}" ]]; then
+    postgres_ddl_connection_string="${postgres_connection_string}"
+  fi
+
   # Redact any password before logging (URI user:pw@host and keyword password=).
   echo "POSTGRES_CONNECTION_STRING: $(printf '%s' "${postgres_connection_string}" \
+    | sed -E 's#(://[^:/@]*):[^@]*@#\1:***@#; s/(password=)[^ &]*/\1***/g')"
+  echo "POSTGRES_DDL_CONNECTION_STRING: $(printf '%s' "${postgres_ddl_connection_string}" \
     | sed -E 's#(://[^:/@]*):[^@]*@#\1:***@#; s/(password=)[^ &]*/\1***/g')"
 
   # Empty unless Cloud SQL is configured; expanded below with the
@@ -787,6 +827,7 @@ create_api_server_env_vars() {
   fi
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     ${cm_args[@]+"${cm_args[@]}"} \
+    --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
@@ -796,7 +837,7 @@ create_api_server_env_vars() {
   # define the key.
   run_kubectl create secret generic -n ate-system ate-api-server-secret-envvars \
     --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
-    --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
+    --from-literal=ATE_API_POSTGRES_DDL_CONNECTION_STRING="${postgres_ddl_connection_string}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
@@ -1040,6 +1081,11 @@ deploy_ate_apiserver() {
   ensure_apiserver_prerequisites
   apply_otel_config
   apply_otel_endpoint_override
+
+  if use_bundled_postgres; then
+    apply_postgres
+    run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+  fi
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
   reconcile_cloudsql_proxy_sidecar

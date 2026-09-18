@@ -71,9 +71,10 @@ var (
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
-	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
-	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	authenticationConfigFile    = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
+	postgresConnectionString    = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
+	postgresDDLConnectionString = pflag.String("postgres-ddl-connection-string", "", "PostgreSQL DDL and maintenance connection string. Defaults to --postgres-connection-string.")
+	postgresSchema              = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
@@ -330,6 +331,7 @@ func loadFlagsFromEnv() {
 		env  string
 	}{
 		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
+		{postgresDDLConnectionString, "ATE_API_POSTGRES_DDL_CONNECTION_STRING"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 	}
 	for _, o := range overrides {
@@ -344,7 +346,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		slog.String("postgres-connection-string", *postgresConnectionString),
+		slog.Bool("postgres-connection-string-set", *postgresConnectionString != ""),
+		slog.Bool("postgres-ddl-connection-string-set", *postgresDDLConnectionString != ""),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
@@ -393,6 +396,11 @@ func connectStore(ctx context.Context) (store.Interface, error) {
 	if _, err := pgxpool.ParseConfig(*postgresConnectionString); err != nil {
 		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
 	}
+	if *postgresDDLConnectionString != "" {
+		if _, err := pgxpool.ParseConfig(*postgresDDLConnectionString); err != nil {
+			return nil, fmt.Errorf("parsing PostgreSQL DDL connection string: %w", err)
+		}
+	}
 	persistence, err := connectPostgresWithRetries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
@@ -408,7 +416,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresDDLConnectionString, *postgresSchema)
 		if err == nil {
 			return persistence, nil
 		}

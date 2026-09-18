@@ -15,11 +15,18 @@
 package steps
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
 func TestUseBundledPostgres(t *testing.T) {
@@ -42,6 +49,51 @@ func TestUseBundledPostgres(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPostgresConnectionStrings(t *testing.T) {
+	t.Run("external DDL defaults to runtime", func(t *testing.T) {
+		const dsn = "postgresql://runtime@db.example/atepg"
+		e := &Env{Cfg: &config.Config{PostgresConnectionString: dsn}}
+		runtimeDSN, ddlDSN, err := e.postgresConnectionStrings(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtimeDSN != dsn || ddlDSN != dsn {
+			t.Fatalf("connection strings = %q, %q; want %q twice", runtimeDSN, ddlDSN, dsn)
+		}
+	})
+
+	t.Run("bundled credentials are reused", func(t *testing.T) {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresRoles, Namespace: NamespaceAteSystem},
+			Data: map[string][]byte{
+				"runtime-password": []byte("runtime-secret"),
+				"ddl-password":     []byte("ddl-secret"),
+			},
+		}
+		e := &Env{
+			Cfg:  &config.Config{},
+			Kube: &kube.Client{Typed: fake.NewSimpleClientset(secret)},
+		}
+		runtimeDSN, ddlDSN, err := e.postgresConnectionStrings(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(runtimeDSN, "ateapi_runtime:runtime-secret") || !strings.Contains(ddlDSN, "ateapi_ddl:ddl-secret") || runtimeDSN == ddlDSN {
+			t.Fatalf("unexpected bundled connection strings: %q, %q", runtimeDSN, ddlDSN)
+		}
+		if !strings.Contains(runtimeDSN, "channel_binding=disable") || !strings.Contains(ddlDSN, "channel_binding=disable") {
+			t.Fatalf("bundled connection strings do not disable unsupported channel binding: %q, %q", runtimeDSN, ddlDSN)
+		}
+		runtimeAgain, ddlAgain, err := e.postgresConnectionStrings(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtimeAgain != runtimeDSN || ddlAgain != ddlDSN {
+			t.Fatal("bundled PostgreSQL credentials changed on the second read")
+		}
+	})
 }
 
 // The StatefulSet lives in a subdirectory that the bundle render does not
