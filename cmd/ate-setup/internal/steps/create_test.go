@@ -15,33 +15,83 @@
 package steps
 
 import (
+	"context"
 	"crypto/x509"
 	"maps"
 	"slices"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/internal/localca"
 )
 
-// ate-api-server resolves --postgres-connection-string=@env and
-// --postgres-schema=@env from this ConfigMap. These are the keys the shell
-// installer writes, and an empty value for either makes the apiserver exit
-// ("--postgres-connection-string is required", "PostgreSQL schema must not be
-// empty"), so both the key set and the values are pinned here.
-func TestBuildAPIServerEnvVars(t *testing.T) {
-	const dsn = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full"
+func TestBuildAPIServerSecretEnvVars(t *testing.T) {
+	const runtimeDSN = "postgresql://runtime@postgres:5432/atepg"
+	const ddlDSN = "postgresql://ddl@postgres:5432/atepg"
 
-	got := buildAPIServerEnvVars(dsn, "public")
+	got := buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN)
 
-	want := []string{"ATE_API_POSTGRES_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
+	want := []string{"ATE_API_POSTGRES_CONNECTION_STRING", "ATE_API_POSTGRES_DDL_CONNECTION_STRING"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Errorf("keys = %v, want %v", keys, want)
 	}
-	if got["ATE_API_POSTGRES_CONNECTION_STRING"] != dsn {
-		t.Errorf("ATE_API_POSTGRES_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_CONNECTION_STRING"], dsn)
+	if got["ATE_API_POSTGRES_CONNECTION_STRING"] != runtimeDSN {
+		t.Errorf("ATE_API_POSTGRES_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_CONNECTION_STRING"], runtimeDSN)
 	}
-	if got["ATE_API_POSTGRES_SCHEMA"] != "public" {
-		t.Errorf("ATE_API_POSTGRES_SCHEMA = %q, want %q", got["ATE_API_POSTGRES_SCHEMA"], "public")
+	if got["ATE_API_POSTGRES_DDL_CONNECTION_STRING"] != ddlDSN {
+		t.Errorf("ATE_API_POSTGRES_DDL_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_DDL_CONNECTION_STRING"], ddlDSN)
+	}
+}
+
+func TestAPIServerEnvHash(t *testing.T) {
+	configVars := map[string]string{"ATE_API_POSTGRES_SCHEMA": "substrate"}
+	secretVars := buildAPIServerSecretEnvVars("runtime", "ddl")
+
+	want := apiServerEnvHash(configVars, secretVars)
+	if got := apiServerEnvHash(configVars, secretVars); got != want {
+		t.Fatalf("stable inputs produced hashes %q and %q", want, got)
+	}
+	for name, values := range map[string][2]map[string]string{
+		"schema": {
+			{"ATE_API_POSTGRES_SCHEMA": "other"},
+			secretVars,
+		},
+		"connection string": {
+			configVars,
+			buildAPIServerSecretEnvVars("other", "ddl"),
+		},
+		"DDL connection string": {
+			configVars,
+			buildAPIServerSecretEnvVars("runtime", "other"),
+		},
+	} {
+		if got := apiServerEnvHash(values[0], values[1]); got == want {
+			t.Errorf("changing %s did not change the hash", name)
+		}
+	}
+}
+
+func TestAnnotateAPIServerEnvHash(t *testing.T) {
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name:      "ate-api-server",
+		Namespace: NamespaceAteSystem,
+	}}
+	e := &Env{Kube: &kube.Client{Typed: fake.NewSimpleClientset(deployment)}}
+
+	if err := e.annotateAPIServerEnvHash(context.Background(), "new-hash"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.Kube.Typed.AppsV1().Deployments(NamespaceAteSystem).Get(
+		context.Background(), "ate-api-server", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Template.Annotations[apiServerEnvHashKey] != "new-hash" {
+		t.Errorf("environment hash annotation = %q, want new-hash", got.Spec.Template.Annotations[apiServerEnvHashKey])
 	}
 }
 

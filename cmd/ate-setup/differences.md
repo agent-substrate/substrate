@@ -277,5 +277,5 @@ to the in-cluster database, leaving behind an orphaned proxy. Use
 
 The shell installer had no tests. `cmd/ate-setup` has unit tests for template
 rendering, overlay selection, config resolution, the authentication config, the
-apiserver environment ConfigMap, delegated script arguments, manifest deletion,
+apiserver environment ConfigMap and Secret, delegated script arguments, manifest deletion,
 per-demo rendering, and image reference rewriting.

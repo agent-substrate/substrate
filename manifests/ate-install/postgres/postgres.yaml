@@ -30,9 +30,10 @@ data:
     # health checks, the workload's idempotent database bootstrap, and the
     # tls-reloader sidecar's configuration reloads.
     local all all trust
-    # PostgreSQL verifies client certificates against the pod-identity CA. It
-    # does not need its own serving CA because it never verifies its server certificate.
-    hostssl all all all trust clientcert=verify-ca
+    # Only ateapi's two roles may connect over TCP. PostgreSQL requires both a
+    # password and a client certificate signed by the pod-identity CA.
+    hostssl atepg ateapi_runtime all scram-sha-256 clientcert=verify-ca
+    hostssl atepg ateapi_ddl all scram-sha-256 clientcert=verify-ca
   reload-tls.sh: |
     # PostgreSQL opens ssl_cert_file, ssl_key_file and ssl_ca_file at startup
     # and on SIGHUP, and nowhere else. The kubelet replaces the projected pod
@@ -57,7 +58,7 @@ data:
 
     reloaded=""
     while true; do
-      current="$(sha256sum "${CERT}" "${CA}")"
+      current="$(sha256sum "${CERT}" "${CA}" /etc/postgresql/pg_hba.conf)"
       # Reloading fails until the server is accepting connections, which is
       # where every pod starts out, so only record a hash once it has worked.
       # Starting empty also means a restart of this container costs one
@@ -158,6 +159,41 @@ spec:
                   "SELECT 1 FROM pg_database WHERE datname = 'atepg'" | grep -qx 1; then
                   createdb -U postgres atepg
                 fi
+                psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
+                  -v runtime_password="${ATEAPI_RUNTIME_PASSWORD}" \
+                  -v ddl_password="${ATEAPI_DDL_PASSWORD}" <<'SQL'
+                SET password_encryption = 'scram-sha-256';
+                SELECT 'CREATE ROLE ateapi_runtime LOGIN'
+                  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ateapi_runtime') \gexec
+                SELECT 'CREATE ROLE ateapi_ddl LOGIN'
+                  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ateapi_ddl') \gexec
+                ALTER ROLE ateapi_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD :'runtime_password';
+                ALTER ROLE ateapi_ddl NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD :'ddl_password';
+                REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE atepg FROM PUBLIC;
+                GRANT CONNECT ON DATABASE atepg TO ateapi_runtime, ateapi_ddl;
+                GRANT CREATE ON DATABASE atepg TO ateapi_ddl;
+                SQL
+                psql -v ON_ERROR_STOP=1 -U postgres -d atepg \
+                  -v substrate_schema="${ATEAPI_POSTGRES_SCHEMA}" <<'SQL'
+                SELECT format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', :'substrate_schema')
+                  WHERE EXISTS (SELECT FROM pg_namespace WHERE nspname = :'substrate_schema') \gexec
+                SELECT format('ALTER SCHEMA %I OWNER TO ateapi_ddl', :'substrate_schema')
+                  WHERE EXISTS (SELECT FROM pg_namespace WHERE nspname = :'substrate_schema') \gexec
+                SELECT format('ALTER TABLE %I.%I OWNER TO ateapi_ddl', n.nspname, c.relname)
+                  FROM pg_class c
+                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = :'substrate_schema'
+                    AND c.relkind IN ('r', 'p')
+                    AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = 'ateapi_ddl')
+                  \gexec
+                SELECT format('ALTER SEQUENCE %I.%I OWNER TO ateapi_ddl', n.nspname, c.relname)
+                  FROM pg_class c
+                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = :'substrate_schema'
+                    AND c.relkind = 'S'
+                    AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = 'ateapi_ddl')
+                  \gexec
+                SQL
         env:
         - name: POSTGRES_DB
           value: atepg
@@ -165,6 +201,21 @@ spec:
           value: trust
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata
+        - name: ATEAPI_RUNTIME_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-role-passwords
+              key: runtime-password
+        - name: ATEAPI_DDL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-role-passwords
+              key: ddl-password
+        - name: ATEAPI_POSTGRES_SCHEMA
+          valueFrom:
+            configMapKeyRef:
+              name: ate-api-server-envvars
+              key: ATE_API_POSTGRES_SCHEMA
         ports:
         - name: postgres
           containerPort: 5432

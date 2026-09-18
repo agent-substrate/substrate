@@ -234,6 +234,14 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
+	if e.useBundledPostgres() {
+		if err := e.applyBundledPostgres(ctx); err != nil {
+			return err
+		}
+		if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, NamespaceAteSystem, "postgres", e.Cfg.RolloutTimeout); err != nil {
+			return err
+		}
+	}
 	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err
 	}

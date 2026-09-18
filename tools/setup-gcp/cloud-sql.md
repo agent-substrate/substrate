@@ -148,10 +148,20 @@ Optional environment variables:
   password yourself (the install script rejects `false` without an explicit
   connection string — a synthesized passwordless DSN cannot log in once the
   proxy stops injecting IAM tokens).
+- `ATE_API_POSTGRES_DDL_CONNECTION_STRING` — a separate schema-owner DSN for
+  migrations and outbox partition maintenance. Setting it requires an explicit
+  `ATE_API_POSTGRES_CONNECTION_STRING`; otherwise it defaults to the runtime DSN.
+  Operators that provision separate database identities should give the
+  runtime role only `CONNECT` and let ateapi apply its table grants. The
+  DDL role must own the Substrate schema and its objects, plus `CREATE` on the
+  database when ateapi needs to create that schema. Use a schema dedicated to
+  Substrate when configuring separate identities: runtime grants cover all
+  tables and sequences in that schema.
 - `ATE_API_POSTGRES_SCHEMA` — the schema holding the store's tables
-  (default `public`). If using a custom schema, the one-time schema grant
-  in §2 (`GRANT USAGE, CREATE ON SCHEMA ...`) must target your custom schema
-  instead of `public`.
+  (default `public`). A dedicated schema such as `substrate` is recommended
+  when using separate runtime and DDL roles. If using a custom schema, the
+  one-time schema grant in §2 (`GRANT USAGE, CREATE ON SCHEMA ...`) must target
+  your custom schema instead of `public`.
 - `ATE_API_POSTGRES_POOL_MAX_CONNS` — pgxpool connections per ateapi replica
   (default: `max(4, NumCPU)`); appended as `pool_max_conns` to whichever DSN
   is in effect (synthesized, in-cluster default, or explicitly provided —
@@ -203,6 +213,7 @@ server CA and credentials yourself.)
 
 ```sh
 export ATE_API_POSTGRES_CONNECTION_STRING='postgresql://<user>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
+export ATE_API_POSTGRES_DDL_CONNECTION_STRING='postgresql://<schema-owner>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
 export ATE_API_POSTGRES_SERVER_CA_FILE=/path/to/server-ca.pem
 ./hack/install-ate.sh --deploy-ate-system
 ```

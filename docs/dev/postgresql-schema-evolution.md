@@ -57,6 +57,7 @@ Store migration files in `cmd/ateapi/internal/store/atepg/migrations`.
 - Do not add SQL transaction control statements.
 - Do not use `IF NOT EXISTS` for a schema change.
 - Keep each startup migration short.
+- Runtime DML privileges are granted to all tables and sequences after migrations. Add an explicit exception for any new DDL-only table, like the Goose migration ledger.
 
 Before the first stable v1 release, developers can change or squash migration files. Recreate a development database after its migration history changes.
 

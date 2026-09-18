@@ -16,12 +16,14 @@ package steps
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
@@ -37,8 +39,11 @@ const (
 	SecretServiceDNSCA     = "service-dns-ca-pool"
 	SecretPodIdentityCA    = "pod-identity-ca-pool"
 	SecretEgressMITMCAPool = "egress-mitm-ca-pool"
+	SecretAPIServerEnvVars = "ate-api-server-secret-envvars"
+	SecretPostgresRoles    = "postgres-role-passwords"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
+	apiServerEnvHashKey    = "ate.dev/env-hash"
 	// poolKeyID is the identifier given to the first CA and JWT key in a new
 	// pool, matching the --ca-id/--key-id the shell scripts passed.
 	poolKeyID = "1"
@@ -119,33 +124,59 @@ func (e *Env) CreateActorIDCACertsSecret(ctx context.Context) error {
 	})
 }
 
-// CreateAPIServerEnvVars writes the ConfigMap that tells ate-api-server how to
-// reach its PostgreSQL store. ate-api-server.yaml pulls it in via an optional
-// envFrom and resolves --postgres-connection-string=@env and
-// --postgres-schema=@env from it.
+// CreateAPIServerEnvVars writes the PostgreSQL schema to a ConfigMap and the
+// credential-bearing connection strings to a Secret.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
 	if err := e.Kube.EnsureNamespace(ctx, NamespaceAteSystem); err != nil {
 		return err
 	}
 
-	connString := e.Cfg.PostgresConnString()
-	log.Infof("POSTGRES_CONNECTION_STRING: %s", connString)
+	runtimeDSN, ddlDSN, err := e.postgresConnectionStrings(ctx)
+	if err != nil {
+		return err
+	}
+	log.Infof("POSTGRES_CONNECTION_STRING: configured")
+	log.Infof("POSTGRES_DDL_CONNECTION_STRING: configured")
 
-	return e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars,
-		buildAPIServerEnvVars(connString, e.Cfg.PostgresSchemaName()))
+	configVars := map[string]string{
+		"ATE_API_POSTGRES_SCHEMA": e.Cfg.PostgresSchemaName(),
+	}
+	secretVars := buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN)
+	if err := e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, configVars); err != nil {
+		return err
+	}
+	if err := e.Kube.ApplySecret(ctx, NamespaceAteSystem, SecretAPIServerEnvVars, secretVars); err != nil {
+		return err
+	}
+	return e.annotateAPIServerEnvHash(ctx, apiServerEnvHash(configVars, secretVars))
 }
 
-// buildAPIServerEnvVars is the ConfigMap payload. ate-api-server takes the
-// connection string and the schema from it, and exits on an empty schema; an
-// unrecognized key here reaches the container as a stray environment variable,
-// so the set stays exactly what the shell installer's
-// create_api_server_env_vars writes.
-func buildAPIServerEnvVars(connString, schema string) map[string]string {
+func buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN string) map[string]string {
 	return map[string]string{
-		"ATE_API_POSTGRES_CONNECTION_STRING": connString,
-		"ATE_API_POSTGRES_SCHEMA":            schema,
+		"ATE_API_POSTGRES_CONNECTION_STRING":     runtimeDSN,
+		"ATE_API_POSTGRES_DDL_CONNECTION_STRING": ddlDSN,
 	}
+}
+
+func apiServerEnvHash(configVars, secretVars map[string]string) string {
+	payload := configVars["ATE_API_POSTGRES_SCHEMA"] + "\x00" +
+		secretVars["ATE_API_POSTGRES_CONNECTION_STRING"] + "\x00" +
+		secretVars["ATE_API_POSTGRES_DDL_CONNECTION_STRING"]
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+}
+
+func (e *Env) annotateAPIServerEnvHash(ctx context.Context, hash string) error {
+	exists, err := e.Kube.DeploymentExists(ctx, NamespaceAteSystem, "ate-api-server")
+	if err != nil || !exists {
+		return err
+	}
+	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"%s":%q}}}}}`, apiServerEnvHashKey, hash)
+	if _, err := e.Kube.Typed.AppsV1().Deployments(NamespaceAteSystem).Patch(
+		ctx, "ate-api-server", types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("while annotating ate-api-server environment hash: %w", err)
+	}
+	return nil
 }
 
 // CreateAPIAuthenticationConfig writes the default ate-api-server
