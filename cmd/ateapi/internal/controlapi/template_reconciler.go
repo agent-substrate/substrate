@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -174,7 +175,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		return 0, fmt.Errorf("while acquiring lease: %w", err)
 	}
 	defer lease.Close()
-	ctx = lease.Context()
+	ctx = authz.WithBypass(lease.Context())
 
 	tmpl, err := r.persistence.GetActorTemplate(ctx, ref)
 	if err != nil {

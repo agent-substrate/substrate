@@ -255,6 +255,11 @@ func (p *Persistence) Close() {
 	}
 }
 
+// Pool returns the underlying PostgreSQL connection pool.
+func (p *Persistence) Pool() *pgxpool.Pool {
+	return p.pool
+}
+
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
 // run either directly against the pool or inside an in-flight transaction.
 type querier interface {

@@ -54,9 +54,57 @@ type RPCService struct {
 	actorIdentityJWTIssuer string
 	actorIDJWTPool         localjwtauthority.Pool
 	actorIDCAPool          localca.Pool
+	authorizer             Authorizer
 }
 
 var _ ateapipb.ControlServer = (*RPCService)(nil)
+
+// Authorizer defines the runtime authorization interface for control-plane RPCs.
+type Authorizer interface {
+	CheckPermission(ctx context.Context, relation, object string) error
+	ListAccessibleAtespaces(ctx context.Context) (all bool, allowedObjects map[string]bool, err error)
+	EnsureParentGlobal(ctx context.Context, name string) error
+	OnCreateAtespace(ctx context.Context, name string) error
+	OnDeleteAtespace(ctx context.Context, name string) error
+}
+
+// Option configures an RPCService instance.
+type Option func(*RPCService)
+
+// WithAuthorizer enables runtime authorization checks using the provided Authorizer.
+func WithAuthorizer(a Authorizer) Option {
+	return func(s *RPCService) {
+		s.authorizer = a
+	}
+}
+
+func (s *RPCService) authorize(ctx context.Context, relation, object string) error {
+	if s.authorizer == nil {
+		return nil
+	}
+	return s.authorizer.CheckPermission(ctx, relation, object)
+}
+
+func (s *RPCService) ensureParentGlobal(ctx context.Context, name string) error {
+	if s.authorizer == nil {
+		return nil
+	}
+	return s.authorizer.EnsureParentGlobal(ctx, name)
+}
+
+func (s *RPCService) onCreateAtespace(ctx context.Context, name string) error {
+	if s.authorizer == nil {
+		return nil
+	}
+	return s.authorizer.OnCreateAtespace(ctx, name)
+}
+
+func (s *RPCService) onDeleteAtespace(ctx context.Context, name string) error {
+	if s.authorizer == nil {
+		return nil
+	}
+	return s.authorizer.OnDeleteAtespace(ctx, name)
+}
 
 // VolumePluginRegistry defines the interface for dynamic CSI plugin resolution.
 type VolumePluginRegistry interface {
@@ -85,6 +133,7 @@ func NewRPCService(
 	actorIdentityJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	actorIDCAPool localca.Pool,
+	opts ...Option,
 ) *RPCService {
 	impl := newServiceImpl(persistence, storageClassLister)
 	s := &RPCService{
@@ -100,6 +149,9 @@ func NewRPCService(
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPool:         actorIDJWTPool,
 		actorIDCAPool:          actorIDCAPool,
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
 	s.workerWorkflow = NewWorkerWorkflow(impl)

@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,8 +43,29 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 		return nil, toGRPCStatusError(errs)
 	}
 
+	if err := s.authorize(ctx, authz.RelationCanCreateAtespace, authz.GlobalRootObject); err != nil {
+		return nil, err
+	}
+
 	// Handle the creation, including validation of the final stored object.
-	return s.impl.CreateAtespace(ctx, inAtespace)
+	stored, err := s.impl.CreateAtespace(ctx, inAtespace)
+	if err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			// Ensure parent_global tuple exists without deleting any existing tuples on the live atespace.
+			_ = s.ensureParentGlobal(ctx, inAtespace.GetMetadata().GetName())
+		}
+		return nil, err
+	}
+
+	// TODO: Consider a Postgres transactional outbox pattern to atomically coordinate
+	// storage mutations and OpenFGA tuple writes across the two calls.
+	if err := s.onCreateAtespace(ctx, stored.GetMetadata().GetName()); err != nil {
+		// Roll back DB creation so no wedged/orphaned atespace remains without authorization tuples.
+		_, _ = s.impl.DeleteAtespace(ctx, stored.GetMetadata().GetName())
+		return nil, status.Errorf(codes.Internal, "failed to record authorization tuples for atespace %s: %v", stored.GetMetadata().GetName(), err)
+	}
+
+	return stored, nil
 }
 
 func (s *ServiceImpl) CreateAtespace(ctx context.Context, inAtespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
@@ -72,7 +94,16 @@ func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceR
 		return nil, toGRPCStatusError(errs)
 	}
 
-	return s.impl.GetAtespace(ctx, req.Atespace.Name)
+	if err := s.authorize(ctx, authz.RelationCanGet, authz.AtespaceObject(req.Atespace.Name)); err != nil {
+		return nil, err
+	}
+
+	res, err := s.impl.GetAtespace(ctx, req.Atespace.Name)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.ensureParentGlobal(ctx, req.Atespace.Name)
+	return res, nil
 }
 
 func (s *ServiceImpl) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
@@ -97,13 +128,50 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: req.PageSize, PageToken: req.PageToken})
-	if err != nil {
-		return nil, err
+	var (
+		all            = true
+		allowedObjects map[string]bool
+	)
+	if s.authorizer != nil {
+		var err error
+		all, allowedObjects, err = s.authorizer.ListAccessibleAtespaces(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if all {
+		page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: req.PageSize, PageToken: req.PageToken})
+		if err != nil {
+			return nil, err
+		}
+		return &ateapipb.ListAtespacesResponse{
+			Atespaces:     page.Items,
+			NextPageToken: page.NextPageToken,
+		}, nil
+	}
+
+	targetSize := int(effectivePageSize(req.PageSize))
+	var filtered []*ateapipb.Atespace
+	currToken := req.PageToken
+	for {
+		page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: req.PageSize, PageToken: currToken})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.Items {
+			if allowedObjects[authz.AtespaceObject(item.GetMetadata().GetName())] {
+				filtered = append(filtered, item)
+			}
+		}
+		currToken = page.NextPageToken
+		if len(filtered) >= targetSize || currToken == "" {
+			break
+		}
 	}
 	return &ateapipb.ListAtespacesResponse{
-		Atespaces:     page.Items,
-		NextPageToken: page.NextPageToken,
+		Atespaces:     filtered,
+		NextPageToken: currToken,
 	}, nil
 }
 
@@ -127,7 +195,27 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAte
 		return nil, toGRPCStatusError(errs)
 	}
 
-	return s.impl.DeleteAtespace(ctx, req.Atespace.Name)
+	if err := s.authorize(ctx, authz.RelationCanDelete, authz.AtespaceObject(req.Atespace.Name)); err != nil {
+		return nil, err
+	}
+
+	deleted, err := s.impl.DeleteAtespace(ctx, req.Atespace.Name)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			if delErr := s.onDeleteAtespace(ctx, req.Atespace.Name); delErr != nil {
+				return nil, status.Errorf(codes.Internal, "failed to delete authorization tuples for atespace %s: %v", req.Atespace.Name, delErr)
+			}
+		}
+		return nil, err
+	}
+
+	// TODO: Consider a Postgres transactional outbox pattern to atomically coordinate
+	// storage deletions and OpenFGA tuple cleanup across the two calls.
+	if err := s.onDeleteAtespace(ctx, req.Atespace.Name); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete authorization tuples for atespace %s: %v", req.Atespace.Name, err)
+	}
+
+	return deleted, nil
 }
 
 func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {

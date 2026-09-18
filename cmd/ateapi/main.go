@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -59,6 +60,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"strings"
 )
 
 // maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
@@ -74,6 +76,8 @@ var (
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	enableAuthz              = pflag.Bool("enable-authz", false, "Enable OpenFGA authorization checks.")
+	authzBootstrapOwners     = pflag.String("authz-bootstrap-owners", "", "Comma-separated list of principal IDs to bootstrap as global owners in OpenFGA.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
@@ -149,6 +153,21 @@ func main() {
 		defer closer.Close()
 	}
 
+	var authzSrv *authz.Server
+	if poolProvider, ok := persistence.(interface{ Pool() *pgxpool.Pool }); ok {
+		var err error
+		authzSrv, err = authz.NewServer(shutdownCtx, poolProvider.Pool())
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
+		}
+		defer authzSrv.Close()
+		if *authzBootstrapOwners != "" {
+			if err := authzSrv.BootstrapGlobalOwners(shutdownCtx, strings.Split(*authzBootstrapOwners, ",")); err != nil {
+				serverboot.Fatal(ctx, "Failed to bootstrap OpenFGA global owners", err)
+			}
+		}
+	}
+
 	clientset, ateClient, err := newKubeClients()
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
@@ -216,6 +235,11 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
+	var rpcOpts []controlapi.Option
+	if *enableAuthz && authzSrv != nil {
+		rpcOpts = append(rpcOpts, controlapi.WithAuthorizer(authzSrv))
+	}
+
 	controlSrv := controlapi.NewRPCService(
 		persistence,
 		workerCache,
@@ -230,6 +254,7 @@ func main() {
 		actorIdentityJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
+		rpcOpts...,
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
@@ -328,6 +353,12 @@ func loadFlagsFromEnv() {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
+	if v := os.Getenv("ATE_API_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("enable-authz") {
+		*enableAuthz = (v == "true" || v == "1")
+	}
+	if v := os.Getenv("ATE_API_AUTHZ_BOOTSTRAP_OWNERS"); v != "" && !pflag.CommandLine.Changed("authz-bootstrap-owners") {
+		*authzBootstrapOwners = v
+	}
 }
 
 func logFlagValues(ctx context.Context) {
@@ -337,6 +368,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("postgres-connection-string", *postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Bool("enable-authz", *enableAuthz),
+		slog.String("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
