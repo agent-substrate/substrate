@@ -83,6 +83,12 @@ func TestGatewayCertificateMetadataTransport(t *testing.T) {
 			t.Skip("chain transport proof is scoped to the Envoy egress implementation")
 		}
 		result := probe.connectAs(t, ctx, destination, "/run/actor-identity-live-chain/credential-bundle.pem", "")
+		if os.Getenv("E2E_EGRESS_CERTIFICATE_LEAF_ONLY") == "1" {
+			if result.Stage != stageConnect || result.ConnectStatus != http.StatusForbidden {
+				t.Fatalf("leaf-only chain credential: got stage %q status %d: %s", result.Stage, result.ConnectStatus, result.Error)
+			}
+			return
+		}
 		if result.Stage != "" || result.ConnectStatus != http.StatusOK {
 			t.Fatalf("chain credential: got stage %q status %d: %s", result.Stage, result.ConnectStatus, result.Error)
 		}
