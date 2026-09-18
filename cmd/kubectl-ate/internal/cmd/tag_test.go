@@ -84,3 +84,12 @@ func TestUpdateTagScope(t *testing.T) {
 		t.Errorf("returned tag mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestParseTagScope(t *testing.T) {
+	if got, err := parseTagScope("published"); err != nil || got != ateapipb.TagScope_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("parseTagScope(published) = (%v, %v)", got, err)
+	}
+	if _, err := parseTagScope("global"); err == nil {
+		t.Fatal("parseTagScope(global) succeeded")
+	}
+}

@@ -26,11 +26,86 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
 )
+
+func TestActorCommandArgs(t *testing.T) {
+	runCommandArgsTests(t, []commandArgsTest{
+		{name: "list", command: getActorsCmd},
+		{name: "get", command: getActorsCmd, args: []string{"actor-1"}},
+		{name: "get multiple", command: getActorsCmd, args: []string{"actor-1", "actor-2"}},
+	})
+}
+
+func TestBuildCreateActorRequest(t *testing.T) {
+	tests := []struct {
+		name        string
+		templateRef string
+		tag         string
+		want        *ateapipb.Actor
+		wantErr     bool
+	}{
+		{
+			name:        "bare template name defaults to the actor's atespace",
+			templateRef: "counter",
+			want: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
+			},
+		},
+		{
+			name:        "bare tag name defaults to the actor's atespace",
+			templateRef: "counter",
+			tag:         "before-upgrade",
+			want: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "demo", Name: "before-upgrade"},
+			},
+		},
+		{
+			name:        "qualified tag in a different atespace",
+			templateRef: "counter",
+			tag:         "other-atespace/before-upgrade",
+			want: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "other-atespace", Name: "before-upgrade"},
+			},
+		},
+		{
+			name:        "qualified template in a different atespace",
+			templateRef: "shared-templates/counter",
+			want: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "shared-templates", Name: "counter"},
+			},
+		},
+		{name: "malformed template ref", templateRef: "a/b/c", wantErr: true},
+		{name: "malformed tag", templateRef: "counter", tag: "a/b/c", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("buildCreateActorRequest error = %v, wantErr %t", err, test.wantErr)
+			}
+			if test.wantErr {
+				return
+			}
+			want := &ateapipb.CreateActorRequest{Actor: test.want}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("request mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
 
 func TestFilterAndDisplayLogLine(t *testing.T) {
 	tests := []struct {
