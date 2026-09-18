@@ -63,6 +63,9 @@ _FLAGS = {
     "--mem-churn": str,
     "--mem-read": str,
     "--max-pings-per-wake": int,
+    "--sweperf-template": str,
+    "--sweperf-total-steps": int,
+    "--sweperf-num-cycles": int,
 }
 
 
@@ -143,6 +146,7 @@ def init_boomer_config() -> None:
     from common.memload_config import add_memload_arguments
     from common.ping_config import add_ping_arguments
     from common.resume_mode import add_resume_mode_arguments
+    from common.sweperf_config import add_sweperf_arguments
     from common.trace import init_tracing
     from common.wait_time import init_wait_time
 
