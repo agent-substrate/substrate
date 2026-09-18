@@ -46,7 +46,8 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 
 # Keep in sync with the rustfs-bucket-init Job in
 # manifests/ate-install/kind/rustfs.yaml, which creates the bucket we upload into.
-AWS_CLI_IMAGE="amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73"
+# 2.17's botocore rejected a bracketed IPv6 endpoint, which is all this script can build.
+AWS_CLI_IMAGE="amazon/aws-cli:2.31.0@sha256:3b018ce74732c98acf6f1de59b3a89587cb7f9eb6ea0d1447d1779091b2bf057"
 
 ASSETS=(cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml)
 
@@ -76,7 +77,12 @@ if [[ -z "${NODE}" ]]; then
   echo "error: no nodes found for kind cluster '${KIND_CLUSTER_NAME}'" >&2
   exit 1
 fi
-ENDPOINT="http://$(run_kubectl get svc rustfs -o jsonpath='{.spec.clusterIP}'):9000"
+RUSTFS_IP="$(run_kubectl get svc rustfs -o jsonpath='{.spec.clusterIP}')"
+# A v6 ClusterIP needs brackets to be a URL.
+if [[ "${RUSTFS_IP}" == *:* ]]; then
+  RUSTFS_IP="[${RUSTFS_IP}]"
+fi
+ENDPOINT="http://${RUSTFS_IP}:9000"
 
 echo ">> Uploading assets to s3://${BUCKET}/kata-assets/ via ${ENDPOINT} (netns of ${NODE})..."
 aws_cli() {
