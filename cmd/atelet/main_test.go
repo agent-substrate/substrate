@@ -227,7 +227,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
-			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+			ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
 				SnapshotUri: testSnapshotURI,
 			},
 		},
@@ -395,11 +395,61 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.GoldenSnapshotUri = goldenSnapshotURI
 		}), true},
+		{"data-on-golden with base config only", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
+		}), false},
+		// A transitional caller sets base_config and the superseded
+		// golden_snapshot_uri together; they must name one snapshot.
+		{"data-on-golden with agreeing base config and golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
+			r.GoldenSnapshotUri = goldenSnapshotURI
+		}), false},
+		{"base config and golden uri disagree", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
+			r.GoldenSnapshotUri = testSnapshotURI
+		}), true},
+		{"data-on-golden with bucketless base config", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: "relative/path"}
+		}), true},
+		{"base config with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
+		}), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := validateRestoreRequest(tc.req); (err != nil) != tc.wantErr {
 				t.Errorf("validateRestoreRequest err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestRestoreBaseConfig pins the dual-read precedence during the
+// golden_snapshot_uri -> base_config transition: base_config wins when it
+// names a snapshot, the legacy field covers callers that predate it, and a
+// request with neither yields nil (safe through proto getters).
+func TestRestoreBaseConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		base    *ateletpb.ExternalRestoreConfiguration
+		legacy  string
+		wantURI string
+	}{
+		{"neither set", nil, "", ""},
+		{"base config only", &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}, "", goldenSnapshotURI},
+		{"legacy only", nil, goldenSnapshotURI, goldenSnapshotURI},
+		{"base config preferred over legacy", &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}, testSnapshotURI, goldenSnapshotURI},
+		{"empty base config falls back to legacy", &ateletpb.ExternalRestoreConfiguration{}, goldenSnapshotURI, goldenSnapshotURI},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &ateletpb.RestoreRequest{BaseConfig: tc.base, GoldenSnapshotUri: tc.legacy}
+			if got := restoreBaseConfig(req).GetSnapshotUri(); got != tc.wantURI {
+				t.Errorf("restoreBaseConfig().GetSnapshotUri() = %q, want %q", got, tc.wantURI)
 			}
 		})
 	}
