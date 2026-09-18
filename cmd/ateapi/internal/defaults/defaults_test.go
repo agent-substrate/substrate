@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package controlapi
+package defaults
 
 import (
 	"testing"
@@ -23,17 +23,19 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-func TestDefaultActorTemplate(t *testing.T) {
+func TestApply(t *testing.T) {
 	const (
 		scopeFull = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 		scopeData = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 	)
 	tests := []struct {
 		name string
-		in   *ateapipb.ActorTemplate
-		want *ateapipb.ActorTemplate
+		in   proto.Message
+		want proto.Message
 	}{{
-		name: "nil template is tolerated",
+		name: "nil actor template is tolerated",
+		in:   (*ateapipb.ActorTemplate)(nil),
+		want: (*ateapipb.ActorTemplate)(nil),
 	}, {
 		name: "missing snapshots_config is left for validation",
 		in:   &ateapipb.ActorTemplate{},
@@ -78,7 +80,7 @@ func TestDefaultActorTemplate(t *testing.T) {
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
 			{Name: "main", Readyz: &ateapipb.ContainerReadyz{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/readyz"},
+				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/"},
 				TimeoutSeconds: 30,
 			}},
 		}},
@@ -112,22 +114,42 @@ func TestDefaultActorTemplate(t *testing.T) {
 			{Name: "c", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 3}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 1, Path: "/readyz"}, TimeoutSeconds: 30}},
+			{Name: "a", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
 			{Name: "b"},
-			{Name: "c", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 3, Path: "/readyz"}, TimeoutSeconds: 30}},
+			{Name: "c", Readyz: &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
 		}},
+	}, {
+		name: "actor has no defaults",
+		in:   &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}},
+		want: &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}},
+	}, {
+		name: "atespace has no defaults",
+		in:   &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
+		want: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
+	}, {
+		name: "egress policy has no defaults",
+		in:   &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}},
+		want: &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}},
+	}, {
+		name: "tag has no defaults",
+		in:   &ateapipb.Tag{Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED},
+		want: &ateapipb.Tag{Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED},
+	}, {
+		name: "worker has no defaults",
+		in:   &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}},
+		want: &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := proto.CloneOf(tt.in)
-			defaultActorTemplate(got)
+			got := proto.Clone(tt.in)
+			Apply(got)
 			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
-				t.Fatalf("defaultActorTemplate mismatch (-want +got):\n%s", diff)
+				t.Fatalf("Apply mismatch (-want +got):\n%s", diff)
 			}
-			again := proto.CloneOf(got)
-			defaultActorTemplate(again)
+			again := proto.Clone(got)
+			Apply(again)
 			if diff := cmp.Diff(got, again, protocmp.Transform()); diff != "" {
-				t.Errorf("defaultActorTemplate is not idempotent (-once +twice):\n%s", diff)
+				t.Errorf("Apply is not idempotent (-once +twice):\n%s", diff)
 			}
 		})
 	}

@@ -12,25 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package controlapi
+// Package defaults applies each resource's field defaults in place. It is
+// its own package, separate from validation, so that both the RPC handlers
+// and the store layer (which needs to backfill defaults on read, without
+// depending on the RPC handlers) can call it.
+package defaults
 
 import (
+	"fmt"
+
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
-// defaultActorTemplate applies the ActorTemplate defaults in place.
-func defaultActorTemplate(t *ateapipb.ActorTemplate) {
-	if t == nil {
-		return
-	}
-	defaultSnapshotsConfig(t.SnapshotsConfig)
-	for _, c := range t.Containers {
-		defaultContainer(c)
+// Apply set default values to Substrate resource proto messages.
+func Apply(m proto.Message) {
+	switch v := m.(type) {
+	case *ateapipb.Actor:
+		applyActorDefaults(v)
+	case *ateapipb.ActorTemplate:
+		applyActorTemplateDefaults(v)
+	case *ateapipb.Atespace:
+		applyAtespaceDefaults(v)
+	case *ateapipb.EgressPolicy:
+		applyEgressPolicyDefaults(v)
+	case *ateapipb.Tag:
+		applyTagDefaults(v)
+	case *ateapipb.Worker:
+		applyWorkerDefaults(v)
+	default:
+		panic(fmt.Sprintf("unknown resource message %T", m))
 	}
 }
 
-// defaultSnapshotsConfig fills the snapshot scopes and the resume policy.
-func defaultSnapshotsConfig(sc *ateapipb.SnapshotsConfig) {
+func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
+	if t == nil {
+		return
+	}
+	applySnapshotsConfigDefaults(t.SnapshotsConfig)
+	for _, c := range t.Containers {
+		applyContainerDefaults(c)
+	}
+}
+
+func applySnapshotsConfigDefaults(sc *ateapipb.SnapshotsConfig) {
 	if sc == nil {
 		return
 	}
@@ -48,12 +73,10 @@ func defaultSnapshotsConfig(sc *ateapipb.SnapshotsConfig) {
 	}
 }
 
-// defaultContainer fills the readiness probe's deadline and path. An absent
-// probe means no readiness gate, so nothing is created for it.
-func defaultContainer(c *ateapipb.Container) {
+func applyContainerDefaults(c *ateapipb.Container) {
 	const (
 		defaultReadyzTimeoutSeconds int32 = 30
-		defaultReadyzPath                 = "/readyz"
+		defaultReadyzPath                 = "/"
 	)
 	if c == nil || c.Readyz == nil {
 		return
@@ -66,24 +89,12 @@ func defaultContainer(c *ateapipb.Container) {
 	}
 }
 
-// defaultActor applies the Actor defaults in place. An Actor has none: its
-// optional fields (worker_selector, source_tag) mean something by being
-// absent.
-func defaultActor(*ateapipb.Actor) {}
+func applyActorDefaults(*ateapipb.Actor) {}
 
-// defaultAtespace applies the Atespace defaults in place. An Atespace has
-// none; it is metadata only.
-func defaultAtespace(*ateapipb.Atespace) {}
+func applyAtespaceDefaults(*ateapipb.Atespace) {}
 
-// defaultEgressPolicy applies the EgressPolicy defaults in place. A policy
-// has none: an empty rule list means deny all, and an unset header prefix
-// already is the empty string.
-func defaultEgressPolicy(*ateapipb.EgressPolicy) {}
+func applyEgressPolicyDefaults(*ateapipb.EgressPolicy) {}
 
-// defaultTag applies the Tag defaults in place. A Tag has none: scope and
-// source_actor are required.
-func defaultTag(*ateapipb.Tag) {}
+func applyTagDefaults(*ateapipb.Tag) {}
 
-// defaultWorker applies the Worker defaults in place. A Worker has none:
-// sandbox_class and labels mirror the WorkerPool as they are.
-func defaultWorker(*ateapipb.Worker) {}
+func applyWorkerDefaults(*ateapipb.Worker) {}

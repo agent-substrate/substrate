@@ -26,6 +26,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -50,7 +51,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	if inActor != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inActor.Metadata)
 		inActor.Status = nil
-		defaultActor(inActor)
+		defaults.Apply(inActor)
 	}
 
 	// Validate the request, including the object within it.
@@ -278,7 +279,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 		// Restore status and metadata from the server.
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
-		defaultActor(toUpdate)
+		defaults.Apply(toUpdate)
 		return nil
 	})
 	if err != nil {

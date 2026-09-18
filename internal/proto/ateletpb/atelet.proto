@@ -303,13 +303,12 @@ message EnvEntry {
 message Readyz {
   HTTPGetAction http_get = 1;
   // How long to keep polling before giving up and failing the actor start.
-  // Zero means the ateom's default.
   int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
 message HTTPGetAction {
-  // Path to access on the HTTP server. Empty means "/readyz".
+  // Path to access on the HTTP server.
   string path = 1;
   // TCP port to connect to (1..65535).
   int32 port = 2;
