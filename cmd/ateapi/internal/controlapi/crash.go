@@ -94,9 +94,11 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 
-		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept for
-		// debugging; failed workflow steps must never promote either of them to an
-		// ActorSnapshot or to LocalSnapshotInfo.
+		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
+		// later DeleteActor or RevertActor can collect what they name: each is
+		// the only pointer to it, so clearing them here would leak the objects
+		// for good; failed workflow steps must never promote either of them to an
+		// ExternalSnapshot or to LocalSnapshotInfo.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})
