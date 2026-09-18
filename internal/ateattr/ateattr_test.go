@@ -752,7 +752,7 @@ func TestFailureReason(t *testing.T) {
 		},
 		{
 			name: "gRPC status carrying the reason as an ErrorInfo detail",
-			err:  ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, nil, errors.New("no space left on device")),
+			err:  ateerrors.ReasonAsGRPCError(context.Background(), fmt.Errorf("%w: no space left on device", ateerrors.ReasonTerminalFileSystemError)),
 			want: string(ateerrors.ReasonTerminalFileSystemError),
 		},
 		{

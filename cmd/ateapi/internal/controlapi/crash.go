@@ -23,42 +23,37 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// maybeCrashActor inspects err returned by an atelet RPC and crashes the actor
-// if err carries the actorCrashed=true metadata directive.
-func maybeCrashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, err error, wrapMsg, opName string) error {
+// crashActorOnError crashes the actor if the atelet RPC returned any error.
+func crashActorOnError(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, err error, opName string) error {
 	if err == nil {
 		return nil
 	}
 
-	if ateerrors.ActorCrashRequested(err) {
-		// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. Normalized
-		// here rather than in crashActor alone, so the log and the counter cannot
-		// report a different reason for the same crash.
-		reason := ateattr.FailureReason(err)
+	// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. Normalized
+	// here rather than in crashActor alone, so the log and the counter cannot
+	// report a different reason for the same crash.
+	reason := ateattr.FailureReason(err)
 
-		// Only the ref is knowable here; crashActor logs the authoritative record.
-		attrs := ateattr.ActorRefLogAttrs(actorRef)
-		attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
-		attrs = append(attrs,
-			slog.String(string(ateattr.ErrorTypeKey), status.Code(err).String()),
-			slog.Any("err", err),
-		)
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error", attrs...)
+	// Only the ref is knowable here; crashActor logs the authoritative record.
+	attrs := ateattr.ActorRefLogAttrs(actorRef)
+	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
+	attrs = append(attrs,
+		slog.String(string(ateattr.ErrorTypeKey), status.Code(err).String()),
+		slog.Any("err", err),
+	)
+	slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error", attrs...)
 
-		if cerr := crashActor(ctx, st, actorRef, opName, reason); cerr != nil {
-			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("err", cerr))
-			return cerr
-		}
-		return status.Errorf(codes.DataLoss, "actor %s crashed", actorRef)
+	if cerr := crashActor(ctx, st, actorRef, opName, reason); cerr != nil {
+		slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("err", cerr))
+		return cerr
 	}
-	return fmt.Errorf("%s: %w", wrapMsg, err)
+	return status.Errorf(codes.DataLoss, "actor %s crashed", actorRef)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
