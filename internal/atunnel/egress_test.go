@@ -247,7 +247,7 @@ func TestEgressEndToEnd(t *testing.T) {
 			t.Errorf("gateway connection has type %T, want *tls.Conn", conn)
 		} else {
 			peer := tlsConn.ConnectionState().PeerCertificates[0]
-			if len(peer.URIs) != 1 || peer.URIs[0].String() != "spiffe://substrate-actor.local/atespace/team/actor/actor" {
+			if len(peer.URIs) != 1 || peer.URIs[0].String() != "spiffe://substrate-actor.local/ateom/actor/team/actor" {
 				t.Errorf("client identity = %v, want actor SPIFFE ID", peer.URIs)
 			}
 		}

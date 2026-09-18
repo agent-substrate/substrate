@@ -31,8 +31,7 @@ import (
 
 type ateomSupportServer struct {
 	ateletpb.UnimplementedAteomSupportServer
-	controlClient ateapipb.ControlClient
-	workers       ateapipb.WorkerServiceClient
+	workers ateapipb.WorkerServiceClient
 }
 
 func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -46,14 +45,13 @@ func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *atel
 	// requested actor?  ate-api-server will further check that we (the atelet)
 	// are allowed to request a certificate for the actor.
 
-	resp, err := b.controlClient.MintActorCertificate(ctx, &ateapipb.MintActorCertificateRequest{
+	resp, err := b.workers.MintAteomActorCertificate(ctx, &ateapipb.MintAteomActorCertificateRequest{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
 		},
 		ActorUid:                  req.GetActorUid(),
 		CertificateSigningRequest: req.GetCertificateSigningRequest(),
-		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mint actor certificate: %w", err)

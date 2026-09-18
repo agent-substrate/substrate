@@ -88,8 +88,10 @@ func workerCertificate(t *testing.T, podUID, nodeName string) *x509.Certificate 
 type fakeWorkerService struct {
 	ateapipb.WorkerServiceClient
 
-	got []*ateapipb.SetWorkerCapacityRequest
-	err error
+	got      []*ateapipb.SetWorkerCapacityRequest
+	mintGot  []*ateapipb.MintAteomActorCertificateRequest
+	mintResp *ateapipb.MintAteomActorCertificateResponse
+	err      error
 }
 
 func (s *fakeWorkerService) SetWorkerCapacity(_ context.Context, in *ateapipb.SetWorkerCapacityRequest, _ ...grpc.CallOption) (*ateapipb.SetWorkerCapacityResponse, error) {
@@ -98,6 +100,17 @@ func (s *fakeWorkerService) SetWorkerCapacity(_ context.Context, in *ateapipb.Se
 	}
 	s.got = append(s.got, in)
 	return &ateapipb.SetWorkerCapacityResponse{}, nil
+}
+
+func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ateapipb.MintAteomActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.mintGot = append(s.mintGot, in)
+	if s.mintResp != nil {
+		return s.mintResp, nil
+	}
+	return &ateapipb.MintAteomActorCertificateResponse{}, nil
 }
 
 func TestSetWorkerCapacityRecordsWhatTheWorkerSays(t *testing.T) {
@@ -165,5 +178,59 @@ func TestSetWorkerCapacitySurfacesRejection(t *testing.T) {
 	ctx := workerContext(t, "pod-a")
 	if _, err := svc.SetWorkerCapacity(ctx, &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}}); err == nil {
 		t.Error("a rejected report returned success, so the worker would not retry")
+	}
+}
+
+func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
+	wantCerts := [][]byte{[]byte("cert-der-bytes")}
+	workers := &fakeWorkerService{
+		mintResp: &ateapipb.MintAteomActorCertificateResponse{
+			ActorCertificates: wantCerts,
+		},
+	}
+	svc := &ateomSupportServer{workers: workers}
+
+	ctx := workerContext(t, "pod-a")
+	resp, err := svc.MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{
+		ActorAtespace:             "team-a",
+		ActorName:                 "actor-1",
+		ActorUid:                  "actor-uid-1",
+		CertificateSigningRequest: []byte("csr-bytes"),
+	})
+	if err != nil {
+		t.Fatalf("MintActorCertificate() failed: %v", err)
+	}
+
+	want := []*ateapipb.MintAteomActorCertificateRequest{{
+		Actor: &ateapipb.ObjectRef{
+			Atespace: "team-a",
+			Name:     "actor-1",
+		},
+		ActorUid:                  "actor-uid-1",
+		CertificateSigningRequest: []byte("csr-bytes"),
+	}}
+	if diff := cmp.Diff(want, workers.mintGot, protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded mint request mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantCerts, resp.GetActorCertificates()); diff != "" {
+		t.Errorf("returned certificates mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestMintActorCertificateRequiresCertificate(t *testing.T) {
+	workers := &fakeWorkerService{}
+	svc := &ateomSupportServer{workers: workers}
+
+	_, err := svc.MintActorCertificate(context.Background(), &ateletpb.MintActorCertificateRequest{
+		ActorAtespace:             "team-a",
+		ActorName:                 "actor-1",
+		ActorUid:                  "actor-uid-1",
+		CertificateSigningRequest: []byte("csr-bytes"),
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("unauthenticated request returned %v, want Unauthenticated", err)
+	}
+	if len(workers.mintGot) != 0 {
+		t.Errorf("unauthenticated request still forwarded %v", workers.mintGot)
 	}
 }
