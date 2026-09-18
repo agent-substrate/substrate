@@ -19,6 +19,8 @@ __pycache__/
 
 # Developers can store local stuff in dirs named __something
 __*
+!**/__init__.py
+!**/__main__.py
 
 # OS artifacts
 .DS_Store
