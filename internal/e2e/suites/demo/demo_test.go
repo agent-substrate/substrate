@@ -1067,10 +1067,11 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 	// template names unique.
 	name := base + "-" + nsObj.Name
 	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
-		Atespace:     demoAtespace,
-		Name:         name,
-		PoolName:     base,
-		PoolReplicas: 5,
+		Atespace: demoAtespace,
+		Name:     name,
+		PoolName: base,
+		// One actor at a time, plus a spare for the worker-deletion tests.
+		PoolReplicas: 2,
 		Labels:       map[string]string{"demo": nsObj.Name},
 		SnapshotsConfig: &ateapipb.SnapshotsConfig{
 			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,

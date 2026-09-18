@@ -169,19 +169,16 @@ func main() {
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	workerPodInformerFactory.Start(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	workerPodInformerFactory.WaitForCacheSync(stopCh)
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
 	scInformerFactory.WaitForCacheSync(stopCh)
@@ -204,7 +201,7 @@ func main() {
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
-	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
+	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {

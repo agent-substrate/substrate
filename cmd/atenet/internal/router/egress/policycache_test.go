@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -109,40 +110,38 @@ func TestPolicyCacheDisabledFetchesEveryTime(t *testing.T) {
 
 // Concurrent callers on a cold entry share one fetch.
 func TestPolicyCacheCollapsesConcurrentFetches(t *testing.T) {
-	client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
-	c, _ := newTestCache(client, 10*time.Second)
+	synctest.Test(t, func(t *testing.T) {
+		client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
+		c, _ := newTestCache(client, 10*time.Second)
 
-	const callers = 8
-	var wg sync.WaitGroup
-	errs := make(chan error, callers)
-	for range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := c.get(context.Background(), testActorRef)
-			errs <- err
-		}()
-	}
-	// Wait for the leader to be inside the fetch before releasing it, so every
-	// other caller has had the chance to join rather than start its own.
-	deadline := time.Now().Add(5 * time.Second)
-	for client.policyCalls.Load() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("no fetch started")
+		const callers = 8
+		var wg sync.WaitGroup
+		errs := make(chan error, callers)
+		for range callers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := c.get(context.Background(), testActorRef)
+				errs <- err
+			}()
 		}
-		time.Sleep(time.Millisecond)
-	}
-	close(client.policyGate)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Errorf("get: %v", err)
+		// synctest.Wait returns once every caller is parked on the fetch, so
+		// the release below cannot beat one of them to it. A caller that
+		// reached the fetch after it completed would start its own, which says
+		// nothing about collapsing.
+		synctest.Wait()
+		close(client.policyGate)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Errorf("get: %v", err)
+			}
 		}
-	}
-	if calls := client.policyCalls.Load(); calls != 1 {
-		t.Errorf("GetActorEgressPolicy calls = %d, want 1 for %d concurrent callers", calls, callers)
-	}
+		if calls := client.policyCalls.Load(); calls != 1 {
+			t.Errorf("GetActorEgressPolicy calls = %d, want 1 for %d concurrent callers", calls, callers)
+		}
+	})
 }
 
 // The leader's cancellation must not fail the callers that joined its fetch,

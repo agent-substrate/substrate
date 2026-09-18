@@ -125,18 +125,10 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	if workerName := assignment.GetWorker().GetName(); workerName != "" {
-		worker, err := w.store.GetWorker(ctx, workerName)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				slog.InfoContext(ctx, "worker not found in store, skipping atelet terminate request", slog.String("worker", workerName), slog.Any("actor", actorRef))
-				return nil
-			}
-			return fmt.Errorf("while checking worker assignment: %w", err)
-		}
 		// Ask whether the worker still HOSTS this actor, not whether its one
 		// assignment happens to be this actor: a worker hosting several is the
 		// ordinary case, and the others are none of this delete's business.
-		hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
+		hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
 		if err != nil {
 			return err
 		}
@@ -148,16 +140,9 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		}
 	}
 
-	workerPodNs := assignment.GetWorkerNamespace()
-	workerPodName := assignment.GetWorkerPod()
-
-	conn, err := w.dialer.DialForWorker(workerPodNs, workerPodName)
+	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.InfoContext(ctx, "worker pod not found, treating as terminated", slog.String("workerNamespace", workerPodNs), slog.String("workerPod", workerPodName))
-			return nil
-		}
-		return fmt.Errorf("while connecting to worker pod %s/%s: %w", workerPodNs, workerPodName, err)
+		return fmt.Errorf("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
 	}
 
 	client := ateletpb.NewAteomHerderClient(conn)

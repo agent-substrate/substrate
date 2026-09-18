@@ -15,14 +15,30 @@
 package cmd
 
 import (
+	"testing"
+
 	"github.com/spf13/cobra"
 )
 
-var resumeCmd = &cobra.Command{
-	Use:   "resume",
-	Short: "Resume a resource",
+// commandArgsTest checks a command's positional-argument validation.
+type commandArgsTest struct {
+	name    string
+	command *cobra.Command
+	args    []string
+	wantErr bool
 }
 
-func init() {
-	rootCmd.AddCommand(resumeCmd)
+func runCommandArgsTests(t *testing.T, tests []commandArgsTest) {
+	t.Helper()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var err error
+			if test.command.Args != nil {
+				err = test.command.Args(test.command, test.args)
+			}
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Args(%q) error = %v, wantErr %t", test.args, err, test.wantErr)
+			}
+		})
+	}
 }

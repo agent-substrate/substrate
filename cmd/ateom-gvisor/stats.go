@@ -153,17 +153,23 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	active := s.activeActor.Load()
 	if active == nil {
-		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD), nil
+		// "Available" is the empty list, per the proto: a normal answer for a
+		// scraper to get, not an error.
+		return &ateompb.GetActiveWorkloadStatsResponse{}, nil
 	}
 
 	sample, err := s.sampleSandbox(active)
 	if err != nil {
 		// A missing cgroup is a workload with no numbers yet -- a poll landing
 		// in the boot -- which for a caller with no prior knowledge is as
-		// normal a finding as an available ateom, so it is a reason, not an
-		// error. Anything else is a real read failure.
+		// normal a finding as an available ateom. It answers as a pending
+		// entry: attribution without measurements, so even a workload that
+		// dies during boot is attributable. Anything else is a real read
+		// failure.
 		if errors.Is(err, fs.ErrNotExist) {
-			return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET), nil
+			return &ateompb.GetActiveWorkloadStatsResponse{
+				Samples: []*ateompb.WorkloadStatsSample{pendingSample(active)},
+			}, nil
 		}
 		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
 	}
@@ -171,26 +177,38 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
 	// there is no "requested actor" for NOT_FOUND to disown, and a transition
 	// underneath the read just means these numbers cannot be attributed to any
-	// single actor. Report the reason as of now -- the next tick resolves it
+	// single actor. Report the state as of now -- empty if the slot emptied, a
+	// pending entry for the new occupant otherwise; the next tick resolves it
 	// either way.
 	if latest := s.activeActor.Load(); latest != active {
-		reason := ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET
 		if latest == nil {
-			reason = ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD
+			return &ateompb.GetActiveWorkloadStatsResponse{}, nil
 		}
-		return noSample(reason), nil
+		return &ateompb.GetActiveWorkloadStatsResponse{
+			Samples: []*ateompb.WorkloadStatsSample{pendingSample(latest)},
+		}, nil
 	}
 
 	return &ateompb.GetActiveWorkloadStatsResponse{
-		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: sample},
+		Samples: []*ateompb.WorkloadStatsSample{sample},
 	}, nil
 }
 
-// noSample is the discovery read's "nothing to give, and that is normal"
-// answer.
-func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResponse {
-	return &ateompb.GetActiveWorkloadStatsResponse{
-		Result: &ateompb.GetActiveWorkloadStatsResponse_NoSampleReason{NoSampleReason: reason},
+// pendingSample is a workload with no numbers to give yet, as the discovery
+// read reports it: attribution and the runtime family, measurements absent --
+// source stays STATS_SOURCE_UNSPECIFIED, which the sample's contract defines
+// as "not measured" rather than "measured as zero".
+func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSample {
+	return &ateompb.WorkloadStatsSample{
+		Atespace:              active.Ref.Atespace,
+		ActorName:             active.Ref.Name,
+		ActorUid:              active.UID,
+		ActorTemplateAtespace: active.TemplateAtespace,
+		ActorTemplateName:     active.TemplateName,
+
+		SandboxClass: ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+
+		ObservedAtUnixNano: time.Now().UnixNano(),
 	}
 }
 

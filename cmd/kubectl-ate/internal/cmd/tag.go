@@ -27,30 +27,28 @@ import (
 )
 
 var (
-	tagAtespaceFlag       string
-	tagAllAtespacesFlag   bool
-	createTagAtespaceFlag string
-	createTagActorFlag    string
-	createTagScopeFlag    string
-	updateTagAtespaceFlag string
-	updateTagScopeFlag    string
-	deleteTagAtespaceFlag string
+	getTagAtespaceFlag     string
+	getTagAllAtespacesFlag bool
+	createTagAtespaceFlag  string
+	createTagActorFlag     string
+	createTagScopeFlag     string
+	updateTagAtespaceFlag  string
+	updateTagScopeFlag     string
+	deleteTagAtespaceFlag  string
 )
-
-var updateCmd = &cobra.Command{Use: "update", Short: "Update a resource"}
 
 var getTagsCmd = &cobra.Command{
 	Use:     "tags [tag-name ...]",
 	Aliases: []string{"tag"},
 	Short:   "List or get tags",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if tagAllAtespacesFlag && tagAtespaceFlag != "" {
+		if getTagAllAtespacesFlag && getTagAtespaceFlag != "" {
 			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
 		}
-		if len(args) > 0 && tagAtespaceFlag == "" {
+		if len(args) > 0 && getTagAtespaceFlag == "" {
 			return fmt.Errorf("--atespace is required when getting tags")
 		}
-		if len(args) == 0 && !tagAllAtespacesFlag && tagAtespaceFlag == "" {
+		if len(args) == 0 && !getTagAllAtespacesFlag && getTagAtespaceFlag == "" {
 			return fmt.Errorf("specify --atespace <name>, or -A/--all-atespaces")
 		}
 
@@ -65,7 +63,7 @@ var getTagsCmd = &cobra.Command{
 			tags := make([]*ateapipb.Tag, 0, len(args))
 			for _, name := range args {
 				tag, err := client.GetTag(ctx, &ateapipb.GetTagRequest{
-					Tag: &ateapipb.ObjectRef{Atespace: tagAtespaceFlag, Name: name},
+					Tag: &ateapipb.ObjectRef{Atespace: getTagAtespaceFlag, Name: name},
 				})
 				if err != nil {
 					return fmt.Errorf("failed to get tag %q: %w", name, err)
@@ -81,7 +79,7 @@ var getTagsCmd = &cobra.Command{
 		var tags []*ateapipb.Tag
 		pageToken := ""
 		for {
-			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: tagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
+			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
 			if err != nil {
 				return fmt.Errorf("failed to list tags: %w", err)
 			}
@@ -208,8 +206,8 @@ func parseTagScope(value string) (ateapipb.TagScope, error) {
 }
 
 func init() {
-	getTagsCmd.Flags().StringVarP(&tagAtespaceFlag, "atespace", "a", "", "Atespace to list/get tags in")
-	getTagsCmd.Flags().BoolVarP(&tagAllAtespacesFlag, "all-atespaces", "A", false, "List tags across all atespaces")
+	getTagsCmd.Flags().StringVarP(&getTagAtespaceFlag, "atespace", "a", "", "Atespace to list/get tags in")
+	getTagsCmd.Flags().BoolVarP(&getTagAllAtespacesFlag, "all-atespaces", "A", false, "List tags across all atespaces")
 	getCmd.AddCommand(getTagsCmd)
 
 	createTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in; the tag is created here (required)")
@@ -219,7 +217,6 @@ func init() {
 	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "Tag scope: atespace or published")
 	createCmd.AddCommand(createTagCmd)
 
-	rootCmd.AddCommand(updateCmd)
 	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "Atespace owning the tag (required)")
 	updateTagCmd.Flags().StringVar(&updateTagScopeFlag, "scope", "", "Tag scope: atespace or published (required)")
 	_ = updateTagCmd.MarkFlagRequired("atespace")

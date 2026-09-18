@@ -19,7 +19,7 @@ guide builds on. For background on the runtime, see
 ## Option A: Linux host with KVM
 
 Works on bare-metal Linux or any cloud VM with nested virtualization enabled
-(e.g. GCE N2/N2D instances with nested virt, or equivalent on other clouds).
+(e.g. GCE N4/N4D instances with nested virt, or equivalent on other clouds).
 
 ### 1. Verify KVM
 

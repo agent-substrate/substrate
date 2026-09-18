@@ -71,6 +71,57 @@ var getAtespacesCmd = &cobra.Command{
 	},
 }
 
+var createAtespaceCmd = &cobra.Command{
+	Use:   "atespace [name]",
+	Short: "Create an atespace",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		resp, err := apiClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
+			Atespace: &ateapipb.Atespace{
+				Metadata: &ateapipb.ResourceMetadata{
+					Name: args[0],
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create atespace: %w", err)
+		}
+
+		return printer.PrintAtespaceTo(cmd.OutOrStdout(), resp, outputFmt)
+	},
+}
+
+var deleteAtespaceCmd = &cobra.Command{
+	Use:   "atespace [name]",
+	Short: "Delete an empty atespace (fails if any actors remain)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		name := args[0]
+		if _, err := apiClient.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}}); err != nil {
+			return fmt.Errorf("failed to delete atespace: %w", err)
+		}
+
+		fmt.Printf("atespace %q deleted\n", name)
+		return nil
+	},
+}
+
 func init() {
 	getCmd.AddCommand(getAtespacesCmd)
+	createCmd.AddCommand(createAtespaceCmd)
+	deleteCmd.AddCommand(deleteAtespaceCmd)
 }

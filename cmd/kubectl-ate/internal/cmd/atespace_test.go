@@ -14,15 +14,12 @@
 
 package cmd
 
-import (
-	"github.com/spf13/cobra"
-)
+import "testing"
 
-var deleteCmd = &cobra.Command{
-	Use:   "delete",
-	Short: "Delete a resource",
-}
-
-func init() {
-	rootCmd.AddCommand(deleteCmd)
+func TestAtespaceCommandArgs(t *testing.T) {
+	runCommandArgsTests(t, []commandArgsTest{
+		{name: "list", command: getAtespacesCmd},
+		{name: "get", command: getAtespacesCmd, args: []string{"team-a"}},
+		{name: "get multiple", command: getAtespacesCmd, args: []string{"team-a", "team-b"}},
+	})
 }
