@@ -363,9 +363,10 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 }
 
 // TestDeleteActor_CollectsSnapshotsAfterWorkerDelete verifies that
-// deleting an actor whose suspend a worker delete crashed mid-finalize reclaims
-// every object that suspend wrote. CRASHED is terminal, so the actor delete is
-// the only collector left: whatever it cannot name is leaked for good.
+// deleting an actor whose suspend a worker delete crashed mid-finalize deletes
+// every object that suspend wrote. When an actor crashes mid-suspend, only
+// DeleteActor or RevertActor can delete the in-progress snapshot
+// (in_progress_snapshot_uri): whatever they cannot name is leaked for good.
 func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 	tests := []struct {
 		name string
@@ -447,7 +448,8 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				t.Fatalf("DeleteWorker: %v", err)
 			}
 
-			// The actor is CRASHED and can only be deleted from here.
+			// The actor is CRASHED; DeleteActor deletes the in-progress snapshot
+			// (in_progress_snapshot_uri).
 			stored, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)

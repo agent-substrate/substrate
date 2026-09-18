@@ -43,7 +43,8 @@ service Control {
   // Resume an actor from its latest snapshot.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
 
-  // Delete an actor. Only suspended actors can be deleted.
+  // Delete an actor. Only suspended or crashed actors can be deleted unless
+  // any_state is set.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
 
   // Get the egress policy resource nested under an Actor.

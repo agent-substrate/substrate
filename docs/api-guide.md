@@ -450,7 +450,7 @@ Once a template is `Ready`, creating an actor logically (via `kubectl ate create
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
 *   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
-*   **Eviction:** When its worker pod is evicted, an actor gets `SIGTERM` and 30 minutes to be suspended. After that it is killed and moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. So an actor that runs for more than 30 minutes without a suspend can lose data.
+*   **Eviction:** When its worker pod is evicted, an actor gets `SIGTERM` and 30 minutes to be suspended. After that it is killed and moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. So an actor that runs for more than 30 minutes without a suspend can lose data. A `CRASHED` actor can be recovered back to `ACTOR_STATE_SUSPENDED` at its last external snapshot using `RevertActor` (`kubectl ate revert`).
 
 ---
 
@@ -503,6 +503,14 @@ An actor created from a tag borrows the tag's copy instead of taking one of its 
 Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry with the same arguments: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
 
 > **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (its `status.externalSnapshot.snapshotUri` still names the tag's prefix while it is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
+
+#### `RevertActor`
+Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.externalSnapshot`).
+*   **Request:** `RevertActorRequest`
+    *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING`, `ACTOR_STATE_PAUSED`, and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries). Calling `RevertActor` on an already `ACTOR_STATE_SUSPENDED` actor returns `FAILED_PRECONDITION`.
+*   **Response:** `RevertActorResponse` containing the reverted `Actor` in `ACTOR_STATE_SUSPENDED`.
+*   Reverting terminates any bound worker sandbox, clears node-local pause checkpoints (`localSnapshotInfo`), and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed `externalSnapshot`.
+*   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`
 Removes an actor from the registry and cleans up associated resources.

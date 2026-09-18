@@ -617,11 +617,11 @@ groups:
     brief: The number of actors that went to the ACTOR_STATE_CRASHED state, with the reasons.
     note: >
       This counter counts the moves into the CRASHED state of the state machine.
-      It does not count the crashes of a process. The CRASHED state is a
-      permanent loss of the actor. Substrate can also lose the data that it did
-      not write. Some moves into this state are not a loss of data. They are
-      careful responses to a control plane problem. The ate.failure.reason key
-      keeps these groups separate.
+      It does not count the crashes of a process. The CRASHED state is a loss of
+      the actor's live execution (recoverable back to SUSPENDED via RevertActor).
+      Substrate can also lose the data that it did not write. Some moves into
+      this state are not a loss of data. They are careful responses to a control
+      plane problem. The ate.failure.reason key keeps these groups separate.
       ate.sandbox.class is unknown when ateapi could not read the class of the
       worker: the worker record is already gone, or its assignment is already
       clear.
