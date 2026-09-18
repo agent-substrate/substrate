@@ -174,18 +174,24 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
-	if actor.GetStatus().GetWorkerAssignment() != nil {
-		if terr := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); terr != nil {
-			// A terminate that comes back with a crash directive lands the
-			// actor in CRASHED, which the user can revert again — that retry
-			// needs no live worker.
-			return maybeCrashActor(ctx, w.store, actorRef, terr, "while terminating the actor's workload", ateattr.OperationRevert)
-		}
-		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
+	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
+		hosted, err := workerHostsActor(ctx, w.store, assignment.GetWorker().GetName(), actor.GetMetadata().GetUid())
+		if err != nil {
 			return err
 		}
-		if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
-			return fmt.Errorf("while releasing worker: %w", err)
+		if hosted {
+			if terr := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); terr != nil {
+				// A terminate that comes back with a crash directive lands the
+				// actor in CRASHED, which the user can revert again — that retry
+				// needs no live worker.
+				return maybeCrashActor(ctx, w.store, actorRef, terr, "while terminating the actor's workload", ateattr.OperationRevert)
+			}
+			if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
+				return err
+			}
+			if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
+				return fmt.Errorf("while releasing worker: %w", err)
+			}
 		}
 	}
 
@@ -214,7 +220,7 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 	}
 	// A suspend records the in-progress URI under the actor's own prefix
 	// before atelet writes the first object, so a URI owned by anything else
-	// is a corrupted record: deleting it would collect another actor's data.
+	// is a corrupted record.
 	owner := actorSnapshotOwner(actor)
 	if !uri.OwnedBy(owner) {
 		return fmt.Errorf("the in-progress snapshot %q is not owned by actor %s", inProgress, owner)
