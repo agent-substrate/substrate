@@ -59,6 +59,8 @@ var (
 	nsPolicyFile = pflag.String("namespace-policy-file", "", "path to the atespace→namespace authorization YAML (required)")
 	logLevel     = pflag.String("log-level", "info", "one of debug, info, warn, error")
 	drainGrace   = pflag.Duration("drain-grace", 5*time.Second, "how long to wait for in-flight RPCs on shutdown before a hard stop")
+	kubeAPIQPS   = pflag.Float32("kube-api-qps", 50, "Sustained queries per second allowed against the Kubernetes API.")
+	kubeAPIBurst = pflag.Int("kube-api-burst", 100, "Burst queries allowed against the Kubernetes API.")
 )
 
 func main() {
@@ -151,10 +153,18 @@ func run(ctx context.Context) error {
 }
 
 func newKubeClient() (kubernetes.Interface, error) {
+	if *kubeAPIQPS <= 0 || *kubeAPIBurst <= 0 {
+		return nil, fmt.Errorf("--kube-api-qps and --kube-api-burst must be positive")
+	}
+
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("in-cluster config: %w", err)
 	}
+
+	cfg.QPS = *kubeAPIQPS
+	cfg.Burst = *kubeAPIBurst
+
 	return kubernetes.NewForConfig(cfg)
 }
 
