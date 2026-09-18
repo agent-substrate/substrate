@@ -95,7 +95,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 
 		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
-		// later DeleteActor or RevertActor can collect what they name: each is
+		// later DeleteActor or RevertActor can delete what they name: each is
 		// the only pointer to it, so clearing them here would leak the objects
 		// for good; failed workflow steps must never promote either of them to an
 		// ExternalSnapshot or to LocalSnapshotInfo.
