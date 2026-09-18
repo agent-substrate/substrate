@@ -28,8 +28,10 @@ import (
 )
 
 const (
-	restoreDurationMetric    = "ate.actor.restore.duration"
-	checkpointDurationMetric = "ate.actor.checkpoint.duration"
+	restoreDurationMetric        = "ate.actor.restore.duration"
+	checkpointDurationMetric     = "ate.actor.checkpoint.duration"
+	imageStreamingRequestsMetric = "ate.imagestreaming.requests"
+	imageStreamingDurationMetric = "ate.imagestreaming.duration"
 )
 
 // snapshotPhaseBuckets have to cover both ends of a phase breakdown: a warm OCI
@@ -37,11 +39,15 @@ const (
 // fetching a multi-GiB snapshot runs for tens of seconds.
 var snapshotPhaseBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
 
-// Instruments holds atelet's cold-start histograms. A nil *Instruments is a
-// valid no-op, so call sites need no guard.
+var imageStreamingDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30}
+
+// Instruments holds atelet's cold-start histograms and image streaming instruments.
+// A nil *Instruments is a valid no-op, so call sites need no guard.
 type Instruments struct {
-	restoreDuration    metric.Float64Histogram
-	checkpointDuration metric.Float64Histogram
+	restoreDuration        metric.Float64Histogram
+	checkpointDuration     metric.Float64Histogram
+	imageStreamingRequests metric.Int64Counter
+	imageStreamingDuration metric.Float64Histogram
 }
 
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
@@ -65,10 +71,48 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("create %s histogram: %w", checkpointDurationMetric, err)
 	}
 
+	imageStreamingRequests, err := meter.Int64Counter(
+		imageStreamingRequestsMetric,
+		metric.WithUnit("{request}"),
+		metric.WithDescription("Number of image streaming layer preparation requests on the node, by provider and outcome."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s counter: %w", imageStreamingRequestsMetric, err)
+	}
+
+	imageStreamingDuration, err := meter.Float64Histogram(
+		imageStreamingDurationMetric,
+		metric.WithUnit("s"),
+		metric.WithDescription("Duration in seconds to prepare streamed image layers on the node."),
+		metric.WithExplicitBucketBoundaries(imageStreamingDurationBuckets...),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s histogram: %w", imageStreamingDurationMetric, err)
+	}
+
 	return &Instruments{
-		restoreDuration:    restoreDuration,
-		checkpointDuration: checkpointDuration,
+		restoreDuration:        restoreDuration,
+		checkpointDuration:     checkpointDuration,
+		imageStreamingRequests: imageStreamingRequests,
+		imageStreamingDuration: imageStreamingDuration,
 	}, nil
+}
+
+// RecordImageStreaming records one image streaming evaluation/preparation attempt.
+func (i *Instruments) RecordImageStreaming(ctx context.Context, provider, outcome string, duration time.Duration) {
+	if i == nil {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		ateattr.ImageStreamingProviderKey.String(provider),
+		ateattr.ImageStreamingOutcomeKey.String(outcome),
+	}
+	if i.imageStreamingRequests != nil {
+		i.imageStreamingRequests.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+	if i.imageStreamingDuration != nil && duration > 0 {
+		i.imageStreamingDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+	}
 }
 
 // snapshotOp is the dimension set shared by every phase of one restore or

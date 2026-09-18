@@ -44,6 +44,10 @@ type OverlaySpec struct {
 	// protect the image while the bundle exists; consumers ignore it.
 	// Optional: older specs lack it.
 	ImageDigest string `json:"imageDigest,omitempty"`
+	// ImageRef is the image reference (e.g. registry/image:tag).
+	// Used for lease reconciliation and recovery across atelet restarts.
+	// Optional: older specs lack it.
+	ImageRef string `json:"imageRef,omitempty"`
 	// Layers are the cached layer directories (each holding its tree under
 	// fs/), bottom-most layer first — the order the image manifest lists
 	// them. Consumers reverse this into overlayfs's top-first lowerdir.

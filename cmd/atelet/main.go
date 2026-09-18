@@ -44,6 +44,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/imagestreaming"
+	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/remotesnapshotter"
+	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/riptide"
+	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/soci"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -97,6 +101,8 @@ var (
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 	imageCacheDir                = pflag.String("image-cache-dir", ateompath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
+	imageStreamer                = pflag.String("image-streamer", "none", "Image acceleration / streaming provider: none, auto, riptide, soci, remotesnapshotter, or registered provider name.")
+	imageStreamerSocket          = pflag.String("image-streamer-socket", "", "Unix domain socket path for the image streaming daemon (e.g. /run/containerd-gcfs-grpc or /run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock). If empty, the driver default or auto-detected socket is used.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -285,12 +291,23 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 	clusterTrustBundleInformerFactory.WaitForCacheSync(stopCh)
 
+	streamer, err := initImageStreamer(ctx, *imageStreamer, *imageStreamerSocket)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize image streamer", err)
+	}
+	if streamer != nil {
+		if err := reconcileStreamingLeases(ctx, streamer, ateompath.ActorsDir); err != nil {
+			slog.WarnContext(ctx, "Failed to reconcile image streaming leases on startup", slog.Any("err", err))
+		}
+	}
+
 	wmService := NewService(
 		ctx,
 		ateomDialer,
 		wrappedAnonGCS,
 		wrappedGCS,
 		imageCache,
+		streamer,
 		instruments,
 		volPlugins,
 		csiDriverConfigLister,
@@ -433,6 +450,7 @@ type AteomHerder struct {
 
 	ateomDialer           *AteomDialer
 	imageCache            *imagecache.Store
+	imageStreamer         imagestreaming.ImageStreamer
 	anonGCSClient         ategcs.ObjectStorage
 	gcsClient             ategcs.ObjectStorage
 	instruments           *Instruments
@@ -444,6 +462,60 @@ type AteomHerder struct {
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
 
+// initImageStreamer resolves and instantiates the ImageStreamer according to flags.
+func initImageStreamer(ctx context.Context, provider, socket string) (imagestreaming.ImageStreamer, error) {
+	if provider == "" || provider == "none" {
+		return nil, nil
+	}
+
+	if provider == "auto" {
+		// Auto-detection checks for well-known streaming daemon sockets on the host.
+		// Priority order: Riptide remote snapshotter socket, then AWS SOCI socket.
+		sockCandidates := []struct {
+			name string
+			sock string
+		}{
+			{"riptide", "/run/containerd-gcfs-grpc"},
+			{"soci", "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"},
+			{"riptide", "/run/gcfsd/grpc.sock"},
+		}
+		if socket != "" {
+			for _, c := range sockCandidates {
+				if c.sock == socket {
+					return imagestreaming.Get(ctx, c.name, imagestreaming.Config{imagestreaming.SocketPathKey: socket})
+				}
+			}
+		}
+		for _, c := range sockCandidates {
+			if _, err := os.Stat(c.sock); err == nil {
+				slog.InfoContext(ctx, "Auto-detected image streaming daemon",
+					slog.String("provider", c.name),
+					slog.String("socket", c.sock))
+				streamer, err := imagestreaming.Get(ctx, c.name, imagestreaming.Config{imagestreaming.SocketPathKey: c.sock})
+				if err != nil {
+					slog.WarnContext(ctx, "Failed to initialize auto-detected image streamer",
+						slog.String("provider", c.name),
+						slog.Any("err", err))
+					continue
+				}
+				return streamer, nil
+			}
+		}
+		slog.InfoContext(ctx, "No supported image streaming daemon socket found; image streaming disabled")
+		return nil, nil
+	}
+
+	cfg := imagestreaming.Config{}
+	if socket != "" {
+		cfg[imagestreaming.SocketPathKey] = socket
+	}
+	streamer, err := imagestreaming.Get(ctx, provider, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize image streamer %q: %w", provider, err)
+	}
+	return streamer, nil
+}
+
 // NewService creates a new WorkersManagerService.
 func NewService(
 	ctx context.Context,
@@ -451,6 +523,7 @@ func NewService(
 	anonGCSClient ategcs.ObjectStorage,
 	gcsClient ategcs.ObjectStorage,
 	imageCache *imagecache.Store,
+	imageStreamer imagestreaming.ImageStreamer,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
@@ -459,6 +532,7 @@ func NewService(
 	wms := &AteomHerder{
 		ateomDialer:           ateomDialer,
 		imageCache:            imageCache,
+		imageStreamer:         imageStreamer,
 		anonGCSClient:         anonGCSClient,
 		gcsClient:             gcsClient,
 		instruments:           instruments,
@@ -716,12 +790,31 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), fmt.Errorf("while unmounting external volumes: %w", err))
 	}
 
+	// Release streamed image layers when actor sleeps/pauses (Approach 1: active-only leases)
+	s.releaseStreamedLayers(ctx, actorRef, req.GetSpec())
+
 	// Note: we do not crash the actor if resetting the directory fails.
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func (s *AteomHerder) releaseStreamedLayers(ctx context.Context, actorRef resources.ActorRef, spec *ateletpb.WorkloadSpec) {
+	if s.imageStreamer == nil || spec == nil {
+		return
+	}
+	for _, ctr := range spec.GetContainers() {
+		if ctr.GetImage() != "" {
+			if err := s.imageStreamer.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ctr.GetImage()}); err != nil {
+				slog.WarnContext(ctx, "Failed to release streamed layers",
+					slog.String("actor", actorRef.String()),
+					slog.String("image", ctr.GetImage()),
+					slog.Any("err", err))
+			}
+		}
+	}
 }
 
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
@@ -1314,6 +1407,9 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	// Deregister after teardown succeeds
 	s.systemInfoVolumes.Deregister(actorUID)
 
+	// Release any streamed image layers for this actor's containers
+	s.releaseStreamedLayers(ctx, actorRef, req.GetSpec())
+
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, fmt.Errorf("failed to unmount external volumes during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
@@ -1442,6 +1538,8 @@ func (s *AteomHerder) prepareOCIBundles(
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.imageCache,
+			s.imageStreamer,
+			s.instruments,
 			actorUID,
 			ocispec.PauseContainer,
 			pauseImage,
@@ -1470,6 +1568,8 @@ func (s *AteomHerder) prepareOCIBundles(
 			if err := prepareOCIDirectory(
 				gCtx,
 				s.imageCache,
+				s.imageStreamer,
+				s.instruments,
 				actorUID,
 				ctr.GetName(),
 				ctr.GetImage(),

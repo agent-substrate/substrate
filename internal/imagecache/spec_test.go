@@ -26,8 +26,10 @@ import (
 func TestOverlaySpecRoundTrip(t *testing.T) {
 	bundle := t.TempDir()
 	in := &OverlaySpec{
-		Layers:    []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"},
-		ExtraDirs: []string{"/run/ate"},
+		ImageDigest: "sha256:11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
+		ImageRef:    "us-docker.pkg.dev/proj/repo/image:v1",
+		Layers:      []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"},
+		ExtraDirs:   []string{"/run/ate"},
 	}
 	if err := WriteSpec(bundle, in); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
@@ -39,6 +41,12 @@ func TestOverlaySpecRoundTrip(t *testing.T) {
 	if out == nil {
 		t.Fatalf("ReadSpec returned nil for a bundle with a spec")
 		return // unreachable; makes the non-nil-ness explicit to static analysis
+	}
+	if out.ImageRef != in.ImageRef {
+		t.Errorf("ImageRef = %q, want %q", out.ImageRef, in.ImageRef)
+	}
+	if out.ImageDigest != in.ImageDigest {
+		t.Errorf("ImageDigest = %q, want %q", out.ImageDigest, in.ImageDigest)
 	}
 	if !slices.Equal(out.Layers, in.Layers) {
 		t.Errorf("Layers = %v, want %v", out.Layers, in.Layers)

@@ -17,17 +17,23 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/imagestreaming"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -76,7 +82,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, instruments *Instruments, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -110,8 +116,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
-			return fmt.Errorf("in imageCache.EnsureImage: %w", err)
+		if img, err = ensureContainerImage(gctx, imageCache, streamer, instruments, ref); err != nil {
+			return fmt.Errorf("in ensureContainerImage: %w", err)
 		}
 		return nil
 	})
@@ -141,6 +147,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
+		ImageRef:     ref,
 		Layers:       img.LayerDirs,
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
@@ -263,4 +270,100 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 		return nil, fmt.Errorf("%w: no command specified: image defines neither ENTRYPOINT nor CMD and the container sets neither command nor args", ateerrors.ReasonInvalidContainerConfig)
 	}
 	return argv, nil
+}
+
+// ensureContainerImage resolves and prepares layers for an image.
+// If an ImageStreamer is provided and supports streaming the image, it mounts
+// the virtual layer directories via the streaming provider without full layer download/untar.
+// If streaming fails or is unsupported, it falls back to imageCache.EnsureImage.
+func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, instruments *Instruments, ref string) (*imagecache.Image, error) {
+	t0 := time.Now()
+	if streamer != nil {
+		req := &imagestreaming.StreamRequest{ImageRef: ref}
+		canStream, err := streamer.CanStream(ctx, req)
+		if err != nil {
+			instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
+			slog.WarnContext(ctx, "Error evaluating image streaming eligibility; falling back to cache",
+				slog.String("image", ref),
+				slog.String("streamer", streamer.Name()),
+				slog.Any("err", err))
+		} else if !canStream {
+			instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
+		} else {
+			res, err := streamer.PrepareLayers(ctx, req)
+			if err != nil {
+				instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
+				slog.WarnContext(ctx, "Image streaming layer preparation failed; falling back to cache",
+					slog.String("image", ref),
+					slog.String("streamer", streamer.Name()),
+					slog.Any("err", err))
+			} else if res != nil && len(res.LayerDirs) > 0 {
+				var (
+					digest v1.Hash
+					cfg    v1.Config
+				)
+				if res.ImageDigest != "" {
+					digest, _ = v1.NewHash(res.ImageDigest)
+				}
+				if res.Config != nil {
+					cfg = *res.Config
+				} else {
+					d, c, err := fetchImageConfig(ctx, ref)
+					if err != nil {
+						instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
+						slog.WarnContext(ctx, "Failed to resolve image config for streamed image; falling back to cache",
+							slog.String("image", ref),
+							slog.Any("err", err))
+						goto fallback
+					}
+					if digest.String() == "" {
+						digest = d
+					}
+					cfg = c
+				}
+				instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeSuccess, time.Since(t0))
+				return &imagecache.Image{
+					Digest:    digest,
+					Config:    cfg,
+					LayerDirs: res.LayerDirs,
+				}, nil
+			} else {
+				instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
+			}
+		}
+	}
+
+fallback:
+	if imageCache == nil {
+		if streamer != nil {
+			instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeError, time.Since(t0))
+		}
+		return nil, fmt.Errorf("imageCache is nil and image streaming is unavailable for %q", ref)
+	}
+	img, err := imageCache.EnsureImage(ctx, ref)
+	if err != nil && streamer != nil {
+		instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeError, time.Since(t0))
+	}
+	return img, err
+}
+
+func fetchImageConfig(ctx context.Context, ref string) (v1.Hash, v1.Config, error) {
+	opts := []name.Option{name.Insecure}
+	parsedRef, err := name.ParseReference(ref, opts...)
+	if err != nil {
+		return v1.Hash{}, v1.Config{}, fmt.Errorf("while parsing reference %q: %w", ref, err)
+	}
+	img, err := remote.Image(parsedRef, remote.WithContext(ctx))
+	if err != nil {
+		return v1.Hash{}, v1.Config{}, fmt.Errorf("while fetching image metadata %q: %w", ref, err)
+	}
+	digest, err := img.Digest()
+	if err != nil {
+		return v1.Hash{}, v1.Config{}, fmt.Errorf("while resolving image digest: %w", err)
+	}
+	cfgFile, err := img.ConfigFile()
+	if err != nil {
+		return v1.Hash{}, v1.Config{}, fmt.Errorf("while reading config file: %w", err)
+	}
+	return digest, cfgFile.Config, nil
 }
