@@ -1,0 +1,81 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Environment variables for Substrate development on GCP when the underlying
+# resources are provisioned with Terraform (see hack/iac/).
+#
+# Copy this file to .ate-dev-env.sh and customize it for your environment.
+# The values here must match the variables in hack/iac/terraform.tfvars.
+#
+# Unlike hack/ate-dev-env.sh.example (which is consumed by the
+# `go run ./tools/setup-gcp` provisioner), the resources referenced below are
+# created by Terraform. Run `terraform apply` in hack/iac/ first, then source
+# this file before deploying with hack/install-ate.sh.
+
+export PROJECT_ID=${USER}-gke-dev
+export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
+
+export GCE_REGION=us-central1
+export CLUSTER_LOCATION=us-central1-c
+
+# VPC and subnet are created by Terraform (hack/iac/network.tf) and are both
+# named "substrate".
+export NETWORK=substrate
+export SUBNETWORK=substrate
+
+export CLUSTER_NAME=substrate-poc
+export CLUSTER_VERSION=1.35.0-gke.2398000
+
+# The gVisor sandbox runtime runs on the "worker" node pool created by
+# Terraform (hack/iac/cluster.tf). The default pool keeps a single node for
+# system and non-gVisor workloads.
+export NODE_POOL_NAME=worker
+export NODE_POOL_VERSION=1.35.0-gke.2398000
+export DEFAULT_NODE_MACHINE_TYPE=e2-standard-2
+export GVISOR_NODE_MACHINE_TYPE=c3-standard-4
+
+# Set this if you are using an existing cluster with a different context name.
+export KUBECTL_CONTEXT=
+
+export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
+
+# Artifact Registry repository created by Terraform (hack/iac/artifactregistry.tf).
+# Cloud Build pushes images here; the cluster pulls from it.
+export AR_REPOSITORY_ID=ate-images
+export KO_DOCKER_REPO="${GCE_REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY_ID}"
+
+# Set this if you want to override the default build platforms
+export KO_DEFAULTPLATFORMS=linux/amd64
+
+# ── Terraform inputs ──────────────────────────────────────────────────────────
+# Terraform automatically picks up any variable from a TF_VAR_<name> environment
+# variable, so we derive its inputs from the values above instead of maintaining
+# a separate terraform.tfvars. Source this file before running terraform in
+# hack/iac/ and the variables will be populated automatically.
+export TF_VAR_project_id=${PROJECT_ID}
+export TF_VAR_gce_region=${GCE_REGION}
+export TF_VAR_cluster_location=${CLUSTER_LOCATION}
+export TF_VAR_cluster_name=${CLUSTER_NAME}
+export TF_VAR_cluster_version=${CLUSTER_VERSION}
+export TF_VAR_default_node_machine_type=${DEFAULT_NODE_MACHINE_TYPE}
+export TF_VAR_worker_node_machine_type=${GVISOR_NODE_MACHINE_TYPE}
+export TF_VAR_bucket_name=${BUCKET_NAME}
+export TF_VAR_ar_repository_id=${AR_REPOSITORY_ID}
+export TF_VAR_filestore=false
+
+# Networking CIDRs use the defaults in hack/iac/variables.tf. Uncomment and set
+# these to override them.
+# export TF_VAR_subnet_cidr=10.0.0.0/20
+# export TF_VAR_pods_cidr=10.1.0.0/16
+# export TF_VAR_services_cidr=10.2.0.0/20
