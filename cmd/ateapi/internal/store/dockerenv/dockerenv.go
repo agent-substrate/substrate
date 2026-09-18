@@ -60,3 +60,11 @@ func Configure(ctx context.Context) error {
 	}
 	return nil
 }
+
+// Required reports whether an unavailable container must fail the test rather
+// than skip it. Skipping is right on a workstation without Docker and wrong in
+// CI, where it turns every container-backed package into a silent pass.
+// REQUIRE_DOCKER opts a local run into the CI behavior.
+func Required() bool {
+	return os.Getenv("CI") == "true" || os.Getenv("REQUIRE_DOCKER") == "true"
+}
