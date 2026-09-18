@@ -461,7 +461,15 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetBoot())
+	var actor *ateapipb.Actor
+	var resumed bool
+	var runtimeLease *ateapipb.ActorLease
+	var err error
+	if req.GetClaimRuntimeLease() || req.GetLease() != nil {
+		actor, resumed, runtimeLease, err = s.actorWorkflow.ResumeActorWithLease(ctx, actorRef, req.GetBoot(), req.GetLease())
+	} else {
+		actor, resumed, err = s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetBoot())
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -473,7 +481,18 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	}
 
 	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.ResumeActorResponse{Actor: actor, Resumed: resumed}, nil
+	return &ateapipb.ResumeActorResponse{Actor: actor, Resumed: resumed, Lease: runtimeLease}, nil
+}
+
+// ResumeActorForReconciler is not part of the public Control contract. It is
+// the in-process golden-actor path that may reattach to its persisted lease.
+func (s *RPCService) ResumeActorForReconciler(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	actor, resumed, runtimeLease, err := s.actorWorkflow.ResumeActorForReconciler(ctx, actorRef, req.GetBoot())
+	if err != nil {
+		return nil, err
+	}
+	return &ateapipb.ResumeActorResponse{Actor: actor, Resumed: resumed, Lease: runtimeLease}, nil
 }
 
 func validateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
@@ -501,6 +520,76 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
+}
+
+func (s *RPCService) SuspendActorWithLease(ctx context.Context, req *ateapipb.SuspendActorWithLeaseRequest) (*ateapipb.SuspendActorResponse, error) {
+	if errs := validateSuspendActorWithLeaseRequest(ctx, req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
+
+	actor, err := s.actorWorkflow.SuspendActorWithLease(ctx, actorRef, req.GetLease())
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+		}
+		return nil, err
+	}
+	setSpanActorAttributes(ctx, actor)
+	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
+}
+
+// SuspendActorForReconciler is the in-process golden-actor counterpart to
+// SuspendActorWithLease; it looks up the persisted lease after a controller
+// restart and still executes the lease-aware workflow.
+func (s *RPCService) SuspendActorForReconciler(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	actor, err := s.actorWorkflow.SuspendActorForReconciler(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
+}
+
+func validateSuspendActorWithLeaseRequest(ctx context.Context, req *ateapipb.SuspendActorWithLeaseRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_SuspendActorWithLeaseRequest(ctx, op, nil, req, nil)
+}
+
+func (s *RPCService) RenewActorLease(ctx context.Context, req *ateapipb.RenewActorLeaseRequest) (*ateapipb.RenewActorLeaseResponse, error) {
+	if errs := validateRenewActorLeaseRequest(ctx, req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
+
+	actor, err := s.impl.GetActor(ctx, actorRef)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+		}
+		return nil, err
+	}
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return nil, status.Error(codes.FailedPrecondition, "actor is not running")
+	}
+	renewed, err := s.impl.RenewActorRuntimeLease(ctx, actor.GetMetadata().GetUid(), req.GetLease().GetToken(), req.GetLease().GetGeneration())
+	if errors.Is(err, store.ErrRuntimeLeaseInvalid) {
+		return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is no longer current")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ateapipb.RenewActorLeaseResponse{Lease: actorRuntimeLeaseProto(renewed)}, nil
+}
+
+func validateRenewActorLeaseRequest(ctx context.Context, req *ateapipb.RenewActorLeaseRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_RenewActorLeaseRequest(ctx, op, nil, req, nil)
 }
 
 func validateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActorRequest) field.ErrorList {

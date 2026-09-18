@@ -69,6 +69,9 @@ type goldenActorControl interface {
 	GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
 	ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error)
 	SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
+	ResumeActorForReconciler(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error)
+	SuspendActorForReconciler(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
+	SuspendActorWithLease(ctx context.Context, req *ateapipb.SuspendActorWithLeaseRequest) (*ateapipb.SuspendActorResponse, error)
 }
 
 // ActorTemplateReconciler drives stored ActorTemplates through the golden
@@ -194,6 +197,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	// Each iteration observes the golden actor, takes the one action that
 	// fact demands, and re-observes; the pass ends at a terminal condition,
 	// a deadline wait, or an error the workqueue retries.
+	var runtimeLease *ateapipb.ActorLease
 	for {
 		goldenSnapshotStatus := tmpl.GetStatus().GetGoldenSnapshotStatus()
 		if goldenSnapshotStatus.GetErrorMessage() != "" {
@@ -238,7 +242,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				return rem, nil
 			}
 			// Warmup done: suspend the golden actor and record its snapshot.
-			snapshot, err := r.suspendActor(ctx, goldenActorRef)
+			snapshot, err := r.suspendActor(ctx, goldenActorRef, runtimeLease)
 			if err != nil {
 				return 0, err
 			}
@@ -246,7 +250,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 			// A previous pass died mid-suspend; retry suspend.
-			snapshot, err := r.suspendActor(ctx, goldenActorRef)
+			snapshot, err := r.suspendActor(ctx, goldenActorRef, runtimeLease)
 			if err != nil {
 				return 0, err
 			}
@@ -262,10 +266,12 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				// without being recorded.
 				return 0, r.saveGoldenSnapshot(ctx, tmpl, actor.GetStatus().GetExternalSnapshot())
 			}
-			if _, err := r.control.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: goldenActorRef}); err != nil {
+			resumeResp, err := r.control.ResumeActorForReconciler(ctx, &ateapipb.ResumeActorRequest{Actor: goldenActorRef})
+			if err != nil {
 				// A crash during resume is observed as CRASHED on the retry.
 				return 0, fmt.Errorf("while resuming golden actor: %w", err)
 			}
+			runtimeLease = resumeResp.GetLease()
 			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
 			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
 				snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
@@ -286,8 +292,14 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 // suspendActor suspends the golden actor and returns the external snapshot it
 // wrote. Reentrant: SuspendActor completes an in-flight suspend and is a no-op
 // on an already-suspended actor, returning the existing snapshot either way.
-func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapipb.ObjectRef) (*ateapipb.ExternalSnapshot, error) {
-	resp, err := r.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: goldenRef})
+func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapipb.ObjectRef, runtimeLease *ateapipb.ActorLease) (*ateapipb.ExternalSnapshot, error) {
+	var resp *ateapipb.SuspendActorResponse
+	var err error
+	if runtimeLease != nil {
+		resp, err = r.control.SuspendActorWithLease(ctx, &ateapipb.SuspendActorWithLeaseRequest{Actor: goldenRef, Lease: runtimeLease})
+	} else {
+		resp, err = r.control.SuspendActorForReconciler(ctx, &ateapipb.SuspendActorRequest{Actor: goldenRef})
+	}
 	if err != nil {
 		// A crash during suspend is observed as CRASHED on the retry.
 		return nil, fmt.Errorf("while suspending golden actor: %w", err)

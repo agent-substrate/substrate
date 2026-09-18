@@ -68,7 +68,7 @@ func (s *leaseCountingStore) AcquireLease(ctx context.Context, key string) (*sto
 	return s.Interface.AcquireLease(ctx, key)
 }
 
-func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
+func TestResumeActorWithLease_RunningLegacyActorGetsRuntimeLeaseUnderOperationLease(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -78,7 +78,7 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	st := &leaseCountingStore{Interface: persistence}
 	w := &ActorWorkflow{store: st}
 
-	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+	got, resumed, runtimeLease, err := w.ResumeActorWithLease(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false, nil)
 	if err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
@@ -88,8 +88,68 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	if !proto.Equal(got, created) {
 		t.Errorf("ResumeActor actor = %v, want %v", got, created)
 	}
+	if st.acquireCalls != 1 {
+		t.Errorf("AcquireLease calls = %d, want 1", st.acquireCalls)
+	}
+	if runtimeLease == nil {
+		t.Fatal("runtime lease = nil, want lease")
+	}
+	lease, err := persistence.GetActorRuntimeLease(ctx, created.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("GetActorRuntimeLease: %v", err)
+	}
+	if lease.Generation < 1 || lease.Token == "" {
+		t.Fatalf("runtime lease = %+v, want token and positive generation", lease)
+	}
+}
+
+func TestResumeActor_RunningPathDoesNotClaimRuntimeLease(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "router-actor"},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	})
+	st := &leaseCountingStore{Interface: persistence}
+	w := &ActorWorkflow{store: st}
+
+	got, resumed, err := w.ResumeActor(ctx, resources.ActorRefFromActor(created), false)
+	if err != nil {
+		t.Fatalf("ResumeActor: %v", err)
+	}
+	if resumed {
+		t.Fatal("ResumeActor resumed = true, want false")
+	}
+	if !proto.Equal(got, created) {
+		t.Errorf("ResumeActor actor = %v, want %v", got, created)
+	}
 	if st.acquireCalls != 0 {
 		t.Errorf("AcquireLease calls = %d, want 0", st.acquireCalls)
+	}
+	if _, err := persistence.GetActorRuntimeLease(ctx, created.GetMetadata().GetUid()); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("runtime lease after router path = %v, want not found", err)
+	}
+}
+
+func TestResumeActorWithLease_RunningActorRequiresCurrentLease(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "owned-actor"},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	})
+	_, err := persistence.IssueActorRuntimeLease(ctx, created.GetMetadata().GetUid(), resources.ActorRefFromActor(created))
+	if err != nil {
+		t.Fatalf("IssueActorRuntimeLease: %v", err)
+	}
+	w := &ActorWorkflow{store: persistence}
+
+	_, _, _, err = w.ResumeActorWithLease(ctx, resources.ActorRefFromActor(created), false, nil)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ResumeActorWithLease error = %v, want FailedPrecondition", err)
+	}
+	if _, err := persistence.GetActorRuntimeLease(ctx, created.GetMetadata().GetUid()); err != nil {
+		t.Fatalf("runtime lease after rejected claim: %v", err)
 	}
 }
 

@@ -37,11 +37,17 @@ service Control {
   // to the template's commit scope where required (Full capture, Data commit).
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
+  // Suspend an actor only when the caller holds its runtime lease.
+  rpc SuspendActorWithLease(SuspendActorWithLeaseRequest) returns (SuspendActorResponse) {}
+
   // Pause a given actor and keep its snapshots on node VM.
   rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {}
 
   // Resume an actor from its latest snapshot.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
+
+  // Renew an actor's runtime lease.
+  rpc RenewActorLease(RenewActorLeaseRequest) returns (RenewActorLeaseResponse) {}
 
   // Delete an actor. Only suspended actors can be deleted.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
@@ -1340,6 +1346,17 @@ message SuspendActorResponse {
   Actor actor = 1;
 }
 
+message SuspendActorWithLeaseRequest {
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // The runtime lease returned by ResumeActor.
+  //
+  // +k8s:required
+  ActorLease lease = 2;
+}
+
 message PauseActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
@@ -1359,6 +1376,18 @@ message ResumeActorRequest {
   //
   // +k8s:optional
   bool boot = 2;
+
+  // Reattach to an already-running actor only with its current runtime lease.
+  //
+  // +k8s:optional
+  ActorLease lease = 3;
+
+  // Claim the actor's runtime lease for an executor-owned workload. The
+  // legacy router path leaves this false so it can keep resolving already
+  // running actors without becoming their liveness owner.
+  //
+  // +k8s:optional
+  bool claim_runtime_lease = 4;
 }
 
 message ResumeActorResponse {
@@ -1367,6 +1396,36 @@ message ResumeActorResponse {
   // True if a resume workflow was executed to activate the actor.
   // False if the actor was already RUNNING.
   bool resumed = 2;
+
+  // The runtime lease for the running actor.
+  ActorLease lease = 3;
+}
+
+// ActorLease identifies one actor workload incarnation. The token is opaque to
+// callers; generation prevents an old token from being reused after reclaim.
+message ActorLease {
+  // +k8s:required
+  string token = 1;
+
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 generation = 2;
+
+  // Server-assigned expiration time.
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message RenewActorLeaseRequest {
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // +k8s:required
+  ActorLease lease = 2;
+}
+
+message RenewActorLeaseResponse {
+  ActorLease lease = 1;
 }
 
 message DeleteActorRequest {

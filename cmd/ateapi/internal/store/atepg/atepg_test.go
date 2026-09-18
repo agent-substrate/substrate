@@ -712,6 +712,71 @@ func TestAcquireLease_CleansExpiredLeases(t *testing.T) {
 	}
 }
 
+func TestActorRuntimeLease_CASAndGeneration(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	ref := resources.ActorRef{Atespace: "team-a", Name: "actor-a"}
+	first, err := s.IssueActorRuntimeLease(ctx, "actor-uid-1", ref)
+	if err != nil {
+		t.Fatalf("IssueActorRuntimeLease: %v", err)
+	}
+	if _, err := s.IssueActorRuntimeLease(ctx, "actor-uid-1", ref); !errors.Is(err, store.ErrLeaseConflict) {
+		t.Fatalf("second IssueActorRuntimeLease = %v, want ErrLeaseConflict", err)
+	}
+	if _, err := s.RenewActorRuntimeLease(ctx, first.ActorUID, first.Token, first.Generation+1); !errors.Is(err, store.ErrRuntimeLeaseInvalid) {
+		t.Fatalf("stale renewal = %v, want ErrRuntimeLeaseInvalid", err)
+	}
+	renewed, err := s.RenewActorRuntimeLease(ctx, first.ActorUID, first.Token, first.Generation)
+	if err != nil {
+		t.Fatalf("RenewActorRuntimeLease: %v", err)
+	}
+	if renewed.Generation != first.Generation || !renewed.ExpiresAt.After(first.ExpiresAt) {
+		t.Fatalf("renewed lease = %+v, want same generation and later expiry than %+v", renewed, first)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE actor_runtime_leases SET expires_at = clock_timestamp() - interval '1 second' WHERE actor_uid = $1`, first.ActorUID); err != nil {
+		t.Fatalf("expire runtime lease: %v", err)
+	}
+	if err := s.ClaimExpiredActorRuntimeLease(ctx, first.ActorUID, first.Token, first.Generation); err != nil {
+		t.Fatalf("ClaimExpiredActorRuntimeLease: %v", err)
+	}
+	if _, err := s.RenewActorRuntimeLease(ctx, first.ActorUID, first.Token, first.Generation); !errors.Is(err, store.ErrRuntimeLeaseInvalid) {
+		t.Fatalf("renewal after reclaim claim = %v, want ErrRuntimeLeaseInvalid", err)
+	}
+	if err := s.DeleteActorRuntimeLease(ctx, first.ActorUID, first.Token, first.Generation+1); !errors.Is(err, store.ErrRuntimeLeaseInvalid) {
+		t.Fatalf("stale delete = %v, want ErrRuntimeLeaseInvalid", err)
+	}
+	if err := s.DeleteActorRuntimeLease(ctx, first.ActorUID, first.Token, first.Generation); err != nil {
+		t.Fatalf("DeleteActorRuntimeLease: %v", err)
+	}
+	second, err := s.IssueActorRuntimeLease(ctx, "actor-uid-1", ref)
+	if err != nil {
+		t.Fatalf("IssueActorRuntimeLease after delete: %v", err)
+	}
+	if second.Generation <= first.Generation {
+		t.Fatalf("second generation = %d, want greater than %d", second.Generation, first.Generation)
+	}
+}
+
+func TestAcquireLease_DoesNotCleanActorRuntimeLeases(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO actor_runtime_leases
+			(actor_uid, actor_atespace, actor_name, token, generation, expires_at)
+		VALUES ('runtime-uid', 'team-a', 'actor-a', 'runtime-token', 1,
+			clock_timestamp() - interval '1 minute')`); err != nil {
+		t.Fatalf("seeding runtime lease: %v", err)
+	}
+	lease, err := s.AcquireLease(ctx, "workflow")
+	if err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+	defer lease.Close()
+	if _, err := s.GetActorRuntimeLease(ctx, "runtime-uid"); err != nil {
+		t.Fatalf("GetActorRuntimeLease after workflow cleanup: %v", err)
+	}
+}
+
 // TestCreateActor_MissingAtespace_FailedPrecondition exercises the
 // foreign-key race the doc calls out: CreateActor rejects an actor whose
 // atespace doesn't exist (including a concurrently-deleted one), with the

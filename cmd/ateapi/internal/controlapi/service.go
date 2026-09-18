@@ -94,6 +94,12 @@ func NewRPCService(
 	return s
 }
 
+// StartRuntimeLeaseReconciler starts the native expiry loop. Multiple ate-api
+// replicas safely race through the actor operation lease.
+func (s *RPCService) StartRuntimeLeaseReconciler(ctx context.Context) {
+	newRuntimeLeaseReconciler(s.actorWorkflow.store, s.actorWorkflow.terminateActorWorkload).Start(ctx)
+}
+
 // serviceStore enumerates the exact storage methods needed by
 // the control API and nothing more.
 type serviceStore interface {
@@ -123,6 +129,11 @@ type serviceStore interface {
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
+	IssueActorRuntimeLease(ctx context.Context, actorUID string, actorRef resources.ActorRef) (*store.ActorRuntimeLease, error)
+	GetActorRuntimeLease(ctx context.Context, actorUID string) (*store.ActorRuntimeLease, error)
+	RenewActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) (*store.ActorRuntimeLease, error)
+	DeleteActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error
+	ListExpiredActorRuntimeLeases(ctx context.Context, limit int) ([]store.ActorRuntimeLease, error)
 }
 
 // GetPlugin retrieves a CSI volume plugin by driver name, dynamically discovering it if not present.
@@ -176,4 +187,28 @@ func newServiceImpl(
 // Pass-through.
 func (s *ServiceImpl) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	return s.store.AcquireLease(ctx, key)
+}
+
+func (s *ServiceImpl) IssueActorRuntimeLease(ctx context.Context, actorUID string, actorRef resources.ActorRef) (*store.ActorRuntimeLease, error) {
+	return s.store.IssueActorRuntimeLease(ctx, actorUID, actorRef)
+}
+
+func (s *ServiceImpl) GetActorRuntimeLease(ctx context.Context, actorUID string) (*store.ActorRuntimeLease, error) {
+	return s.store.GetActorRuntimeLease(ctx, actorUID)
+}
+
+func (s *ServiceImpl) RenewActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) (*store.ActorRuntimeLease, error) {
+	return s.store.RenewActorRuntimeLease(ctx, actorUID, token, generation)
+}
+
+func (s *ServiceImpl) ClaimExpiredActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error {
+	return s.store.ClaimExpiredActorRuntimeLease(ctx, actorUID, token, generation)
+}
+
+func (s *ServiceImpl) DeleteActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error {
+	return s.store.DeleteActorRuntimeLease(ctx, actorUID, token, generation)
+}
+
+func (s *ServiceImpl) ListExpiredActorRuntimeLeases(ctx context.Context, limit int) ([]store.ActorRuntimeLease, error) {
+	return s.store.ListExpiredActorRuntimeLeases(ctx, limit)
 }

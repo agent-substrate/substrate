@@ -1747,7 +1747,11 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 
 // defaultLeaseTTL is how long a lease may go unrenewed before another client
 // can reclaim it.
-const defaultLeaseTTL = 30 * time.Second
+const (
+	defaultLeaseTTL              = 30 * time.Second
+	runtimeLeaseTTL              = 120 * time.Second
+	defaultRuntimeLeaseListLimit = 100
+)
 
 func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	ttl := p.leaseTTL
@@ -1917,4 +1921,126 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 		return fmt.Errorf("releasing lease for %q: %w", key, err)
 	}
 	return nil
+}
+
+// --- Actor runtime leases ---
+
+func (p *Persistence) IssueActorRuntimeLease(ctx context.Context, actorUID string, actorRef resources.ActorRef) (*store.ActorRuntimeLease, error) {
+	lease := &store.ActorRuntimeLease{}
+	err := p.pool.QueryRow(ctx, `
+		INSERT INTO actor_runtime_leases
+			(actor_uid, actor_atespace, actor_name, token, generation, expires_at)
+		VALUES ($1, $2, $3, $4, nextval('actor_runtime_lease_generation_seq'),
+			clock_timestamp() + make_interval(secs => $5))
+		ON CONFLICT (actor_uid) DO NOTHING
+		RETURNING actor_uid, token, generation, expires_at`,
+		actorUID, actorRef.Atespace, actorRef.Name, uuid.NewString(), runtimeLeaseTTL.Seconds()).Scan(
+		&lease.ActorUID, &lease.Token, &lease.Generation, &lease.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrLeaseConflict
+		}
+		return nil, fmt.Errorf("issuing runtime lease for actor %q: %w", actorUID, err)
+	}
+	lease.ActorRef = actorRef
+	return lease, nil
+}
+
+func (p *Persistence) GetActorRuntimeLease(ctx context.Context, actorUID string) (*store.ActorRuntimeLease, error) {
+	lease := &store.ActorRuntimeLease{ActorUID: actorUID}
+	err := p.pool.QueryRow(ctx, `
+		SELECT actor_atespace, actor_name, token, generation, expires_at
+		FROM actor_runtime_leases
+		WHERE actor_uid = $1`, actorUID).Scan(
+		&lease.ActorRef.Atespace, &lease.ActorRef.Name, &lease.Token, &lease.Generation, &lease.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting runtime lease for actor %q: %w", actorUID, err)
+	}
+	return lease, nil
+}
+
+func (p *Persistence) RenewActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) (*store.ActorRuntimeLease, error) {
+	lease := &store.ActorRuntimeLease{ActorUID: actorUID, Token: token, Generation: generation}
+	err := p.pool.QueryRow(ctx, `
+		UPDATE actor_runtime_leases
+		SET expires_at = clock_timestamp() + make_interval(secs => $4)
+		WHERE actor_uid = $1
+		  AND token = $2
+		  AND generation = $3
+		  AND reclaiming_until <= clock_timestamp()
+		  AND expires_at > clock_timestamp()
+		RETURNING actor_atespace, actor_name, expires_at`,
+		actorUID, token, generation, runtimeLeaseTTL.Seconds()).Scan(
+		&lease.ActorRef.Atespace, &lease.ActorRef.Name, &lease.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrRuntimeLeaseInvalid
+		}
+		return nil, fmt.Errorf("renewing runtime lease for actor %q: %w", actorUID, err)
+	}
+	return lease, nil
+}
+
+func (p *Persistence) ClaimExpiredActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error {
+	result, err := p.pool.Exec(ctx, `
+		UPDATE actor_runtime_leases
+		SET reclaiming_until = clock_timestamp() + interval '5 minutes'
+		WHERE actor_uid = $1
+		  AND token = $2
+		  AND generation = $3
+		  AND expires_at <= clock_timestamp()
+		  AND reclaiming_until <= clock_timestamp()`, actorUID, token, generation)
+	if err != nil {
+		return fmt.Errorf("claiming expired runtime lease for actor %q: %w", actorUID, err)
+	}
+	if result.RowsAffected() == 0 {
+		return store.ErrRuntimeLeaseInvalid
+	}
+	return nil
+}
+
+func (p *Persistence) DeleteActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error {
+	result, err := p.pool.Exec(ctx, `
+		DELETE FROM actor_runtime_leases
+		WHERE actor_uid = $1 AND token = $2 AND generation = $3`, actorUID, token, generation)
+	if err != nil {
+		return fmt.Errorf("deleting runtime lease for actor %q: %w", actorUID, err)
+	}
+	if result.RowsAffected() == 0 {
+		return store.ErrRuntimeLeaseInvalid
+	}
+	return nil
+}
+
+func (p *Persistence) ListExpiredActorRuntimeLeases(ctx context.Context, limit int) ([]store.ActorRuntimeLease, error) {
+	if limit <= 0 {
+		limit = defaultRuntimeLeaseListLimit
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT actor_uid, actor_atespace, actor_name, token, generation, expires_at
+		FROM actor_runtime_leases
+		WHERE expires_at <= clock_timestamp()
+		  AND reclaiming_until <= clock_timestamp()
+		ORDER BY expires_at, actor_uid
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing expired runtime leases: %w", err)
+	}
+	defer rows.Close()
+
+	var leases []store.ActorRuntimeLease
+	for rows.Next() {
+		var lease store.ActorRuntimeLease
+		if err := rows.Scan(&lease.ActorUID, &lease.ActorRef.Atespace, &lease.ActorRef.Name, &lease.Token, &lease.Generation, &lease.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("scanning expired runtime lease: %w", err)
+		}
+		leases = append(leases, lease)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing expired runtime leases: %w", err)
+	}
+	return leases, nil
 }

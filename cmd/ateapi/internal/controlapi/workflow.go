@@ -79,6 +79,7 @@ type ActorWorkflow struct {
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
 	objectStore          objectstore.Store
+	terminateWorkload    func(context.Context, *ateapipb.Actor) error
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -131,6 +132,12 @@ type actorWorkflowStore interface {
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
+	IssueActorRuntimeLease(ctx context.Context, actorUID string, actorRef resources.ActorRef) (*store.ActorRuntimeLease, error)
+	GetActorRuntimeLease(ctx context.Context, actorUID string) (*store.ActorRuntimeLease, error)
+	RenewActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) (*store.ActorRuntimeLease, error)
+	ClaimExpiredActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error
+	DeleteActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error
+	ListExpiredActorRuntimeLeases(ctx context.Context, limit int) ([]store.ActorRuntimeLease, error)
 }
 
 // WorkerWorkflow handles the multi-step operations on a Worker.

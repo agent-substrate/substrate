@@ -39,6 +39,76 @@ import (
 // the steps a previous attempt completed, deriving progress from the
 // persisted actor alone.
 func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+	actor, err := w.store.GetActor(leaseCtx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.ensureNoRuntimeLease(leaseCtx, actor); err != nil {
+		return nil, err
+	}
+	return w.suspendActorHeld(leaseCtx, actorRef)
+}
+
+// SuspendActorWithLease requires the runtime lease for the actor incarnation.
+// The actor operation lease is acquired before validating the tuple, so a
+// stale caller cannot reach any suspend step or a replacement actor.
+func (w *ActorWorkflow) SuspendActorWithLease(ctx context.Context, actorRef resources.ActorRef, requested *ateapipb.ActorLease) (_ *ateapipb.Actor, err error) {
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+
+	actor, err := w.store.GetActor(leaseCtx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	runtimeLease, err := w.store.GetActorRuntimeLease(leaseCtx, actor.GetMetadata().GetUid())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is no longer current")
+		}
+		return nil, err
+	}
+	if runtimeLease.ExpiresAt.Before(time.Now()) || !runtimeLeaseMatchesProto(runtimeLease, requested) {
+		return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is stale or does not match")
+	}
+
+	actor, err = w.suspendActorHeld(leaseCtx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.store.DeleteActorRuntimeLease(leaseCtx, runtimeLease.ActorUID, runtimeLease.Token, runtimeLease.Generation); err != nil {
+		return nil, fmt.Errorf("while clearing suspended actor runtime lease: %w", err)
+	}
+	return actor, nil
+}
+
+// SuspendActorForReconciler reattaches to the persisted runtime lease for a
+// trusted in-process controller after a restart, then uses the same
+// lease-aware suspend path. Actors from before runtime leases existed retain
+// the compatibility path.
+func (w *ActorWorkflow) SuspendActorForReconciler(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	actor, err := w.store.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	stored, err := w.store.GetActorRuntimeLease(ctx, actor.GetMetadata().GetUid())
+	if errors.Is(err, store.ErrNotFound) {
+		return w.SuspendActor(ctx, actorRef)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return w.SuspendActorWithLease(ctx, actorRef, actorRuntimeLeaseProto(stored))
+}
+
+func (w *ActorWorkflow) suspendActorHeld(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate
@@ -55,13 +125,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err, attrs...)
 	}()
 
-	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
-	if err != nil {
-		return nil, err
-	}
-	defer lease.Close()
-
-	actor, actorTemplate, err = w.loadActorForSuspend(leaseCtx, actorRef)
+	actor, actorTemplate, err = w.loadActorForSuspend(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
@@ -76,26 +140,26 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	// alone can no longer tell the two origins apart.
 	fromPaused := isPausedOriginSuspend(actor)
 	var marked *ateapipb.Actor
-	if marked, err = w.ensureMarkedSuspending(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+	if marked, err = w.ensureMarkedSuspending(ctx, actorRef, actor, actorTemplate); err != nil {
 		return nil, err
 	}
 	actor = marked
 	if fromPaused {
-		wireSnapshotScope, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
+		wireSnapshotScope, err = w.ensurePausedSnapshotUploaded(ctx, actorRef, actor, actorTemplate)
 	} else {
-		wireSnapshotScope, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate)
+		wireSnapshotScope, err = w.ensureAteletSuspended(ctx, actorRef, actor, actorTemplate)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err = w.ensureVolumesDetached(leaseCtx, actor, actorTemplate, "DetachVolumes", ateattr.OperationSuspend); err != nil {
+	if err = w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumes", ateattr.OperationSuspend); err != nil {
 		return nil, err
 	}
 	// FinalizeSuspended clears the WorkerAssignment the labels read, so snapshot
 	// them here, as crash.go does for the crash counter.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(ctx, actorRef, actorTemplate); err != nil {
 		return nil, err
 	}
 	actor = finalized

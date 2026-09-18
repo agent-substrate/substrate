@@ -37,8 +37,10 @@ const (
 	Control_CreateActor_FullMethodName                = "/ateapi.Control/CreateActor"
 	Control_UpdateActor_FullMethodName                = "/ateapi.Control/UpdateActor"
 	Control_SuspendActor_FullMethodName               = "/ateapi.Control/SuspendActor"
+	Control_SuspendActorWithLease_FullMethodName      = "/ateapi.Control/SuspendActorWithLease"
 	Control_PauseActor_FullMethodName                 = "/ateapi.Control/PauseActor"
 	Control_ResumeActor_FullMethodName                = "/ateapi.Control/ResumeActor"
+	Control_RenewActorLease_FullMethodName            = "/ateapi.Control/RenewActorLease"
 	Control_DeleteActor_FullMethodName                = "/ateapi.Control/DeleteActor"
 	Control_GetActorEgressPolicy_FullMethodName       = "/ateapi.Control/GetActorEgressPolicy"
 	Control_CreateActorEgressPolicy_FullMethodName    = "/ateapi.Control/CreateActorEgressPolicy"
@@ -83,10 +85,14 @@ type ControlClient interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
+	// Suspend an actor only when the caller holds its runtime lease.
+	SuspendActorWithLease(ctx context.Context, in *SuspendActorWithLeaseRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
 	// Pause a given actor and keep its snapshots on node VM.
 	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
+	// Renew an actor's runtime lease.
+	RenewActorLease(ctx context.Context, in *RenewActorLeaseRequest, opts ...grpc.CallOption) (*RenewActorLeaseResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
@@ -195,6 +201,16 @@ func (c *controlClient) SuspendActor(ctx context.Context, in *SuspendActorReques
 	return out, nil
 }
 
+func (c *controlClient) SuspendActorWithLease(ctx context.Context, in *SuspendActorWithLeaseRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SuspendActorResponse)
+	err := c.cc.Invoke(ctx, Control_SuspendActorWithLease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PauseActorResponse)
@@ -209,6 +225,16 @@ func (c *controlClient) ResumeActor(ctx context.Context, in *ResumeActorRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResumeActorResponse)
 	err := c.cc.Invoke(ctx, Control_ResumeActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) RenewActorLease(ctx context.Context, in *RenewActorLeaseRequest, opts ...grpc.CallOption) (*RenewActorLeaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewActorLeaseResponse)
+	err := c.cc.Invoke(ctx, Control_RenewActorLease_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -491,10 +517,14 @@ type ControlServer interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
+	// Suspend an actor only when the caller holds its runtime lease.
+	SuspendActorWithLease(context.Context, *SuspendActorWithLeaseRequest) (*SuspendActorResponse, error)
 	// Pause a given actor and keep its snapshots on node VM.
 	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
+	// Renew an actor's runtime lease.
+	RenewActorLease(context.Context, *RenewActorLeaseRequest) (*RenewActorLeaseResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
@@ -575,11 +605,17 @@ func (UnimplementedControlServer) UpdateActor(context.Context, *UpdateActorReque
 func (UnimplementedControlServer) SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuspendActor not implemented")
 }
+func (UnimplementedControlServer) SuspendActorWithLease(context.Context, *SuspendActorWithLeaseRequest) (*SuspendActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SuspendActorWithLease not implemented")
+}
 func (UnimplementedControlServer) PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PauseActor not implemented")
 }
 func (UnimplementedControlServer) ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResumeActor not implemented")
+}
+func (UnimplementedControlServer) RenewActorLease(context.Context, *RenewActorLeaseRequest) (*RenewActorLeaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenewActorLease not implemented")
 }
 func (UnimplementedControlServer) DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActor not implemented")
@@ -752,6 +788,24 @@ func _Control_SuspendActor_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_SuspendActorWithLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SuspendActorWithLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SuspendActorWithLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SuspendActorWithLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SuspendActorWithLease(ctx, req.(*SuspendActorWithLeaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_PauseActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PauseActorRequest)
 	if err := dec(in); err != nil {
@@ -784,6 +838,24 @@ func _Control_ResumeActor_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).ResumeActor(ctx, req.(*ResumeActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_RenewActorLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewActorLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).RenewActorLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_RenewActorLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).RenewActorLease(ctx, req.(*RenewActorLeaseRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1280,12 +1352,20 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_SuspendActor_Handler,
 		},
 		{
+			MethodName: "SuspendActorWithLease",
+			Handler:    _Control_SuspendActorWithLease_Handler,
+		},
+		{
 			MethodName: "PauseActor",
 			Handler:    _Control_PauseActor_Handler,
 		},
 		{
 			MethodName: "ResumeActor",
 			Handler:    _Control_ResumeActor_Handler,
+		},
+		{
+			MethodName: "RenewActorLease",
+			Handler:    _Control_RenewActorLease_Handler,
 		},
 		{
 			MethodName: "DeleteActor",

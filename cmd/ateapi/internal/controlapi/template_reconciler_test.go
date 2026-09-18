@@ -216,7 +216,11 @@ func (c *fakeGoldenControl) ResumeActor(_ context.Context, req *ateapipb.ResumeA
 		return nil, c.resumeErr
 	}
 	c.goldenState = ateapipb.ActorState_ACTOR_STATE_RUNNING
-	return &ateapipb.ResumeActorResponse{}, nil
+	return &ateapipb.ResumeActorResponse{Lease: &ateapipb.ActorLease{Token: "golden-token", Generation: 1}}, nil
+}
+
+func (c *fakeGoldenControl) ResumeActorForReconciler(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+	return c.ResumeActor(ctx, req)
 }
 
 func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
@@ -233,6 +237,14 @@ func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapipb.Suspen
 	return &ateapipb.SuspendActorResponse{
 		Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: c.goldenSnapshot}}},
 	}, nil
+}
+
+func (c *fakeGoldenControl) SuspendActorForReconciler(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+	return c.SuspendActor(ctx, req)
+}
+
+func (c *fakeGoldenControl) SuspendActorWithLease(ctx context.Context, req *ateapipb.SuspendActorWithLeaseRequest) (*ateapipb.SuspendActorResponse, error) {
+	return c.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: req.GetActor()})
 }
 
 func (c *fakeGoldenControl) callCounts() (creates, resumes, suspends int) {

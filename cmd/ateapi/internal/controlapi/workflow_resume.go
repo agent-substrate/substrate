@@ -72,10 +72,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	var tele restoreTelemetry
 	var wasRunning bool
 
-	// Recorded before the lease so lease contention still counts as an attempt.
-	// Clean already-running no-ops are skipped: the router resumes per routed
-	// request, and recording those would sample at router QPS and bury
-	// cold-resume latency.
+	// The router calls this method for every request. Keep its established
+	// read-only running fast path; executor-owned callers use
+	// ResumeActorWithLease instead so an actor cannot be revived without an
+	// owner lease.
 	defer func() {
 		if err == nil && wasRunning {
 			return
@@ -84,10 +84,6 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireSnapshotScope)...)
 	}()
 
-	// Routed requests call ResumeActor even when the actor is already running.
-	// Read before taking the distributed lease so that hot-path checks do not
-	// upsert and delete a PostgreSQL lease row. Any state that needs work is read
-	// again under the lease below.
 	actor, err = w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
@@ -110,6 +106,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
 		return actor, false, nil
 	}
+	if err = w.ensureNoRuntimeLease(leaseCtx, actor); err != nil {
+		return nil, false, err
+	}
 	var created *ateapipb.Actor
 	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
@@ -131,8 +130,188 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if running, err = w.finalizeRunning(leaseCtx, actorRef, actorTemplate); err != nil {
 		return nil, false, err
 	}
+	return running, true, nil
+}
+
+func (w *ActorWorkflow) ensureNoRuntimeLease(ctx context.Context, actor *ateapipb.Actor) error {
+	_, err := w.store.GetActorRuntimeLease(ctx, actor.GetMetadata().GetUid())
+	if err == nil {
+		return status.Error(codes.FailedPrecondition, "actor is owned by an executor runtime lease")
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+// ResumeActorForReconciler is the trusted in-process path used by the golden
+// actor controller. It reattaches to a persisted runtime lease before calling
+// the same lease-checked workflow, so a controller restart cannot strand the
+// golden workload behind an otherwise correctly fail-closed public API.
+func (w *ActorWorkflow) ResumeActorForReconciler(ctx context.Context, actorRef resources.ActorRef, boot bool) (*ateapipb.Actor, bool, *ateapipb.ActorLease, error) {
+	actor, err := w.store.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	stored, getErr := w.store.GetActorRuntimeLease(ctx, actor.GetMetadata().GetUid())
+	if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
+		return nil, false, nil, getErr
+	}
+	requested := actorRuntimeLeaseProto(stored)
+	return w.ResumeActorWithLease(ctx, actorRef, boot, requested)
+}
+
+// ResumeActorWithLease resumes an actor and returns the runtime lease that
+// owns the resulting workload. A running actor may be reattached only with
+// its matching lease; a legacy running actor without a lease row is assigned
+// one while the actor operation lease is held.
+func (w *ActorWorkflow) ResumeActorWithLease(ctx context.Context, actorRef resources.ActorRef, boot bool, requestedLease *ateapipb.ActorLease) (_ *ateapipb.Actor, resumed bool, runtimeLease *ateapipb.ActorLease, err error) {
+	start := time.Now()
+	var actor *ateapipb.Actor
+	var actorTemplate *ateapipb.ActorTemplate
+	var tele restoreTelemetry
+	var wasRunning bool
+
+	// Recorded before the lease so lease contention still counts as an attempt.
+	// Clean already-running no-ops are skipped: the router resumes per routed
+	// request, and recording those would sample at router QPS and bury
+	// cold-resume latency.
+	defer func() {
+		if err == nil && wasRunning {
+			return
+		}
+		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
+			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireSnapshotScope)...)
+	}()
+
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	defer lease.Close()
+
+	var src resumeSnapshotSource
+	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef, boot)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
+		runtimeLease, err = w.ensureRunningRuntimeLease(leaseCtx, actor, requestedLease)
+		return actor, false, runtimeLease, err
+	}
+	if requestedLease == nil {
+		// A fresh executor may claim only an unowned incarnation. A persisted
+		// lease belongs to the previous owner until the native reaper removes it;
+		// adopting it without its token would defeat hard-death fencing.
+		if err = w.ensureNoRuntimeLease(leaseCtx, actor); err != nil {
+			return nil, false, nil, err
+		}
+	}
+	var created *ateapipb.Actor
+	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+		return nil, false, nil, err
+	}
+	actor = created
+	var worker *ateapipb.Worker
+	var assigned *ateapipb.Actor
+	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+		return nil, false, nil, err
+	}
+	actor = assigned
+	if err = w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate); err != nil {
+		return nil, false, nil, err
+	}
+	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
+		return nil, false, nil, err
+	}
+	runtimeLease, err = w.ensureRuntimeLease(leaseCtx, actor, requestedLease)
+	if err != nil {
+		if cleanupErr := w.cleanupFailedResume(leaseCtx, actorRef, actor, nil); cleanupErr != nil {
+			return nil, false, nil, errors.Join(err, cleanupErr)
+		}
+		return nil, false, nil, err
+	}
+	var running *ateapipb.Actor
+	if running, err = w.finalizeRunning(leaseCtx, actorRef, actorTemplate); err != nil {
+		if cleanupErr := w.cleanupFailedResume(leaseCtx, actorRef, actor, runtimeLease); cleanupErr != nil {
+			return nil, false, nil, errors.Join(err, cleanupErr)
+		}
+		return nil, false, nil, err
+	}
 	actor = running
-	return actor, true, nil
+	return actor, true, runtimeLease, nil
+}
+
+func (w *ActorWorkflow) cleanupFailedResume(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, runtimeLease *ateapipb.ActorLease) error {
+	if err := w.terminateActorWorkload(ctx, actor); err != nil {
+		return fmt.Errorf("while cleaning up failed resume workload: %w", err)
+	}
+	if err := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonUnknown); err != nil {
+		return fmt.Errorf("while crashing failed resume actor: %w", err)
+	}
+	if runtimeLease == nil {
+		return nil
+	}
+	stored, err := w.store.GetActorRuntimeLease(ctx, actor.GetMetadata().GetUid())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while checking failed resume runtime lease: %w", err)
+	}
+	if !runtimeLeaseMatchesProto(stored, runtimeLease) {
+		return store.ErrRuntimeLeaseInvalid
+	}
+	if err := w.store.DeleteActorRuntimeLease(ctx, stored.ActorUID, stored.Token, stored.Generation); err != nil {
+		return fmt.Errorf("while clearing failed resume runtime lease: %w", err)
+	}
+	return nil
+}
+
+func (w *ActorWorkflow) ensureRuntimeLease(ctx context.Context, actor *ateapipb.Actor, requested *ateapipb.ActorLease) (*ateapipb.ActorLease, error) {
+	stored, err := w.store.GetActorRuntimeLease(ctx, actor.GetMetadata().GetUid())
+	if err == nil {
+		if requested == nil || stored.ExpiresAt.Before(time.Now()) || !runtimeLeaseMatchesProto(stored, requested) {
+			return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is stale or does not match")
+		}
+		return actorRuntimeLeaseProto(stored), nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	if requested != nil {
+		return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is no longer current")
+	}
+	issued, err := w.store.IssueActorRuntimeLease(ctx, actor.GetMetadata().GetUid(), resources.ActorRefFromActor(actor))
+	if err != nil {
+		return nil, err
+	}
+	return actorRuntimeLeaseProto(issued), nil
+}
+
+func (w *ActorWorkflow) ensureRunningRuntimeLease(ctx context.Context, actor *ateapipb.Actor, requested *ateapipb.ActorLease) (*ateapipb.ActorLease, error) {
+	stored, err := w.store.GetActorRuntimeLease(ctx, actor.GetMetadata().GetUid())
+	if errors.Is(err, store.ErrNotFound) {
+		if requested != nil {
+			return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is no longer current")
+		}
+		issued, issueErr := w.store.IssueActorRuntimeLease(ctx, actor.GetMetadata().GetUid(), resources.ActorRefFromActor(actor))
+		if issueErr != nil {
+			return nil, issueErr
+		}
+		return actorRuntimeLeaseProto(issued), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if stored.ExpiresAt.Before(time.Now()) || !runtimeLeaseMatchesProto(stored, requested) {
+		return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is stale or does not match")
+	}
+	renewed, err := w.store.RenewActorRuntimeLease(ctx, stored.ActorUID, stored.Token, stored.Generation)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "actor runtime lease is no longer current")
+	}
+	return actorRuntimeLeaseProto(renewed), nil
 }
 
 // validateGoldenSnapshotScope rejects a golden snapshot that does not carry

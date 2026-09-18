@@ -69,6 +69,11 @@ class ControlStub:
                 request_serializer=ateapi__pb2.SuspendActorRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.SuspendActorResponse.FromString,
                 _registered_method=True)
+        self.SuspendActorWithLease = channel.unary_unary(
+                '/ateapi.Control/SuspendActorWithLease',
+                request_serializer=ateapi__pb2.SuspendActorWithLeaseRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.SuspendActorResponse.FromString,
+                _registered_method=True)
         self.PauseActor = channel.unary_unary(
                 '/ateapi.Control/PauseActor',
                 request_serializer=ateapi__pb2.PauseActorRequest.SerializeToString,
@@ -78,6 +83,11 @@ class ControlStub:
                 '/ateapi.Control/ResumeActor',
                 request_serializer=ateapi__pb2.ResumeActorRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.ResumeActorResponse.FromString,
+                _registered_method=True)
+        self.RenewActorLease = channel.unary_unary(
+                '/ateapi.Control/RenewActorLease',
+                request_serializer=ateapi__pb2.RenewActorLeaseRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.RenewActorLeaseResponse.FromString,
                 _registered_method=True)
         self.DeleteActor = channel.unary_unary(
                 '/ateapi.Control/DeleteActor',
@@ -245,6 +255,13 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SuspendActorWithLease(self, request, context):
+        """Suspend an actor only when the caller holds its runtime lease.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def PauseActor(self, request, context):
         """Pause a given actor and keep its snapshots on node VM.
         """
@@ -254,6 +271,13 @@ class ControlServicer:
 
     def ResumeActor(self, request, context):
         """Resume an actor from its latest snapshot.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RenewActorLease(self, request, context):
+        """Renew an actor's runtime lease.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -470,6 +494,11 @@ def add_ControlServicer_to_server(servicer, server):
                     request_deserializer=ateapi__pb2.SuspendActorRequest.FromString,
                     response_serializer=ateapi__pb2.SuspendActorResponse.SerializeToString,
             ),
+            'SuspendActorWithLease': grpc.unary_unary_rpc_method_handler(
+                    servicer.SuspendActorWithLease,
+                    request_deserializer=ateapi__pb2.SuspendActorWithLeaseRequest.FromString,
+                    response_serializer=ateapi__pb2.SuspendActorResponse.SerializeToString,
+            ),
             'PauseActor': grpc.unary_unary_rpc_method_handler(
                     servicer.PauseActor,
                     request_deserializer=ateapi__pb2.PauseActorRequest.FromString,
@@ -479,6 +508,11 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.ResumeActor,
                     request_deserializer=ateapi__pb2.ResumeActorRequest.FromString,
                     response_serializer=ateapi__pb2.ResumeActorResponse.SerializeToString,
+            ),
+            'RenewActorLease': grpc.unary_unary_rpc_method_handler(
+                    servicer.RenewActorLease,
+                    request_deserializer=ateapi__pb2.RenewActorLeaseRequest.FromString,
+                    response_serializer=ateapi__pb2.RenewActorLeaseResponse.SerializeToString,
             ),
             'DeleteActor': grpc.unary_unary_rpc_method_handler(
                     servicer.DeleteActor,
@@ -731,6 +765,33 @@ class Control:
             _registered_method=True)
 
     @staticmethod
+    def SuspendActorWithLease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/SuspendActorWithLease',
+            ateapi__pb2.SuspendActorWithLeaseRequest.SerializeToString,
+            ateapi__pb2.SuspendActorResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def PauseActor(request,
             target,
             options=(),
@@ -774,6 +835,33 @@ class Control:
             '/ateapi.Control/ResumeActor',
             ateapi__pb2.ResumeActorRequest.SerializeToString,
             ateapi__pb2.ResumeActorResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RenewActorLease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/RenewActorLease',
+            ateapi__pb2.RenewActorLeaseRequest.SerializeToString,
+            ateapi__pb2.RenewActorLeaseResponse.FromString,
             options,
             channel_credentials,
             insecure,

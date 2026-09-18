@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -42,6 +43,10 @@ var (
 
 	// ErrLeaseConflict indicates that a distributed lease is already held by another client.
 	ErrLeaseConflict = errors.New("persistence: lease conflict")
+
+	// ErrRuntimeLeaseInvalid indicates that an actor runtime lease is missing,
+	// stale, or expired.
+	ErrRuntimeLeaseInvalid = errors.New("persistence: runtime lease invalid")
 
 	// ErrInvalidPageToken indicates that a list page token is malformed or was
 	// issued for a different list operation or scope.
@@ -266,6 +271,28 @@ type Interface interface {
 	// held and renewed automatically until the returned Lease is closed.
 	// Returns ErrLeaseConflict if the lease is already held by another client.
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
+
+	// IssueActorRuntimeLease creates the runtime lease for an actor UID. An
+	// existing row, including an expired row awaiting reclaim, conflicts.
+	IssueActorRuntimeLease(ctx context.Context, actorUID string, actorRef resources.ActorRef) (*ActorRuntimeLease, error)
+
+	// GetActorRuntimeLease fetches the runtime lease for an actor UID.
+	GetActorRuntimeLease(ctx context.Context, actorUID string) (*ActorRuntimeLease, error)
+
+	// RenewActorRuntimeLease compares the complete caller tuple and extends the
+	// lease only while it is still current, unexpired, and not being reclaimed.
+	RenewActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) (*ActorRuntimeLease, error)
+
+	// ClaimExpiredActorRuntimeLease fences renewal before a reaper terminates
+	// the workload. A claim expires on its own if the reaper process dies.
+	ClaimExpiredActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error
+
+	// DeleteActorRuntimeLease removes a lease only when its token and generation
+	// still match. It is used after a successful suspend or reclaim.
+	DeleteActorRuntimeLease(ctx context.Context, actorUID, token string, generation int64) error
+
+	// ListExpiredActorRuntimeLeases returns runtime leases ready for reclaim.
+	ListExpiredActorRuntimeLeases(ctx context.Context, limit int) ([]ActorRuntimeLease, error)
 }
 
 // Precondition guards an update with the uid and version the caller observed:
@@ -389,6 +416,15 @@ type Lease struct {
 	ctx     context.Context
 	closeFn func()
 	once    sync.Once
+}
+
+// ActorRuntimeLease is durable ownership of a running actor workload.
+type ActorRuntimeLease struct {
+	ActorUID   string
+	ActorRef   resources.ActorRef
+	Token      string
+	Generation int64
+	ExpiresAt  time.Time
 }
 
 // NewLease builds a Lease from its lease context (cancelled on loss or Close)
