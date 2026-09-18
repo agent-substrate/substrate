@@ -107,8 +107,9 @@ func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, i
 // Register records actorUID's system-info volumes and writes their contents
 // from current cluster state. If actorUID is already registered (for example
 // after a worker pod crash left a stale entry without Terminate), the previous
-// registration is superseded.
-func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) error {
+// registration is superseded. The returned pointer identifies this
+// registration for failure cleanup.
+func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) (*registeredActor, error) {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
 	// Held until the initial write finishes so a refresh cannot interleave.
 	actor.mu.Lock()
@@ -129,10 +130,16 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 
 	for _, v := range volumes {
 		if err := r.write(ref, actorUID, v); err != nil {
-			return fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
+			r.mu.Lock()
+			if r.actors[actorUID] == actor {
+				delete(r.actors, actorUID)
+				actor.stale = true
+			}
+			r.mu.Unlock()
+			return actor, fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
 		}
 	}
-	return nil
+	return actor, nil
 }
 
 // Deregister drops actorUID's registration. After Deregister returns, no more
@@ -149,6 +156,22 @@ func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 		actor.stale = true
 		actor.mu.Unlock()
 	}
+}
+
+// DeregisterOwned removes actorUID only when it still points at owner. This
+// protects a newer registration from cleanup belonging to an older operation.
+func (r *systemInfoVolumeRefresher) DeregisterOwned(actorUID string, owner *registeredActor) {
+	r.mu.Lock()
+	if r.actors[actorUID] != owner {
+		r.mu.Unlock()
+		return
+	}
+	delete(r.actors, actorUID)
+	r.mu.Unlock()
+
+	owner.mu.Lock()
+	owner.stale = true
+	owner.mu.Unlock()
 }
 
 // collectData builds the volume's contents keyed by volume-relative path,

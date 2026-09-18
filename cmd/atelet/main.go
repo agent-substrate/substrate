@@ -504,12 +504,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
+	var registration *registeredActor
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(actorUID, registration)
 		}
 	}()
-	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
@@ -1113,10 +1114,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		runtimeRec = goldenRec
 	}
 
-	// Undo the Register if the restore fails.
+	var registration *registeredActor
+	// Undo the Register if the restore fails. The errgroup join below happens
+	// before this defer can read registration, so the handoff is synchronized.
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(actorUID, registration)
 		}
 	}()
 
@@ -1188,7 +1191,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
-		if err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+		if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return err
 		}
