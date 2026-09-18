@@ -60,7 +60,7 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 	// a missing or stale one fails loudly at template creation.
 	blocks["${TEMPLATE_SANDBOX_CONFIG}"] = "sandboxConfig:\n  sandboxClass: SANDBOX_CLASS_MICROVM\n  configName: microvm"
 	// Only for fixtures that declare no limits of their own. Without them the
-	// guest boots at the kata config's default (2GiB), and several of those
+	// guest boots at ateom's default size (2GiB), and several of those
 	// do not fit beside the demo pools on CI's single kind node. These size
 	// the VM itself — see internal/sizing. Quantities are strings.
 	blocks["${TEMPLATE_RESOURCES}"] = "resources:\n  limits:\n  - name: cpu\n    quantity: \"1\"\n  - name: memory\n    quantity: 512Mi"
