@@ -151,6 +151,24 @@ func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	}
 }
 
+// RegisteredActorUIDs returns the actors currently registered here, which is
+// the set this atelet is hosting: Run and Restore register, Terminate
+// deregisters.
+//
+// Trustworthy in the positive direction only. The registry is in memory and a
+// restarted atelet starts with an empty one while the actors it served keep
+// running (TODO(#1372)), so a caller may treat a UID here as live but must not
+// treat an absent one as dead.
+func (r *systemInfoVolumeRefresher) RegisteredActorUIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	uids := make([]string, 0, len(r.actors))
+	for uid := range r.actors {
+		uids = append(uids, uid)
+	}
+	return uids
+}
+
 // collectData builds the volume's contents keyed by volume-relative path,
 // plus each projected bundle's trustBundleHash.
 func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) (payload map[string][]byte, bundleHashes map[string]string, err error) {

@@ -443,7 +443,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 
 			// The worker's pod goes away with the commit still outstanding, so
 			// the suspend never gets to finish.
-			if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+			if _, err := NewWorkerWorkflow(persistence, nil).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("DeleteWorker: %v", err)
 			}
 
