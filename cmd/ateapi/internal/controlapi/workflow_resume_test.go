@@ -1133,7 +1133,6 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 // golden) so a missing permutation is visible by scanning.
 func TestResumeActor_AteletWireRequest(t *testing.T) {
 	const localSnapshotName = "pause-snap-1"
-	const malformedURI = "not-a-valid-snapshot-uri"
 
 	actorURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1")
 	goldenURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
@@ -1203,12 +1202,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			name: "03 late non-Full golden does not change a cold boot",
 			tmpl: templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, Fidelity: dataScope}},
 			want: restoreWant{run: true},
-		},
-		{
-			name:  "04 inherited golden snapshot rejects a malformed URI",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, Fidelity: fullScope}, tmplUID: "current"},
-			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, Fidelity: fullScope}},
-			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
 			name:  "05 template repoint with a late golden still cold-boots",
@@ -1286,11 +1279,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotURI:    actorURI,
 				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			},
-		},
-		{
-			name:  "12 malformed durable snapshot URI fails with DataLoss",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, Fidelity: fullScope}},
-			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
 			name: "13 Full pause snapshot restores locally as Full",

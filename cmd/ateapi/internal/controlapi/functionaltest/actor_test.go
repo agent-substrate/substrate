@@ -79,7 +79,7 @@ func TestCreateActor_Success(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 	}
@@ -700,7 +700,7 @@ func TestUpdateActor_Success(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -846,7 +846,7 @@ func TestUpdateActor(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -2910,7 +2910,7 @@ func TestResumeActor(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			AssignedNode:     "node1",
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
 				WorkerNamespace: ns,
@@ -3058,36 +3058,7 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
-	// Publish the golden snapshot as a tag and point the template at it, as
-	// createTemplateWithContainersAndVolumes does.
-	createAtespace(t, tc, resources.GoldenActorAtespace)
-	tag, err := tc.persistence.CreateTag(context.Background(), &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
-		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
-		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
-			StorageLocation:  testStorageLocation,
-			ActorTemplateUid: created.GetMetadata().GetUid(),
-		},
-	})
-	if err != nil {
-		t.Fatalf("create golden tag: %v", err)
-	}
-	updated, err := tc.persistence.UpdateActorTemplate(context.Background(),
-		resources.ActorTemplateRefFromActorTemplate(created), store.PreconditionFrom(created),
-		func(dbTemplate *ateapipb.ActorTemplate) error {
-			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
-				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: resources.TagRefFromTag(tag).ToObjectRef(),
-				},
-			}
-			return nil
-		})
-	if err != nil {
-		t.Fatalf("failed to record the template's golden snapshot: %v", err)
-	}
-	return updated
+	return publishGoldenTag(t, tc, created)
 }
 
 // TestResumeActor_DataSnapshotIgnoresGolden drives a resume from a DATA
@@ -4054,7 +4025,7 @@ func TestPauseActor(t *testing.T) {
 			LocalSnapshot: &ateapipb.LocalSnapshot{
 				Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 	}
 

@@ -504,7 +504,7 @@ func TestDeleteTag_RefusesWhileBorrowed(t *testing.T) {
 	// what ends the borrow.
 	own := mustActorSnapshotURI(t, template, borrower, "clone-1-snapshot")
 	mustUpdateActorStatus(t, ctx, persistence, borrower, func(s *ateapipb.ActorStatus) {
-		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: own.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: own.String(), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
 	})
 	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteTag once the borrow ended: %v", err)
