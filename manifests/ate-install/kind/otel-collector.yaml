@@ -85,8 +85,8 @@ data:
             attributes:
               - key: service.name
                 default_value: unknown
+              # No default: drops workload logs, which have no such key.
               - key: ate.actor.state
-                default_value: unknown
 
     exporters:
       otlp/jaeger:
@@ -108,11 +108,11 @@ data:
           processors: [batch]
           exporters: [prometheus, debug]
 
-        # The actor lifecycle events. debug is the only exporter: kind has no
-        # log store, and the e2e read-back goes through the count connector
-        # below. Never put a sampler or a filter here. A consumer takes the
-        # last event for an actor, thus a dropped record reports a stale state
-        # with no sign that anything is missing.
+        # Every ate event, plus any workload that sends OTLP logs. debug is the
+        # only exporter: kind has no log store, and the e2e read-back goes
+        # through the count connector below. Never put a sampler or a filter
+        # here. A consumer takes the last event for an actor, thus a dropped
+        # record reports a stale state with no sign that anything is missing.
         logs:
           receivers: [otlp]
           processors: [batch]

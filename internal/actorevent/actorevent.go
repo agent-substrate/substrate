@@ -105,10 +105,31 @@ func BuildRecord(ev Event, t time.Time, attrs []slog.Attr) log.Record {
 
 	kvs := make([]log.KeyValue, 0, len(attrs))
 	for _, a := range attrs {
-		kvs = append(kvs, log.String(a.Key, a.Value.String()))
+		kvs = append(kvs, log.KeyValue{Key: a.Key, Value: logValue(a.Value)})
 	}
 	rec.AddAttributes(kvs...)
 	return rec
+}
+
+// logValue keeps the kind slog's JSON handler writes, so the two copies match.
+func logValue(v slog.Value) log.Value {
+	switch v.Kind() {
+	case slog.KindString:
+		return log.StringValue(v.String())
+	case slog.KindInt64:
+		return log.Int64Value(v.Int64())
+	case slog.KindUint64:
+		return log.Int64Value(int64(v.Uint64()))
+	case slog.KindFloat64:
+		return log.Float64Value(v.Float64())
+	case slog.KindBool:
+		return log.BoolValue(v.Bool())
+	case slog.KindDuration:
+		// nanoseconds, not "1.5s"
+		return log.Int64Value(int64(v.Duration()))
+	default:
+		return log.StringValue(v.String())
+	}
 }
 
 // Emitter writes events through one log.Logger. Tests construct one directly, so

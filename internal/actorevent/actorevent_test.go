@@ -233,3 +233,40 @@ func TestEmitIsANoOpWithoutAProvider(t *testing.T) {
 	// This asserts it does not panic rather than that it drops the record.
 	actorevent.Emit(context.Background(), actorevent.StateChanged, stateChangedAttrs(ateattr.ActorStateRunning))
 }
+
+func TestBuildRecordKeepsValueKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		attr slog.Attr
+		want log.Value
+	}{
+		{"string", slog.String("k", "v"), log.StringValue("v")},
+		{"int", slog.Int64("k", 7), log.Int64Value(7)},
+		{"uint", slog.Uint64("k", 7), log.Int64Value(7)},
+		{"float", slog.Float64("k", 1.5), log.Float64Value(1.5)},
+		{"bool", slog.Bool("k", true), log.BoolValue(true)},
+		{"duration is nanoseconds, as in the stdout copy", slog.Duration("k", 1500*time.Millisecond), log.Int64Value(1_500_000_000)},
+		{"anything else falls back to its string form", slog.Any("k", struct{}{}), log.StringValue("{}")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := actorevent.BuildRecord(actorevent.StateChanged, time.Now(), []slog.Attr{tt.attr})
+			var got log.Value
+			rec.WalkAttributes(func(kv log.KeyValue) bool {
+				got = kv.Value
+				return false
+			})
+			if got.Kind() != tt.want.Kind() {
+				t.Fatalf("kind = %v, want %v", got.Kind(), tt.want.Kind())
+			}
+			if got.String() != tt.want.String() {
+				t.Errorf("value = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
