@@ -79,6 +79,13 @@ not a local entry point. See [automation/README.md](automation/README.md).
 python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
 ```
 
+One flag controls the optional post-run measurements described in
+[Benchmark output files](#benchmark-output-files):
+
+* `--cluster-facts` / `--no-cluster-facts`: read node capacity and worker pod
+  count from the Kubernetes API once the run ends, to derive density frontiers.
+  On by default. Pass `--no-cluster-facts` to skip Kubernetes API discovery.
+
 Test-specific flags are appended to the same command; see the sections below.
 
 ### DurDir Benchmark
@@ -114,6 +121,52 @@ You must have enabled otel tracing for your cluster to view traces.
 
 You can find trace IDs by viewing the `logs` tab in the Locust UI
 
+## Benchmark output files
+
+A run writes the following to `--dest`. Each run produces them fresh; none of
+them are checked into the repository.
+
+* `status.json`: `locust_exit_code` and `stats_generated`. Deliberately just
+  those two keys, because it is what CI orchestration reads to decide whether a
+  trial ran at all.
+* `stats.csv`, `stats_history.csv`, `failures.csv`, `exceptions.csv`: Locust's
+  own CSV output.
+* `logs.txt`, `traces.txt`: the runner log, and the trace IDs seen during the run.
+* `stats.jsonl`: one JSON object per line, one per metric. Every row carries
+  the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
+  `measurements` map holding that metric's numbers.
+
+### Density frontiers
+
+With cluster discovery enabled, `stats.jsonl` gains a `trial_summary` row
+describing how densely actors packed onto the hardware. Its `measurements`
+map holds the raw facts and the derived numbers side by side.
+
+* `machine_type`, `node_count`, `allocatable_cores`, `allocatable_ram_gb`
+  (GiB), `worker_pod_count`: the measured facts, before any arithmetic.
+  Capacity covers the nodes the worker pods are running on rather than the
+  whole cluster, so a separate infrastructure pool is not counted. They are
+  recorded so the ratios below can be re-derived later, or recomputed against
+  a different denominator.
+* `actors_per_node`, `actors_per_vcpu`, `actors_per_gb_ram`: the most users
+  Locust reported running, over the matching capacity. The `-u` flag only
+  stands in when no sample was read.
+* `actors_per_pod_p50`, `actors_per_pod_p90`, `actors_per_pod_p99`: users per
+  worker pod across the run. Reported as a distribution rather than one
+  average, and it spans ramp-up too, because a custom load shape has no
+  single user count to call steady.
+* `aggregate_failure_ratio`: failures over requests for the run.
+* `<operation>_failure_ratio`: the same ratio for every operation Locust
+  reported, so each test carries its own names through. The operation name is
+  lowercased with underscores, so `DurDirWrite` becomes
+  `dur_dir_write_failure_ratio`. A key is absent when the test has no such
+  row, and null when the row ran no requests.
+
+
+The Kubernetes API is not required. If it is unreachable, or discovery was
+skipped, the affected fields are written as `null` and the run still
+succeeds. A `null` means the value was not measured. It never means zero.
+
 ## Optional: Prometheus + Grafana
 
 Locust provides graphs, statistics, etc. via the UI. However, you
@@ -138,3 +191,12 @@ Once installed:
 code; it manages its own virtual environment under `locust/codegen/venv`.
 `hack/verify/codegen.sh` fails if the checked-in clients have drifted from the
 protos.
+
+### Unit tests
+
+`locust/unit_tests` covers the runner's helpers and needs no cluster. From the
+repository root:
+
+```bash
+python3 -m unittest discover -s benchmarking/locust/unit_tests
+```
