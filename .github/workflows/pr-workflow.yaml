@@ -97,6 +97,9 @@ jobs:
           | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
+      # Envoy needs more inotify instances for the combined router and worker pods.
+    - name: Raise inotify instance limit
+      run: sudo sysctl -w fs.inotify.max_user_instances=1024
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate (${{ matrix.dataplane }})
@@ -137,6 +140,11 @@ jobs:
       env:
         E2E_SANDBOX_CLASS: microvm
       run: hack/run-e2e-kind.sh -v -args --no-color
+    - name: Enable experimental x86 guest clocksource for MITM tests
+      # Opt-in after the baseline MicroVM tests; keep the default assets unchanged.
+      env:
+        E2E_EXPERIMENT_KVM_CLOCK: "1"
+      run: hack/setup-e2e-kvm-clock-kind.sh
     - name: Deploy MITM egress (sdsmint)
       # Swap the passthrough egress gateway for the sdsmint variant, which
       # mints per-SNI leaves from the egress-mitm-ca-pool (created here if
@@ -169,6 +177,7 @@ jobs:
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress-mitm
         hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm
+        hack/setup-e2e-egress-tls-kind.sh
     - name: Run E2E tests (networking, MITM egress)
       env:
         E2E_EGRESS_MITM: "1"
@@ -196,6 +205,12 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
+        # Failed e2e tests retain their labeled namespaces; include ordinary
+        # origin Pods there as well as worker-labeled Pods above.
+        for ns in $(kubectl --context kind-kind get ns -l ate.dev/e2e=true -o name 2>/dev/null | cut -d/ -f2); do
+          kubectl --context kind-kind get pods -n "$ns" -o name --no-headers 2>/dev/null \
+            | while read -r name; do dump "$ns" "$name"; done
+        done
   # Preserve the required-check name while the concrete Envoy and AgentGateway
   # executions run as entries in the shared matrix above.
   e2e-test:
