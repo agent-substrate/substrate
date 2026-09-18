@@ -17,6 +17,7 @@ package ateompath
 
 import (
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -193,10 +194,35 @@ func LocalSnapshotDir(actorUID, snapshotName string) string {
 
 // DurableDirTarFile is the snapshot file holding the tar of an
 // actor's durable-dir volumes (entries are <volumeName>/... relative to
-// DurableDirVolumeMountsDir). Written by ateom-microvm at checkpoint; a DATA
-// snapshot consists of this file alone, so atelet uses the name to carve the
-// durable data out of a FULL snapshot's file set.
+// DurableDirVolumeMountsDir). Written by ateom-microvm at checkpoint.
 const DurableDirTarFile = "durable-dir.tar"
+
+// DurableDirIndexFile is the snapshot file holding the same tree in the split
+// arrangement (ATEOM_DURABLE_BACKEND=files): a tar of the tree's metadata
+// alone, whose regular-file entries carry no payload and instead name their
+// contents in a sibling blob file. Its presence is what tells a restore which
+// of the two arrangements the snapshot was written in.
+const DurableDirIndexFile = "durable-dir.index.tar"
+
+// DurableDirBlobPrefix begins the filename of each blob in that arrangement,
+// which continues with a four-digit sequence number. Unlike the tar, durable
+// data here is MANY files — one per non-empty regular file — so the carve
+// below is by predicate rather than by a single name.
+const DurableDirBlobPrefix = "durable-dir.blob-"
+
+// DurableDirSnapshotFile reports whether a snapshot file holds micro-VM
+// durable-dir data, in either arrangement.
+//
+// atelet uses it to carve the durable data out of a FULL snapshot's file set
+// when uploading a paused checkpoint as DATA: what is left after the carve is
+// exactly what a DATA restore needs and nothing else. Both writers keep to
+// this naming for that reason — a durable file the predicate misses is data
+// silently dropped from a DATA snapshot.
+func DurableDirSnapshotFile(name string) bool {
+	return name == DurableDirTarFile ||
+		name == DurableDirIndexFile ||
+		strings.HasPrefix(name, DurableDirBlobPrefix)
+}
 
 // DurableDirVolumeMountsDir is the directory where individual durable-dir
 // volumes are mounted.
