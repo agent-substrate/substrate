@@ -16,8 +16,10 @@ package glutton
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
@@ -130,5 +132,38 @@ func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
 	reqs := fakeCtrl.recordedDeleteRequests()
 	if len(reqs) == 0 || !reqs[0].GetAnyState() {
 		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
+	}
+}
+
+// TestIteratePacesResumeFailures guards against a crashed actor's VU
+// spinning on ResumeActor as fast as ateapi can reject it: a VU that never
+// waits between failed resumes issues far more QPS than a healthy VU,
+// distorting benchmark sampling.
+func TestIteratePacesResumeFailures(t *testing.T) {
+	srv := &fake.Server{}
+	fakeCtrl := &fakeControlClient{resumeErrs: []error{errors.New("actor crashed")}}
+	const wait = 50 * time.Millisecond
+	cfg := newTestConfig(t, srv, &userclass.Config{
+		APIStub: fakeCtrl,
+		Dyn: dynconfig.NewHolder(dynconfig.Config{
+			MinWait: wait,
+			MaxWait: wait,
+		}),
+	})
+
+	rt := &taskRuntime{cfg: cfg}
+	rt.users.Store(boomerutil.GoroutineID(), &gluttonUser{actors: []*gluttonActor{{cfg: cfg, actorName: "sb-test"}}})
+
+	start := time.Now()
+	rt.iterate()
+	elapsed := time.Since(start)
+
+	if elapsed < wait {
+		t.Errorf("iterate() returned after %v on a failed resume, want at least the configured wait %v", elapsed, wait)
+	}
+
+	calls := fakeCtrl.recordedCalls()
+	if len(calls) != 1 || calls[0] != "ResumeActor" {
+		t.Errorf("recordedCalls: got %v, want [ResumeActor]", calls)
 	}
 }
