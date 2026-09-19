@@ -15,11 +15,11 @@
 package router
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -28,7 +28,6 @@ import (
 
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/otel"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
@@ -63,31 +62,16 @@ type FormattedQuery struct {
 	Duration  string `json:"duration"`
 }
 
-func (s *RouterServer) getRouterIP(ctx context.Context) string {
-	if s.clientset == nil {
-		return "Offline Mode (No Cluster IP)"
-	}
-
-	svc, err := s.clientset.CoreV1().Services(s.cfg.Namespace).Get(ctx, "atenet-router", metav1.GetOptions{})
-	if err != nil {
-		return fmt.Sprintf("Lookup Failed: %v", err)
-	}
-
-	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
-		return "ClusterIP Unassigned"
-	}
-
-	return svc.Spec.ClusterIP
-}
-
 func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
-	ctx, span := otel.Tracer(extproc.ServiceName).Start(req.Context(), "handleStatusz")
+	_, span := otel.Tracer(extproc.ServiceName).Start(req.Context(), "handleStatusz")
 	defer span.End()
 
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	routerIP := s.getRouterIP(ctx)
+	// Deployment-supplied container-start configuration, independent of --namespace.
+	// Missing service links can leave the manifest's $(...) reference unexpanded.
+	routerIP := os.Getenv("ROUTER_SERVICE_IP")
+	if net.ParseIP(routerIP) == nil {
+		routerIP = ""
+	}
 
 	buildInfo := BuildTag
 	if info, ok := debug.ReadBuildInfo(); ok {

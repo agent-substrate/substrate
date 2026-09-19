@@ -112,6 +112,38 @@ data:
                     address: 127.0.0.1
                     port_value: 18000
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atenet-router
+  namespace: ate-system
+spec:
+  type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
+  selector:
+    app: atenet-router
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 8443
+    protocol: TCP
+  - name: connect
+    port: 8081
+    targetPort: 8081
+    protocol: TCP
+  - name: connect-tls
+    port: 8444
+    targetPort: 8444
+    protocol: TCP
+  - name: status
+    port: 4040
+    targetPort: status
+    protocol: TCP
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -185,6 +217,9 @@ spec:
         # If long turns must survive a shutdown, raise --drain-timeout and
         # terminationGracePeriodSeconds above together.
         env:
+        # Optional /statusz snapshot; service links are resolved at container start.
+        - name: ROUTER_SERVICE_IP
+          value: "$(ATENET_ROUTER_SERVICE_HOST)"
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -325,35 +360,3 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: atenet-router
-  namespace: ate-system
-spec:
-  type: ClusterIP
-  ipFamilyPolicy: PreferDualStack
-  selector:
-    app: atenet-router
-  ports:
-  - name: http
-    port: 80
-    targetPort: 8080
-    protocol: TCP
-  - name: https
-    port: 443
-    targetPort: 8443
-    protocol: TCP
-  - name: connect
-    port: 8081
-    targetPort: 8081
-    protocol: TCP
-  - name: connect-tls
-    port: 8444
-    targetPort: 8444
-    protocol: TCP
-  - name: status
-    port: 4040
-    targetPort: status
-    protocol: TCP
