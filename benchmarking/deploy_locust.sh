@@ -26,6 +26,10 @@ ROOT="$(git rev-parse --show-toplevel)"
 BENCHMARKING_DIR="${ROOT}/benchmarking"
 
 WORKER_COUNT=1
+# Forwarded to both halves of the stack, which must agree on the pools: one
+# creates them, the other tells the boomer workers which to use. Empty keeps
+# the single unpinned pool.
+WORKER_POOLS=""
 SANDBOX_CLASS=gvisor
 SKIP_BUILD=0
 OTLP_ENDPOINT=""
@@ -39,7 +43,11 @@ usage() {
   echo "Options:"
   echo "  --deploy                Deploy workloads, build/push locust image, then deploy locust"
   echo "  --delete                Delete locust and then workloads"
-  echo "  --worker-count N        Number of WorkerPool replicas (default: 1)"
+  echo "  --worker-count N        Total number of WorkerPool replicas across all pools (default: 1)"
+  echo "  --worker-pools LIST     Comma-separated name:weight[:nodeSelectorKey=value] entries."
+  echo "                          One WorkerPool per entry, --worker-count split between them by"
+  echo "                          weight, each actor pinned to one pool. Default: one pool,"
+  echo "                          actors unpinned. See benchmarking/README.md."
   echo "  --sandbox-class CLASS   Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                          microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --otlp-endpoint URL     Forwarded to workloads/deploy.sh. The address to which an"
@@ -56,6 +64,22 @@ usage() {
   echo "  scripts this wrapper invokes."
 }
 
+# boomer_worker_pools drops the optional node selector from each WORKER_POOLS
+# entry: it says where a pool's worker pods run, which the boomer workers have
+# no use for and reject as a third field.
+boomer_worker_pools() {
+  local entry name weight rest out=""
+  local IFS=,
+  for entry in ${WORKER_POOLS}; do
+    [[ -z "${entry}" ]] && continue
+    name="${entry%%:*}"
+    rest="${entry#*:}"
+    weight="${rest%%:*}"
+    out+="${out:+,}${name}:${weight}"
+  done
+  printf '%s' "${out}"
+}
+
 if [[ "$#" -eq 0 ]]; then
   usage
   exit 1
@@ -68,6 +92,8 @@ while [[ "$#" -gt 0 ]]; do
     --delete) action="delete" ;;
     --worker-count) shift; WORKER_COUNT="$1" ;;
     --worker-count=*) WORKER_COUNT="${1#*=}" ;;
+    --worker-pools) shift; WORKER_POOLS="$1" ;;
+    --worker-pools=*) WORKER_POOLS="${1#*=}" ;;
     --sandbox-class) shift; SANDBOX_CLASS="$1" ;;
     --sandbox-class=*) SANDBOX_CLASS="${1#*=}" ;;
     --otlp-endpoint) shift; OTLP_ENDPOINT="$1" ;;
@@ -101,11 +127,14 @@ if [[ -n "${WAIT_TIMEOUT_SECS}" ]] && ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]
 fi
 
 if [[ "${action}" == "deploy" ]]; then
-  echo "=== Deploying benchmark workloads (worker_count=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS}) ==="
+  echo "=== Deploying benchmark workloads (worker_count=${WORKER_COUNT}, worker_pools=${WORKER_POOLS:-none}, sandbox_class=${SANDBOX_CLASS}) ==="
   # An empty OTLP_ENDPOINT must not become an empty --otlp-endpoint argument,
   # which would overwrite the default in workloads/deploy.sh with an empty
   # string and send the actor telemetry nowhere.
   workload_args=(--deploy --worker-count "${WORKER_COUNT}" --sandbox-class "${SANDBOX_CLASS}")
+  if [[ -n "${WORKER_POOLS}" ]]; then
+    workload_args+=(--worker-pools "${WORKER_POOLS}")
+  fi
   if [[ -n "${OTLP_ENDPOINT}" ]]; then
     workload_args+=(--otlp-endpoint "${OTLP_ENDPOINT}")
   fi
@@ -128,14 +157,24 @@ if [[ "${action}" == "deploy" ]]; then
 
   echo
   echo "=== Deploying locust ==="
-  "${BENCHMARKING_DIR}/locust/deploy.sh" --deploy
+  locust_args=(--deploy)
+  if [[ -n "${WORKER_POOLS}" ]]; then
+    locust_args+=(--worker-pools "$(boomer_worker_pools)")
+  fi
+  "${BENCHMARKING_DIR}/locust/deploy.sh" "${locust_args[@]}"
 elif [[ "${action}" == "delete" ]]; then
   echo "=== Deleting locust ==="
   "${BENCHMARKING_DIR}/locust/deploy.sh" --delete
 
   echo
   echo "=== Deleting benchmark workloads ==="
-  "${BENCHMARKING_DIR}/workloads/deploy.sh" --delete
+  # workloads/deploy.sh renders one manifest per pool to delete it, so the
+  # teardown needs the same list the deploy ran with.
+  workload_args=(--delete)
+  if [[ -n "${WORKER_POOLS}" ]]; then
+    workload_args+=(--worker-pools "${WORKER_POOLS}")
+  fi
+  "${BENCHMARKING_DIR}/workloads/deploy.sh" "${workload_args[@]}"
 else
   usage
   exit 1

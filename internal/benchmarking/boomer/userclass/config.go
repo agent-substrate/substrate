@@ -46,4 +46,8 @@ type Config struct {
 	// that honor this knob; classes that don't honor it treat every VU as
 	// owning exactly one actor.
 	ActorsPerUser int
+	// Pools spreads new actors over several worker pools, weighted by
+	// capacity, by setting Actor.worker_selector at create time. Nil leaves
+	// placement to the ActorTemplate's own workerSelector.
+	Pools *PoolPicker
 }

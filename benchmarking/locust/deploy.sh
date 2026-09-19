@@ -35,6 +35,10 @@ MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 # Substituted into the boomer container's --user-class argument and the master's -f.
 BENCHMARK_USER_CLASS=glutton
 
+# Substituted into the boomer container's --worker-pools argument. Empty leaves
+# the actors unpinned.
+BENCHMARK_WORKER_POOLS=""
+
 usage() {
   echo "Usage: $0 [options]"
   echo ""
@@ -42,6 +46,8 @@ usage() {
   echo "  --deploy           Deploy the locust workers"
   echo "  --delete           Delete the locust workers"
   echo "  --user-class NAME  Locust user class, lowercase; runs tests/NAME.py (default: glutton)"
+  echo "  --worker-pools LIST  Comma-separated name:weight entries pinning each actor to one"
+  echo "                     WorkerPool. Use the names and weights the pools were created with."
   echo "  -h|--help          Show this help message"
 }
 
@@ -51,7 +57,7 @@ deploy() {
   # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS})..."
+  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, worker_pools=${BENCHMARK_WORKER_POOLS:-none})..."
   envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
@@ -72,6 +78,8 @@ while [[ "$#" -gt 0 ]]; do
     --delete) action="delete" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
+    --worker-pools) shift; BENCHMARK_WORKER_POOLS="$1" ;;
+    --worker-pools=*) BENCHMARK_WORKER_POOLS="${1#*=}" ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -87,6 +95,7 @@ if [[ ! -f "${SCRIPT_DIR}/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
   exit 1
 fi
 export BENCHMARK_USER_CLASS
+export BENCHMARK_WORKER_POOLS
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

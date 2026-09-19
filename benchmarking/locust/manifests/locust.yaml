@@ -129,6 +129,10 @@ spec:
         # benchmarking/locust/common/boomer_config.py on the master.
         - "--master-web-port=8089"
         - "--user-class=${BENCHMARK_USER_CLASS}"
+        # Pins each actor to one WorkerPool, as name:weight[,...] matching the
+        # pools benchmarking/workloads/deploy.sh created. Empty leaves actors
+        # unpinned. See benchmarking/README.md#multiple-worker-pools.
+        - "--worker-pools=${BENCHMARK_WORKER_POOLS}"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
