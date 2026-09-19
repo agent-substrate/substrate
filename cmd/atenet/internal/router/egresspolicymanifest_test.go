@@ -31,11 +31,72 @@ import (
 const (
 	extProcFilter        = "envoy.filters.http.ext_proc"
 	setFilterStateFilter = "envoy.filters.http.set_filter_state"
+	luaFilter            = "envoy.filters.http.lua"
 	extProcServerCluster = "ext_proc_server"
 	passthroughCluster   = "egress_tcp_passthrough"
 	originalDstKey       = "envoy.network.transport_socket.original_dst_address"
 	dfpClusterType       = "envoy.clusters.dynamic_forward_proxy"
 )
+
+const peerCertificateNamespace = "dev.ate.egress.peer_certificate"
+
+func TestEgressManifestsForwardPeerCertificateMetadata(t *testing.T) {
+	for _, path := range egressManifests {
+		t.Run(path, func(t *testing.T) {
+			tree := bootstrapTree(t, path)
+			outer := outerChain(t, tree)
+			ts := child(outer, "transport_socket")
+			tls := child(ts, "typed_config")
+			if required, _ := tls["require_client_certificate"].(bool); !required {
+				t.Error("outer TLS no longer requires an actor client certificate")
+			}
+			if _, ok := child(child(tls, "common_tls_context"), "validation_context")["trusted_ca"]; !ok {
+				t.Error("outer TLS has no actor identity trusted_ca")
+			}
+			h := hcm(outer)
+			if got := str(h, "forward_client_cert_details"); got != "SANITIZE" {
+				t.Errorf("forward_client_cert_details = %q, want SANITIZE", got)
+			}
+			if _, ok := h["set_current_client_cert_details"]; ok {
+				t.Error("outer HCM still generates certificate headers")
+			}
+			filters := list(h, "http_filters")
+			luaAt, extAt := filterIndex(filters, luaFilter), filterIndex(filters, extProcFilter)
+			if count := slices.IndexFunc(filters, func(f node) bool { return str(f, "name") == luaFilter }); count < 0 || slices.IndexFunc(filters[count+1:], func(f node) bool { return str(f, "name") == luaFilter }) >= 0 {
+				t.Errorf("outer HCM must have exactly one Lua producer")
+			}
+			if luaAt < 0 || extAt < 0 || luaAt >= extAt {
+				t.Fatalf("outer HCM Lua/ext_proc order = %d/%d", luaAt, extAt)
+			}
+			script := str(child(child(filters[luaAt], "typed_config"), "default_source_code"), "inline_string")
+			for _, want := range []string{"downstreamSslConnection", "urlEncodedPemEncodedPeerCertificateChain", peerCertificateNamespace, "chain", "chain = \"\""} {
+				if !strings.Contains(script, want) {
+					t.Errorf("Lua producer does not contain %q", want)
+				}
+			}
+			cfg := child(filters[extAt], "typed_config")
+			forward := strs(child(child(cfg, "metadata_options"), "forwarding_namespaces"), "untyped")
+			receive := strs(child(child(cfg, "metadata_options"), "receiving_namespaces"), "untyped")
+			if !slices.Equal(forward, []string{peerCertificateNamespace}) || !slices.Equal(receive, []string{extproc.EgressMetadataNamespace}) {
+				t.Errorf("metadata namespaces = forward %v receive %v", forward, receive)
+			}
+			if got := filterIndex(filters, luaFilter); got != 1 {
+				t.Errorf("Lua producer index = %d, want immediately after actor filter state", got)
+			}
+			if writers := filterStateWriters(tree, peerCertificateNamespace); len(writers) != 0 {
+				t.Errorf("certificate namespace appears in filter state writers: %d", len(writers))
+			}
+			for _, lc := range allChains(tree) {
+				if str(lc.chain, "name") == extproc.EgressFilterChainName {
+					continue
+				}
+				if containsString(lc.chain, peerCertificateNamespace) {
+					t.Errorf("certificate namespace appears on inner chain %q", str(lc.chain, "name"))
+				}
+			}
+		})
+	}
+}
 
 // requestLegs are the chains that decide per request and answer with a dial.
 var requestLegs = []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName}
@@ -149,6 +210,26 @@ func filterStateWriters(v any, key string) []node {
 		}
 	}
 	return found
+}
+
+func containsString(v any, want string) bool {
+	switch t := v.(type) {
+	case string:
+		return t == want
+	case map[string]any:
+		for _, value := range t {
+			if containsString(value, want) {
+				return true
+			}
+		}
+	case []any:
+		for _, value := range t {
+			if containsString(value, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // outerChain returns the egress listener's CONNECT chain.

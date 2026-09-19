@@ -295,7 +295,7 @@ func TestConnectLegRequiresAPolicy(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL, nil, "")
-			res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
+			res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(encodedCertificateChain(leaf)))
 			if tc.want == 0 {
 				wantAllowed(t, res, err)
 				if calls := tc.client.policyCalls.Load(); calls != 1 {
