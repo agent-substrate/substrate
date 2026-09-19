@@ -127,6 +127,7 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) 
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
 		userClass:    durDirUserClass,
+		pool:         r.cfg.Pools.Pick(),
 	}
 	bmetrics.UpdateUsers(durDirUserClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
@@ -162,6 +163,9 @@ type durDirUser struct {
 	userClass      string
 	expectedDigest string
 	expectedSize   int64
+	// pool pins this actor to one worker pool for its whole life (see
+	// userclass.PoolPicker). Empty means no per-actor constraint.
+	pool string
 }
 
 func (u *durDirUser) ref() *ateapipb.ObjectRef {
@@ -188,12 +192,16 @@ func (u *durDirUser) ensureAtespace(ctx context.Context) error {
 }
 
 func (u *durDirUser) create(ctx context.Context) error {
+	actor := &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: u.templateName},
+	}
+	// ANDed with the template's workerSelector by the scheduler, so this only
+	// narrows the actor to one pool. Nil when no pools are configured.
+	actor.WorkerSelector = u.cfg.Pools.SelectorFor(u.pool)
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: u.templateName},
-			},
+			Actor: actor,
 		}, grpc.Trailer(tr))
 		return err
 	})

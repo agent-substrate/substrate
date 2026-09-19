@@ -12,26 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Worker pool for the benchmark workloads. The ActorTemplates are not CRDs:
-# they live in the *-template.yaml.tmpl files next to this one and are
-# created through the ate API by workloads/deploy.sh with
+# Namespace for the benchmark workloads. The worker pools live in
+# workerpool.yaml.tmpl, which deploy.sh renders once per pool. The
+# ActorTemplates are not CRDs: they live in the *-template.yaml.tmpl files next
+# to this one and are created through the ate API by workloads/deploy.sh with
 # `kubectl ate create actor-template`.
 
 apiVersion: v1
 kind: Namespace
 metadata:
   name: benchmark-workloads
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: WorkerPool
-metadata:
-  name: benchmark-ateom
-  namespace: benchmark-workloads
-  labels:
-    workload: benchmark-ateom
-spec:
-  replicas: ${WORKER_COUNT}
-  sandboxClass: ${SANDBOX_CLASS}
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}

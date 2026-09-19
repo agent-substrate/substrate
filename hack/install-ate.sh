@@ -150,7 +150,10 @@ function usage() {
   echo ""
   echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
   echo "  --delete-benchmarks                    Delete the locust stack and workloads"
-  echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
+  echo "  --benchmark-worker-count N             Total number of WorkerPool replicas (default: 1)"
+  echo "  --benchmark-worker-pools LIST          Comma-separated name:weight[:nodeSelectorKey=value]"
+  echo "                                         entries, forwarded to benchmarking/deploy_locust.sh:"
+  echo "                                         one WorkerPool each, one pool per actor."
   echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                                         microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --benchmark-actor-memory SIZE          Memory limit for the benchmark ActorTemplates (default: 256Mi,"
@@ -1394,7 +1397,7 @@ delete_atenet() {
 }
 
 deploy_benchmarks() {
-  log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT}, sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
+  log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT}, worker_pools=${BENCHMARK_WORKER_POOLS:-none}, sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
   # The microvm SandboxConfig lives outside --deploy-ate-system's default set
   # (which only installs gvisor-default); the workloads deploy references it
   # by name and would fail if we skipped this.
@@ -1405,6 +1408,9 @@ deploy_benchmarks() {
   local benchmark_args=(--deploy
     --worker-count "${BENCHMARK_WORKER_COUNT}"
     --sandbox-class "${BENCHMARK_SANDBOX_CLASS}")
+  if [[ -n "${BENCHMARK_WORKER_POOLS}" ]]; then
+    benchmark_args+=(--worker-pools "${BENCHMARK_WORKER_POOLS}")
+  fi
   if [[ -n "${ATE_OTLP_ENDPOINT:-}" ]]; then
     benchmark_args+=(--otlp-endpoint "${ATE_OTLP_ENDPOINT}")
   fi
@@ -1416,7 +1422,13 @@ deploy_benchmarks() {
 
 delete_benchmarks() {
   log_step "delete_benchmarks (sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
-  "${ROOT}/benchmarking/deploy_locust.sh" --delete
+  # The teardown renders one manifest per pool, so it needs the same list the
+  # deploy ran with to find them all.
+  local benchmark_args=(--delete)
+  if [[ -n "${BENCHMARK_WORKER_POOLS}" ]]; then
+    benchmark_args+=(--worker-pools "${BENCHMARK_WORKER_POOLS}")
+  fi
+  "${ROOT}/benchmarking/deploy_locust.sh" "${benchmark_args[@]}"
   # only tear down the microvm SandboxConfig if the caller opted into microvm.
   if [[ "${BENCHMARK_SANDBOX_CLASS}" == "microvm" ]]; then
     "${ROOT}/hack/install-microvm-deps.sh" --delete
@@ -1457,6 +1469,9 @@ done
 # workstation will not have loaded.
 SETUP_CSI="${SETUP_CSI:-none}"
 BENCHMARK_WORKER_COUNT=1
+# Empty keeps the single unpinned pool that benchmarking/deploy_locust.sh
+# creates by default.
+BENCHMARK_WORKER_POOLS=""
 BENCHMARK_SANDBOX_CLASS=gvisor
 # Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).
 BENCHMARK_ACTOR_MEMORY=""
@@ -1529,6 +1544,16 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ;;
     --benchmark-worker-count=*)
       BENCHMARK_WORKER_COUNT="${prescan_args[i]#*=}"
+      ;;
+    --benchmark-worker-pools)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --benchmark-worker-pools requires name:weight[:nodeSelectorKey=value] entries" >&2
+        exit 1
+      fi
+      BENCHMARK_WORKER_POOLS="${prescan_args[$((i + 1))]}"
+      ;;
+    --benchmark-worker-pools=*)
+      BENCHMARK_WORKER_POOLS="${prescan_args[i]#*=}"
       ;;
     --benchmark-sandbox-class)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1672,6 +1697,8 @@ while [[ "$#" -gt 0 ]]; do
     # dispatch loop's `*)` unknown-option branch doesn't reject it.
     --benchmark-worker-count) shift ;;
     --benchmark-worker-count=*) ;;
+    --benchmark-worker-pools) shift ;;
+    --benchmark-worker-pools=*) ;;
     --benchmark-sandbox-class) shift ;;
     --benchmark-sandbox-class=*) ;;
     --benchmark-actor-memory) shift ;;

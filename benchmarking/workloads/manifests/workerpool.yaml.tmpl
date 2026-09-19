@@ -1,0 +1,42 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# One worker pool for the benchmark workloads. workloads/deploy.sh renders this
+# once per --worker-pools entry, so a run can spread its actors over several
+# node shapes. A WorkerPool's labels become the labels of every Worker it owns,
+# which is what the scheduler matches, and it ANDs the two below:
+#
+#   workload  every benchmark pool carries it, and the ActorTemplates'
+#             workerSelector matches it, so a benchmark actor never lands on a
+#             worker outside these pools.
+#   pool      names a class of interchangeable workers. Boomer sets it as an
+#             actor's own worker_selector, which keeps that actor in one class.
+#             See internal/benchmarking/boomer/userclass.PoolLabelKey.
+#
+# Keeping an actor in one class is a correctness requirement, not tuning, once
+# the classes differ in machine type: a micro-VM snapshot carries the CPU
+# features the guest observed, and nothing masks them to a common baseline on
+# resume, so an actor that moves between CPU models fails to restore.
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: ${POOL_WORKERPOOL_NAME}
+  namespace: benchmark-workloads
+  labels:
+    workload: benchmark-ateom
+    pool: ${POOL_NAME}
+spec:
+  replicas: ${POOL_WORKER_COUNT}
+  sandboxClass: ${SANDBOX_CLASS}
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}

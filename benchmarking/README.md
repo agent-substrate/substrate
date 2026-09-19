@@ -26,9 +26,47 @@ image, then deploys the Locust workers:
 
 Useful flags:
 
-* `--worker-count N` — number of `WorkerPool` replicas (default 1).
+* `--worker-count N` — total number of `WorkerPool` replicas (default 1).
+* `--worker-pools LIST` — comma-separated `name:weight[:nodeSelectorKey=value]`
+  entries. See [Multiple worker pools](#multiple-worker-pools).
 * `--skip-build` — reuse the existing `:latest` locust image (skip the
   `docker build && docker push` step).
+
+### Multiple worker pools
+
+By default the stack creates one `WorkerPool`, and the scheduler may place an
+actor on any of its workers. `--worker-pools` creates one pool per entry
+instead, splits `--worker-count` between them by weight, and pins each actor to
+a single pool for its whole life:
+
+```bash
+./benchmarking/deploy_locust.sh --deploy --worker-count 100 \
+  --worker-pools 'n4d:1:cloud.google.com/machine-family=n4d,c4:1:cloud.google.com/machine-family=c4'
+```
+
+That run puts 50 workers on `n4d` nodes and 50 on `c4`, and sends half the
+actors to each.
+
+Pinning is a correctness requirement once the pools differ in machine type, not
+a tuning knob. A suspended actor's memory snapshot records the CPU features the
+guest saw, and nothing masks them to a common baseline on resume, so an actor
+that moves between CPU models fails to restore. Pinning is also how a run
+measures one machine type against another in the same test.
+
+A pool name is a class of interchangeable workers, not one `WorkerPool`: it
+reaches the scheduler as a `pool=<name>` label that every worker in the pool
+inherits, so several pools may share a value when an actor can freely move
+between them. What a value must never span is workers a snapshot cannot move
+between. The key is `pool` and not `cpu-class` because CPU compatibility is
+only today's reason to separate workers.
+
+The pool list reaches the actors through the boomer workers, which set it as
+each actor's `worker_selector`; `deploy_locust.sh` forwards the same list to
+both halves so they cannot drift. Passing `--worker-pools` to
+`benchmarking/workloads/deploy.sh` alone creates the pools but leaves the
+actors unpinned.
+
+### Teardown
 
 To tear everything down (locust then workloads, in reverse order):
 
@@ -44,8 +82,9 @@ convenience:
 ./hack/install-ate.sh --delete-benchmarks
 ```
 
-The installer accepts `--benchmark-worker-count N` (default `1`).
-`--skip-build` is only available when invoking
+The installer accepts `--benchmark-worker-count N` (default `1`) and
+`--benchmark-worker-pools LIST`, which it forwards to
+`benchmarking/deploy_locust.sh`. `--skip-build` is only available when invoking
 `benchmarking/deploy_locust.sh` directly.
 
 ## Running Tests
