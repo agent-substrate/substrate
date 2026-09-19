@@ -105,6 +105,13 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: benchmark-runner
+      # Lets the runner land on a node pool reserved for load generators
+      # with the taint ate.dev/benchmarking=true:NoSchedule.
+      tolerations:
+      - key: ate.dev/benchmarking
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
       containers:
       - name: runner
         image: ${IMAGE}
