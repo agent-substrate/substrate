@@ -146,6 +146,7 @@ func (r *taskRuntime) iterate() {
 
 	ctx := context.Background()
 	if !actor.resume(ctx) {
+		user.replaceActor(ctx, actor)
 		return
 	}
 	// Fill before the first suspend so every snapshot from cycle one on
@@ -183,7 +184,9 @@ func (r *taskRuntime) iterate() {
 	if remaining := time.Until(deadline); remaining > 0 {
 		time.Sleep(remaining)
 	}
-	actor.hibernate(ctx)
+	if !actor.hibernate(ctx) {
+		user.replaceActor(ctx, actor)
+	}
 }
 
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
@@ -285,6 +288,30 @@ func (u *gluttonUser) nextActor() *gluttonActor {
 	a := u.actors[u.nextIdx]
 	u.nextIdx = (u.nextIdx + 1) % len(u.actors)
 	return a
+}
+
+// replaceActor deletes a stuck/broken actor and replaces its slot in u.actors
+// with a freshly created actor so the VU maintains full concurrency without
+// repeatedly calling a stuck actor (e.g. left in ACTOR_STATE_SUSPENDING).
+func (u *gluttonUser) replaceActor(ctx context.Context, broken *gluttonActor) {
+	broken.delete(ctx)
+	replacement := &gluttonActor{
+		cfg:         broken.cfg,
+		actorName:   "sb-" + uuid.NewString(),
+		firstResume: true,
+	}
+	if err := replacement.create(ctx); err != nil {
+		slog.Warn("glutton actor replacement create failed; will retry on next failure",
+			slog.String("old_actor", broken.actorName),
+			slog.String("err", err.Error()))
+		return
+	}
+	for i, a := range u.actors {
+		if a == broken {
+			u.actors[i] = replacement
+			return
+		}
+	}
 }
 
 // gluttonActor is one actor's lifetime state within a VU. Every per-iteration
@@ -408,32 +435,33 @@ func isConcurrentUpdateConflict(err error) bool {
 // hibernate takes the actor off its worker by whichever operation the
 // lifecycle mode selects: PauseActor keeps the snapshot on the node, while
 // SuspendActor writes it to durable storage.
-func (u *gluttonActor) hibernate(ctx context.Context) {
+func (u *gluttonActor) hibernate(ctx context.Context) bool {
 	if u.cfg.Dyn.Load().LifecycleMode == dynconfig.LifecycleModePause {
-		u.pause(ctx)
-	} else {
-		u.suspend(ctx)
+		return u.pause(ctx)
 	}
+	return u.suspend(ctx)
 }
 
-func (u *gluttonActor) pause(ctx context.Context) {
-	_ = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+func (u *gluttonActor) pause(ctx context.Context) bool {
+	err := u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
 	u.actorRunning = false
+	return err == nil
 }
 
-func (u *gluttonActor) suspend(ctx context.Context) {
-	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+func (u *gluttonActor) suspend(ctx context.Context) bool {
+	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
 	u.actorRunning = false
+	return err == nil
 }
 
 func (u *gluttonActor) delete(ctx context.Context) {

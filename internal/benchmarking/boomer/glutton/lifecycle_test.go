@@ -132,3 +132,38 @@ func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
 		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
 	}
 }
+
+func TestGluttonIterate_ReplacesActorOnResumeFailure(t *testing.T) {
+	srv := &fake.Server{}
+	fakeCtrl := &fakeControlClient{
+		resumeErrs: []error{conflictErr(), conflictErr(), conflictErr(), conflictErr(), conflictErr()},
+	}
+	cfg := newTestConfig(t, srv, &userclass.Config{
+		APIStub:  fakeCtrl,
+		Atespace: "bench-test",
+		Dyn: dynconfig.NewHolder(dynconfig.Config{
+			LifecycleMode: dynconfig.LifecycleModeSuspend,
+		}),
+	})
+
+	rt := &taskRuntime{cfg: cfg}
+	rt.iterate()
+
+	calls := fakeCtrl.recordedCalls()
+	createCount := 0
+	deleteCount := 0
+	for _, c := range calls {
+		if c == "CreateActor" {
+			createCount++
+		}
+		if c == "DeleteActor" {
+			deleteCount++
+		}
+	}
+	if createCount != 2 {
+		t.Fatalf("CreateActor count = %d, want 2 (initial + replacement); calls = %v", createCount, calls)
+	}
+	if deleteCount != 1 {
+		t.Fatalf("DeleteActor count = %d, want 1 (deleted broken actor); calls = %v", deleteCount, calls)
+	}
+}
