@@ -534,6 +534,33 @@ func validateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActor
 	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
 }
 
+func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {
+	if errs := validateRevertActorRequest(ctx, req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
+
+	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+		}
+		return nil, err
+	}
+	setSpanActorAttributes(ctx, actor)
+	return &ateapipb.RevertActorResponse{Actor: actor}, nil
+}
+
+func validateRevertActorRequest(ctx context.Context, req *ateapipb.RevertActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_RevertActorRequest(ctx, op, nil, req, nil)
+}
+
 func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Update}

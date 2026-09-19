@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -128,6 +129,18 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
+	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
+		ServiceName: "ateapi",
+		Exporter:    serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize logging", err)
+	}
+	// Nil when the exporter is none.
+	if lp != nil {
+		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
+	}
+
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
 	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
@@ -147,6 +160,20 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown.
 	if closer, ok := persistence.(interface{ Close() }); ok {
 		defer closer.Close()
+	}
+
+	if poolProvider, ok := persistence.(interface {
+		NewPool(context.Context) (*pgxpool.Pool, error)
+	}); ok {
+		authzPool, err := poolProvider.NewPool(shutdownCtx)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)
+		}
+		authzSrv, err := authz.NewServer(shutdownCtx, authzPool)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
+		}
+		defer authzSrv.Close()
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -169,19 +196,16 @@ func main() {
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	workerPodInformerFactory.Start(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	workerPodInformerFactory.WaitForCacheSync(stopCh)
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
 	scInformerFactory.WaitForCacheSync(stopCh)
@@ -204,7 +228,7 @@ func main() {
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
-	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
+	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {

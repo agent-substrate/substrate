@@ -201,17 +201,15 @@ func newTestPersistence(t *testing.T) store.Interface {
 }
 
 // newDanglingDialer returns a dialer whose informer cache has no pods, so
-// DialForWorker returns ErrWorkerPodNotFound and DialForAteletOnNode returns
-// ErrNoAteletOnNode.
+// DialForAteletOnNode always returns ErrNoAteletOnNode.
 func newDanglingDialer() *AteletDialer {
 	empty := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
-		byNamespaceAndName: func(obj any) ([]string, error) { return nil, nil },
-		byNode:             func(obj any) ([]string, error) { return nil, nil },
+		byNode: func(obj any) ([]string, error) { return nil, nil },
 	})
-	return NewAteletDialer(empty, empty, "", "")
+	return NewAteletDialer(empty, "", "")
 }
 
-func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {
 	neverWritten := someActorSnapshotURI(t, testStorageLocation, "team-a", "never-written")
 
 	tests := []struct {
@@ -240,6 +238,7 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 						WorkerNamespace: "worker-ns",
 						WorkerPool:      "pool",
 						WorkerPod:       "pod-gone",
+						NodeName:        "node-gone",
 					},
 					InProgressSnapshotUri: neverWritten,
 					ExternalSnapshot:      &ateapipb.ExternalSnapshot{SnapshotUri: tt.prevSnapshot},
@@ -249,15 +248,18 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
 			if _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
-				t.Fatal("ensureAteletSuspended: want error for dangling worker, got nil")
+				t.Fatal("ensureAteletSuspended: want error when atelet is unreachable, got nil")
 			}
 
+			// A dial failure is transient from this workflow's point of view: it
+			// must not crash the actor or touch its snapshot state. A worker that
+			// is genuinely gone is handled by the DeleteWorker workflow instead.
 			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
-			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-				t.Errorf("state = %v, want CRASHED", stored.GetStatus().GetState())
+			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+				t.Errorf("state = %v, want unchanged SUSPENDING", stored.GetStatus().GetState())
 			}
 			if got := stored.GetStatus().GetInProgressSnapshotUri(); got != neverWritten {
 				t.Errorf("InProgressSnapshotUri = %q, want preserved for debugging", got)

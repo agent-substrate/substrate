@@ -19,15 +19,21 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	otellog "go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
@@ -604,6 +610,64 @@ func logRecords(t *testing.T, msg string) *[]map[string]string {
 	return &records
 }
 
+// otlpEvent is one captured record from the OTLP copy of a log record.
+type otlpEvent struct {
+	name  string
+	attrs map[string]string
+}
+
+var (
+	otlpSinkOnce sync.Once
+	otlpSinkMu   sync.Mutex
+	otlpSink     []otlpEvent
+)
+
+type otlpSinkExporter struct{}
+
+func (otlpSinkExporter) Export(_ context.Context, records []sdklog.Record) error {
+	otlpSinkMu.Lock()
+	defer otlpSinkMu.Unlock()
+	for _, r := range records {
+		e := otlpEvent{name: r.EventName(), attrs: map[string]string{}}
+		r.WalkAttributes(func(kv otellog.KeyValue) bool {
+			e.attrs[kv.Key] = kv.Value.String()
+			return true
+		})
+		otlpSink = append(otlpSink, e)
+	}
+	return nil
+}
+
+func (otlpSinkExporter) Shutdown(context.Context) error   { return nil }
+func (otlpSinkExporter) ForceFlush(context.Context) error { return nil }
+
+// otlpEvents captures the events emitted while a test runs, so a test can assert
+// the OTLP copy beside the stdout one. The global logger provider only ever
+// delegates once, so one provider serves the whole binary and each call clears
+// the sink. Like logRecords, this makes the caller non-parallel.
+func otlpEvents(t *testing.T) func() []otlpEvent {
+	t.Helper()
+
+	otlpSinkOnce.Do(func() {
+		global.SetLoggerProvider(sdklog.NewLoggerProvider(
+			sdklog.WithProcessor(sdklog.NewSimpleProcessor(otlpSinkExporter{}))))
+	})
+
+	clear := func() {
+		otlpSinkMu.Lock()
+		defer otlpSinkMu.Unlock()
+		otlpSink = nil
+	}
+	clear()
+	t.Cleanup(clear)
+
+	return func() []otlpEvent {
+		otlpSinkMu.Lock()
+		defer otlpSinkMu.Unlock()
+		return slices.Clone(otlpSink)
+	}
+}
+
 type slogHandlerFunc func(slog.Record)
 
 func (f slogHandlerFunc) Enabled(context.Context, slog.Level) bool { return true }
@@ -623,6 +687,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Fatalf("RegisterActorCrashes: %v", err)
 	}
 	records := crashRecords(t)
+	events := otlpEvents(t)
 
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
@@ -665,11 +730,26 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Error("crash record carries no ate.actor.uid; it cannot survive a name reuse")
 	}
 
+	// The OTLP copy is the same record under an event name.
+	gotEvents := events()
+	if len(gotEvents) != 1 {
+		t.Fatalf("got %d crash events, want 1: %v", len(gotEvents), gotEvents)
+	}
+	if gotEvents[0].name != actorevent.Crashed.Name {
+		t.Errorf("event name = %q, want %q", gotEvents[0].name, actorevent.Crashed.Name)
+	}
+	if !maps.Equal(gotEvents[0].attrs, got) {
+		t.Errorf("crash event attributes = %v, want the stdout record's %v", gotEvents[0].attrs, got)
+	}
+
 	// Re-crashing an already-crashed actor must move neither signal.
 	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
 		t.Fatalf("second crashActor: %v", err)
 	}
 	if len(*records) != 1 {
 		t.Errorf("got %d crash records after re-crashing, want 1", len(*records))
+	}
+	if gotEvents := events(); len(gotEvents) != 1 {
+		t.Errorf("got %d crash events after re-crashing, want 1", len(gotEvents))
 	}
 }

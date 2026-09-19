@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -152,6 +153,52 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 		}
 	}
 	return missing
+}
+
+// LifecycleEventMetric is the count connector's view of the actor lifecycle
+// events. Reading it rather than a log store keeps this check on the metrics
+// harness: kind has no place to query log records.
+const LifecycleEventMetric = "substrate_actor_state_changes"
+
+// LifecycleEventCounts returns the count the collector holds for each
+// ate.actor.state. The counter is cumulative and the collector outlives any one
+// test, so compare two reads rather than asserting a state is merely present:
+// a stale count from an earlier run would pass a presence check even with the
+// exporter turned off.
+//
+// One state can appear on several lines, one per emitting ateapi instance, so
+// the counts are summed.
+func LifecycleEventCounts(scrape string) map[string]float64 {
+	counts := map[string]float64{}
+	for _, line := range strings.Split(scrape, "\n") {
+		name := metricNameFromLine(line)
+		if name != LifecycleEventMetric && !strings.HasPrefix(name, LifecycleEventMetric+"_") {
+			continue
+		}
+		state := promLabelValue(line, "ate_actor_state")
+		if state == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		counts[state] += v
+	}
+	return counts
+}
+
+// StatesNotAdvanced returns the states whose count did not rise between the two
+// reads. An empty result means every state was emitted during the window.
+func StatesNotAdvanced(before, after map[string]float64, states []string) []string {
+	var stale []string
+	for _, s := range states {
+		if after[s] <= before[s] {
+			stale = append(stale, s)
+		}
+	}
+	return stale
 }
 
 // CollectorHasService reports whether any named service has pushed telemetry to

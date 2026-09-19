@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -125,7 +126,8 @@ func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName, reason 
 	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), opName))
 	attrs = append(attrs, slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
 	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
-	slog.LogAttrs(ctx, slog.LevelError, "Actor crashed", attrs...)
+	slog.LogAttrs(ctx, slog.LevelError, actorevent.CrashedBody, attrs...)
+	actorevent.Emit(ctx, actorevent.Crashed, attrs)
 }
 
 // crashActorStore encapsulates the subset of store operations needed to crash

@@ -44,6 +44,7 @@ const (
 	ActorVethGateway  = "169.254.17.1"
 	ActorVethIP       = "169.254.17.2"
 	ActorNftTableName = "ateom_actor"
+	dnsPort           = 53
 
 	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
 	ActorVethSubnet = "169.254.17.0/30"
@@ -212,10 +213,12 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	//
 	// The rules do three things:
 	//
-	//   * prerouting: redirect new actor TCP connections to atunnel's local
-	//     listener. REDIRECT preserves SO_ORIGINAL_DST for the CONNECT authority.
+	//   * prerouting: redirect new actor TCP connections, other than traffic to
+	//     destination port 53, to atunnel's local listener. REDIRECT preserves
+	//     SO_ORIGINAL_DST for the CONNECT authority.
 	//   * postrouting: masquerade traffic not handled by the TCP tunnel, notably
-	//     DNS over UDP, so hostname resolution continues to work.
+	//     traffic to TCP or UDP destination port 53, so hostname resolution
+	//     continues to work.
 	//   * forward: drop actor UDP egress to any port but DNS, and accept the rest
 	//     of the packets forwarded between the actor veth and pod eth0.
 	if err := RemoveActorNftablesRules(); err != nil {
@@ -334,14 +337,28 @@ func l4ProtocolEqual(proto byte) []expr.Any {
 }
 
 // ActorEgressRedirectRule returns the prerouting rule that redirects actor TCP
-// egress to the local atunnel egress listener on port, or nil when port is zero
-// (tunneled egress disabled, so actor egress stays on the masquerade path).
+// egress, except traffic to [dnsPort], to the local atunnel egress listener on
+// port, or nil when port is zero (tunneled egress disabled, so actor egress
+// stays on the masquerade path).
 func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
 	if port == 0 {
 		return nil
 	}
 	exprs := append(IPSourceEqual(ActorVethIP), l4ProtocolEqual(unix.IPPROTO_TCP)...)
 	exprs = append(exprs,
+		// Traffic to destination port 53 bypasses atunnel and follows the direct
+		// masquerade path.
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseTransportHeader,
+			Offset:       2,
+			Len:          2,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(dnsPort),
+		},
 		&expr.Immediate{
 			Register: 1,
 			Data:     binaryutil.BigEndian.PutUint16(port),
@@ -358,9 +375,6 @@ func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port 
 // up as a rising counter in `nft list table ip ateom_actor` rather than as an
 // unexplained timeout.
 func actorNonDNSUDPDropRule(table *nftables.Table, chain *nftables.Chain) *nftables.Rule {
-	// dnsPort is the only destination port on which actor UDP egress is forwarded.
-	const dnsPort = 53
-
 	exprs := append(IPSourceEqual(ActorVethIP), l4ProtocolEqual(unix.IPPROTO_UDP)...)
 	exprs = append(exprs,
 		// Destination port, at offset 2 of the UDP header.

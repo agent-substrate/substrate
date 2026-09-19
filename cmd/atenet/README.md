@@ -44,6 +44,19 @@ likely be split in the future for better scalability.)
 RBAC permissions:
 * get, list, watch on ate-system EndpointSlices
 
+The Go router's `/statusz` page displays `ROUTER_SERVICE_IP` as optional
+deployment configuration, independently of `--namespace`. The ingress Deployment
+maps it from Kubernetes' `ATENET_ROUTER_SERVICE_HOST` service-link variable.
+It is a container-start snapshot, not a live Service lookup: recreating the
+Service can leave the address stale until the container restarts. The Service
+is installed before the Deployment to make injection available on a fresh install,
+but kubelet observation races or disabled service links can still leave it absent.
+Deployments with a different Service name can supply their own mapping.
+
+Missing or invalid values display as **Unavailable** in HTML and an empty
+`router_cluster_ip` string in JSON. This diagnostic does not affect readiness or
+require Service API permissions. The egress Deployment leaves it unset.
+
 ## testing
 
 Run the package tests with `go test ./cmd/atenet/...`. Cluster e2e

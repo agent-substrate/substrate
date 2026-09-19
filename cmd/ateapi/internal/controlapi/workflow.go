@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -95,7 +96,8 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 	attrs = append(attrs,
 		slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)),
 		slog.String(string(ateattr.ActorStateKey), state))
-	slog.LogAttrs(ctx, slog.LevelInfo, "Actor state changed", attrs...)
+	slog.LogAttrs(ctx, slog.LevelInfo, actorevent.StateChangedBody, attrs...)
+	actorevent.Emit(ctx, actorevent.StateChanged, attrs)
 }
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.

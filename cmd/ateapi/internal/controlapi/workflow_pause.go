@@ -166,16 +166,9 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		return "", status.Errorf(codes.FailedPrecondition, "CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
 	}
 
-	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
+	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_local_snapshot_name", actor.GetStatus().GetInProgressLocalSnapshotName())
-			if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateattr.ReasonWorkerPodGone); err != nil {
-				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
-			}
-			return "", fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
-		}
-		return "", fmt.Errorf("while getting atelet conn for worker pod: %w", err)
+		return "", fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 

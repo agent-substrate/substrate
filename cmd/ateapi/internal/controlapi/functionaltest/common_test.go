@@ -131,7 +131,6 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	}
 
 	// 3. Initialize Informers
-	workerFactory, workerInformer := controlapi.WorkerPodInformer(k8sClient)
 	ateletFactory, ateletInformer := controlapi.AteletInformer(k8sClient)
 	scFactory := informers.NewSharedInformerFactory(k8sClient, 0)
 	scLister := scFactory.Storage().V1().StorageClasses().Lister()
@@ -143,12 +142,10 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	workerFactory.Start(ctx.Done())
 	ateletFactory.Start(ctx.Done())
 	substrateInformerFactory.Start(ctx.Done())
 	scFactory.Start(ctx.Done())
 
-	workerFactory.WaitForCacheSync(ctx.Done())
 	ateletFactory.WaitForCacheSync(ctx.Done())
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
 	scFactory.WaitForCacheSync(ctx.Done())
@@ -162,8 +159,8 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	}
 
 	// Dial the fake atelet over insecure transport instead of per-atelet mTLS,
-	// so DialForWorker's real lookup/dial/cache path is exercised under test.
-	dialer := controlapi.NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer(), "", "",
+	// so DialForAteletOnNode's real lookup/dial/cache path is exercised under test.
+	dialer := controlapi.NewAteletDialer(ateletInformer.GetIndexer(), "", "",
 		controlapi.WithDialCredentials(func(_ string) (credentials.TransportCredentials, error) {
 			return insecure.NewCredentials(), nil
 		}))

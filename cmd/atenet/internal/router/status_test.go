@@ -28,15 +28,82 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
+
+func TestStatuszConfiguredServiceIP(t *testing.T) {
+	// The deployment chooses the address; neither --namespace nor Kubernetes
+	// service links are discovery inputs to the status handler.
+	t.Setenv("POD_NAMESPACE", "deployed-namespace")
+	t.Setenv("ATENET_ROUTER_SERVICE_HOST", "10.96.0.99")
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"IPv4", "10.96.0.42", "10.96.0.42"},
+		{"IPv6", "fd00:10:96::42", "fd00:10:96::42"},
+		{"missing", "", ""},
+		{"headless", "None", ""},
+		{"unexpanded", "$(ATENET_ROUTER_SERVICE_HOST)", ""},
+		{"invalid", "not-an-ip", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ROUTER_SERVICE_IP", tc.input)
+			for _, format := range []string{"html", "json"} {
+				t.Run(format, func(t *testing.T) {
+					clientset := kubernetesfake.NewSimpleClientset()
+					srv := &RouterServer{
+						cfg:       routerConfig{Namespace: "configured-namespace"},
+						clientset: clientset,
+					}
+					response := httptest.NewRecorder()
+					srv.handleStatusz(response, httptest.NewRequest(http.MethodGet, "/statusz?format="+format, nil))
+					if response.Code != http.StatusOK {
+						t.Fatalf("status = %d, want 200", response.Code)
+					}
+					if actions := clientset.Actions(); len(actions) != 0 {
+						t.Errorf("status handler made Kubernetes API calls: %v", actions)
+					}
+					if format == "json" {
+						var data map[string]any
+						if err := json.Unmarshal(response.Body.Bytes(), &data); err != nil {
+							t.Fatal(err)
+						}
+						if got := data["router_cluster_ip"]; got != tc.want {
+							t.Errorf("router_cluster_ip = %#v, want %q", got, tc.want)
+						}
+						if got := data["namespace"]; got != "configured-namespace" {
+							t.Errorf("namespace = %#v, want configured-namespace", got)
+						}
+						return
+					}
+					body := response.Body.String()
+					for _, label := range []string{"Configured Service IP (container-start snapshot)", "Configured namespace", "configured-namespace"} {
+						if !strings.Contains(body, label) {
+							t.Errorf("HTML missing %q", label)
+						}
+					}
+					want := tc.want
+					if want == "" {
+						want = "Unavailable"
+					}
+					if !strings.Contains(body, ">"+want+"</span>") {
+						t.Errorf("HTML missing Service IP value %q", want)
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestStatuszEndpoint(t *testing.T) {
 	dnsAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")

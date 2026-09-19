@@ -134,41 +134,17 @@ func makeLeafCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, o
 	return cert
 }
 
-// newDialerForPods builds an AteletDialer for testing.
-func newDialerForPods(t *testing.T, workerPod, ateletPod *corev1.Pod) *AteletDialer {
+// dialerWithAtelets builds an AteletDialer over the given atelet pods, dialing
+// with insecure test credentials.
+func dialerWithAtelets(t *testing.T, pods ...*corev1.Pod) *AteletDialer {
 	t.Helper()
-
-	workerIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
-		byNamespaceAndName: func(obj any) ([]string, error) {
-			pod := obj.(*corev1.Pod)
-			return []string{pod.ObjectMeta.Namespace + "/" + pod.ObjectMeta.Name}, nil
-		},
-	})
-	if err := workerIndexer.Add(workerPod); err != nil {
-		t.Fatalf("adding worker pod to indexer: %v", err)
-	}
-
-	ateletIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
-		byNode: func(obj any) ([]string, error) {
-			pod := obj.(*corev1.Pod)
-			return []string{pod.Spec.NodeName}, nil
-		},
-	})
-	if err := ateletIndexer.Add(ateletPod); err != nil {
-		t.Fatalf("adding atelet pod to indexer: %v", err)
-	}
-
-	return &AteletDialer{
-		workerIndexer: workerIndexer,
-		ateletIndexer: ateletIndexer,
-		ateletConns:   newAteletConnCache(16),
-		dialCredentials: func(string) (credentials.TransportCredentials, error) {
+	return NewAteletDialer(newTestAteletIndexer(t, pods...), "", "",
+		WithDialCredentials(func(string) (credentials.TransportCredentials, error) {
 			return insecure.NewCredentials(), nil
-		},
-	}
+		}))
 }
 
-func TestDialForWorkerTarget(t *testing.T) {
+func TestDialForAteletOnNodeTarget(t *testing.T) {
 	tests := []struct {
 		name       string
 		ateletIP   string
@@ -193,20 +169,16 @@ func TestDialForWorkerTarget(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			workerPod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "worker-1", UID: "worker-uid"},
-				Spec:       corev1.PodSpec{NodeName: "node-1"},
-			}
 			ateletPod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-abc", UID: "atelet-uid"},
 				Spec:       corev1.PodSpec{NodeName: "node-1"},
 				Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: tc.ateletIP}}},
 			}
 
-			d := newDialerForPods(t, workerPod, ateletPod)
-			conn, err := d.DialForWorker("team-a", "worker-1")
+			d := dialerWithAtelets(t, ateletPod)
+			conn, err := d.DialForAteletOnNode("node-1")
 			if err != nil {
-				t.Fatalf("DialForWorker returned error: %v", err)
+				t.Fatalf("DialForAteletOnNode returned error: %v", err)
 			}
 			t.Cleanup(func() { conn.Close() })
 
@@ -217,34 +189,15 @@ func TestDialForWorkerTarget(t *testing.T) {
 	}
 }
 
-func TestDialForWorkerErrors(t *testing.T) {
-	workerPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "worker-1", UID: "worker-uid"},
+func TestDialForAteletOnNodeNoIPs(t *testing.T) {
+	ateletPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-abc", UID: "atelet-uid"},
 		Spec:       corev1.PodSpec{NodeName: "node-1"},
 	}
-
-	t.Run("unknown worker pod", func(t *testing.T) {
-		ateletPod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-abc", UID: "atelet-uid"},
-			Spec:       corev1.PodSpec{NodeName: "node-1"},
-			Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.244.1.7"}}},
-		}
-		d := newDialerForPods(t, workerPod, ateletPod)
-		if _, err := d.DialForWorker("team-a", "no-such-worker"); !errors.Is(err, ErrWorkerPodNotFound) {
-			t.Fatalf("DialForWorker error = %v, want ErrWorkerPodNotFound", err)
-		}
-	})
-
-	t.Run("atelet without assigned IPs", func(t *testing.T) {
-		ateletPod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-abc", UID: "atelet-uid"},
-			Spec:       corev1.PodSpec{NodeName: "node-1"},
-		}
-		d := newDialerForPods(t, workerPod, ateletPod)
-		if _, err := d.DialForWorker("team-a", "worker-1"); err == nil {
-			t.Fatal("DialForWorker succeeded, want error for atelet with no IPs")
-		}
-	})
+	d := dialerWithAtelets(t, ateletPod)
+	if _, err := d.DialForAteletOnNode("node-1"); err == nil {
+		t.Fatal("DialForAteletOnNode succeeded, want error for atelet with no IPs")
+	}
 }
 
 func TestVerifyAteletServerCert(t *testing.T) {
@@ -363,14 +316,14 @@ func TestDialForAteletOnNode(t *testing.T) {
 	}
 
 	t.Run("no atelet on node", func(t *testing.T) {
-		d := NewAteletDialer(nil, newTestAteletIndexer(t), "", "")
+		d := NewAteletDialer(newTestAteletIndexer(t), "", "")
 		if _, err := d.DialForAteletOnNode("node1"); !errors.Is(err, ErrNoAteletOnNode) {
 			t.Fatalf("DialForAteletOnNode = %v, want ErrNoAteletOnNode", err)
 		}
 	})
 
 	t.Run("more than one atelet on node", func(t *testing.T) {
-		d := NewAteletDialer(nil, newTestAteletIndexer(t,
+		d := NewAteletDialer(newTestAteletIndexer(t,
 			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),
 			ateletPod("atelet-2", "uid-2", "node1", "10.0.0.2"),
 		), "", "")
@@ -381,7 +334,7 @@ func TestDialForAteletOnNode(t *testing.T) {
 	})
 
 	t.Run("dials and caches the node's atelet", func(t *testing.T) {
-		d := NewAteletDialer(nil, newTestAteletIndexer(t,
+		d := NewAteletDialer(newTestAteletIndexer(t,
 			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),
 		), "", "")
 		var credsUID string
@@ -407,7 +360,7 @@ func TestDialForAteletOnNode(t *testing.T) {
 	})
 
 	t.Run("closes conns evicted from the cache", func(t *testing.T) {
-		d := NewAteletDialer(nil, newTestAteletIndexer(t,
+		d := NewAteletDialer(newTestAteletIndexer(t,
 			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),
 			ateletPod("atelet-2", "uid-2", "node2", "10.0.0.2"),
 		), "", "", WithDialCredentials(func(string) (credentials.TransportCredentials, error) {
