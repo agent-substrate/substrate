@@ -41,6 +41,10 @@ var substrateFixtures = []struct {
 		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
 	}, 1},
 	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/security/atespace-a-pool.yaml.tmpl",
+		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
 	}, 2},
