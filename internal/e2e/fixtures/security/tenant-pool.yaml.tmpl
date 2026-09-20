@@ -1,0 +1,56 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The k8s half of the FIRST tenant of the cross-tenant security fixture: the
+# namespace plus the one WorkerPool both tenants run on. The second tenant
+# deploys tenant-namespace.yaml.tmpl instead, which brings a namespace and no
+# pool of its own — see the package comment in suites/security.
+#
+# replicas is 1 deliberately. An ateom hosts one actor at a time
+# (internal/ateomcapacity: actorsPerAteom = 1), so two tenants never run
+# together on a worker; the boundary this fixture exercises is worker REUSE
+# across time. Worker pools are not atespace-scoped (the scheduler filters on
+# sandbox class, the label selector and capacity, never on the actor's
+# atespace), so a single worker forces the second tenant to reuse the exact
+# ateom the first vacated. That reuse is the whole point: it makes the attacker
+# inherit the host on which the victim just left its per-actor state, which is
+# the arrangement the isolation assertions have to hold under. On more than one
+# worker the attacker may boot on a fresh ateom the victim never touched, and
+# the host-state assertions weaken to a tautology.
+#
+# The workload label is a literal rather than ${FIXTURE_SUFFIX}-suffixed
+# because both tenants' templates must select this one pool and they render
+# with different suffixes. The two sandbox-class lanes run sequentially and
+# each tears its pool down, and sandbox class is itself a scheduling
+# constraint, so the shared label cannot cross a gVisor actor onto a micro-VM
+# worker.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-e2e${FIXTURE_SUFFIX}
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: tenant
+  namespace: ate-e2e${FIXTURE_SUFFIX}
+  labels:
+    workload: ate-e2e-security
+spec:
+  replicas: 1
+  workerImage: ${ATEOM_IMAGE}
+${WORKERPOOL_RUNTIME}
