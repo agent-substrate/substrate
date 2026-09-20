@@ -779,6 +779,11 @@ data:
       # The only cluster that dials the internet. Reached from the MITM leg, so
       # the host it resolves comes from the decrypted request's own Host header
       # rather than from the CONNECT authority.
+      # Disable session resumption on all four origin TLS clusters: Envoy 1.39
+      # shares sessions across SNIs within a client context, which can fail SAN
+      # validation if another origin accepts the ticket. Revisit after upgrading
+      # to a build with https://github.com/envoyproxy/envoy/pull/45982 enabled.
+      # New TLS connections use full handshakes; HTTP connection reuse is unchanged.
       - name: egress_forward_proxy
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
@@ -809,6 +814,7 @@ data:
           name: envoy.transport_sockets.tls
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            max_session_keys: 0
             common_tls_context:
               validation_context:
                 trusted_ca:
@@ -837,6 +843,7 @@ data:
           name: envoy.transport_sockets.tls
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            max_session_keys: 0
             common_tls_context:
               validation_context:
                 trusted_ca:
@@ -896,6 +903,7 @@ data:
           name: envoy.transport_sockets.tls
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            max_session_keys: 0
             common_tls_context:
               validation_context:
                 trusted_ca:
@@ -918,6 +926,7 @@ data:
           name: envoy.transport_sockets.tls
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            max_session_keys: 0
             common_tls_context:
               validation_context:
                 trusted_ca:

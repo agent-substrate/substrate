@@ -16,6 +16,7 @@ package router
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,49 @@ import (
 var egressManifests = []string{
 	"../../../../manifests/ate-install/atenet-egress.yaml",
 	"../../../../manifests/ate-install/atenet-egress-with-sdsmint.yaml",
+}
+
+// Missing max_session_keys defaults to 1, so it must be explicitly zero.
+// Each MITM origin cluster serves multiple SNIs through one TLS context.
+func TestEgressOriginDisablesSessionResumption(t *testing.T) {
+	var bootstrap struct {
+		StaticResources struct {
+			Clusters []struct {
+				Name            string `json:"name"`
+				TransportSocket struct {
+					TypedConfig struct {
+						Type           string  `json:"@type"`
+						MaxSessionKeys *uint32 `json:"max_session_keys"`
+					} `json:"typed_config"`
+				} `json:"transport_socket"`
+			} `json:"clusters"`
+		} `json:"static_resources"`
+	}
+	raw := envoyConfig(t, "../../../../manifests/ate-install/atenet-egress-with-sdsmint.yaml")
+	if err := yaml.Unmarshal([]byte(raw), &bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	var checked []string
+	for _, cluster := range bootstrap.StaticResources.Clusters {
+		ctx := cluster.TransportSocket.TypedConfig
+		if ctx.Type != "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext" {
+			continue
+		}
+		checked = append(checked, cluster.Name)
+		t.Run(cluster.Name, func(t *testing.T) {
+			if ctx.MaxSessionKeys == nil {
+				t.Fatal("max_session_keys is missing; Envoy enables session resumption by default")
+			}
+			if *ctx.MaxSessionKeys != 0 {
+				t.Errorf("max_session_keys = %d, want 0 to prevent cross-SNI session reuse", *ctx.MaxSessionKeys)
+			}
+		})
+	}
+	slices.Sort(checked)
+	want := []string{"egress_forward_proxy", "egress_forward_proxy_grpc", "egress_original_dst_tls", "egress_original_dst_tls_grpc"}
+	if !slices.Equal(checked, want) {
+		t.Errorf("checked TLS clusters = %v, want %v", checked, want)
+	}
 }
 
 // TestEgressManifestsDisableTheConnectTimeout is the static-config half of
