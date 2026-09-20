@@ -137,11 +137,12 @@ spec:
       # Stop() and the tracer/meter flush on exit.
       terminationGracePeriodSeconds: 330
       # atelet must run on every node a WorkerPool actor may schedule to.
-      # Microvm pools are tainted ate.dev/sandboxClass=<class>:NoSchedule per
-      # the convention in cmd/atecontroller/internal/controllers/workerpool_apply.go
-      # (which also adds the matching toleration to ateom worker pods).
-      # Tolerating the key with operator: Exists covers any current or future
-      # sandbox class value without needing another manifest edit.
+      # Node pools reserved for one sandbox class are tainted
+      # ate.dev/sandboxClass=<class>:NoSchedule per the convention in
+      # cmd/atecontroller/internal/controllers/workerpool_apply.go, which adds
+      # the matching toleration to every pool's worker pods. Tolerating the key
+      # with operator: Exists covers any current or future sandbox class value
+      # without needing another manifest edit.
       tolerations:
       - key: ate.dev/sandboxClass
         operator: Exists

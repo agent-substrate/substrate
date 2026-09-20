@@ -394,7 +394,15 @@ func TestWorkerPoolPodTemplatePropagation(t *testing.T) {
 		if podSpec.NodeSelector["workload"] != "substrate" {
 			return false, nil
 		}
-		if len(podSpec.Tolerations) != 1 || podSpec.Tolerations[0].Key != "nvidia.com/gpu" {
+		// The controller appends its own sandbox class toleration, so look
+		// for the template's rather than expecting it to be the only one.
+		hasTemplateToleration := false
+		for _, tol := range podSpec.Tolerations {
+			if tol.Key == "nvidia.com/gpu" {
+				hasTemplateToleration = true
+			}
+		}
+		if !hasTemplateToleration {
 			return false, nil
 		}
 		if podSpec.PriorityClassName != "substrate-workers" {
@@ -491,8 +499,9 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 		}
 		podSpec := dep.Spec.Template.Spec
 		container := podSpec.Containers[0]
+		// The template's toleration plus the controller's sandbox class one.
 		return podSpec.NodeSelector["workload"] == "substrate" &&
-			len(podSpec.Tolerations) == 1 &&
+			len(podSpec.Tolerations) == 2 &&
 			podSpec.PriorityClassName == "substrate-workers" &&
 			podSpec.Affinity != nil &&
 			podSpec.Affinity.NodeAffinity != nil &&
@@ -510,8 +519,10 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 		}
 		podSpec := dep.Spec.Template.Spec
 		container := podSpec.Containers[0]
+		// Only the controller's sandbox class toleration survives the clear.
 		return len(podSpec.NodeSelector) == 0 &&
-			len(podSpec.Tolerations) == 0 &&
+			len(podSpec.Tolerations) == 1 &&
+			podSpec.Tolerations[0].Key == sandboxClassTaintKey &&
 			podSpec.PriorityClassName == "" &&
 			(podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil) &&
 			len(container.Resources.Limits) == 0 &&

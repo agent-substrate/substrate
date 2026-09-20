@@ -228,6 +228,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		)
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
+	applySandboxClassToleration(podSpecAC, wp.Spec.SandboxClass)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
@@ -459,15 +460,34 @@ func maybeApplyMicroVMPodShape(
 	// with no node advertising the resource, workers stay Pending rather than
 	// landing somewhere they cannot run.
 	//
-	// The toleration stays: extended resources constrain where this pod fits but
-	// repel nothing, so a cluster reserving nested-virt nodes with a taint still
-	// needs it. Additive on top of the WorkerPool's configurable scheduling
-	// fields (spec.template nodeSelector/tolerations/affinity, added in #247) —
-	// merge, don't overwrite.
+	// Extended resources constrain where this pod fits but repel nothing, so a
+	// cluster reserving nested-virt nodes with a taint also needs the toleration
+	// that applySandboxClassToleration adds for every class.
+}
+
+// sandboxClassTaintKey is the taint key a cluster puts on a node pool reserved
+// for one sandbox class, with the class name as the value:
+// ate.dev/sandboxClass=<class>:NoSchedule. The atelet DaemonSet tolerates the
+// key for any value.
+const sandboxClassTaintKey = "ate.dev/sandboxClass"
+
+// applySandboxClassToleration lets worker pods schedule onto a node pool
+// tainted for the pool's own sandbox class. Without it a cluster that reserves
+// nodes per class with the ate.dev/sandboxClass taint leaves every worker
+// Pending. The toleration is additive on top of the WorkerPool's configurable
+// spec.template tolerations. An empty class means the API default, gvisor,
+// which is what the CRD's defaulting produces on the server.
+func applySandboxClassToleration(
+	podSpecAC *corev1ac.PodSpecApplyConfiguration,
+	sandboxClass atev1alpha1.SandboxClass,
+) {
+	if sandboxClass == "" {
+		sandboxClass = atev1alpha1.SandboxClassGvisor
+	}
 	podSpecAC.WithTolerations(corev1ac.Toleration().
-		WithKey("ate.dev/sandboxClass").
+		WithKey(sandboxClassTaintKey).
 		WithOperator(corev1.TolerationOpEqual).
-		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
+		WithValue(string(sandboxClass)).
 		WithEffect(corev1.TaintEffectNoSchedule))
 }
 

@@ -100,6 +100,8 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 				Tolerations: []corev1.Toleration{toleration},
 			}),
 			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				// Template tolerations come first; the sandbox class toleration
+				// is appended after them.
 				podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{
 					*corev1ac.Toleration().
 						WithKey("dedicated").
@@ -107,6 +109,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 						WithValue("workerpool").
 						WithEffect(corev1.TaintEffectNoSchedule).
 						WithTolerationSeconds(300),
+					sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 				}
 			}),
 		},
@@ -188,6 +191,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 						WithValue("workerpool").
 						WithEffect(corev1.TaintEffectNoSchedule).
 						WithTolerationSeconds(300),
+					sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 				}
 				podSpecAC.WithPriorityClassName("interactive-workerpool")
 				podSpecAC.WithAffinity(corev1ac.Affinity().WithNodeAffinity(
@@ -252,10 +256,74 @@ func TestBuildDeploymentApplyConfigMetadata(t *testing.T) {
 	}
 }
 
+// sandboxClassTolerationAC is the toleration applySandboxClassToleration adds
+// for class, in apply-configuration form for cmp against built pod specs.
+func sandboxClassTolerationAC(class atev1alpha1.SandboxClass) corev1ac.TolerationApplyConfiguration {
+	return *corev1ac.Toleration().
+		WithKey(sandboxClassTaintKey).
+		WithOperator(corev1.TolerationOpEqual).
+		WithValue(string(class)).
+		WithEffect(corev1.TaintEffectNoSchedule)
+}
+
+// TestSandboxClassToleration asserts every pool tolerates the
+// ate.dev/sandboxClass taint for its own class, exactly once, with an empty
+// class meaning the gvisor default, and that template tolerations survive
+// alongside it.
+func TestSandboxClassToleration(t *testing.T) {
+	tests := []struct {
+		name  string
+		class atev1alpha1.SandboxClass
+		want  string
+	}{
+		{"gvisor default", "", "gvisor"},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, "gvisor"},
+		{"microvm", atev1alpha1.SandboxClassMicroVM, "microvm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				Tolerations: []corev1.Toleration{{
+					Key:      "dedicated",
+					Operator: corev1.TolerationOpExists,
+					Effect:   corev1.TaintEffectNoSchedule,
+				}},
+			})
+			wp.Spec.SandboxClass = tt.class
+			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec
+
+			var classValues []string
+			hasTemplateToleration := false
+			for _, tol := range ps.Tolerations {
+				if tol.Key == nil {
+					continue
+				}
+				switch *tol.Key {
+				case sandboxClassTaintKey:
+					if tol.Operator == nil || *tol.Operator != corev1.TolerationOpEqual ||
+						tol.Effect == nil || *tol.Effect != corev1.TaintEffectNoSchedule || tol.Value == nil {
+						t.Errorf("sandbox class toleration = %+v, want Equal/NoSchedule with a value", tol)
+						continue
+					}
+					classValues = append(classValues, *tol.Value)
+				case "dedicated":
+					hasTemplateToleration = true
+				}
+			}
+			if len(classValues) != 1 || classValues[0] != tt.want {
+				t.Errorf("%s toleration values = %v, want exactly [%s]", sandboxClassTaintKey, classValues, tt.want)
+			}
+			if !hasTemplateToleration {
+				t.Errorf("template toleration was dropped; the class toleration must be additive")
+			}
+		})
+	}
+}
+
 // TestMicroVMPodShape asserts the micro-VM sandbox class requests the host
 // devices as extended resources (served by atelet's device plugin) and
-// tolerates the ate.dev/sandboxClass taint; other classes get none of it.
-// Placement comes from the device request, so no nodeSelector is added.
+// bind-mounts the tun device; other classes get none of it. Placement comes
+// from the device request, so no nodeSelector is added.
 func TestMicroVMPodShape(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -315,18 +383,12 @@ func TestMicroVMPodShape(t *testing.T) {
 			// The device request handles placement, so the class must not also
 			// pin a nodeSelector (which would re-introduce the hand-applied
 			// label as a scheduling requirement).
-			if _, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]; hasSelector {
-				t.Errorf("nodeSelector on ate.dev/sandboxClass should be gone; placement comes from the device request")
+			if _, hasSelector := ps.NodeSelector[sandboxClassTaintKey]; hasSelector {
+				t.Errorf("nodeSelector on %s should be gone; placement comes from the device request", sandboxClassTaintKey)
 			}
-			hasTol := false
-			for _, tol := range ps.Tolerations {
-				if tol.Key != nil && *tol.Key == "ate.dev/sandboxClass" {
-					hasTol = true
-				}
-			}
-			if hasDeviceRequest != tt.wantMicroVM || hasTol != tt.wantMicroVM || hasTunMount != tt.wantMicroVM {
-				t.Errorf("microvm shape: deviceRequest=%v toleration=%v tunMount=%v, want all %v",
-					hasDeviceRequest, hasTol, hasTunMount, tt.wantMicroVM)
+			if hasDeviceRequest != tt.wantMicroVM || hasTunMount != tt.wantMicroVM {
+				t.Errorf("microvm shape: deviceRequest=%v tunMount=%v, want both %v",
+					hasDeviceRequest, hasTunMount, tt.wantMicroVM)
 			}
 		})
 	}
@@ -813,7 +875,9 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithResources(corev1ac.ResourceRequirements()))
 
 	podSpecAC.NodeSelector = map[string]string{}
-	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
+	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{
+		sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
+	}
 	podSpecAC.WithPriorityClassName("")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
