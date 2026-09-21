@@ -481,6 +481,9 @@ func Validate_ActorStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 2048); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -2937,6 +2940,9 @@ func Validate_ExternalSnapshot(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 2048); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			return
 		}

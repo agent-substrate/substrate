@@ -534,6 +534,7 @@ type ExternalSnapshot struct {
 	// snapshot_uri addresses the snapshot's prefix in object storage.
 	//
 	// +k8s:required
+	// +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// content_scope is what the snapshot captured.
 	//
@@ -1497,6 +1498,7 @@ type ActorStatus struct {
 	// snapshot the Actor is currently taking.
 	//
 	// +k8s:optional
+	// +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
 	InProgressSnapshotUri string `protobuf:"bytes,3,opt,name=in_progress_snapshot_uri,json=inProgressSnapshotUri,proto3" json:"in_progress_snapshot_uri,omitempty"`
 	// external_snapshot is the Actor's current external snapshot.
 	// If the Actor was created from a Tag this is the tag's snapshot, borrowed

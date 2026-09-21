@@ -1182,6 +1182,13 @@ func TestValidateExternalSnapshot(t *testing.T) {
 			want: field.ErrorList{field.Required(uriPath, "")},
 		},
 		{
+			name: "snapshot_uri too long",
+			obj: valid(func(s *ateapipb.ExternalSnapshot) {
+				s.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
+			}),
+			want: field.ErrorList{field.TooLong(uriPath, nil, 2048).WithOrigin("maxLength")},
+		},
+		{
 			name: "content_scope above the enum",
 			obj:  valid(func(s *ateapipb.ExternalSnapshot) { s.ContentScope = ateapipb.SnapshotContentScope(3) }),
 			want: field.ErrorList{field.Invalid(scopePath, nil, "").WithOrigin("maximum")},
@@ -1259,6 +1266,14 @@ func TestValidateExternalSnapshotUpdate(t *testing.T) {
 			newObj: badExternalSnapshot(func(s *ateapipb.ExternalSnapshot) {
 				s.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 			}),
+		},
+		{
+			name:   "snapshot_uri changed to a value that is too long",
+			oldObj: valid(),
+			newObj: valid(func(s *ateapipb.ExternalSnapshot) {
+				s.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
+			}),
+			want: field.ErrorList{field.TooLong(uriPath, nil, 2048).WithOrigin("maxLength")},
 		},
 		{
 			name:   "snapshot_uri repaired",

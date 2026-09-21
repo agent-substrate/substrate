@@ -151,6 +151,7 @@ message ExternalSnapshot {
   // snapshot_uri addresses the snapshot's prefix in object storage.
   //
   // +k8s:required
+  // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string snapshot_uri = 1;
 
   // content_scope is what the snapshot captured.
@@ -550,6 +551,7 @@ message ActorStatus {
   // snapshot the Actor is currently taking.
   //
   // +k8s:optional
+  // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string in_progress_snapshot_uri = 3;
 
   // external_snapshot is the Actor's current external snapshot.
