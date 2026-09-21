@@ -85,6 +85,18 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := s.rejectIfDraining(); err != nil {
 		return nil, err
 	}
+	var prepared *preparedSandbox
+	if s.prepared != nil {
+		if s.prepared.cleanupStarted {
+			return nil, status.Error(codes.FailedPrecondition, "prepared sandbox cleanup is incomplete")
+		}
+		if req.GetScope() != ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA ||
+			!s.prepared.params.matches(sandboxParamsFromRestore(req)) {
+			return nil, status.Error(codes.FailedPrecondition, "RestoreWorkload does not match the prepared sandbox")
+		}
+		prepared = s.prepared
+		s.prepared = nil
+	}
 
 	// Same as RunWorkload: a restore is a boot, and graceful shutdown cancels it
 	// rather than queueing behind it.
@@ -93,9 +105,22 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.setActiveRPC(rpcRestoreWorkload, cancel)
 	defer s.clearActiveRPC()
 
-	if err := s.deactivateActorNetworking(ctx); err != nil {
-		return nil, err
+	if prepared == nil {
+		if err := s.deactivateActorNetworking(ctx); err != nil {
+			return nil, err
+		}
 	}
+	preparedPending := prepared
+	defer func() {
+		if retErr == nil || preparedPending == nil {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cleanupCancel()
+		if err := s.cleanupPreparedSandbox(cleanupCtx, preparedPending); err != nil {
+			slog.WarnContext(cleanupCtx, "Failed to clean up prepared microVM after Restore failure", slog.Any("err", err))
+		}
+	}()
 
 	p := actorBootParams{
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
@@ -149,6 +174,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		// A Data snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. readyz gating comes
 		// with the cold-boot path, so the actor is serving when we return.
+		p.prepared = prepared
+		preparedPending = nil // coldBootActor owns cleanup from this point.
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
 		}
