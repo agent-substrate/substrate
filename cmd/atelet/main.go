@@ -252,6 +252,15 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
 	}
 
+	if *ateomGCEnabled {
+		// The janitor needs the node's pod list, and so the node name.
+		if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
+			go newAteomGC(k8sClient, nodeName).Run(ctx)
+		} else {
+			slog.WarnContext(ctx, "NODE_NAME not set; the ateom directory janitor is disabled")
+		}
+	}
+
 	if interval := clampActorStatsPollInterval(ctx, *actorStatsPollInterval); interval > 0 {
 		if statsInst, err := newStatsInstruments(otel.Meter("atelet")); err != nil {
 			// Telemetry must not take the node's lifecycle daemon down with
