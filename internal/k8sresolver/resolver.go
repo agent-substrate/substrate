@@ -123,7 +123,12 @@ func ParseTarget(target resolver.Target) (ns, svc, port string, err error) {
 
 	svc, port, err = net.SplitHostPort(ep)
 	if err != nil {
+		if strings.Contains(ep, ":") {
+			return "", "", "", fmt.Errorf("invalid port in target %q: %w", target.String(), err)
+		}
 		svc, port = ep, "443"
+	} else if portNumber, err := strconv.Atoi(port); err != nil || portNumber < 0 || portNumber > 65535 {
+		return "", "", "", fmt.Errorf("invalid port %q in target %q, expected a number between 0 and 65535", port, target.String())
 	}
 
 	if parts := strings.Split(svc, "."); len(parts) > 1 {

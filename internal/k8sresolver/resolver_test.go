@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,42 @@ func TestParseTarget(t *testing.T) {
 			wantService:   "api",
 			wantPort:      "443",
 		},
+		{
+			name: "EndpointSlice port sentinel",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:0"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "0",
+		},
+		{
+			name: "minimum explicit port",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:1"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "1",
+		},
+		{
+			name: "maximum explicit port",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:65535"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "65535",
+		},
+		{
+			name: "explicit port spelling is preserved",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:00443"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "00443",
+		},
 	}
 
 	for _, tt := range tests {
@@ -143,6 +180,35 @@ func TestParseTarget(t *testing.T) {
 			}
 			if gotPort != tt.wantPort {
 				t.Errorf("ParseTarget() gotPort = %v, want %v", gotPort, tt.wantPort)
+			}
+		})
+	}
+}
+
+func TestParseTargetRejectsInvalidPorts(t *testing.T) {
+	tests := []struct {
+		name string
+		port string
+	}{
+		{name: "empty", port: ""},
+		{name: "nonnumeric", port: "notaport"},
+		{name: "negative", port: "-1"},
+		{name: "above 65535", port: "65536"},
+		{name: "multiple colons", port: "443:extra"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:" + tt.port},
+			}
+
+			_, _, _, err := ParseTarget(target)
+			if err == nil {
+				t.Fatal("ParseTarget() error = nil, want an invalid port error")
+			}
+			if !strings.Contains(err.Error(), "invalid port") {
+				t.Fatalf("ParseTarget() error = %q, want an invalid port error", err)
 			}
 		})
 	}
