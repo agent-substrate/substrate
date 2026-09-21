@@ -48,7 +48,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -72,9 +71,10 @@ var (
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
 	authenticationConfigFile    = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	postgresConnectionString    = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
-	postgresDDLConnectionString = pflag.String("postgres-ddl-connection-string", "", "PostgreSQL DDL and maintenance connection string. Defaults to --postgres-connection-string.")
+	postgresConnectionString    = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN, URI, or @file:/absolute/path).")
+	postgresDDLConnectionString = pflag.String("postgres-ddl-connection-string", "", "PostgreSQL DDL and maintenance connection string (libpq DSN, URI, or @file:/absolute/path). Defaults to --postgres-connection-string.")
 	postgresSchema              = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	postgresMaxConnLifetime     = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
@@ -349,6 +349,7 @@ func logFlagValues(ctx context.Context) {
 		slog.Bool("postgres-connection-string-set", *postgresConnectionString != ""),
 		slog.Bool("postgres-ddl-connection-string-set", *postgresDDLConnectionString != ""),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Duration("postgres-max-conn-lifetime", *postgresMaxConnLifetime),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -393,13 +394,8 @@ func connectStore(ctx context.Context) (store.Interface, error) {
 	if *postgresConnectionString == "" {
 		return nil, fmt.Errorf("--postgres-connection-string is required")
 	}
-	if _, err := pgxpool.ParseConfig(*postgresConnectionString); err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
-	}
-	if *postgresDDLConnectionString != "" {
-		if _, err := pgxpool.ParseConfig(*postgresDDLConnectionString); err != nil {
-			return nil, fmt.Errorf("parsing PostgreSQL DDL connection string: %w", err)
-		}
+	if *postgresMaxConnLifetime < 0 {
+		return nil, fmt.Errorf("--postgres-max-conn-lifetime must not be negative")
 	}
 	persistence, err := connectPostgresWithRetries(ctx)
 	if err != nil {
@@ -416,7 +412,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresDDLConnectionString, *postgresSchema)
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresDDLConnectionString, *postgresSchema, *postgresMaxConnLifetime)
 		if err == nil {
 			return persistence, nil
 		}

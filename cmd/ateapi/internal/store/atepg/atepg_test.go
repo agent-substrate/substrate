@@ -137,7 +137,7 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			p, err := Connect(ctx, containerDSN, "", "concurrent-startup")
+			p, err := Connect(ctx, containerDSN, "", "concurrent-startup", 0)
 			if p != nil {
 				p.Close()
 				p.pool.Close()
@@ -253,7 +253,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", "", schema)
+	persistence, err := Connect(ctx, dsn+"&search_path=public", "", schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	if runtimeDSN == containerDSN || ddlDSN == containerDSN {
 		t.Fatalf("unexpected test DSN format: %q", containerDSN)
 	}
-	p, err := Connect(ctx, runtimeDSN, ddlDSN, schema)
+	p, err := Connect(ctx, runtimeDSN, ddlDSN, schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestConnectSingleRoleDoesNotRequireSchemaOwnership(t *testing.T) {
 	})
 
 	dsn := strings.Replace(containerDSN, "://atepg:atepg@", "://"+role+":"+password+"@", 1)
-	p, err := Connect(ctx, dsn, "", schema)
+	p, err := Connect(ctx, dsn, "", schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`)
 		})
 
-		p, err := Connect(ctx, containerDSN, "", "migration-ahead")
+		p, err := Connect(ctx, containerDSN, "", "migration-ahead", 0)
 		if err != nil {
 			t.Fatalf("creating current schema: %v", err)
 		}
@@ -418,7 +418,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			t.Fatalf("setting ahead migration state: %v", err)
 		}
 
-		p, err = Connect(ctx, containerDSN, "", "migration-ahead")
+		p, err = Connect(ctx, containerDSN, "", "migration-ahead", 0)
 		if err != nil {
 			t.Fatalf("Connect with an ahead clean schema failed: %v", err)
 		}
@@ -437,7 +437,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-legacy" CASCADE`)
 		})
 
-		_, err := Connect(ctx, containerDSN, "", "migration-legacy")
+		_, err := Connect(ctx, containerDSN, "", "migration-legacy", 0)
 		if err == nil || !strings.Contains(err.Error(), "Substrate tables exist without a migration ledger") {
 			t.Fatalf("Connect error = %v, want unsupported schema error", err)
 		}
@@ -972,7 +972,7 @@ func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "", "public")
+	p, err := Connect(ctx, containerDSN, "", "public", 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -1014,7 +1014,7 @@ func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "", "public")
+	p, err := Connect(ctx, containerDSN, "", "public", 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

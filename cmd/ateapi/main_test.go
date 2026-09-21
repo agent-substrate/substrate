@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
@@ -30,5 +31,43 @@ func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
 	_, err := connectStore(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "--postgres-connection-string is required") {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
+	}
+}
+
+func TestConnectStoreRejectsNegativeMaxConnectionLifetime(t *testing.T) {
+	oldDSN, oldLifetime := *postgresConnectionString, *postgresMaxConnLifetime
+	t.Cleanup(func() {
+		*postgresConnectionString = oldDSN
+		*postgresMaxConnLifetime = oldLifetime
+	})
+	*postgresConnectionString = "postgres://runtime@postgres/atepg"
+	*postgresMaxConnLifetime = -time.Second
+
+	_, err := connectStore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--postgres-max-conn-lifetime must not be negative") {
+		t.Fatalf("connectStore() error = %v, want invalid-lifetime error", err)
+	}
+}
+
+func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
+	oldRuntime, oldDDL := *postgresConnectionString, *postgresDDLConnectionString
+	t.Cleanup(func() {
+		*postgresConnectionString = oldRuntime
+		*postgresDDLConnectionString = oldDDL
+	})
+	*postgresConnectionString = "@env"
+	*postgresDDLConnectionString = "@env"
+	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", "runtime-a")
+	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "ddl-a")
+
+	loadFlagsFromEnv()
+	if *postgresConnectionString != "runtime-a" || *postgresDDLConnectionString != "ddl-a" {
+		t.Fatalf("resolved values = %q, %q", *postgresConnectionString, *postgresDDLConnectionString)
+	}
+	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", "runtime-b")
+	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "ddl-b")
+	loadFlagsFromEnv()
+	if *postgresConnectionString != "runtime-a" || *postgresDDLConnectionString != "ddl-a" {
+		t.Fatal("environment-backed connection strings changed after startup resolution")
 	}
 }

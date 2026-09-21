@@ -27,8 +27,11 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestPoolConfigRereadsRotatedCredentials covers the pod certificate rotation
@@ -47,7 +50,7 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 		"postgres://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=%s&sslcert=%s&sslkey=%s",
 		rootPath, bundlePath, bundlePath)
 
-	cfg, err := poolConfig(dsn)
+	cfg, err := poolConfig(mustConnectionStringSource(t, dsn), 0)
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
@@ -75,15 +78,233 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 	}
 }
 
-// TestPoolConfigWithoutTLS keeps the hook off connection strings that have no
-// TLS material to re-read, such as the ones the tests here use.
-func TestPoolConfigWithoutTLS(t *testing.T) {
-	cfg, err := poolConfig("postgres://postgres@localhost:5432/atepg?sslmode=disable")
+func TestPoolConfigRefreshesFileSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connection-string")
+	writeConnectionString(t, path, "postgres://runtime:old-password@postgres:5432/atepg?sslmode=disable&search_path=public")
+
+	source, err := newConnectionStringSource("@file:" + path)
+	if err != nil {
+		t.Fatalf("newConnectionStringSource: %v", err)
+	}
+	cfg, err := poolConfig(source, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
-	if cfg.BeforeConnect != nil {
-		t.Error("BeforeConnect is set for a connection string with no TLS material")
+	cfg.ConnConfig.RuntimeParams["search_path"] = `"substrate"`
+	watchCfg := cfg.Copy()
+
+	writeConnectionString(t, path, "postgres://runtime:new-password@postgres:5432/atepg?sslmode=disable&search_path=wrong\n")
+	conn := cfg.ConnConfig.Copy()
+	if err := cfg.BeforeConnect(context.Background(), conn); err != nil {
+		t.Fatalf("BeforeConnect: %v", err)
+	}
+	if conn.Password != "new-password" {
+		t.Errorf("password = %q, want refreshed password", conn.Password)
+	}
+	if got := conn.RuntimeParams["search_path"]; got != `"substrate"` {
+		t.Errorf("search_path = %q, want explicit schema", got)
+	}
+	if cfg.ConnConfig.Password != "old-password" {
+		t.Error("refresh modified the pool's pinned connection config")
+	}
+	if cfg.MaxConnLifetime != 5*time.Minute || watchCfg.MaxConnLifetime != 5*time.Minute {
+		t.Errorf("maximum connection lifetime was not retained by copied watch config")
+	}
+	watchConn := watchCfg.ConnConfig.Copy()
+	if err := watchCfg.BeforeConnect(context.Background(), watchConn); err != nil {
+		t.Fatalf("watch BeforeConnect: %v", err)
+	}
+	if watchConn.Password != "new-password" {
+		t.Errorf("watch password = %q, want refreshed password", watchConn.Password)
+	}
+}
+
+func TestConnectionStringSources(t *testing.T) {
+	runtimePath := filepath.Join(t.TempDir(), "runtime-dsn")
+	ddlPath := filepath.Join(t.TempDir(), "ddl-dsn")
+	writeConnectionString(t, runtimePath, "postgres://runtime:runtime-old@postgres:5432/atepg?sslmode=disable")
+	writeConnectionString(t, ddlPath, "postgres://ddl:ddl-old@postgres:5432/atepg?sslmode=disable")
+
+	t.Run("omitted DDL source follows runtime", func(t *testing.T) {
+		runtimeSource, ddlSource, err := connectionStringSources("@file:"+runtimePath, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtimeCfg, err := poolConfig(runtimeSource, 5*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ddlCfg, err := poolConfig(ddlSource, 5*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		watchCfg := runtimeCfg.Copy()
+		writeConnectionString(t, runtimePath, "postgres://runtime:runtime-new@postgres:5432/atepg?sslmode=disable")
+		for name, cfg := range map[string]*pgxpool.Config{"runtime": runtimeCfg, "watch": watchCfg, "DDL": ddlCfg} {
+			conn := cfg.ConnConfig.Copy()
+			if err := cfg.BeforeConnect(context.Background(), conn); err != nil {
+				t.Fatalf("%s BeforeConnect: %v", name, err)
+			}
+			if conn.Password != "runtime-new" {
+				t.Errorf("%s password = %q, want rotated runtime password", name, conn.Password)
+			}
+			if cfg.MaxConnLifetime != 5*time.Minute {
+				t.Errorf("%s maximum connection lifetime = %s", name, cfg.MaxConnLifetime)
+			}
+		}
+	})
+
+	t.Run("separate sources rotate independently", func(t *testing.T) {
+		writeConnectionString(t, runtimePath, "postgres://runtime:runtime-old@postgres:5432/atepg?sslmode=disable")
+		runtimeSource, ddlSource, err := connectionStringSources("@file:"+runtimePath, "@file:"+ddlPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtimeCfg, err := poolConfig(runtimeSource, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ddlCfg, err := poolConfig(ddlSource, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeConnectionString(t, runtimePath, "postgres://runtime:runtime-new@postgres:5432/atepg?sslmode=disable")
+		runtimeConn, ddlConn := runtimeCfg.ConnConfig.Copy(), ddlCfg.ConnConfig.Copy()
+		if err := runtimeCfg.BeforeConnect(context.Background(), runtimeConn); err != nil {
+			t.Fatal(err)
+		}
+		if err := ddlCfg.BeforeConnect(context.Background(), ddlConn); err != nil {
+			t.Fatal(err)
+		}
+		if runtimeConn.Password != "runtime-new" || ddlConn.Password != "ddl-old" {
+			t.Errorf("runtime and DDL sources did not rotate independently")
+		}
+		writeConnectionString(t, ddlPath, "postgres://ddl:ddl-new@postgres:5432/atepg?sslmode=disable")
+		ddlConn = ddlCfg.ConnConfig.Copy()
+		if err := ddlCfg.BeforeConnect(context.Background(), ddlConn); err != nil {
+			t.Fatal(err)
+		}
+		if ddlConn.Password != "ddl-new" {
+			t.Errorf("DDL password = %q, want independently rotated password", ddlConn.Password)
+		}
+	})
+}
+
+func TestPoolConfigRejectsIdentityChanges(t *testing.T) {
+	tests := []struct {
+		name    string
+		initial string
+		rotated string
+	}{
+		{"host", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://runtime:new-secret@two:5432/db?sslmode=disable"},
+		{"port", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://runtime:new-secret@one:5433/db?sslmode=disable"},
+		{"database", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://runtime:new-secret@one:5432/other?sslmode=disable"},
+		{"user", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://other:new-secret@one:5432/db?sslmode=disable"},
+		{"fallback host", "postgres://runtime:old-secret@one:5432,two:5433/db?sslmode=disable", "postgres://runtime:new-secret@one:5432,three:5433/db?sslmode=disable"},
+		{"fallback port", "postgres://runtime:old-secret@one:5432,two:5433/db?sslmode=disable", "postgres://runtime:new-secret@one:5432,two:5434/db?sslmode=disable"},
+		{"fallback order", "postgres://runtime:old-secret@one:5432,two:5433,three:5434/db?sslmode=disable", "postgres://runtime:new-secret@one:5432,three:5434,two:5433/db?sslmode=disable"},
+		{"fallback count", "postgres://runtime:old-secret@one:5432,two:5433/db?sslmode=disable", "postgres://runtime:new-secret@one:5432/db?sslmode=disable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "connection-string")
+			writeConnectionString(t, path, tt.initial)
+			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), 0)
+			if err != nil {
+				t.Fatalf("poolConfig: %v", err)
+			}
+			writeConnectionString(t, path, tt.rotated)
+			err = cfg.BeforeConnect(context.Background(), cfg.ConnConfig.Copy())
+			if err == nil || !strings.Contains(err.Error(), "restart is required") {
+				t.Fatalf("BeforeConnect error = %v, want restart-required error", err)
+			}
+			if strings.Contains(err.Error(), "old-secret") || strings.Contains(err.Error(), "new-secret") {
+				t.Fatalf("BeforeConnect error exposed credentials: %v", err)
+			}
+		})
+	}
+}
+
+func TestPoolConfigRefreshFailuresAreSafe(t *testing.T) {
+	tests := []struct {
+		name    string
+		replace func(*testing.T, string)
+	}{
+		{"empty", func(t *testing.T, path string) { writeConnectionString(t, path, " \n") }},
+		{"malformed", func(t *testing.T, path string) { writeConnectionString(t, path, "://new-secret") }},
+		{"unreadable", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "connection-string")
+			writeConnectionString(t, path, "postgres://runtime:old-secret@postgres:5432/atepg?sslmode=disable")
+			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.replace(t, path)
+			conn := cfg.ConnConfig.Copy()
+			err = cfg.BeforeConnect(context.Background(), conn)
+			if err == nil {
+				t.Fatal("BeforeConnect succeeded with an invalid replacement")
+			}
+			if strings.Contains(err.Error(), "old-secret") || strings.Contains(err.Error(), "new-secret") {
+				t.Fatalf("BeforeConnect error exposed credentials: %v", err)
+			}
+			if conn.Password != "old-secret" || cfg.ConnConfig.Password != "old-secret" {
+				t.Error("failed refresh modified an existing connection config")
+			}
+		})
+	}
+}
+
+func TestConnectionStringFileSourceValidation(t *testing.T) {
+	emptyPath := filepath.Join(t.TempDir(), "empty")
+	writeConnectionString(t, emptyPath, "\n")
+
+	if _, err := newConnectionStringSource("@file:relative"); err == nil {
+		t.Error("newConnectionStringSource accepted a relative path")
+	}
+	for _, value := range []string{"@file:" + filepath.Join(t.TempDir(), "missing"), "@file:" + emptyPath} {
+		source, err := newConnectionStringSource(value)
+		if err != nil {
+			t.Fatalf("newConnectionStringSource(%q): %v", value, err)
+		}
+		if _, err := poolConfig(source, 0); err == nil {
+			t.Errorf("poolConfig accepted invalid source %q", value)
+		} else if !strings.Contains(err.Error(), strings.TrimPrefix(value, "@file:")) {
+			t.Errorf("poolConfig error %q does not identify its source path", err)
+		}
+	}
+
+	malformedPath := filepath.Join(t.TempDir(), "malformed")
+	writeConnectionString(t, malformedPath, "://startup-secret")
+	_, err := poolConfig(mustConnectionStringSource(t, "@file:"+malformedPath), 0)
+	if err == nil {
+		t.Fatal("poolConfig accepted a malformed file source")
+	}
+	if strings.Contains(err.Error(), "startup-secret") {
+		t.Fatalf("poolConfig error exposed file contents: %v", err)
+	}
+}
+
+func mustConnectionStringSource(t *testing.T, value string) connectionStringSource {
+	t.Helper()
+	source, err := newConnectionStringSource(value)
+	if err != nil {
+		t.Fatalf("newConnectionStringSource: %v", err)
+	}
+	return source
+}
+
+func writeConnectionString(t *testing.T, path, dsn string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(dsn), 0o600); err != nil {
+		t.Fatalf("writing connection string: %v", err)
 	}
 }
 

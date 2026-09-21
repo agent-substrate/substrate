@@ -26,6 +26,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,15 +117,31 @@ var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
 // Connect opens runtime and DDL pools, creates schema if necessary, and
 // applies pending schema migrations. An empty ddlDSN uses dsn for both roles.
-func Connect(ctx context.Context, dsn, ddlDSN, schema string) (*Persistence, error) {
+func Connect(ctx context.Context, dsn, ddlDSN, schema string, maxConnLifetime time.Duration) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
-	cfg, err := poolConfig(dsn)
+	if maxConnLifetime < 0 {
+		return nil, fmt.Errorf("PostgreSQL maximum connection lifetime must not be negative")
+	}
+	runtimeSource, ddlSource, err := connectionStringSources(dsn, ddlDSN)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := poolConfig(runtimeSource, maxConnLifetime)
 	if err != nil {
 		return nil, err
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
+	ownerCfg, err := poolConfig(ddlSource, maxConnLifetime)
+	if err != nil {
+		return nil, fmt.Errorf("parsing PostgreSQL DDL connection string: %w", err)
+	}
+	ownerCfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
+	ownerCfg.MaxConns = ownerPoolMaxConns
+	ownerCfg.MinConns = 0
+	ownerCfg.MinIdleConns = 0
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
@@ -132,18 +151,6 @@ func Connect(ctx context.Context, dsn, ddlDSN, schema string) (*Persistence, err
 		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
 	}
 
-	if ddlDSN == "" {
-		ddlDSN = dsn
-	}
-	ownerCfg, err := poolConfig(ddlDSN)
-	if err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("parsing PostgreSQL DDL connection string: %w", err)
-	}
-	ownerCfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	ownerCfg.MaxConns = ownerPoolMaxConns
-	ownerCfg.MinConns = 0
-	ownerCfg.MinIdleConns = 0
 	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerCfg)
 	if err != nil {
 		pool.Close()
@@ -182,6 +189,46 @@ func Connect(ctx context.Context, dsn, ddlDSN, schema string) (*Persistence, err
 	return p, nil
 }
 
+type connectionStringSource func() (string, error)
+
+func connectionStringSources(dsn, ddlDSN string) (connectionStringSource, connectionStringSource, error) {
+	runtimeSource, err := newConnectionStringSource(dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ddlDSN == "" {
+		return runtimeSource, runtimeSource, nil
+	}
+	ddlSource, err := newConnectionStringSource(ddlDSN)
+	if err != nil {
+		return nil, nil, fmt.Errorf("PostgreSQL DDL connection string: %w", err)
+	}
+	return runtimeSource, ddlSource, nil
+}
+
+func newConnectionStringSource(value string) (connectionStringSource, error) {
+	const filePrefix = "@file:"
+	if !strings.HasPrefix(value, filePrefix) {
+		return func() (string, error) { return value, nil }, nil
+	}
+	path := strings.TrimPrefix(value, filePrefix)
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("PostgreSQL connection string file path %q must be absolute", path)
+	}
+	source := func() (string, error) {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("reading PostgreSQL connection string file %q: %w", path, err)
+		}
+		dsn := strings.TrimSpace(string(contents))
+		if dsn == "" {
+			return "", fmt.Errorf("PostgreSQL connection string file %q is empty", path)
+		}
+		return dsn, nil
+	}
+	return source, nil
+}
+
 func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -201,8 +248,8 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	return nil
 }
 
-// poolConfig parses dsn into a pool configuration whose TLS material is read
-// from disk again for every new connection.
+// poolConfig parses a connection source into a pool configuration whose
+// password and TLS material are refreshed for every new connection.
 //
 // pgx resolves sslcert, sslkey and sslrootcert once, when the connection
 // string is parsed, and pins the result for the life of the pool. The paths in
@@ -211,28 +258,51 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 // certificate it started with, and keep trusting only the CAs it started with,
 // until connections started failing. Re-parsing in BeforeConnect costs one
 // small file read per new connection and picks up every rotation.
-func poolConfig(dsn string) (*pgxpool.Config, error) {
+func poolConfig(source connectionStringSource, maxConnLifetime time.Duration) (*pgxpool.Config, error) {
+	dsn, err := source()
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+		return nil, fmt.Errorf("parsing PostgreSQL connection string: invalid value")
 	}
-	usesTLS := cfg.ConnConfig.TLSConfig != nil
-	for _, fallback := range cfg.ConnConfig.Fallbacks {
-		usesTLS = usesTLS || fallback.TLSConfig != nil
-	}
-	if !usesTLS {
-		return cfg, nil
+	if maxConnLifetime > 0 {
+		cfg.MaxConnLifetime = maxConnLifetime
 	}
 	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+		dsn, err := source()
+		if err != nil {
+			return err
+		}
 		fresh, err := pgx.ParseConfig(dsn)
 		if err != nil {
-			return fmt.Errorf("re-reading PostgreSQL TLS material: %w", err)
+			return fmt.Errorf("parsing refreshed PostgreSQL connection string: invalid value")
 		}
+		if !sameConnectionIdentity(cc, fresh) {
+			return fmt.Errorf("PostgreSQL connection identity changed; restart is required")
+		}
+		cc.Password = fresh.Password
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
 		return nil
 	}
 	return cfg, nil
+}
+
+func sameConnectionIdentity(current, fresh *pgx.ConnConfig) bool {
+	if current.Host != fresh.Host || current.Port != fresh.Port || current.Database != fresh.Database || current.User != fresh.User {
+		return false
+	}
+	if len(current.Fallbacks) != len(fresh.Fallbacks) {
+		return false
+	}
+	for i := range current.Fallbacks {
+		if current.Fallbacks[i].Host != fresh.Fallbacks[i].Host || current.Fallbacks[i].Port != fresh.Fallbacks[i].Port {
+			return false
+		}
+	}
+	return true
 }
 
 // NewPersistence wraps an already-open pool, applying pending migrations.
