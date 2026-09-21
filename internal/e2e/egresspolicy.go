@@ -49,6 +49,35 @@ func EgressAllowHTTPS(patterns ...string) *ateapipb.EgressRule {
 	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns}}
 }
 
+// EgressInjectHeader is an https rule (see EgressAllowHTTPS) that also carries
+// a replace_headers effect: on a match, the gateway resolves credentialURI
+// through its credential provider and replaces header with prefix plus the
+// credential.
+func EgressInjectHeader(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
+	rule := EgressAllowHTTPS(patterns...)
+	rule.Https.Effects = replaceHeaderEffects(header, prefix, credentialURI)
+	return rule
+}
+
+// EgressInjectHeaderHTTP is an http rule (see EgressAllowHTTP) carrying the
+// same effect as EgressInjectHeader. The gateway never puts a credential on
+// cleartext, so a test uses it to prove the effect is skipped there.
+func EgressInjectHeaderHTTP(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
+	rule := EgressAllowHTTP(patterns...)
+	rule.Http.Effects = replaceHeaderEffects(header, prefix, credentialURI)
+	return rule
+}
+
+func replaceHeaderEffects(header, prefix, credentialURI string) *ateapipb.HttpRuleEffects {
+	return &ateapipb.HttpRuleEffects{
+		ReplaceHeaders: []*ateapipb.CredentialHeader{{
+			Header:        header,
+			Prefix:        prefix,
+			CredentialUri: credentialURI,
+		}},
+	}
+}
+
 // EnsureEgressPolicy gives actor an EgressPolicy with exactly rules, replacing
 // any it had. Deleting the actor deletes the policy, so there is no cleanup.
 func EnsureEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, actor *ateapipb.ObjectRef, rules ...*ateapipb.EgressRule) {
