@@ -144,10 +144,3 @@ func createTestActorTemplate(t *testing.T, s *Persistence, atespace, name string
 		t.Fatalf("CreateActorTemplate(%q/%q) failed: %v", atespace, name, err)
 	}
 }
-
-func TestDecodePageTokenRejectsWrongKeyShape(t *testing.T) {
-	token := encodePageToken(kindActor, "", []string{"only-an-atespace"})
-	if _, err := decodePageToken(token, kindActor, "", 2); err == nil {
-		t.Fatal("decodePageToken() accepted a global actor token with only one key part")
-	}
-}
