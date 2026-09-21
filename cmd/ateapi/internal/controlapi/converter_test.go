@@ -56,23 +56,6 @@ func TestSnapshotScopeToAtelet(t *testing.T) {
 	}
 }
 
-// TestEffectiveContentScope pins UNSPECIFIED-means-FULL: stored substrate
-// templates may legitimately leave scopes unset.
-func TestEffectiveContentScope(t *testing.T) {
-	tests := []struct {
-		in, expected ateapipb.SnapshotContentScope
-	}{
-		{ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-		{ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-		{ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-	}
-	for _, tt := range tests {
-		if got := effectiveContentScope(tt.in); got != tt.expected {
-			t.Errorf("effectiveContentScope(%v) = %v, want %v", tt.in, got, tt.expected)
-		}
-	}
-}
-
 // TestSandboxClassString pins the label values the scheduler and metrics
 // share with the CRD's lower-case enum.
 func TestSandboxClassString(t *testing.T) {

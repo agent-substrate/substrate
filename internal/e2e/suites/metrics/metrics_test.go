@@ -43,6 +43,16 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	tmpl := e2e.SubstrateCounterFixture()
 	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
+	// The lifecycle event counters are cumulative and the collector outlives this
+	// test, so take a baseline before driving anything. Asserting the states are
+	// merely present would pass on a previous run's counts, even with the
+	// exporter switched off.
+	baselineScrape, err := e2e.ScrapeCollectorMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeCollectorMetrics for the lifecycle baseline: %v", err)
+	}
+	lifecycleBaseline := e2e.LifecycleEventCounts(baselineScrape)
+
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: metricsAtespace}},
@@ -64,7 +74,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// they add the drive steps their instruments need.
 	resume(t, ctx, clients, actorID)
 
-	// Drive request through the router so Envoy ext_proc emits atenet_router_route_duration.
+	// Drive request through the router so the dataplane emits atenet_router_route_duration.
 	rClient, err := e2e.NewRouterClient(ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
@@ -87,16 +97,35 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// because it deletes the worker pod.
 	triggerActorCrash(t, ctx, clients, actorID)
 
+	// The actor lifecycle events the steps above must have produced. The crash
+	// is the one state only ateapi can report, so it is what proves the events
+	// carry more than the ateom plane could.
+	wantStates := []string{
+		ateattr.ActorStateResuming,
+		ateattr.ActorStateRunning,
+		ateattr.ActorStateSuspended,
+		ateattr.ActorStateCrashed,
+	}
+
 	deadline := time.Now().Add(2 * time.Minute)
+	dataplane := e2e.CurrentAtenetDataplane()
+	prefixes := dataplane.PlatformMetricPrefixes(e2e.PlatformMetricPrefixes)
 	var missing []string
-	var ateomSeen, controllerSeen bool
+	var ateomSeen, controllerSeen, routeDurationSeen, lifecycleSeen bool
+	var missingStates []string
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
 		if err != nil {
 			t.Fatalf("ScrapeCollectorMetrics: %v", err)
 		}
-		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
+		missing = e2e.MissingPlatformMetrics(scrape, prefixes)
+		routeDurationSeen, err = dataplane.RouteDurationSeen(ctx, scrape)
+		if err != nil {
+			t.Fatalf("checking route-duration metric: %v", err)
+		}
+		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventCounts(scrape), wantStates)
+		lifecycleSeen = len(missingStates) == 0
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
@@ -105,7 +134,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
 			strings.Contains(scrape, "controller_runtime_")
 
-		if len(missing) == 0 && ateomSeen && controllerSeen {
+		if len(missing) == 0 && ateomSeen && controllerSeen && routeDurationSeen && lifecycleSeen {
 			var errs []string
 
 			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
@@ -298,11 +327,11 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 
 	if lastLabelErr != nil {
-		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
-			missing, ateomSeen, controllerSeen, lastLabelErr)
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
+			missing, missingStates, ateomSeen, controllerSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v",
-		missing, ateomSeen, controllerSeen)
+	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, ateom pushed=%v, atecontroller pushed=%v",
+		missing, missingStates, routeDurationSeen, ateomSeen, controllerSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

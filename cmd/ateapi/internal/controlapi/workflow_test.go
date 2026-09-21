@@ -16,10 +16,12 @@ package controlapi
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -84,7 +86,8 @@ func TestActorStateChangeRecords(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			records := logRecords(t, "Actor state changed")
+			records := logRecords(t, actorevent.StateChanged.Body)
+			events := otlpEvents(t)
 
 			persistence := newTestPersistence(t)
 			storetest.MustCreateAtespace(t, ctx, persistence, tmplAtespace)
@@ -115,7 +118,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			if len(*records) != 1 {
 				t.Fatalf("got %d state records, want 1: %v", len(*records), *records)
 			}
-			got := (*records)[0]
+			got := (*records)[0].attrs
 			want := map[string]string{
 				string(ateattr.AtespaceKey):           actorRef.Atespace,
 				string(ateattr.ActorNameKey):          actorRef.Name,
@@ -134,6 +137,20 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Errorf("got %d attributes, want %d: %v", len(got), len(want), got)
 			}
 
+			// The OTLP copy is the same record under an event name. One call writes
+			// both, so anything either copy holds alone is a bug in actorevent.Log.
+			gotEvents := events()
+			if len(gotEvents) != 1 {
+				t.Fatalf("got %d state events, want 1: %v", len(gotEvents), gotEvents)
+			}
+			if gotEvents[0].name != actorevent.StateChanged.Name {
+				t.Errorf("event name = %q, want %q", gotEvents[0].name, actorevent.StateChanged.Name)
+			}
+			if !maps.Equal(gotEvents[0].attrs, got) {
+				t.Errorf("state event attributes = %v, want the stdout record's %v", gotEvents[0].attrs, got)
+			}
+			assertCopiesAgree(t, (*records)[0], gotEvents[0], actorevent.StateChanged)
+
 			stored, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("reload actor: %v", err)
@@ -150,7 +167,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 // retention.
 func TestActorCreatedRecord(t *testing.T) {
 	ctx := context.Background()
-	records := logRecords(t, "Actor state changed")
+	records := logRecords(t, actorevent.StateChanged.Body)
 
 	persistence := newTestPersistence(t)
 	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
@@ -169,7 +186,7 @@ func TestActorCreatedRecord(t *testing.T) {
 	if len(*records) != 1 {
 		t.Fatalf("got %d state records, want 1: %v", len(*records), *records)
 	}
-	got := (*records)[0]
+	got := (*records)[0].attrs
 	if got[string(ateattr.ActorOperationNameKey)] != ateattr.OperationCreate {
 		t.Errorf("operation = %q, want %q", got[string(ateattr.ActorOperationNameKey)], ateattr.OperationCreate)
 	}
@@ -185,7 +202,7 @@ func TestActorCreatedRecord(t *testing.T) {
 // finished delete from one that is stuck.
 func TestActorDeletedRecord(t *testing.T) {
 	ctx := context.Background()
-	records := logRecords(t, "Actor state changed")
+	records := logRecords(t, actorevent.StateChanged.Body)
 
 	persistence := newTestPersistence(t)
 	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
@@ -211,7 +228,7 @@ func TestActorDeletedRecord(t *testing.T) {
 	if len(*records) != 1 {
 		t.Fatalf("got %d state records, want 1: %v", len(*records), *records)
 	}
-	got := (*records)[0]
+	got := (*records)[0].attrs
 	if got[string(ateattr.ActorStateKey)] != ateattr.ActorStateDeleted {
 		t.Errorf("state = %q, want %q", got[string(ateattr.ActorStateKey)], ateattr.ActorStateDeleted)
 	}
@@ -231,7 +248,7 @@ func TestActorDeletedRecord(t *testing.T) {
 // in the stream the store never held.
 func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	ctx := context.Background()
-	records := logRecords(t, "Actor state changed")
+	records := logRecords(t, actorevent.StateChanged.Body)
 
 	persistence := newTestPersistence(t)
 	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
@@ -251,7 +268,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 
 	// Bump the stored version so the workflow's precondition is stale.
 	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(stale), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.InProgressSnapshotName = "someone-else"
+		toUpdate.Status.InProgressSnapshotUri = someActorSnapshotURI(t, testStorageLocation, "team-a", "someone-else")
 		return nil
 	}); err != nil {
 		t.Fatalf("bump version: %v", err)

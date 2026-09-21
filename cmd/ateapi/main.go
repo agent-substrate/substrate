@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -64,6 +65,8 @@ import (
 // maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
 const maxRPCDeadline = 10 * time.Minute
 
+const minResyncInterval = 250 * time.Millisecond
+
 var (
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
@@ -83,6 +86,8 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
+	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
+
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 )
@@ -99,6 +104,9 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
+	if *templateResyncInterval < minResyncInterval {
+		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
+	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -121,6 +129,18 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
+	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
+		ServiceName: "ateapi",
+		Exporter:    serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize logging", err)
+	}
+	// Nil when the exporter is none.
+	if lp != nil {
+		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
+	}
+
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
 	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
@@ -140,6 +160,20 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown.
 	if closer, ok := persistence.(interface{ Close() }); ok {
 		defer closer.Close()
+	}
+
+	if poolProvider, ok := persistence.(interface {
+		NewPool(context.Context) (*pgxpool.Pool, error)
+	}); ok {
+		authzPool, err := poolProvider.NewPool(shutdownCtx)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)
+		}
+		authzSrv, err := authz.NewServer(shutdownCtx, authzPool)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
+		}
+		defer authzSrv.Close()
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -162,19 +196,16 @@ func main() {
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	workerPodInformerFactory.Start(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	workerPodInformerFactory.WaitForCacheSync(stopCh)
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
 	scInformerFactory.WaitForCacheSync(stopCh)
@@ -197,7 +228,7 @@ func main() {
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
-	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
+	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
@@ -226,7 +257,7 @@ func main() {
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}

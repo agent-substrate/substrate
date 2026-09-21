@@ -71,6 +71,29 @@ type authConfig struct {
 	AteapiServerName     string
 }
 
+// credentialProviderConfig holds the egress gateway's connection to the
+// credential provider the MITM-leg injection resolves secrets through. A
+// non-empty Address enables injection; the rest configures the mTLS the gateway
+// dials the provider with. See cmd/atenet/internal/router/egress.
+type credentialProviderConfig struct {
+	// Name is the provider this gateway serves, as a ate-secret://
+	// prefix; a policy credential URI naming any other provider is refused.
+	// Empty disables the check (dev only).
+	Name string
+	// Address is the provider's gRPC dial target. Empty disables injection.
+	Address string
+	// CAFile is the CA the provider's serving certificate must chain to.
+	// Required unless Insecure is set.
+	CAFile string
+	// ClientCert is the credential bundle presented to the provider as the
+	// client certificate. Required unless Insecure is set.
+	ClientCert string
+	// ServerName is the SAN/SNI expected on the provider's serving certificate.
+	ServerName string
+	// Insecure dials the provider without TLS; explicit development-only opt-in.
+	Insecure bool
+}
+
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
 	// Mode restricts the instance to one traffic direction. Empty means ModeAll.
@@ -115,6 +138,13 @@ type routerConfig struct {
 	// the cache.
 	EgressPolicyCacheTTL time.Duration
 
+	// CredentialProvider configures egress credential injection on the MITM leg.
+	// Only the egress gateway sets it, and only when injection is enabled: an
+	// empty CredentialProvider.Address leaves the injector disabled, so a rule
+	// that requires an injection is skipped and the request passes through
+	// without the credential. See egress.Handler.
+	CredentialProvider credentialProviderConfig
+
 	LogLevel    string
 	MetricsAddr string
 	// OtlpCollectorAddress is the OTLP gRPC collector that Envoy reports
@@ -133,7 +163,8 @@ type routerConfig struct {
 	// ceiling on one request from the ingress listener to the actor's response.
 	// It bounds the actor's own handling time, not the resume that precedes it
 	// — parking and the ext_proc timeout cover that. A non-positive value
-	// leaves Envoy on defaultRouteTimeout.
+	// leaves Envoy on defaultRouteTimeout. It does not size shutdown; see
+	// drainRouteBudget.
 	RouteTimeout time.Duration
 
 	// ParkedRequest configures request parking: hold and retry requests whose
@@ -198,16 +229,16 @@ func (c routerConfig) extProcMaxRequests() int {
 const drainTimeoutMargin = 5 * time.Second
 
 // drainTimeout resolves the effective ext_proc drain deadline: an explicit
-// flag wins; 0 derives park budget + the DEFAULT route timeout + margin. The
-// derivation deliberately ignores a configured --route-timeout so a raised
-// route ceiling cannot silently stretch shutdown past the pod's grace period
-// (see defaultRouteTimeout); operators pair a long route timeout with an
-// explicit --drain-timeout instead.
+// flag wins; 0 derives park budget + drainRouteBudget + margin. The derivation
+// deliberately ignores the route timeout, configured or default, so a route
+// ceiling sized for the longest turn a workload might take cannot stretch
+// shutdown past the pod's grace period (see drainRouteBudget); operators pair a
+// long route timeout with an explicit --drain-timeout instead.
 func (c routerConfig) drainTimeout(parkCfg ingress.ParkedRequestConfig) time.Duration {
 	if c.DrainTimeout > 0 {
 		return c.DrainTimeout
 	}
-	return parkCfg.Budget + defaultRouteTimeout + drainTimeoutMargin
+	return parkCfg.Budget + drainRouteBudget + drainTimeoutMargin
 }
 
 // validate rejects flag combinations that would make the router misbehave
@@ -216,7 +247,7 @@ func (c routerConfig) validate() error {
 	switch c.atenetRouter() {
 	case atenetRouterEnvoy, atenetRouterAgentgateway:
 	default:
-		return fmt.Errorf("--atenet-router must be %q or %q, got %q", atenetRouterEnvoy, atenetRouterAgentgateway, c.AtenetRouter)
+		return fmt.Errorf("--atenet-dataplane must be %q or %q, got %q", atenetRouterEnvoy, atenetRouterAgentgateway, c.AtenetRouter)
 	}
 	switch c.Mode {
 	case "", ModeIngress, ModeEgress, ModeAll:

@@ -82,7 +82,19 @@ roleRef:
   name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io
 ---
-# 4. Create DaemonSet
+# 5. Create PriorityClass
+# Prioritize atelet over workers, which need it for actor activation.
+# Use the highest user-defined priority; system-node-critical requires kube-system.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: ate-node-critical
+value: 1000000000
+globalDefault: false
+description: "Node-local ate components that every actor activation depends on."
+
+---
+# 6. Create DaemonSet
 #
 # ${SUBSTRATE_VERSION} and ${SUBSTRATE_VERSION_SUFFIX} are placeholders that
 # hack/install-ate.sh fills in after kustomize/ko.
@@ -113,6 +125,7 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
+      priorityClassName: ate-node-critical
       # Pin to nodes labelled with this substrate version. install-ate.sh labels unlabeled
       # nodes at install time; the operator owns the label afterwards.
       nodeSelector:
@@ -160,6 +173,12 @@ spec:
           capabilities:
             drop:
             - ALL
+        # Keep per-node reservations small; omit limits to allow usage to grow
+        # with the number of hosted actors.
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
         env:
         - name: NODE_NAME
           valueFrom:

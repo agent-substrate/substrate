@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -36,13 +37,20 @@ import (
 )
 
 // validActorTemplate returns the smallest template that passes create
-// validation; mutations tweak it per test case.
+// validation; mutations tweak it per test case. The snapshot scopes and
+// resume policy are set explicitly because TestValidateActorTemplate
+// exercises validation directly, without defaulting.
 func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
 	template := &ateapipb.ActorTemplate{
-		Metadata:        &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
-		Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
-		SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		Metadata:   &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
+		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: "gs://my-bucket/snapshots",
+			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
+		},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 	}
 	for _, m := range mutations {
 		m(template)
@@ -169,13 +177,18 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshots_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_FULL", "")},
 	}, {
-		// UNSPECIFIED defaults to FULL, so leaving on_commit unset over a DATA
-		// on_pause is also a subset violation.
+		// Leaving on_commit unset over a DATA on_pause is both a required
+		// violation (on_commit has no default of its own) and a subset
+		// violation (UNSPECIFIED is not DATA).
 		"on_commit unset with data on_pause",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotsConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+			tmpl.SnapshotsConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
 		})},
-		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshots_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED", "")},
+		field.ErrorList{
+			field.Required(field.NewPath("actor_template", "snapshots_config", "on_commit"), ""),
+			field.Invalid(field.NewPath("actor_template", "snapshots_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED", ""),
+		},
 	}, {
 		"missing sandbox_config",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -309,12 +322,11 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		tmpl.Metadata.Version = 42
 		tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"pool": "default"}}
 		tmpl.Containers = []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
-		tmpl.SnapshotsConfig = &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"}
 		tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "1Gi"}}}
 		// Server-owned status a client must not be able to set.
 		tmpl.Status = &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-				GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/sneaky"},
+				GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 			},
 		}
 	})
@@ -327,7 +339,6 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		tmpl.Metadata.Version = 1
 		tmpl.WorkerSelector = in.GetWorkerSelector()
 		tmpl.Containers = in.GetContainers()
-		tmpl.SnapshotsConfig = in.GetSnapshotsConfig()
 		tmpl.Resources = in.GetResources()
 		tmpl.Status = &ateapipb.ActorTemplateStatus{}
 	})
@@ -336,6 +347,125 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	}
 	if got := created.GetMetadata().GetUid(); got == "" || got == in.GetMetadata().GetUid() {
 		t.Errorf("created uid = %q, want a fresh server-assigned uid", got)
+	}
+}
+
+func TestDeleteActorTemplate(t *testing.T) {
+	tests := []struct {
+		name         string
+		actorDeleted bool
+		tagDeleted   bool
+		pendingTag   bool
+		// failPrefix makes object storage fail cleanup for this resource kind.
+		failPrefix            string
+		wantActorAfterFailure bool
+	}{
+		{name: "golden actor and tag"},
+		{name: "golden actor already deleted", actorDeleted: true},
+		{name: "golden tag absent", tagDeleted: true},
+		{name: "no golden resources", actorDeleted: true, tagDeleted: true},
+		{name: "incomplete golden tag", pendingTag: true},
+		{name: "actor cleanup failure", failPrefix: "/actors/", wantActorAfterFailure: true},
+		{name: "tag cleanup failure", failPrefix: "/tags/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
+			templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
+			goldenRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
+				ActorTemplate: templateRef.ToObjectRef(),
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			workflow, objects := newFinalizeWorkflow(persistence)
+			actorURI := mustActorSnapshotURI(t, tmpl, actor, "snapshot")
+			objects.PutSnapshot(t, actorURI, "manifest.json")
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: actorURI.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+				s.CurrentActorTemplateUid = tmpl.GetMetadata().GetUid()
+			})
+			var tag *ateapipb.Tag
+			if tt.pendingTag {
+				tag = storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, goldenRef.Name, actor))
+			} else {
+				var err error
+				tag, err = workflow.TagActorSnapshot(ctx, tagToCreate(goldenRef, goldenRef.Name))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			tagRef := resources.TagRefFromTag(tag)
+			tagURI := mustReservedTagSnapshotURI(t, tag)
+			objects.PutSnapshot(t, tagURI, "manifest.json")
+			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStore: objects}
+			// The handler must request AnyState to clean up an active golden actor.
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+			})
+			if tt.actorDeleted {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.tagDeleted {
+				if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.failPrefix != "" {
+				objects.OnDelete = func(_, key string) error {
+					if strings.Contains(key, tt.failPrefix) {
+						return errObjectStore
+					}
+					return nil
+				}
+			}
+			req := &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}
+			deleted, err := svc.DeleteActorTemplate(ctx, req)
+			if tt.failPrefix != "" {
+				if !errors.Is(err, errObjectStore) {
+					t.Fatalf("DeleteActorTemplate = %v, want object storage error", err)
+				}
+				if _, err := persistence.GetActorTemplate(ctx, templateRef); err != nil {
+					t.Fatalf("template lost after cleanup failure: %v", err)
+				}
+				if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+					t.Fatalf("tag lost after cleanup failure: %v", err)
+				}
+				_, actorErr := persistence.GetActor(ctx, goldenRef)
+				if tt.wantActorAfterFailure && actorErr != nil || !tt.wantActorAfterFailure && !errors.Is(actorErr, store.ErrNotFound) {
+					t.Fatalf("GetActor after failure = %v, want present %v", actorErr, tt.wantActorAfterFailure)
+				}
+				objects.OnDelete = nil
+				deleted, err = svc.DeleteActorTemplate(ctx, req)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tmpl, deleted, protocmp.Transform()); diff != "" {
+				t.Fatalf("deleted template mismatch (-want +got):\n%s", diff)
+			}
+			if _, err := persistence.GetActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetActorTemplate after delete = %v, want NotFound", err)
+			}
+			if _, err := persistence.GetActor(ctx, goldenRef); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetActor after delete = %v, want NotFound", err)
+			}
+			if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetTag after delete = %v, want NotFound", err)
+			}
+			for _, uri := range []resources.SnapshotURI{actorURI, tagURI} {
+				if got := objects.Snapshot(t, uri); len(got) != 0 {
+					t.Errorf("snapshot %s still holds %v", uri, got)
+				}
+			}
+			if _, err := svc.DeleteActorTemplate(ctx, req); status.Code(err) != codes.NotFound {
+				t.Fatalf("delete missing template = %v, want NotFound", err)
+			}
+		})
 	}
 }
 
@@ -503,10 +633,14 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotsConfig.StorageLocation = "" },
 		want:   field.ErrorList{field.Required(field.NewPath("snapshots_config", "storage_location"), "")},
 	}, {
-		name: "unspecified snapshot scopes are allowed",
+		name: "unspecified snapshot scopes",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotsConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
 			tmpl.SnapshotsConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+		},
+		want: field.ErrorList{
+			field.Required(field.NewPath("snapshots_config", "on_pause"), ""),
+			field.Required(field.NewPath("snapshots_config", "on_commit"), ""),
 		},
 	}, {
 		name: "on_commit outside the enum",
@@ -520,6 +654,16 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.SnapshotsConfig.OnPause = ateapipb.SnapshotContentScope(-1)
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshots_config", "on_pause"), nil, "").WithOrigin("minimum")},
+	}, {
+		name:   "missing on_resume",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotsConfig.OnResume = nil },
+		want:   field.ErrorList{field.Required(field.NewPath("snapshots_config", "on_resume"), "")},
+	}, {
+		name: "unspecified on_resume from_data",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("snapshots_config", "on_resume", "from_data"), "")},
 	}, {
 		name: "valid on_resume",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -848,10 +992,22 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get"), "")},
 	}, {
+		name: "missing readyz timeout_seconds",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "timeout_seconds"), "")},
+	}, {
+		name: "missing readyz http_get.path",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 8080}, TimeoutSeconds: 60}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), "")},
+	}, {
 		name: "readyz timeout_seconds out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080},
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: 3601,
 			}
 		},
@@ -860,7 +1016,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "negative readyz timeout_seconds",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080},
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: -1,
 			}
 		},
@@ -868,31 +1024,46 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "readyz missing port",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{}}
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz"},
+				TimeoutSeconds: 60,
+			}
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), "")},
 	}, {
 		name: "negative readyz port",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: -1}}
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: -1},
+				TimeoutSeconds: 60,
+			}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "readyz port out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 65536}}
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 65536},
+				TimeoutSeconds: 60,
+			}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "readyz path with query string",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Path: "/readyz?verbose=1", Port: 8080}}
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "/readyz?verbose=1", Port: 8080},
+				TimeoutSeconds: 60,
+			}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), nil, "")},
 	}, {
 		name: "readyz path not starting with slash",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Path: "readyz", Port: 8080}}
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "readyz", Port: 8080},
+				TimeoutSeconds: 60,
+			}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), nil, "")},
 	}, {
@@ -1126,7 +1297,7 @@ func TestValidateActorTemplate(t *testing.T) {
 // seedSubstrateTemplate stores a minimal substrate ActorTemplate in team-a.
 func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.Interface, name string) *ateapipb.ActorTemplate {
 	t.Helper()
-	stored, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+	created, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
 		SnapshotsConfig: &ateapipb.SnapshotsConfig{
 			StorageLocation: "gs://ate-snapshots/team-a/",
@@ -1138,6 +1309,10 @@ func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate: %v", err)
+	}
+	stored, err := persistence.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(created))
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
 	}
 	return stored
 }
@@ -1224,7 +1399,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	// A server-owned status write passes validation and bumps the version.
 	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
 		tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"},
+			GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 		}}
 		return nil
 	})

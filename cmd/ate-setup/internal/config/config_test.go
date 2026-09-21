@@ -30,7 +30,7 @@ import (
 //
 // Load deliberately reads the developer's environment, so a test that sets only
 // what it cares about is at the mercy of whatever the shell or CI job happens
-// to export: an ambient PROJECT_ID or ATE_ATENET_ROUTER quietly changes the
+// to export: an ambient PROJECT_ID or ATE_ATENET_DATAPLANE quietly changes the
 // result. Every variable Load consults is blanked here -- empty reads as unset,
 // which is what these tests mean by "not configured" -- and NO_DEV_ENV keeps
 // .ate-dev-env.sh out of it. Tests then set back only what they exercise.
@@ -40,9 +40,12 @@ func loadEnv(t *testing.T) {
 	for _, name := range []string{
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_CREDENTIAL_INJECTION_ENABLED",
+		"ATE_CREDENTIAL_PROVIDER_ADDRESS",
+		"ATE_CREDENTIAL_PROVIDER_NAME",
 		"ATE_API_POSTGRES_CONNECTION_STRING",
 		"ATE_API_POSTGRES_SCHEMA",
-		"ATE_ATENET_ROUTER",
+		"ATE_ATENET_DATAPLANE",
 		"ATE_EXPERIMENTAL_USE_SDSMINT",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
@@ -85,7 +88,7 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadFlagsBeatEnvironment(t *testing.T) {
 	loadEnv(t)
-	t.Setenv("ATE_ATENET_ROUTER", RouterEnvoy)
+	t.Setenv("ATE_ATENET_DATAPLANE", RouterEnvoy)
 	t.Setenv("ATE_INSTALL_ROLLOUT_TIMEOUT", "30s")
 
 	cfg, err := Load(Options{Router: RouterAgentgateway, RolloutTimeout: "120s"})
@@ -214,6 +217,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"extproc missing sdsmint", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
 		{"extproc invalid format", Options{ExperimentalUseSDSMint: true, AdditionalEgressExtprocService: "extproc:50051"}},
 		{"extproc agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"injection missing sdsmint", Options{ExperimentalEgressCredentialInjection: true}},
+		{"injection agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, ExperimentalEgressCredentialInjection: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {

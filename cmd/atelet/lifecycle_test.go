@@ -236,4 +236,17 @@ func TestLocalSnapshotGC(t *testing.T) {
 		leaked, _ := filepath.Glob(filepath.Join(localDir, "*", "*"))
 		t.Errorf("local checkpoint dir survived terminate (stat err = %v), leaked files: %v", err, leaked)
 	}
+
+	// Terminate is the only chance to reclaim the actor's directory: nothing
+	// else on the node deletes it.
+	actorDir := ateompath.ActorPath(actorUID)
+	if entries, err := os.ReadDir(actorDir); err == nil {
+		left := make([]string, 0, len(entries))
+		for _, e := range entries {
+			left = append(left, e.Name())
+		}
+		t.Errorf("actor dir %s survived terminate with %d entries: %v", actorDir, len(left), left)
+	} else if !os.IsNotExist(err) {
+		t.Errorf("reading actor dir %s: %v", actorDir, err)
+	}
 }

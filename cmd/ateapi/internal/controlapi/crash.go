@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -94,7 +95,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 
-		// InProgressSnapshotName and InProgressLocalSnapshotName are kept for
+		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept for
 		// debugging; failed workflow steps must never promote either of them to an
 		// ActorSnapshot or to LocalSnapshotInfo.
 		toUpdate.Status.WorkerAssignment = nil
@@ -122,10 +123,10 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 // last state an actor reached has to see this record to reach "crashed" at all.
 func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName, reason string) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
-	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), opName))
+	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)))
 	attrs = append(attrs, slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
 	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
-	slog.LogAttrs(ctx, slog.LevelError, "Actor crashed", attrs...)
+	actorevent.Log(ctx, actorevent.Crashed, attrs)
 }
 
 // crashActorStore encapsulates the subset of store operations needed to crash

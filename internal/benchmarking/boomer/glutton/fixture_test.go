@@ -32,6 +32,9 @@ type fakeControlClient struct {
 	mu             sync.Mutex
 	calls          []string
 	deleteRequests []*ateapipb.DeleteActorRequest
+	// resumeErrs is returned by successive ResumeActor calls, in order, until
+	// it is drained; every call after that succeeds.
+	resumeErrs []error
 }
 
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
@@ -52,6 +55,11 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
+	if len(f.resumeErrs) > 0 {
+		err := f.resumeErrs[0]
+		f.resumeErrs = f.resumeErrs[1:]
+		return nil, err
+	}
 	return &ateapipb.ResumeActorResponse{}, nil
 }
 

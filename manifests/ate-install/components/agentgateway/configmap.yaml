@@ -21,8 +21,7 @@ data:
   config.yaml: |
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
-      backend:
-        poolIdleTimeout: 5s
+      statsAddr: 0.0.0.0:15020
 
     frontendPolicies:
       tracing:
@@ -127,6 +126,13 @@ data:
       accessLog:
         add:
           substrate.connect.authority: source.connectHeaders["host"]
+      substrateEgressActorResolution:
+        host: api.ate-system.svc:443
+        policies:
+          backendTLS:
+            cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+            key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+            root: /run/servicedns-ca/trust-bundle.pem
 
     binds:
     # Authenticate the actor before accepting CONNECT.
@@ -153,7 +159,10 @@ data:
               target: source.connectHeaders["host"]
       - protocol: HTTP
         routes:
-        - policies:
+        - backends:
+          - dynamic:
+              target: source.connectHeaders["host"]
+          policies:
             substrateEgress:
               host: api.ate-system.svc:443
               policies:
@@ -161,9 +170,6 @@ data:
                   cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                   key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                   root: /run/servicedns-ca/trust-bundle.pem
-          backends:
-          - dynamic:
-              target: source.connectHeaders["host"]
       - protocol: TCP
         tcpRoutes:
         - backends:

@@ -40,7 +40,7 @@ func validEgressPolicy() *ateapipb.EgressPolicy {
 					InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
 						Header:        "Authorization",
 						Prefix:        "Bearer ",
-						CredentialUri: "substrate-secret://kubernetes.io/provider/ns/name",
+						CredentialUri: "ate-secret://kubernetes.io/provider/ns/name",
 					}},
 				},
 			},
@@ -667,7 +667,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = append(
 				p.Rules[0].Hostnames.Effects.InjectStaticHeaders,
-				&ateapipb.CredentialHeaderInjection{Header: "authorization", CredentialUri: "substrate-secret://example.com/provider/secret"},
+				&ateapipb.CredentialHeaderInjection{Header: "authorization", CredentialUri: "ate-secret://example.com/provider/secret"},
 			)
 		},
 		want: field.ErrorList{
@@ -685,7 +685,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			for i := range 16 {
 				injections = append(injections, &ateapipb.CredentialHeaderInjection{
 					Header:        fmt.Sprintf("X-Header-%d", i),
-					CredentialUri: "substrate-secret://example.com/provider/secret",
+					CredentialUri: "ate-secret://example.com/provider/secret",
 				})
 			}
 			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = injections
@@ -697,7 +697,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			for i := range 17 {
 				injections = append(injections, &ateapipb.CredentialHeaderInjection{
 					Header:        fmt.Sprintf("X-Header-%d", i),
-					CredentialUri: "substrate-secret://example.com/provider/secret",
+					CredentialUri: "ate-secret://example.com/provider/secret",
 				})
 			}
 			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = injections
@@ -727,7 +727,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = "https://example.com/secret"
 		},
 		want: field.ErrorList{
-			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
+			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
 		},
 	}, {
 		name: "empty effects",
@@ -792,7 +792,7 @@ func TestActorEgressPolicy(t *testing.T) {
 						InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
 							Header:        "Authorization",
 							Prefix:        "Bearer ",
-							CredentialUri: "substrate-secret://kubernetes.io/provider/ns/name",
+							CredentialUri: "ate-secret://kubernetes.io/provider/ns/name",
 						}},
 					},
 				},
@@ -874,8 +874,8 @@ func TestActorEgressPolicy(t *testing.T) {
 
 func TestCredentialURIValidation(t *testing.T) {
 	for _, uri := range []string{
-		"substrate-secret://kubernetes.io/provider/ns/name",
-		"substrate-secret://vault.example/provider/secret",
+		"ate-secret://kubernetes.io/provider/ns/name",
+		"ate-secret://vault.example/provider/secret",
 	} {
 		if !validCredentialURI(uri) {
 			t.Errorf("validCredentialURI(%q) = false", uri)
@@ -883,10 +883,10 @@ func TestCredentialURIValidation(t *testing.T) {
 	}
 	for _, uri := range []string{
 		"https://kubernetes.io/provider/ns/name",
-		"substrate-secret://kubernetes.io/provider",
-		"substrate-secret://kubernetes.io//provider/secret",
-		"substrate-secret://kubernetes.io/provider/secret/",
-		"substrate-secret://kubernetes.io:443/provider/secret",
+		"ate-secret://kubernetes.io/provider",
+		"ate-secret://kubernetes.io//provider/secret",
+		"ate-secret://kubernetes.io/provider/secret/",
+		"ate-secret://kubernetes.io:443/provider/secret",
 	} {
 		if validCredentialURI(uri) {
 			t.Errorf("validCredentialURI(%q) = true", uri)

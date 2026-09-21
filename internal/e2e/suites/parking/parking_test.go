@@ -35,7 +35,9 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-const parkingAtespace = "parking-e2e"
+// parkingAtespace is where deployParkingFixture applies the fixture, and the
+// k8s namespace holding its pool.
+var parkingAtespace = e2e.FixtureName("ate-e2e") + "-parking"
 
 // The park budget the deployed router runs with (its flag default). The
 // timing assertions below are windows around it, wide enough for scheduling
@@ -46,13 +48,12 @@ const routerParkBudget = 5 * time.Second
 func TestRequestParking(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
-	nsObj := e2e.CreateNamespace(t)
 
 	// One worker, two actors: the minimal deterministic oversubscription.
-	at := createParkingFixture(ctx, t, clients, nsObj)
+	at := deployParkingFixture(t, ctx, clients)
 
-	actorA := "parked-a-" + nsObj.Name
-	actorB := "parked-b-" + nsObj.Name
+	actorA := "parked-a"
+	actorB := "parked-b"
 	for _, name := range []string{actorA, actorB} {
 		createActor(ctx, t, clients, at, name)
 	}
@@ -62,11 +63,12 @@ func TestRequestParking(t *testing.T) {
 		t.Fatalf("creating router client: %v", err)
 	}
 	defer router.Close()
-	statusz, err := e2e.NewStatuszClient(ctx)
+	dataplane := e2e.CurrentAtenetDataplane()
+	parking, err := dataplane.NewParkingObserver(ctx)
 	if err != nil {
-		t.Fatalf("creating statusz client: %v", err)
+		t.Fatalf("creating parking observer: %v", err)
 	}
-	defer statusz.Close()
+	defer parking.Close()
 
 	t.Run("ParkThenServed", func(t *testing.T) {
 		// Occupy the only worker with actor A.
@@ -93,7 +95,7 @@ func TestRequestParking(t *testing.T) {
 		for attempt := 1; ; attempt++ {
 			start := time.Now()
 			go func() {
-				resp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/")
+				resp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/whoami")
 				var body string
 				if err == nil {
 					b, _ := io.ReadAll(resp.Body)
@@ -104,8 +106,9 @@ func TestRequestParking(t *testing.T) {
 			}()
 			if attempt == 1 {
 				// Free the worker only once the request is observably parked —
-				// the statusz gauge, not a sleep, is the synchronization point.
-				waitForParkedCount(ctx, t, statusz, func(active int) bool { return active >= 1 })
+				// the dataplane's active-parking gauge, not a sleep, is the
+				// synchronization point.
+				waitForParkedCount(ctx, t, parking, func(active int) bool { return active >= 1 })
 				suspendActor(ctx, t, clients, actorA)
 			}
 			res = <-resCh
@@ -113,9 +116,9 @@ func TestRequestParking(t *testing.T) {
 			if res.err != nil {
 				t.Fatalf("parked request failed transport-level: %v", res.err)
 			}
-			if res.resp.StatusCode == http.StatusServiceUnavailable &&
-				strings.Contains(res.body, "no free workers available") && attempt < 3 {
-				t.Logf("attempt %d budget-exhausted while the worker was still freeing (503 after %v); retrying", attempt, elapsed)
+			retryableBudgetExhaustion := dataplane.IsRetryableParkingBudgetExhaustion(res.resp.StatusCode, res.body)
+			if retryableBudgetExhaustion && attempt < 3 {
+				t.Logf("attempt %d budget-exhausted while the worker was still freeing (HTTP %d after %v); retrying", attempt, res.resp.StatusCode, elapsed)
 				continue
 			}
 			break
@@ -123,8 +126,10 @@ func TestRequestParking(t *testing.T) {
 		if res.resp.StatusCode != http.StatusOK {
 			t.Fatalf("parked request: status = %d (body %q), want 200", res.resp.StatusCode, res.body)
 		}
-		if !strings.Contains(res.body, "hello from") {
-			t.Errorf("parked request body = %q, want the counter greeting", res.body)
+		// The parked request must have been served by the actor it named, not
+		// by whichever one happened to hold the worker.
+		if !strings.Contains(res.body, actorB) {
+			t.Errorf("parked request body = %q, want the probe to name %q", res.body, actorB)
 		}
 		// No upper bound on elapsed here: a 200 proves the router served the
 		// request before Envoy's ext_proc timeout, and a slow-but-successful
@@ -135,7 +140,7 @@ func TestRequestParking(t *testing.T) {
 		// claimed (#675): pin that B really converges and a follow-up request
 		// is served warm — a stranded actor would 503 it.
 		waitForActorState(ctx, t, clients, actorB, ateapipb.ActorState_ACTOR_STATE_RUNNING)
-		followUp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/")
+		followUp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/whoami")
 		if err != nil {
 			t.Fatalf("follow-up request failed transport-level: %v", err)
 		}
@@ -146,7 +151,7 @@ func TestRequestParking(t *testing.T) {
 		}
 
 		// The slot must be released once served.
-		waitForParkedCount(ctx, t, statusz, func(active int) bool { return active == 0 })
+		waitForParkedCount(ctx, t, parking, func(active int) bool { return active == 0 })
 	})
 
 	t.Run("BudgetExhaustion", func(t *testing.T) {
@@ -155,7 +160,7 @@ func TestRequestParking(t *testing.T) {
 		// for the full budget and surface the capacity error — from the
 		// router, not from an Envoy timeout.
 		start := time.Now()
-		resp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorA}, "/")
+		resp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorA}, "/whoami")
 		elapsed := time.Since(start)
 		if err != nil {
 			t.Fatalf("budget-exhausted request failed transport-level: %v", err)
@@ -163,14 +168,17 @@ func TestRequestParking(t *testing.T) {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
 
-		if resp.StatusCode != http.StatusServiceUnavailable {
-			t.Fatalf("status = %d (body %q), want 503", resp.StatusCode, string(body))
+		wantStatus := dataplane.ParkingBudgetStatus()
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("status = %d (body %q), want %d", resp.StatusCode, string(body), wantStatus)
 		}
-		if !strings.Contains(string(body), "no free workers available") {
+		if wantStatus == http.StatusServiceUnavailable && !strings.Contains(string(body), "no free workers available") {
 			t.Errorf("body = %q, want the router's capacity verdict", string(body))
 		}
-		if ct := resp.Header.Get("content-type"); ct != "text/plain" {
-			t.Errorf("content-type = %q, want text/plain", ct)
+		if wantStatus == http.StatusServiceUnavailable {
+			if ct := resp.Header.Get("content-type"); ct != "text/plain" {
+				t.Errorf("content-type = %q, want text/plain", ct)
+			}
 		}
 		// Lower bound proves the request parked (fail-fast would answer in
 		// milliseconds); upper bound proves the router's own verdict landed
@@ -181,33 +189,25 @@ func TestRequestParking(t *testing.T) {
 		if elapsed > routerParkBudget+4*time.Second {
 			t.Errorf("503 after %v: too slow, likely an Envoy timeout rather than the router's verdict", elapsed)
 		}
-		t.Logf("budget exhausted after %v", elapsed)
+		t.Logf("budget exhausted after %v with HTTP %d", elapsed, wantStatus)
 	})
 }
 
-// createParkingFixture provisions a 1-worker pool and a substrate
-// ActorTemplate, copying the resolved runtime (sandbox config, ateom image,
-// container images) from the installed substrate counter demo — the same
-// source and isolation pattern as the demo suite: the unique pool label keeps
-// this pool's worker invisible to other namespaces' actors.
-func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace) *ateapipb.ActorTemplate {
+// deployParkingFixture installs the parking probe fixture for the sandbox
+// class under test and waits for its golden snapshot. The fixture declares
+// both halves of the oversubscription: one worker, sized to one of its own
+// actors (see probe-parking.yaml.tmpl).
+func deployParkingFixture(t *testing.T, ctx context.Context, clients *e2e.Clients) *ateapipb.ActorTemplate {
 	t.Helper()
 	env, err := e2e.CheckEnv("BUCKET_NAME")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
-
-	return e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
-		Atespace: parkingAtespace,
-		// Unique within the suite-shared atespace.
-		Name:         "parking-" + nsObj.Name,
-		PoolName:     "parking",
-		PoolReplicas: 1, // deliberately undersized: 2 actors will contend for it
-		Labels:       map[string]string{"demo": nsObj.Name},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{
-			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/e2e-parking-" + nsObj.Name,
-		},
-	})
+	_, templates := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe-parking.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-parking-template.yaml.tmpl",
+	}, env["BUCKET_NAME"], "parking", false)
+	return templates[0]
 }
 
 func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, at *ateapipb.ActorTemplate, name string) {
@@ -265,22 +265,13 @@ func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 	t.Fatalf("timed out waiting for actor %q to reach %v", name, want)
 }
 
-// waitForParkedCount polls the router's statusz parking gauge until cond holds.
+// waitForParkedCount polls the dataplane's active-parking gauge until cond holds.
 // The deadline is short: a parking request becomes visible within its first
 // retry interval (~100ms), and a served one releases its slot immediately.
-func waitForParkedCount(ctx context.Context, t *testing.T, statusz *e2e.StatuszClient, cond func(active int) bool) {
+func waitForParkedCount(ctx context.Context, t *testing.T, parking e2e.ParkingObserver, cond func(active int) bool) {
 	t.Helper()
-	deadline := time.Now().Add(4 * time.Second)
-	var last int
-	for time.Now().Before(deadline) {
-		p, err := statusz.Parking(ctx)
-		if err == nil {
-			last = p.Active
-			if cond(p.Active) {
-				return
-			}
-		}
-		time.Sleep(150 * time.Millisecond)
+	last, err := parking.WaitForCount(ctx, cond)
+	if err != nil {
+		t.Fatalf("waiting for parking gauge (last active=%d): %v", last, err)
 	}
-	t.Fatalf("timed out waiting for the parking gauge to satisfy the condition (last active=%d)", last)
 }

@@ -15,9 +15,139 @@
 package cmd
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
+
+func TestResolveMachineTypeDefault(t *testing.T) {
+	tests := []struct {
+		name   string
+		newVal *string
+		oldVal *string
+		want   string
+	}{
+		{
+			name: "neither set",
+			want: "c3-standard-4",
+		},
+		{
+			name:   "new name set",
+			newVal: ptr("n4-standard-8"),
+			want:   "n4-standard-8",
+		},
+		{
+			name:   "old name still honored",
+			oldVal: ptr("n2-standard-8"),
+			want:   "n2-standard-8",
+		},
+		{
+			name:   "new name wins over old",
+			newVal: ptr("n4-standard-8"),
+			oldVal: ptr("n2-standard-8"),
+			want:   "n4-standard-8",
+		},
+		{
+			name:   "empty new name does not suppress the old one",
+			newVal: ptr(""),
+			oldVal: ptr("n2-standard-8"),
+			want:   "n2-standard-8",
+		},
+		{
+			name:   "empty values fall back to the default",
+			newVal: ptr(""),
+			oldVal: ptr(""),
+			want:   "c3-standard-4",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setOrUnset(t, "NODE_MACHINE_TYPE", tt.newVal)
+			setOrUnset(t, "GVISOR_NODE_MACHINE_TYPE", tt.oldVal)
+
+			if got := resolveMachineTypeDefault(); got != tt.want {
+				t.Errorf("resolveMachineTypeDefault() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWarnDeprecatedMachineTypeEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		newVal   *string
+		oldVal   *string
+		flagArgs []string
+		wantWarn bool
+	}{
+		{
+			name:     "old name alone warns",
+			oldVal:   ptr("n2-standard-8"),
+			wantWarn: true,
+		},
+		{
+			name: "neither set is quiet",
+		},
+		{
+			name:   "new name alone is quiet",
+			newVal: ptr("n4-standard-8"),
+		},
+		{
+			name:   "new name takes precedence, so no warning",
+			newVal: ptr("n4-standard-8"),
+			oldVal: ptr("n2-standard-8"),
+		},
+		{
+			name:     "explicit flag makes the variable moot",
+			oldVal:   ptr("n2-standard-8"),
+			flagArgs: []string{"--machine-type=n4-standard-8"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setOrUnset(t, "NODE_MACHINE_TYPE", tt.newVal)
+			setOrUnset(t, "GVISOR_NODE_MACHINE_TYPE", tt.oldVal)
+
+			var buf bytes.Buffer
+			restore := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(restore) })
+
+			cmd := &cobra.Command{Use: "test"}
+			cmd.Flags().String("machine-type", resolveMachineTypeDefault(), "")
+			if err := cmd.ParseFlags(tt.flagArgs); err != nil {
+				t.Fatalf("ParseFlags(%v) = %v", tt.flagArgs, err)
+			}
+
+			warnDeprecatedMachineTypeEnv(cmd)
+
+			if got := strings.Contains(buf.String(), "GVISOR_NODE_MACHINE_TYPE is deprecated"); got != tt.wantWarn {
+				t.Errorf("warned = %t, want %t (log: %q)", got, tt.wantWarn, buf.String())
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// setOrUnset exports key with the given value, or removes key from the
+// environment when val is nil. t.Setenv registers the restore either way,
+// including for a key that started out unset.
+func setOrUnset(t *testing.T, key string, val *string) {
+	t.Helper()
+	if val == nil {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+		return
+	}
+	t.Setenv(key, *val)
+}
 
 func TestGetEnv_String(t *testing.T) {
 	const key = "TEST_ENV_STRING_VAR"
@@ -85,6 +215,34 @@ func TestGetEnv_Bool(t *testing.T) {
 	}
 	if got := getEnv(key, false); got != false {
 		t.Errorf("getEnv(%q, false) with invalid env = %t; want false", key, got)
+	}
+}
+
+// ParseBool rejects spellings such as "off" and "no", so a value meant to turn a
+// default-on knob off would otherwise leave it on without a word.
+func TestGetEnv_WarnsOnUnparsableValue(t *testing.T) {
+	const key = "TEST_ENV_UNPARSABLE_VAR"
+	t.Setenv(key, "off")
+	t.Cleanup(func() { warnedEnvKeys.Delete(key) })
+
+	var buf bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	if got := getEnv(key, true); got != true {
+		t.Errorf("getEnv(%q, true) = %t; want true", key, got)
+	}
+	if !strings.Contains(buf.String(), key) {
+		t.Errorf("getEnv(%q, true) logged %q; want a warning naming the variable", key, buf.String())
+	}
+
+	// Several commands register a flag for the same variable, so the warning
+	// must not repeat once per registration.
+	buf.Reset()
+	getEnv(key, true)
+	if buf.Len() != 0 {
+		t.Errorf("second getEnv(%q, true) logged %q; want nothing", key, buf.String())
 	}
 }
 

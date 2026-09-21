@@ -94,6 +94,23 @@ func (c *StatuszClient) Parking(ctx context.Context) (*ParkingStatusz, error) {
 	return &dashboard.Parking, nil
 }
 
+// WaitForCount polls the request-parking gauge until cond holds.
+func (c *StatuszClient) WaitForCount(ctx context.Context, cond func(int) bool) (int, error) {
+	deadline := time.Now().Add(4 * time.Second)
+	var last int
+	for time.Now().Before(deadline) {
+		parking, err := c.Parking(ctx)
+		if err == nil {
+			last = parking.Active
+			if cond(last) {
+				return last, nil
+			}
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return last, fmt.Errorf("timed out waiting for the parking gauge to satisfy the condition")
+}
+
 // Close tears down the port-forward.
 func (c *StatuszClient) Close() {
 	if c.stop != nil {

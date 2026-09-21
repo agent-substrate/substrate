@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestBuildCreateClusterRequest_FilestoreDisabled(t *testing.T) {
@@ -104,6 +105,128 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 			}
 			if nodeConfig.DiskType != tt.wantDiskType {
 				t.Errorf("DiskType = %q, want %q", nodeConfig.DiskType, tt.wantDiskType)
+			}
+		})
+	}
+}
+
+func TestBuildCreateClusterRequest_NestedVirtualization(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{
+			name: "enabled",
+			cfg: &Config{
+				ProjectID:                  "test-project",
+				ClusterName:                "test-cluster",
+				ClusterLocation:            "us-west1-c",
+				MachineType:                "n2-standard-8",
+				EnableNestedVirtualization: true,
+			},
+			want: true,
+		},
+		{
+			name: "disabled",
+			cfg: &Config{
+				ProjectID:       "test-project",
+				ClusterName:     "test-cluster",
+				ClusterLocation: "us-west1-c",
+				MachineType:     "c3-standard-4",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := "projects/test-project/locations/us-west1-c"
+			req := buildCreateClusterRequest(parent, tt.cfg)
+			if req.Cluster == nil || len(req.Cluster.NodePools) == 0 {
+				t.Fatal("expected non-empty node pools in request")
+			}
+
+			got := req.Cluster.NodePools[0].Config.GetAdvancedMachineFeatures().GetEnableNestedVirtualization()
+			if got != tt.want {
+				t.Errorf("EnableNestedVirtualization = %v, want %v", got, tt.want)
+			}
+
+			// A disabled knob must leave the field unset rather than send
+			// false, so GKE applies its own default.
+			if !tt.want && req.Cluster.NodePools[0].Config.GetAdvancedMachineFeatures() != nil {
+				t.Errorf("expected AdvancedMachineFeatures to be nil when the knob is off")
+			}
+		})
+	}
+}
+
+func TestNestedVirtualizationEnabled(t *testing.T) {
+	poolWith := func(enabled *bool) *containerpb.NodePool {
+		return &containerpb.NodePool{
+			Config: &containerpb.NodeConfig{
+				AdvancedMachineFeatures: &containerpb.AdvancedMachineFeatures{
+					EnableNestedVirtualization: enabled,
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		cluster *containerpb.Cluster
+		want    bool
+	}{
+		{
+			name:    "nil cluster",
+			cluster: nil,
+			want:    false,
+		},
+		{
+			name:    "no node pools",
+			cluster: &containerpb.Cluster{},
+			want:    false,
+		},
+		{
+			name: "pool without advanced machine features",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{{Config: &containerpb.NodeConfig{}}},
+			},
+			want: false,
+		},
+		{
+			name: "single pool with nested virtualization",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{poolWith(proto.Bool(true))},
+			},
+			want: true,
+		},
+		{
+			name: "second pool carries the KVM nodes",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{
+					poolWith(proto.Bool(false)),
+					poolWith(proto.Bool(true)),
+				},
+			},
+			want: true,
+		},
+		{
+			name: "every pool disabled",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{
+					poolWith(proto.Bool(false)),
+					poolWith(nil),
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nestedVirtualizationEnabled(tt.cluster); got != tt.want {
+				t.Errorf("nestedVirtualizationEnabled() = %v, want %v", got, tt.want)
 			}
 		})
 	}

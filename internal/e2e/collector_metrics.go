@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,9 @@ const (
 	collectorNamespace = "otel-system"
 	collectorService   = "opentelemetry-collector"
 	collectorPromPort  = 8889
+	// AgentGateway exposes native Prometheus metrics; it does not export these
+	// instruments through the OTLP collector.
+	agentGatewayRouterStatsPort = 15020
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -49,6 +53,42 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_checkpoint_duration",
 	"atenet_router_route_duration",
 	"ate_scheduler_eligible_workers",
+}
+
+// ScrapeAgentGatewayRouterMetrics reads the AgentGateway router's native
+// Prometheus stats endpoint. AgentGateway instruments are not OTLP exports.
+func ScrapeAgentGatewayRouterMetrics(ctx context.Context) (string, error) {
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
+	if err != nil {
+		return "", fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", fmt.Errorf("creating k8s client: %w", err)
+	}
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, agentGatewayRouterStatsPort)
+	if err != nil {
+		return "", err
+	}
+	defer stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("scraping AgentGateway metrics: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading AgentGateway metrics: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("AgentGateway metrics returned %d: %s", resp.StatusCode, body)
+	}
+	return string(body), nil
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
@@ -113,6 +153,52 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 		}
 	}
 	return missing
+}
+
+// LifecycleEventMetric is the count connector's view of the actor lifecycle
+// events. Reading it rather than a log store keeps this check on the metrics
+// harness: kind has no place to query log records.
+const LifecycleEventMetric = "substrate_actor_state_changes"
+
+// LifecycleEventCounts returns the count the collector holds for each
+// ate.actor.state. The counter is cumulative and the collector outlives any one
+// test, so compare two reads rather than asserting a state is merely present:
+// a stale count from an earlier run would pass a presence check even with the
+// exporter turned off.
+//
+// One state can appear on several lines, one per emitting ateapi instance, so
+// the counts are summed.
+func LifecycleEventCounts(scrape string) map[string]float64 {
+	counts := map[string]float64{}
+	for _, line := range strings.Split(scrape, "\n") {
+		name := metricNameFromLine(line)
+		if name != LifecycleEventMetric && !strings.HasPrefix(name, LifecycleEventMetric+"_") {
+			continue
+		}
+		state := promLabelValue(line, "ate_actor_state")
+		if state == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		counts[state] += v
+	}
+	return counts
+}
+
+// StatesNotAdvanced returns the states whose count did not rise between the two
+// reads. An empty result means every state was emitted during the window.
+func StatesNotAdvanced(before, after map[string]float64, states []string) []string {
+	var stale []string
+	for _, s := range states {
+		if after[s] <= before[s] {
+			stale = append(stale, s)
+		}
+	}
+	return stale
 }
 
 // CollectorHasService reports whether any named service has pushed telemetry to

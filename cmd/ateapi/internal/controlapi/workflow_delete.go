@@ -88,7 +88,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
 	}
 
-	if err := w.ensureExternalSnapshotsReleased(ctx, actor, actorTemplate); err != nil {
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while releasing external snapshots: %w", err))
 	}
 
@@ -125,18 +125,10 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	if workerName := assignment.GetWorker().GetName(); workerName != "" {
-		worker, err := w.store.GetWorker(ctx, workerName)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				slog.InfoContext(ctx, "worker not found in store, skipping atelet terminate request", slog.String("worker", workerName), slog.Any("actor", actorRef))
-				return nil
-			}
-			return fmt.Errorf("while checking worker assignment: %w", err)
-		}
 		// Ask whether the worker still HOSTS this actor, not whether its one
 		// assignment happens to be this actor: a worker hosting several is the
 		// ordinary case, and the others are none of this delete's business.
-		hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
+		hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
 		if err != nil {
 			return err
 		}
@@ -148,16 +140,9 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		}
 	}
 
-	workerPodNs := assignment.GetWorkerNamespace()
-	workerPodName := assignment.GetWorkerPod()
-
-	conn, err := w.dialer.DialForWorker(workerPodNs, workerPodName)
+	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.InfoContext(ctx, "worker pod not found, treating as terminated", slog.String("workerNamespace", workerPodNs), slog.String("workerPod", workerPodName))
-			return nil
-		}
-		return fmt.Errorf("while connecting to worker pod %s/%s: %w", workerPodNs, workerPodName, err)
+		return fmt.Errorf("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
 	}
 
 	client := ateletpb.NewAteomHerderClient(conn)
@@ -374,7 +359,7 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 //
 // A snapshot borrowed from a tag lives under the tag's prefix, so it survives:
 // the tag owns it and outlives the actor.
-func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, actor *ateapipb.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
 	defer func() { err = done(err) }()
 
@@ -383,7 +368,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 		return nil
 	}
 
-	prefix, err := actorSnapshotStoragePrefix(ctx, actor, actorTemplate)
+	prefix, err := actorSnapshotStoragePrefix(actor)
 	if err != nil {
 		return err
 	}
@@ -398,38 +383,37 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 // the snapshot it last took, the one a suspend was in the middle of taking, and
 // anything a crashed suspend stranded. A zero prefix means the actor never
 // wrote anything.
-func actorSnapshotStoragePrefix(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (resources.StoragePrefix, error) {
-	owner := actorSnapshotOwner(actor)
+func actorSnapshotStoragePrefix(actor *ateapipb.Actor) (resources.StoragePrefix, error) {
+	actorOwner := actorSnapshotOwner(actor)
 	if snapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); snapshotURI != "" {
 		uri, err := resources.ParseSnapshotURI(snapshotURI)
 		if err != nil {
 			return resources.StoragePrefix{}, fmt.Errorf("while parsing the external snapshot %q: %w", snapshotURI, err)
 		}
-		// The recorded URI names the actor's prefix, so no template lookup is
-		// needed. A URI the actor does not own is a tag's, borrowed until the
-		// actor's first suspend completes, which means it has written nothing of
-		// its own yet.
-		if uri.OwnedBy(owner) {
+		// A URI the actor does not own is a tag's snapshot, borrowed until the actor's
+		// first suspend completes, which means it has written nothing of its
+		// own yet.
+		if uri.OwnedBy(actorOwner) {
 			return uri.OwnerPrefix(), nil
 		}
 	}
 	// Nothing of the actor's own is recorded. Unless a suspend died partway,
-	// nothing was ever written under its prefix: the in-progress name is
+	// nothing was ever written under its prefix: the in-progress URI is
 	// recorded before atelet uploads the first object.
-	name := actor.GetStatus().GetInProgressSnapshotName()
-	if name == "" {
+	inProgress := actor.GetStatus().GetInProgressSnapshotUri()
+	if inProgress == "" {
 		return resources.StoragePrefix{}, nil
 	}
-	// The template's storage location is the only place the actor's prefix can
-	// be derived from now. Without it the actor would be stuck DELETING forever.
-	// TODO: prevent this from leaking objects in the external storage.
-	if actorTemplate == nil {
-		slog.WarnContext(ctx, "Leaking an in-progress external snapshot, the actor's template no longer resolves",
-			slog.String("actor", actor.GetMetadata().GetName()),
-			slog.String("in_progress_snapshot_name", name))
-		return resources.StoragePrefix{}, nil
+	uri, err := resources.ParseSnapshotURI(inProgress)
+	if err != nil {
+		return resources.StoragePrefix{}, fmt.Errorf("while parsing the in-progress snapshot %q: %w", inProgress, err)
 	}
-	return owner.Prefix(actorTemplate.GetSnapshotsConfig().GetStorageLocation())
+	if !uri.OwnedBy(actorOwner) {
+		// Corrupted record. This should never happen. An in-progress snapshot should
+		// always be owned by the actor that holds it.
+		return resources.StoragePrefix{}, fmt.Errorf("the in-progress snapshot %q is not owned by actor %s", inProgress, actorOwner)
+	}
+	return uri.OwnerPrefix(), nil
 }
 
 // finalizeDeleted removes the actor from the store and returns the deleted

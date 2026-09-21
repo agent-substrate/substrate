@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -34,9 +35,12 @@ import (
 )
 
 func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	policy := req.GetEgressPolicy()
 	if policy != nil {
 		scrubResourceMetadataForCreate(policy.Metadata)
+		defaults.Apply(policy)
 	}
 	if errs := validateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -91,6 +95,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, policy)
 		toUpdate.Metadata = metadata
+		defaults.Apply(toUpdate)
 		return nil
 	})
 }
@@ -247,7 +252,7 @@ func ValidateCustom_CredentialHeaderInjection_Prefix(_ context.Context, _ operat
 func ValidateCustom_CredentialHeaderInjection_CredentialUri(_ context.Context, _ operation.Operation, p *field.Path, uri, _ *string) field.ErrorList {
 	if !validCredentialURI(*uri) {
 		return field.ErrorList{
-			field.Invalid(p, *uri, "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
+			field.Invalid(p, *uri, "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
 		}
 	}
 	return nil
@@ -255,7 +260,7 @@ func ValidateCustom_CredentialHeaderInjection_CredentialUri(_ context.Context, _
 
 func validCredentialURI(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "substrate-secret" || u.Host == "" || u.Host != u.Hostname() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(validation.IsDNS1123Subdomain(u.Host)) != 0 {
+	if err != nil || u.Scheme != "ate-secret" || u.Host == "" || u.Host != u.Hostname() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(validation.IsDNS1123Subdomain(u.Host)) != 0 {
 		return false
 	}
 	escapedPath := u.EscapedPath()

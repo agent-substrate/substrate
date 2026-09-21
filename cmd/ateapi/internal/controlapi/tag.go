@@ -19,8 +19,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -36,11 +36,13 @@ import (
 // again or deleted cannot collect it. The work is a workflow because it spans
 // two transactions around an object copy; see TagActorSnapshot.
 func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagRequest) (*ateapipb.Tag, error) {
-	// First scrub any fields that users are not allowed to set.
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	inTag := req.Tag
 	if inTag != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inTag.Metadata)
 		inTag.Status = nil
+		defaults.Apply(inTag)
 	}
 
 	if errs := validateCreateTagRequest(ctx, req); len(errs) > 0 {
@@ -168,6 +170,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 		// Restore the server-owned fields, discarding whatever the request
 		// carried in them.
 		toUpdate.Metadata, toUpdate.Status = metadata, tagStatus
+		defaults.Apply(toUpdate)
 		return nil
 	})
 	if err != nil {
@@ -242,71 +245,12 @@ func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Opera
 	return errs
 }
 
-// DeleteTag releases the external snapshot the tag owns and then
-// removes the row, in that order: the row is the only handle on that snapshot,
-// so dropping it first would leak. A failure at any point fails the whole RPC;
-// the client retries the same delete, which rediscovers the work from the row
-// and resumes over whatever is left.
-//
-// The tag stays resolvable while its snapshot is being collected, so a
-// CreateActor racing this delete can seed an Actor from content that is going
-// away. That race is accepted for now.
-//
-// Note that this destroys the external snapshot: an Actor created from the tag
-// and never suspended is still borrowing it and becomes unrecoverable. Do not
-// delete a tag while clones of it exist.
+// DeleteTag removes the tag and collects the external snapshot it owns.
 func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagRequest) (*ateapipb.Tag, error) {
-	// TODO: mode delete orchestration to a workflow.
 	if errs := validateDeleteTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tagRef := resources.TagRefFromObjectRef(req.GetTag())
-
-	// Serializes against a create of the same tag, whose copy would otherwise
-	// keep writing into the prefix this is collecting.
-	ctx, lease, err := acquireTagLease(ctx, s.impl, tagRef)
-	if err != nil {
-		return nil, err
-	}
-	defer lease.Close()
-
-	stored, err := s.impl.GetTag(ctx, tagRef)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
-		}
-		return nil, fmt.Errorf("while getting tag: %w", err)
-	}
-	if err := s.releaseTagSnapshot(ctx, stored); err != nil {
-		return nil, err
-	}
-
-	tag, err := s.impl.DeleteTag(ctx, tagRef)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("while deleting tag: %w", err)
-	}
-	return tag, nil
-}
-
-// releaseTagSnapshot deletes the objects the tag's external snapshot is made
-// of. It tolerates a partly-collected snapshot, so a retry finishes cleanly.
-// It collects the in-progress snapshot too.
-func (s *RPCService) releaseTagSnapshot(ctx context.Context, tag *ateapipb.Tag) error {
-	if s.objectStore == nil {
-		return nil
-	}
-	atespace, name := tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName()
-	uri, err := resources.NewTagSnapshotURI(tag.GetStatus().GetStorageLocation(), atespace, tag.GetMetadata().GetUid())
-	if err != nil {
-		return fmt.Errorf("while resolving the external snapshot of tag %s/%s: %w", atespace, name, err)
-	}
-	if err := objectstore.DeletePrefix(ctx, s.objectStore, uri.Prefix()); err != nil {
-		return fmt.Errorf("while releasing the external snapshot %q of tag %s/%s: %w", uri, atespace, name, err)
-	}
-	return nil
+	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()))
 }
 
 func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {

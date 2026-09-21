@@ -26,6 +26,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -44,11 +45,13 @@ import (
 )
 
 func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
-	// First scrub any fields that users are not allowed to set.
+	// First scrub any fields that users are not allowed to set, then fill the
+	// defaults so validation sees the final resource state.
 	inActor := req.Actor
 	if inActor != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inActor.Metadata)
 		inActor.Status = nil
+		defaults.Apply(inActor)
 	}
 
 	// Validate the request, including the object within it.
@@ -86,13 +89,28 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		return nil, err
 	}
 
-	// If a source tag is requested, resolve it to the external
-	// snapshot the new Actor starts from.
+	// Resolve the explicit tag, or freeze the template's current golden default.
+	tagRef := inActor.GetSourceTag()
+	if tagRef == nil {
+		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+	} else {
+		for _, volume := range template.GetVolumes() {
+			if volume.GetExternalVolumeTemplate() != nil {
+				// TODO: Permit cloning after CSI volume snapshots are supported.
+				return nil, status.Error(codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
+			}
+		}
+	}
 	var sourceTag *ateapipb.Tag
-	if tagRef := inActor.GetSourceTag(); tagRef != nil {
+	if tagRef != nil {
 		sourceTag, err = s.resolveTagSource(ctx, inActor.GetMetadata().GetAtespace(), tagRef, template)
 		if err != nil {
 			return nil, err
+		}
+		if inActor.GetSourceTag() == nil {
+			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -175,12 +193,6 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		return nil, status.Errorf(codes.FailedPrecondition, "source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
-	}
-	for _, volume := range template.GetVolumes() {
-		if volume.GetExternalVolumeTemplate() != nil {
-			// TODO: Permit cloning after CSI volume snapshots are supported.
-			return nil, status.Error(codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
-		}
 	}
 	return tag, nil
 }
@@ -267,6 +279,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 		// Restore status and metadata from the server.
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
+		defaults.Apply(toUpdate)
 		return nil
 	})
 	if err != nil {
@@ -520,6 +533,33 @@ func validateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActor
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
 	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
+}
+
+func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {
+	if errs := validateRevertActorRequest(ctx, req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
+
+	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+		}
+		return nil, err
+	}
+	setSpanActorAttributes(ctx, actor)
+	return &ateapipb.RevertActorResponse{Actor: actor}, nil
+}
+
+func validateRevertActorRequest(ctx context.Context, req *ateapipb.RevertActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_RevertActorRequest(ctx, op, nil, req, nil)
 }
 
 func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {

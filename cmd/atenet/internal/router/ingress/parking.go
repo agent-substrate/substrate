@@ -136,9 +136,9 @@ func DefaultParkedRequestConfig() ParkedRequestConfig {
 }
 
 // parkingLot is a bounded, non-blocking admission gate for resume-gated
-// requests. Each admitted request holds a slot for the duration of its resume
-// attempt; when the lot is full further requests are shed immediately so the
-// router applies backpressure instead of accumulating waiters without bound.
+// requests. A parked request holds a slot until its wait ends; when the lot is
+// full further requests are shed immediately so the router applies
+// backpressure instead of accumulating waiters without bound.
 //
 // With parking disabled (Max <= 0) enter always admits and performs no
 // accounting, applying the router's fail-fast behavior.

@@ -157,9 +157,18 @@ func do(ctx context.Context) error {
 
 	// Create ateom dir.
 	ateomDir := ateompath.AteomPath(*podUID)
+	if err := resources.ValidateAteomUID(*podUID); err != nil {
+		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
+	}
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
+	// Clean up the ateom directory during graceful shutdown (#1677).
+	defer func() {
+		if err := os.RemoveAll(ateomDir); err != nil {
+			slog.ErrorContext(ctx, "Failed to remove the ateom directory on shutdown", slog.Any("err", err))
+		}
+	}()
 
 	// Reap children reparented to us: the detached cloud-hypervisor VMM and
 	// virtiofsd. Synchronous subprocesses (mount, umount, cp, ...) instead go
@@ -294,7 +303,7 @@ func do(ctx context.Context) error {
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
-			SocketPath:           ateompath.CredentialBrokerSocket,
+			SocketPath:           ateompath.AteomSupportSocket,
 			CredentialBundlePath: *workerCredentialBundle,
 			TrustBundlePath:      *podIdentityTrustBundle,
 		})
@@ -533,7 +542,7 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, ac
 		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
 	}
 	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
-		SocketPath:           ateompath.CredentialBrokerSocket,
+		SocketPath:           ateompath.AteomSupportSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
 

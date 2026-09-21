@@ -324,7 +324,7 @@ func TestValidateActorUpdate(t *testing.T) {
 	}, {
 		"just out of bounds actor.status.state",
 		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = 9 })),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = 10 })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "state"), nil, "").WithOrigin("maximum")},
 	}, {
 		"invalid actor.status.state",
@@ -362,6 +362,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_uid"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ip"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "node_name"), ""),
 		},
 	}, {
 		"invalid actor.status.worker_assignment",
@@ -373,6 +374,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			wa.WorkerPod = "invalid pod"
 			wa.WorkerPodUid = "invalid UUID"
 			wa.WorkerPodIp = "invalid IP"
+			wa.NodeName = "invalid node"
 		}))),
 		field.ErrorList{
 			field.Forbidden(field.NewPath("status", "worker_assignment", "worker", "atespace"), ""),
@@ -382,6 +384,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod"), nil, "").WithOrigin("format=k8s-long-name"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "node_name"), nil, "").WithOrigin("format=k8s-long-name"),
 		},
 	}, {
 		// because we have manual IP format validation, let's be sure
@@ -400,15 +403,19 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
 		},
 	}, {
-		"valid actor.status.in_progress_snapshot_name",
+		"valid actor.status.in_progress_snapshot_uri",
 		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressSnapshotName = "snap-1" })),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.InProgressSnapshotUri = "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1"
+		})),
 		nil,
 	}, {
-		"invalid actor.status.in_progress_snapshot_name",
+		"invalid actor.status.in_progress_snapshot_uri: too long",
 		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressSnapshotName = "SNAP 1" })),
-		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.InProgressSnapshotUri = "gs://" + strings.Repeat("x", 2044)
+		})),
+		field.ErrorList{field.TooLong(field.NewPath("status", "in_progress_snapshot_uri"), nil, 2048).WithOrigin("maxLength")},
 	}, {
 		"valid actor.status.external_snapshot",
 		validInput(),
@@ -1271,6 +1278,7 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 			WorkerPod:       "pod",
 			WorkerPodUid:    "12345678-1234-1234-1234-123456789abc",
 			WorkerPodIp:     "1.2.3.4",
+			NodeName:        "node1",
 		}
 		for _, m := range mods {
 			m(s.WorkerAssignment)
@@ -1433,6 +1441,93 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateSuspendActorRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestCreateActor_GoldenTagDefault(t *testing.T) {
+	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
+			storetest.MustCreateAtespace(t, ctx, persistence, resources.GoldenActorAtespace)
+			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
+			ref := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: "golden"}
+			tag := &ateapipb.Tag{
+				Metadata:    &ateapipb.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
+				SourceActor: ref,
+				Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
+				Status: &ateapipb.TagStatus{
+					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
+					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/ate-golden/tags/" + someActorUID, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				},
+			}
+			wantCode := codes.OK
+			switch scenario {
+			case "missing":
+				wantCode = codes.NotFound
+			case "pending":
+				tag.Status.Snapshot = nil
+				wantCode = codes.FailedPrecondition
+			case "wrong template":
+				tag.Status.ActorTemplateUid = "other"
+				wantCode = codes.FailedPrecondition
+			case "data scope":
+				tag.Status.Snapshot.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+				wantCode = codes.FailedPrecondition
+			}
+			if scenario != "missing" {
+				if _, err := persistence.CreateTag(ctx, tag); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapipb.ActorTemplate) error {
+				db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenTag: ref}}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor"}, ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
+			if scenario == "explicit tag" {
+				tag.Metadata.Name = "explicit"
+				tag.Status.Snapshot.SnapshotUri = "gs://bucket/atespaces/ate-golden/tags/explicit"
+				if _, err := persistence.CreateTag(ctx, tag); err != nil {
+					t.Fatal(err)
+				}
+				actor.SourceTag = &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
+			}
+			svc := &ServiceImpl{store: persistence}
+			created, err := svc.CreateActor(ctx, actor)
+			if status.Code(err) != wantCode {
+				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
+			}
+			if err != nil {
+				return
+			}
+			if got := created.GetStatus(); got.GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() || got.GetCurrentActorTemplateUid() != tmpl.GetMetadata().GetUid() {
+				t.Fatalf("incorrect initial status: %v", got)
+			}
+			if scenario == "own snapshot" {
+				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotsConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := persistence.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(db *ateapipb.Actor) error {
+					db.Status.ExternalSnapshot.SnapshotUri = uri.String()
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			workflow := &ActorWorkflow{store: persistence}
+			_, _, src, err := workflow.loadActorForResume(ctx, resources.ActorRefFromActor(created))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if src.SnapshotURI.IsZero() {
+				t.Fatalf("missing snapshot source for %s", scenario)
+			}
 		})
 	}
 }

@@ -171,9 +171,18 @@ func do(ctx context.Context) error {
 
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podUID)
+	if err := resources.ValidateAteomUID(*podUID); err != nil {
+		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
+	}
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
+	// Clean up the ateom directory during graceful shutdown (#1677).
+	defer func() {
+		if err := os.RemoveAll(ateomDir); err != nil {
+			slog.ErrorContext(ctx, "Failed to remove the ateom directory on shutdown", slog.Any("err", err))
+		}
+	}()
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
@@ -247,7 +256,7 @@ func do(ctx context.Context) error {
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
-			SocketPath:           ateompath.CredentialBrokerSocket,
+			SocketPath:           ateompath.AteomSupportSocket,
 			CredentialBundlePath: *workerCredentialBundle,
 			TrustBundlePath:      *podIdentityTrustBundle,
 		})
@@ -259,8 +268,7 @@ func do(ctx context.Context) error {
 	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
 
 	if err := svr.Serve(lis); err != nil {
-		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
-		os.Exit(1)
+		return fmt.Errorf("while serving: %w", err)
 	}
 
 	return nil
@@ -542,12 +550,15 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 // allowance and the deadline has passed. A var so tests can shorten it.
 var containerKillTimeout = 5 * time.Second
 
-// containerRuntime is the slice of *runsc that graceful shutdown needs. Narrowed
-// to an interface so killContainer's SIGTERM-then-SIGKILL escalation can be
-// exercised without executing runsc.
+// containerRuntime is the slice of *runsc that stopping and tearing down
+// containers needs. Narrowed to an interface so that code can be exercised
+// without executing runsc.
 type containerRuntime interface {
 	cmdKill(ctx context.Context, containerName, signal string) error
 	cmdWait(ctx context.Context, containerName string) error
+	cmdState(ctx context.Context, containerName string) error
+	cmdDelete(ctx context.Context, containerName string) error
+	cmdList(ctx context.Context) ([]string, error)
 }
 
 // killContainer stops a container by sending SIGTERM, waiting until deadline, and
@@ -875,39 +886,59 @@ func listSnapshotFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Container) {
+func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) {
 	for _, ctr := range containers {
-		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
-		_ = r.cmdWait(ctx, ctr.GetName())
+		_ = rcmd.cmdKill(ctx, ctr.GetName(), "SIGKILL")
+		_ = rcmd.cmdWait(ctx, ctr.GetName())
 	}
-	_ = r.cmdKill(ctx, ocispec.PauseContainer, "SIGKILL")
-	_ = r.cmdWait(ctx, ocispec.PauseContainer)
+	_ = rcmd.cmdKill(ctx, ocispec.PauseContainer, "SIGKILL")
+	_ = rcmd.cmdWait(ctx, ocispec.PauseContainer)
 }
 
-func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
+func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) error {
+	// Application containers first, the pause (root) container last.
+	names := make([]string, 0, len(containers)+1)
+	for _, ctr := range containers {
+		names = append(names, ctr.GetName())
+	}
+	names = append(names, ocispec.PauseContainer)
+
 	// Check state of all containers to mimic containerd.
-	//
 	// Without this, `runsc delete` occasionally throws an error.
-	if err := r.cmdState(ctx, ocispec.PauseContainer); err != nil {
-		return fmt.Errorf("while checking state of pause container: %w", err)
-	}
-	for _, ctr := range containers {
-		if err := r.cmdState(ctx, ctr.GetName()); err != nil {
-			return fmt.Errorf("while checking state of %q application container: %w", ctr.GetName(), err)
+	present := make([]string, 0, len(names))
+	for _, name := range names {
+		if err := rcmd.cmdState(ctx, name); err != nil {
+			err = fmt.Errorf("while checking state of %q container: %w", name, err)
+			gone, listErr := isContainerAlreadyGone(ctx, rcmd, name)
+			if listErr != nil {
+				return errors.Join(err, listErr)
+			}
+			if gone {
+				slog.InfoContext(ctx, "runsc container already destroyed, skipping its cleanup", slog.String("container", name))
+				continue
+			}
+			return err
 		}
+		present = append(present, name)
 	}
 
-	for _, ctr := range containers {
-		if err := r.cmdDelete(ctx, ctr.GetName()); err != nil {
-			return fmt.Errorf("while deleting %q application container: %w", ctr.GetName(), err)
+	for _, name := range present {
+		if err := rcmd.cmdDelete(ctx, name); err != nil {
+			return fmt.Errorf("while deleting %q container: %w", name, err)
 		}
-	}
-
-	if err := r.cmdDelete(ctx, ocispec.PauseContainer); err != nil {
-		return fmt.Errorf("while deleting pause container: %w", err)
 	}
 
 	return nil
+}
+
+// isContainerAlreadyGone reports whether runsc no longer has a record of the
+// container.
+func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name string) (bool, error) {
+	ids, err := rcmd.cmdList(ctx)
+	if err != nil {
+		return false, err
+	}
+	return !slices.Contains(ids, name), nil
 }
 
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
@@ -1081,7 +1112,7 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, ac
 		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
 	}
 	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
-		SocketPath:           ateompath.CredentialBrokerSocket,
+		SocketPath:           ateompath.AteomSupportSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
 		ActorAtespace:        actorAtespace,
@@ -1138,12 +1169,16 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 		actorUID: actorUID,
 	}
 
+	// Detached from the caller: a deadline mid-`runsc delete` would leave the
+	// container without its record and the actor unrecoverable.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	// Stop the containers before deleting them, to avoid leaving a live container with no bundle on disk. Best-effort: if the containers are already stopped, the delete will succeed anyway.
-	rcmd.stopContainers(ctx, containers)
+	stopContainers(cleanupCtx, rcmd, containers)
 	// Keep this as best-effort cleanup:
 	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
 	// directories after uploading the snapshot.
-	if err := rcmd.cleanupContainers(ctx, containers); err != nil {
+	if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
 

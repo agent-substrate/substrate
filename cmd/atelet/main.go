@@ -351,28 +351,29 @@ func main() {
 	if ateletIdentity == nil {
 		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
 	}
-	brokerTLS := tlsCfg.Clone()
-	brokerTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
-	if err := os.Remove(ateompath.CredentialBrokerSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
+
+	ateomFacingTLS := tlsCfg.Clone()
+	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
+	if err := os.Remove(ateompath.AteomSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
 	}
-	brokerLis, err := net.Listen("unix", ateompath.CredentialBrokerSocket)
+	ateomFacingLis, err := net.Listen("unix", ateompath.AteomSupportSocket)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen for credential broker", err)
 	}
-	defer brokerLis.Close()
-	if err := os.Chmod(ateompath.CredentialBrokerSocket, 0o600); err != nil {
+	defer ateomFacingLis.Close()
+	if err := os.Chmod(ateompath.AteomSupportSocket, 0o600); err != nil {
 		serverboot.Fatal(ctx, "Failed to restrict credential broker socket", err)
 	}
-	brokerServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(brokerTLS)))
-	ateletpb.RegisterCredentialBrokerServer(brokerServer, &credentialBroker{
+
+	ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
+
+	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
 		controlClient: ateapipb.NewControlClient(ateapiConn),
-	})
-	ateletpb.RegisterWorkerCapacityServer(brokerServer, &workerCapacityService{
-		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+		workers:       ateapipb.NewWorkerServiceClient(ateapiConn),
 	})
 	go func() {
-		if err := brokerServer.Serve(brokerLis); err != nil {
+		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {
 			serverboot.Fatal(ctx, "Failed to serve credential broker", err)
 		}
 	}()
@@ -1328,9 +1329,9 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
-	// Reset actor directories on the node
-	if err := resetActorDirs(actorUID); err != nil {
-		return nil, fmt.Errorf("failed to reset actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	// Reclaim the actor's directories on the node
+	if err := removeActorDirs(actorUID); err != nil {
+		return nil, fmt.Errorf("failed to remove actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
 	return &ateletpb.TerminateResponse{}, nil
@@ -1857,6 +1858,8 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return dir.Sync()
 }
 
+// resetActorDirs empties the actor's directories and leaves them in place for
+// its next activation. Use removeActorDirs when the actor will not come back.
 func resetActorDirs(actorUID string) error {
 	// Explicitly leave runsc logs dir untouched.
 
@@ -1941,6 +1944,23 @@ func resetActorDirs(actorUID string) error {
 		return wrapFileSystemErr("while creating volumes dir: %w", err)
 	}
 
+	return nil
+}
+
+// removeActorDirs reclaims the actor's whole directory tree, root included:
+// nothing else on the node deletes it, and no later activation will look here.
+//
+// resetActorDirs runs first for the care a blanket RemoveAll lacks. It refuses
+// to proceed while a volume directory is still populated, so a failed unmount
+// cannot become a deletion of the mount's contents, and it can remove a bundle
+// upper dir carrying an image's read-only modes.
+func removeActorDirs(actorUID string) error {
+	if err := resetActorDirs(actorUID); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(ateompath.ActorPath(actorUID)); err != nil {
+		return wrapFileSystemErr("while deleting actor dir: %w", err)
+	}
 	return nil
 }
 

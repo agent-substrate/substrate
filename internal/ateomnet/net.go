@@ -24,7 +24,9 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -42,6 +44,7 @@ const (
 	ActorVethGateway  = "169.254.17.1"
 	ActorVethIP       = "169.254.17.2"
 	ActorNftTableName = "ateom_actor"
+	dnsPort           = 53
 
 	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
 	ActorVethSubnet = "169.254.17.0/30"
@@ -210,10 +213,12 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	//
 	// The rules do three things:
 	//
-	//   * prerouting: redirect new actor TCP connections to atunnel's local
-	//     listener. REDIRECT preserves SO_ORIGINAL_DST for the CONNECT authority.
+	//   * prerouting: redirect new actor TCP connections, other than traffic to
+	//     destination port 53, to atunnel's local listener. REDIRECT preserves
+	//     SO_ORIGINAL_DST for the CONNECT authority.
 	//   * postrouting: masquerade traffic not handled by the TCP tunnel, notably
-	//     DNS over UDP, so hostname resolution continues to work.
+	//     traffic to TCP or UDP destination port 53, so hostname resolution
+	//     continues to work.
 	//   * forward: drop actor UDP egress to any port but DNS, and accept the rest
 	//     of the packets forwarded between the actor veth and pod eth0.
 	if err := RemoveActorNftablesRules(); err != nil {
@@ -332,14 +337,28 @@ func l4ProtocolEqual(proto byte) []expr.Any {
 }
 
 // ActorEgressRedirectRule returns the prerouting rule that redirects actor TCP
-// egress to the local atunnel egress listener on port, or nil when port is zero
-// (tunneled egress disabled, so actor egress stays on the masquerade path).
+// egress, except traffic to [dnsPort], to the local atunnel egress listener on
+// port, or nil when port is zero (tunneled egress disabled, so actor egress
+// stays on the masquerade path).
 func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
 	if port == 0 {
 		return nil
 	}
 	exprs := append(IPSourceEqual(ActorVethIP), l4ProtocolEqual(unix.IPPROTO_TCP)...)
 	exprs = append(exprs,
+		// Traffic to destination port 53 bypasses atunnel and follows the direct
+		// masquerade path.
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseTransportHeader,
+			Offset:       2,
+			Len:          2,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(dnsPort),
+		},
 		&expr.Immediate{
 			Register: 1,
 			Data:     binaryutil.BigEndian.PutUint16(port),
@@ -356,9 +375,6 @@ func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port 
 // up as a rising counter in `nft list table ip ateom_actor` rather than as an
 // unexplained timeout.
 func actorNonDNSUDPDropRule(table *nftables.Table, chain *nftables.Chain) *nftables.Rule {
-	// dnsPort is the only destination port on which actor UDP egress is forwarded.
-	const dnsPort = 53
-
 	exprs := append(IPSourceEqual(ActorVethIP), l4ProtocolEqual(unix.IPPROTO_UDP)...)
 	exprs = append(exprs,
 		// Destination port, at offset 2 of the UDP header.
@@ -381,9 +397,20 @@ func actorNonDNSUDPDropRule(table *nftables.Table, chain *nftables.Chain) *nftab
 
 // CreateNetNSWithoutSwitching creates a named netns and returns its handle,
 // restoring the caller's current netns before returning.
+//
+// The caller owns the name exclusively, so a name still present when this
+// runs was left behind by an earlier incarnation and is removed first. The
+// kernel creates the name with O_EXCL, so without that removal a single
+// failed teardown would wedge the name for good: nothing could ever create
+// it again. Removal only unmounts and unlinks the name. Anything still
+// holding the namespace keeps it alive, and existing handles stay usable.
 func CreateNetNSWithoutSwitching(name string) (netns.NsHandle, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	if err := removeNamedNetNS(name); err != nil {
+		return -1, fmt.Errorf("while removing the leftover netns %s: %w", name, err)
+	}
 
 	// We need to create the new NS, then switch back to the current netns.
 	curNetNS, err := netns.Get()
@@ -405,6 +432,20 @@ func CreateNetNSWithoutSwitching(name string) (netns.NsHandle, error) {
 		return -1, fmt.Errorf("while creating interior network namespace: %w", err)
 	}
 	return interiorNetNS, nil
+}
+
+func removeNamedNetNS(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
+		return fmt.Errorf("invalid network namespace name %q: %w", name, os.ErrInvalid)
+	}
+	path := filepath.Join("/run/netns", name)
+	if err := unix.Unmount(path, unix.MNT_DETACH|unix.UMOUNT_NOFOLLOW); err != nil && !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EINVAL) {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // NetNSDo runs do() with the OS thread switched into targetNS, then restores it.

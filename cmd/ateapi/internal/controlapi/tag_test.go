@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -28,7 +27,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -935,97 +933,6 @@ func TestUpdateTag_ConcurrentUpdate(t *testing.T) {
 	}
 	if got, want := storedTag.GetScope(), ateapipb.TagScope_TAG_SCOPE_ATESPACE; got != want {
 		t.Errorf("Stored scope = %v, want %v: the rejected update was applied anyway", got, want)
-	}
-}
-
-// TestDeleteTag_ReleasesExternalSnapshot verifies the delete
-// collects the external snapshot the tag owns before dropping the row that
-// names it, and that a failure to collect leaves the row intact so a retry can
-// finish the job.
-func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
-	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
-	w, objects := newFinalizeWorkflow(persistence)
-	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
-	if err != nil {
-		t.Fatalf("TagActorSnapshot: %v", err)
-	}
-	tagRef := resources.TagRefFromTag(tag)
-	uri := mustReservedTagSnapshotURI(t, tag)
-	svc := &RPCService{impl: newServiceImpl(persistence, nil), objectStore: objects}
-
-	// A delete that cannot reach object storage must not drop the row: it is
-	// the only handle left on the snapshot.
-	objects.OnDelete = func(string, string) error { return errObjectStore }
-	req := &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}
-	if _, err := svc.DeleteTag(ctx, req); !errors.Is(err, errObjectStore) {
-		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
-	}
-	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
-		t.Fatalf("GetTag after the failure: %v", err)
-	}
-
-	// Simulates a retried deletion. Now, the object deletion succeeds,
-	// so we can remove the row from the DB.
-	objects.OnDelete = nil
-	if _, err := svc.DeleteTag(ctx, req); err != nil {
-		t.Fatalf("retried DeleteTag: %v", err)
-	}
-	if got := objects.Snapshot(t, uri); len(got) != 0 {
-		t.Errorf("the tag's external snapshot still holds %v, want it collected", got)
-	}
-	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
-	}
-}
-
-// TestDeleteTag_ReleasesPendingSnapshot verifies that deleting a
-// tag whose create never finished collects what that create stranded. The
-// pending row names the prefix the copy was writing into, and it is the only
-// handle left on those objects.
-func TestDeleteTag_ReleasesPendingSnapshot(t *testing.T) {
-	ctx := context.Background()
-	persistence, cleanup := storetest.SetupTestStore(t)
-	t.Cleanup(cleanup)
-
-	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
-	tag := storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, "v1", actor))
-	tagRef := resources.TagRefFromTag(tag)
-
-	objects := objectstoretest.New()
-	uri, err := resources.NewTagSnapshotURI(tag.GetStatus().GetStorageLocation(), tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetUid())
-	if err != nil {
-		t.Fatalf("NewTagSnapshotURI: %v", err)
-	}
-	// What a copy that died halfway through left behind.
-	objects.PutSnapshot(t, uri, "manifest.json")
-	svc := &RPCService{impl: newServiceImpl(persistence, nil), objectStore: objects}
-
-	// Cleanup must work without the source actor or its template.
-	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-	})
-	if _, err := persistence.DeleteActor(ctx, resources.ActorRefFromActor(actor)); err != nil {
-		t.Fatalf("DeleteActor: %v", err)
-	}
-	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); !errors.Is(err, errObjectStore) {
-		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
-	}
-	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
-		t.Fatalf("GetTag after failed cleanup: %v", err)
-	}
-	objects.OnDelete = nil
-	if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
-		t.Fatalf("DeleteTag: %v", err)
-	}
-	if got := objects.Snapshot(t, uri); len(got) != 0 {
-		t.Errorf("the pending tag's stranded objects are still %v, want them collected", got)
-	}
-	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
 	}
 }
 

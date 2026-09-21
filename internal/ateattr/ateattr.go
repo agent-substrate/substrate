@@ -94,6 +94,7 @@ const (
 	ActorStatePaused     = "paused"
 	ActorStateCrashed    = "crashed"
 	ActorStateDeleting   = "deleting"
+	ActorStateReverting  = "reverting"
 	ActorStateDeleted    = "deleted"
 	ActorStateUnknown    = "unknown"
 )
@@ -118,6 +119,8 @@ func ActorStateValue(state ateapipb.ActorState) string {
 		return ActorStateCrashed
 	case ateapipb.ActorState_ACTOR_STATE_DELETING:
 		return ActorStateDeleting
+	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
+		return ActorStateReverting
 	default:
 		return ActorStateUnknown
 	}
@@ -276,6 +279,7 @@ const (
 	OperationSuspend = "suspend"
 	OperationPause   = "pause"
 	OperationDelete  = "delete"
+	OperationRevert  = "revert"
 	OperationUnknown = "unknown"
 )
 
@@ -286,6 +290,7 @@ var AllOperations = []string{
 	OperationSuspend,
 	OperationPause,
 	OperationDelete,
+	OperationRevert,
 }
 
 // NormalizeOperationName ensures op is one of the bounded lifecycle operations.

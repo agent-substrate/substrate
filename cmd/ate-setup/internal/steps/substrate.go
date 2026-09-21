@@ -97,7 +97,7 @@ func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref 
 		lastErr = err
 		if err == nil {
 			goldenStatus := template.GetStatus().GetGoldenSnapshotStatus()
-			if goldenStatus.GetGoldenSnapshot().GetSnapshotUri() != "" {
+			if goldenStatus.GetGoldenTag().GetName() != "" {
 				return nil
 			}
 			if msg := goldenStatus.GetErrorMessage(); msg != "" {
