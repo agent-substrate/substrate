@@ -15,7 +15,12 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +78,98 @@ func TestDecodeCapMask(t *testing.T) {
 				t.Errorf("decodeCapMask(%q) =\n  %v\nwant:\n  %v", tt.mask, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseFetchHeaders(t *testing.T) {
+	headers, err := parseFetchHeaders([]string{"Authorization:Bearer x", "X-Test:a:b"})
+	if err != nil {
+		t.Fatalf("parseFetchHeaders failed: %v", err)
+	}
+	if got := headers.Get("Authorization"); got != "Bearer x" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer x")
+	}
+	// Only the first colon separates; the value keeps the rest verbatim.
+	if got := headers.Get("X-Test"); got != "a:b" {
+		t.Errorf("X-Test = %q, want %q", got, "a:b")
+	}
+	for _, bad := range []string{"no-colon", ":empty-name"} {
+		if _, err := parseFetchHeaders([]string{bad}); err == nil {
+			t.Errorf("parseFetchHeaders(%q) succeeded, want an error", bad)
+		}
+	}
+}
+
+// doFetch drives the fetch handler at an origin URL and decodes its JSON
+// reply. roots=system keeps the handler off the projected trust bundle,
+// which does not exist outside a cluster.
+func doFetch(t *testing.T, origin string, headerParams ...string) map[string]string {
+	t.Helper()
+	query := url.Values{"url": {origin}, "roots": {"system"}}
+	for _, h := range headerParams {
+		query.Add("header", h)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/fetch?"+query.Encode(), nil)
+	rec := httptest.NewRecorder()
+	fetch(rec, req)
+	resp := map[string]string{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding fetch response %q: %v", rec.Body.String(), err)
+	}
+	return resp
+}
+
+// The suites' credential-injection assertions live in the response body an
+// origin echoes back, so fetch must return it — along with the request
+// headers set from ?header= parameters, which is how a suite pre-seeds a
+// header the gateway should overwrite.
+func TestFetchReturnsBodyAndSetsHeaders(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("auth=" + r.Header.Get("Authorization")))
+	}))
+	defer origin.Close()
+
+	resp := doFetch(t, origin.URL, "Authorization:Bearer seeded")
+	if resp["error"] != "" {
+		t.Fatalf("fetch failed: %s", resp["error"])
+	}
+	if resp["status"] != "200" {
+		t.Errorf("status = %q, want 200", resp["status"])
+	}
+	if resp["body"] != "auth=Bearer seeded" {
+		t.Errorf("body = %q, want %q", resp["body"], "auth=Bearer seeded")
+	}
+}
+
+// A followed cross-scheme redirect would silently hop between the gateway's
+// cleartext and TLS legs, so fetch must report the first response instead.
+func TestFetchDoesNotFollowRedirects(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/target" {
+			t.Error("fetch followed the redirect")
+		}
+		http.Redirect(w, r, "/target", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	resp := doFetch(t, origin.URL)
+	if resp["error"] != "" {
+		t.Fatalf("fetch failed: %s", resp["error"])
+	}
+	if resp["status"] != "302" {
+		t.Errorf("status = %q, want 302", resp["status"])
+	}
+}
+
+func TestFetchTruncatesBody(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", maxFetchBody+1)))
+	}))
+	defer origin.Close()
+
+	resp := doFetch(t, origin.URL)
+	if got := len(resp["body"]); got != maxFetchBody {
+		t.Errorf("len(body) = %d, want %d", got, maxFetchBody)
 	}
 }
 
