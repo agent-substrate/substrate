@@ -17,8 +17,16 @@ package atepg
 import (
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storecontract"
 )
+
+// setupPostgresStore adapts the concrete setup helper to the interface-typed
+// setup func the contract suite takes.
+func setupPostgresStore(t *testing.T) store.Interface {
+	t.Helper()
+	return setupPostgresPersistence(t)
+}
 
 // TestContractSuite runs the backend-neutral store.Interface assertions
 // against a real PostgreSQL instance.
