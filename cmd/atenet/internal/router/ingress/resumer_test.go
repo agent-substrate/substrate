@@ -178,58 +178,53 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 	// A failed resume tells no caller whether an activation ran — the leader no
 	// more than the joiners — so every caller on the flight reports "unknown".
 	t.Run("SingleflightDeduplication_FailedFlight", func(t *testing.T) {
-		var resumeCalled int
-		var mu sync.Mutex
-		const concurrentRequests = 10
-		var callersStarted atomic.Int32
+		synctest.Test(t, func(t *testing.T) {
+			const concurrentRequests = 10
+			var resumeCalled atomic.Int32
+			gate := make(chan struct{})
 
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-				mu.Lock()
-				resumeCalled++
-				mu.Unlock()
-				// Hold the flight open until every caller has started, then a
-				// little longer so each one attaches. The flight leaves the
-				// registry when it completes, so a caller that arrives after
-				// that starts a second RPC and breaks the count below.
-				for callersStarted.Load() < concurrentRequests {
-					time.Sleep(time.Millisecond)
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+					resumeCalled.Add(1)
+					<-gate
+					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+				},
+			}
+
+			resumer := NewActorResumer(mock)
+
+			var wg sync.WaitGroup
+			outcomes := make([]ResumeOutcome, concurrentRequests)
+			errs := make([]error, concurrentRequests)
+
+			wg.Add(concurrentRequests)
+			for i := 0; i < concurrentRequests; i++ {
+				go func(idx int) {
+					defer wg.Done()
+					_, outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
+				}(i)
+			}
+			// synctest.Wait returns once every caller is parked on the flight,
+			// so the release below cannot beat one of them to it. The flight
+			// leaves the registry when it completes, so a caller that arrived
+			// after that would start its own RPC and fail the count below.
+			synctest.Wait()
+			close(gate)
+			wg.Wait()
+
+			for i := 0; i < concurrentRequests; i++ {
+				if got := status.Code(errs[i]); got != codes.ResourceExhausted {
+					t.Fatalf("request %d expected ResourceExhausted, got %v", i, errs[i])
 				}
-				time.Sleep(20 * time.Millisecond)
-				return nil, status.Error(codes.ResourceExhausted, "no free workers available")
-			},
-		}
-
-		resumer := NewActorResumer(mock)
-
-		var wg sync.WaitGroup
-		outcomes := make([]ResumeOutcome, concurrentRequests)
-		errs := make([]error, concurrentRequests)
-
-		wg.Add(concurrentRequests)
-		for i := 0; i < concurrentRequests; i++ {
-			go func(idx int) {
-				defer wg.Done()
-				callersStarted.Add(1)
-				_, outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
-			}(i)
-		}
-		wg.Wait()
-
-		for i := 0; i < concurrentRequests; i++ {
-			if got := status.Code(errs[i]); got != codes.ResourceExhausted {
-				t.Fatalf("request %d expected ResourceExhausted, got %v", i, errs[i])
+				if outcomes[i] != ResumeOutcomeUnknown {
+					t.Errorf("request %d: expected outcome %q on a failed flight, got %q", i, ResumeOutcomeUnknown, outcomes[i])
+				}
 			}
-			if outcomes[i] != ResumeOutcomeUnknown {
-				t.Errorf("request %d: expected outcome %q on a failed flight, got %q", i, ResumeOutcomeUnknown, outcomes[i])
-			}
-		}
 
-		mu.Lock()
-		defer mu.Unlock()
-		if resumeCalled != 1 {
-			t.Errorf("expected %d requests to share one ResumeActor call, got %d calls", concurrentRequests, resumeCalled)
-		}
+			if calls := resumeCalled.Load(); calls != 1 {
+				t.Errorf("ResumeActor calls = %d, want 1 for %d concurrent callers", calls, concurrentRequests)
+			}
+		})
 	})
 
 	t.Run("SingleflightDeduplication_Disambiguation", func(t *testing.T) {
