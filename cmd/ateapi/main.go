@@ -166,7 +166,14 @@ func main() {
 
 	if poolProvider, ok := persistence.(interface {
 		NewPool(context.Context) (*pgxpool.Pool, error)
+		MigrateAsOwner(context.Context, func(context.Context, *pgxpool.Pool) error, ...string) error
 	}); ok {
+		// OpenFGA creates its own tables, which the runtime role may not do.
+		// MigrateAsOwner runs the migrations as the DDL role and then grants
+		// the runtime role DML on the tables they created.
+		if err := poolProvider.MigrateAsOwner(shutdownCtx, authz.Migrate, authz.MigrationTableName); err != nil {
+			serverboot.Fatal(ctx, "Failed to apply OpenFGA migrations", err)
+		}
 		authzPool, err := poolProvider.NewPool(shutdownCtx)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)

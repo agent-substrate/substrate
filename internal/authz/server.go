@@ -41,9 +41,10 @@ const (
 	// DefaultStoreName is the name of the OpenFGA store managed by Substrate.
 	DefaultStoreName = "substrate"
 
-	// migrationTableName tracks OpenFGA schema migrations separately from
-	// Substrate's own schema_migrations table.
-	migrationTableName = "goose_db_version"
+	// MigrationTableName tracks OpenFGA schema migrations separately from
+	// Substrate's own schema_migrations table. Callers of Migrate name it as a
+	// ledger table so the runtime role gets no access to it.
+	MigrationTableName = "goose_db_version"
 )
 
 //go:embed model.fga
@@ -59,9 +60,10 @@ type Server struct {
 	modelID   string
 }
 
-// NewServer initializes OpenFGA database migrations on pool, constructs the
-// PostgreSQL storage adapter, creates the OpenFGA server, and ensures the
-// default store and checked-in authorization model are present.
+// NewServer constructs the PostgreSQL storage adapter, creates the OpenFGA
+// server, and ensures the default store and checked-in authorization model are
+// present. Run Migrate before NewServer: pool only needs DML on the OpenFGA
+// tables, and under separate runtime and DDL roles it cannot create them.
 //
 // NewServer takes ownership of pool: calling Close on the returned Server (or
 // an error during NewServer initialization) closes pool. Callers must provide
@@ -69,14 +71,6 @@ type Server struct {
 func NewServer(ctx context.Context, pool *pgxpool.Pool) (*Server, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("postgres pool must not be nil")
-	}
-
-	// Ensure OpenFGA database tables (tuple, store, authorization_model, changelog)
-	// are migrated and ready in PostgreSQL before initializing the storage adapter.
-	// Goose uses PostgresSessionLocker to serialize migrations safely across replicas.
-	if err := applyMigrations(ctx, pool); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("applying OpenFGA migrations: %w", err)
 	}
 
 	cfg := sqlcommon.NewConfig()
@@ -169,9 +163,14 @@ func acquireInitLock(ctx context.Context, pool *pgxpool.Pool) (func(), error) {
 	}, nil
 }
 
-// applyMigrations runs OpenFGA's embedded PostgreSQL migrations against pool
-// using Goose, tracking applied migration versions in the goose_db_version table.
-func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+// Migrate creates and updates the OpenFGA tables (tuple, store,
+// authorization_model, changelog) with Goose, tracking applied versions in the
+// goose_db_version table. Goose uses PostgresSessionLocker to serialize
+// migrations across replicas.
+//
+// pool must connect as a role that can create tables in the target schema.
+// Run Migrate before NewServer.
+func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	migrations, err := fs.Sub(assets.EmbedMigrations, assets.PostgresMigrationDir)
 	if err != nil {
 		return fmt.Errorf("open embedded OpenFGA migrations: %w", err)
@@ -190,7 +189,7 @@ func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		goose.DialectPostgres,
 		db,
 		migrations,
-		goose.WithTableName(migrationTableName),
+		goose.WithTableName(MigrationTableName),
 		goose.WithSessionLocker(locker),
 	)
 	if err != nil {

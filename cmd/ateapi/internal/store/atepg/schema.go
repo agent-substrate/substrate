@@ -69,8 +69,10 @@ func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // grantRuntimePrivileges gives the runtime role DML access to schema objects
-// while keeping the migration ledger private to the DDL role.
-func grantRuntimePrivileges(ctx context.Context, pool *pgxpool.Pool, runtimeRole string) error {
+// while keeping the migration ledgers private to the DDL role. Substrate's own
+// schema_migrations is always private; ledgerTables names any further ledger,
+// such as the one a subsystem migrating through MigrateAsOwner brings with it.
+func grantRuntimePrivileges(ctx context.Context, pool *pgxpool.Pool, runtimeRole string, ledgerTables ...string) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("starting PostgreSQL runtime grant transaction: %w", err)
@@ -86,15 +88,18 @@ func grantRuntimePrivileges(ctx context.Context, pool *pgxpool.Pool, runtimeRole
 	}
 	role := pgx.Identifier{runtimeRole}.Sanitize()
 	schemaName := pgx.Identifier{schema}.Sanitize()
-	migrationTable := pgx.Identifier{schema, migrationTableName}.Sanitize()
 
-	_, err = tx.Exec(ctx, fmt.Sprintf(`
+	statements := fmt.Sprintf(`
 		GRANT USAGE ON SCHEMA %[1]s TO %[2]s;
 		GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %[1]s TO %[2]s;
-		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %[1]s TO %[2]s;
-		REVOKE ALL PRIVILEGES ON TABLE %[3]s FROM %[2]s`,
-		schemaName, role, migrationTable))
-	if err != nil {
+		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %[1]s TO %[2]s`,
+		schemaName, role)
+	for _, table := range append([]string{migrationTableName}, ledgerTables...) {
+		statements += fmt.Sprintf(";\nREVOKE ALL PRIVILEGES ON TABLE %s FROM %s",
+			pgx.Identifier{schema, table}.Sanitize(), role)
+	}
+
+	if _, err = tx.Exec(ctx, statements); err != nil {
 		return fmt.Errorf("granting PostgreSQL runtime privileges to %q: %w", runtimeRole, err)
 	}
 	if err := tx.Commit(ctx); err != nil {

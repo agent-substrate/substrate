@@ -365,9 +365,26 @@ func (p *Persistence) Close() {
 }
 
 // NewPool opens a dedicated PostgreSQL connection pool configured identically
-// to this persistence instance (including TLS rotation and search_path).
+// to this persistence instance (including TLS rotation and search_path). The
+// pool connects as the runtime role, which holds DML but no DDL privileges.
+// A subsystem that creates its own tables migrates through MigrateAsOwner first.
 func (p *Persistence) NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 	return pgxpool.NewWithConfig(ctx, p.pool.Config())
+}
+
+// MigrateAsOwner runs migrate on the DDL-role pool, then grants the runtime
+// role DML on the objects migrate created. A subsystem that owns tables in the
+// Substrate schema (OpenFGA) calls this before it serves traffic through a
+// NewPool pool. The runtime role cannot create tables, and the grants Connect
+// issues only cover the tables that exist at that point.
+//
+// ledgerTables name migration bookkeeping tables that stay private to the DDL
+// role, as schema_migrations does for Substrate's own migrations.
+func (p *Persistence) MigrateAsOwner(ctx context.Context, migrate func(context.Context, *pgxpool.Pool) error, ledgerTables ...string) error {
+	if err := migrate(ctx, p.ownerPool); err != nil {
+		return err
+	}
+	return grantRuntimePrivileges(ctx, p.ownerPool, p.pool.Config().ConnConfig.User, ledgerTables...)
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers

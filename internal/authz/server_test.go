@@ -108,6 +108,11 @@ func TestNewServer_InitializeAndCheck(t *testing.T) {
 	pool := startPostgres(t)
 	ctx := context.Background()
 
+	// ateapi runs Migrate on a DDL-role pool before it hands NewServer a
+	// runtime-role pool. This container has one superuser role for both.
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate failed: %v", err)
+	}
 	srv, err := NewServer(ctx, pool)
 	if err != nil {
 		t.Fatalf("NewServer failed: %v", err)

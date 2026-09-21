@@ -354,6 +354,25 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	if err := p.createWorkerOutboxPartitions(ctx, time.Now().Add(24*time.Hour)); err != nil {
 		t.Fatalf("DDL maintenance failed: %v", err)
 	}
+
+	// A subsystem that brings its own tables (OpenFGA) creates them as the DDL
+	// role, then reads and writes them through the runtime pool. Connect
+	// granted the runtime role DML before these tables existed.
+	err = p.MigrateAsOwner(ctx, func(ctx context.Context, pool *pgxpool.Pool) error {
+		_, err := pool.Exec(ctx, `
+			CREATE TABLE subsystem_data (id integer);
+			CREATE TABLE subsystem_ledger (version integer)`)
+		return err
+	}, "subsystem_ledger")
+	if err != nil {
+		t.Fatalf("MigrateAsOwner failed: %v", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_data VALUES (1)`); err != nil {
+		t.Errorf("runtime role cannot write a table MigrateAsOwner created: %v", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_ledger VALUES (1)`); err == nil {
+		t.Error("runtime role modified a subsystem migration ledger")
+	}
 }
 
 func TestConnectSingleRoleDoesNotRequireSchemaOwnership(t *testing.T) {
