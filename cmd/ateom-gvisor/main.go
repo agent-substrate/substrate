@@ -46,6 +46,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -83,7 +84,7 @@ var (
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
-	otlpRelaySocket = pflag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
+	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
 	// reaper collects children orphaned in the pod PID namespace.
@@ -171,7 +172,7 @@ func do(ctx context.Context) error {
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	// Create ateom dir
-	ateomDir := ateompath.AteomPath(*podUID)
+	ateomDir := nodepath.AteomPath(*podUID)
 	if err := resources.ValidateAteomUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
 	}
@@ -195,7 +196,7 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "Child process reaper launched")
 
 	// Clean up any old socket.
-	sockPath := ateompath.AteomSocketPath(*podUID)
+	sockPath := nodepath.AteomSocketPath(*podUID)
 	if err := os.RemoveAll(sockPath); err != nil {
 		return fmt.Errorf("while removing %q: %w", sockPath, err)
 	}
@@ -261,7 +262,7 @@ func do(ctx context.Context) error {
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
-			SocketPath:           ateompath.AteomSupportSocket,
+			SocketPath:           nodepath.AteomSupportSocket,
 			CredentialBundlePath: *workerCredentialBundle,
 			TrustBundlePath:      *podIdentityTrustBundle,
 			AteletSPIFFEID:       *ateletIdentity,
@@ -1107,7 +1108,7 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, ac
 		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
 	}
 	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
-		SocketPath:           ateompath.AteomSupportSocket,
+		SocketPath:           nodepath.AteomSupportSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
 		ActorAtespace:        actorAtespace,

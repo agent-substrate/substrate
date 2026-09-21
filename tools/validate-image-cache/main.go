@@ -29,7 +29,7 @@
 // Disk is bounded by the cache's own eviction engine: below
 // --min-free-gb free space, the tool asks Store.EvictUnused to reclaim
 // the shortfall. --evict-all instead empties everything evictable and
-// exits. Bundle-spec rooting (scanned from ateompath.ActorsDir) protects
+// exits. Bundle-spec rooting (scanned from the node's actors dir) protects
 // placed actors' mounted images. The engine's locks are per-process, so a
 // run beside a live atelet is unsynchronized with its GC and pulls — the
 // pool cannot be corrupted (record-first pulls, two-phase retirement),
@@ -54,13 +54,14 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
 	"golang.org/x/sys/unix"
@@ -137,16 +138,19 @@ func (c runConfig) validate() error {
 	if c.live {
 		if c.evictIdle < liveNodeIdleFloor {
 			return fmt.Errorf("--evict-idle=%v is below %v with %s present: min-age is the only protection that applies across processes using the cache",
-				c.evictIdle, liveNodeIdleFloor, ateompath.ActorsDir)
+				c.evictIdle, liveNodeIdleFloor, actorsDir)
 		}
 		// Both modes evict here (evictIfLow is a low-water flush on a
 		// loop), unsynchronized with every other user of the pool.
 		if !c.force {
-			return fmt.Errorf("%s exists — this looks like a live node, and evictions are not synchronized with other processes using the cache; re-run with --force to proceed", ateompath.ActorsDir)
+			return fmt.Errorf("%s exists — this looks like a live node, and evictions are not synchronized with other processes using the cache; re-run with --force to proceed", actorsDir)
 		}
 	}
 	return nil
 }
+
+// actorsDir is where atelet keeps the per-actor directories.
+var actorsDir = filepath.Join(nodepath.BasePath, "actors")
 
 // newStore opens the cache with the options both modes share: min-age
 // from --evict-idle, and bundle-spec rooting from the node's actors dir
@@ -154,7 +158,7 @@ func (c runConfig) validate() error {
 func newStore(extra ...imagecache.Option) (*imagecache.Store, error) {
 	return imagecache.New(*cacheDir, append([]imagecache.Option{
 		imagecache.WithMinAge(*evictIdle),
-		imagecache.WithActorsDir(ateompath.ActorsDir),
+		imagecache.WithActorsDir(actorsDir),
 	}, extra...)...)
 }
 
@@ -172,7 +176,7 @@ func main() {
 		cacheDir: *cacheDir, refsFile: *refsFile,
 		evictAll: *evictAll, force: *force,
 		evictIdle: *evictIdle, minFreeGB: *minFreeGB,
-		live: looksLikeLiveNode(ateompath.ActorsDir),
+		live: looksLikeLiveNode(actorsDir),
 	}
 	flag.Visit(func(f *flag.Flag) { cfg.setFlags = append(cfg.setFlags, f.Name) })
 	if err := cfg.validate(); err != nil {

@@ -37,7 +37,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
@@ -107,7 +107,7 @@ type statsPoller struct {
 	interval time.Duration
 
 	// ateomsDir is the directory whose entries are worker pod UIDs
-	// (ateompath.AteomsDir on a real node; a fixture in tests).
+	// (nodepath.AteomsDir on a real node; a fixture in tests).
 	ateomsDir string
 
 	// dial returns a stats client for one ateom plus the closer that releases
@@ -598,7 +598,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 
 	poller := &statsPoller{
 		interval:  interval,
-		ateomsDir: ateompath.AteomsDir(),
+		ateomsDir: nodepath.AteomsDir(),
 		dial: func(_ context.Context, podUID string) (activeStatsClient, io.Closer, error) {
 			conn, closer, err := dialAteomStats(podUID)
 			if err != nil {
@@ -625,7 +625,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 // the actual connect inside the RPC.
 func dialAteomStats(podUID string) (*grpc.ClientConn, io.Closer, error) {
 	conn, err := grpc.NewClient(
-		"unix://"+ateompath.AteomSocketPath(podUID),
+		"unix://"+nodepath.AteomSocketPath(podUID),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)

@@ -28,7 +28,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -87,7 +87,7 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 		return nil, fmt.Errorf("actornet: actor UID is required")
 	}
 
-	actorNSName := ateompath.ActorNetNSName(actorUID)
+	actorNSName := nodepath.ActorNetNSName(actorUID)
 	actorNS, err := CreateNetNSWithoutSwitching(actorNSName)
 	if err != nil {
 		return nil, fmt.Errorf("while creating the actor netns %s: %w", actorNSName, err)
@@ -275,7 +275,7 @@ const gatewayVethName = "atside"
 // SandboxGatewayNetNSName names the namespace holding the veth peer and atunnel's
 // sockets for one actor.
 func SandboxGatewayNetNSName(actorUID string) string {
-	return ateompath.ActorNetNSName(actorUID) + "-at"
+	return nodepath.ActorNetNSName(actorUID) + "-at"
 }
 
 // CleanupSandboxNetwork closes namespace handles and removes their names.
@@ -297,7 +297,7 @@ func CleanupSandboxNetwork(network *SandboxNetwork) error {
 		}
 	}
 	// Deleting the namespaces takes any veth pair with them.
-	for _, name := range []string{ateompath.ActorNetNSName(network.ActorUID), SandboxGatewayNetNSName(network.ActorUID)} {
+	for _, name := range []string{nodepath.ActorNetNSName(network.ActorUID), SandboxGatewayNetNSName(network.ActorUID)} {
 		if err := removeNamedNetNS(name); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("while deleting netns %s: %w", name, err))
 		}

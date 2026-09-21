@@ -34,6 +34,13 @@ const (
 	tagsOwnerKind   = "tags"
 )
 
+// DurableDirTarFile is the snapshot file holding the tar of an actor's
+// durable-dir volumes (entries are <volumeName>/... relative to the actor's
+// durable-dir directory). Written by the ateoms at checkpoint; a DATA
+// snapshot consists of this file alone, so atelet uses the name to carve the
+// durable data out of a FULL snapshot's file set.
+const DurableDirTarFile = "durable-dir.tar"
+
 // NewSnapshotName returns a unique name for a new snapshot, durable or
 // node-local.
 func NewSnapshotName() string {

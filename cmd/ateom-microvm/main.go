@@ -44,9 +44,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -68,7 +68,7 @@ var (
 	showVersion   = flag.Bool("version", false, "Print version and exit.")
 	logLevelFlag  = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
-	otlpRelaySocket = flag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
+	otlpRelaySocket = flag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
 	// Every listen address here is an unspecified wildcard, which Go binds as a
@@ -156,7 +156,7 @@ func do(ctx context.Context) error {
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	// Create ateom dir.
-	ateomDir := ateompath.AteomPath(*podUID)
+	ateomDir := nodepath.AteomPath(*podUID)
 	if err := resources.ValidateAteomUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
 	}
@@ -190,7 +190,7 @@ func do(ctx context.Context) error {
 	}
 
 	// Clean up any old socket.
-	sockPath := ateompath.AteomSocketPath(*podUID)
+	sockPath := nodepath.AteomSocketPath(*podUID)
 	if err := os.RemoveAll(sockPath); err != nil {
 		return fmt.Errorf("while removing %q: %w", sockPath, err)
 	}
@@ -302,7 +302,7 @@ func do(ctx context.Context) error {
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
-			SocketPath:           ateompath.AteomSupportSocket,
+			SocketPath:           nodepath.AteomSupportSocket,
 			CredentialBundlePath: *workerCredentialBundle,
 			TrustBundlePath:      *podIdentityTrustBundle,
 			AteletSPIFFEID:       *ateletIdentity,
@@ -544,7 +544,7 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, ac
 		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
 	}
 	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
-		SocketPath:           ateompath.AteomSupportSocket,
+		SocketPath:           nodepath.AteomSupportSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
 

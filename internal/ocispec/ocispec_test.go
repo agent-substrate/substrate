@@ -18,12 +18,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
-
-const testActorUID = "actor_uid"
 
 // mountFor returns the spec's mount at destination dest, or fails.
 func mountFor(t *testing.T, spec *specs.Spec, dest string) specs.Mount {
@@ -49,11 +47,15 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
 		{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
 	}
+	const (
+		durableDir = "/node/actors/a/durable-dir"
+		volumesDir = "/node/actors/a/volumes"
+		sysInfoDir = "/node/actors/a/system-info"
+		bundle     = "/node/actors/a/bundles/app"
+	)
 	spec := Build(Options{
-		ActorUID:      testActorUID,
-		ContainerName: "app",
-		Args:          []string{"/app"},
-		Volumes:       volumes,
+		Args:    []string{"/app"},
+		Volumes: volumes,
 		VolumeMounts: []*ateletpb.VolumeMount{
 			{Name: "data", MountPath: "/var/data"},
 			{Name: "data", MountPath: "/home/counter"},
@@ -61,6 +63,10 @@ func TestBuild_VolumeMounts(t *testing.T) {
 			{Name: "csi", MountPath: "/mnt/csi"},
 			{Name: "agent", MountPath: "/ate"},
 		},
+		DurableDirVolumeMountsDir: durableDir,
+		VolumesDir:                volumesDir,
+		SystemInfoVolumeRootsDir:  sysInfoDir,
+		BundlePath:                bundle,
 	})
 
 	for _, tc := range []struct {
@@ -68,11 +74,11 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		wantSource string
 		wantOpts   []string
 	}{
-		{"/var/data", ateompath.DurableDirVolumeMountPoint(testActorUID, "data"), []string{"bind", "rw"}},
-		{"/home/counter", ateompath.DurableDirVolumeMountPoint(testActorUID, "data"), []string{"bind", "rw"}},
-		{"/run/ate", ateompath.SystemInfoVolumeRoot(testActorUID, "sysinfo"), []string{"bind", "ro"}},
-		{"/mnt/csi", ateompath.VolumeHostPath(testActorUID, "csi"), []string{"bind", "rw"}},
-		{"/ate", ateompath.ImageVolumeMountPath(testActorUID, "app", "agent"), []string{"bind", "ro"}},
+		{"/var/data", durableDir + "/data", []string{"bind", "rw"}},
+		{"/home/counter", durableDir + "/data", []string{"bind", "rw"}},
+		{"/run/ate", sysInfoDir + "/sysinfo", []string{"bind", "ro"}},
+		{"/mnt/csi", volumesDir + "/csi", []string{"bind", "rw"}},
+		{"/ate", imagecache.ImageVolumeMountPath(bundle, "agent"), []string{"bind", "ro"}},
 	} {
 		m := mountFor(t, spec, tc.dest)
 		if m.Type != "bind" {
@@ -90,9 +96,7 @@ func TestBuild_VolumeMounts(t *testing.T) {
 // A mount naming an undeclared volume is skipped.
 func TestBuild_UnknownVolumeMountSkipped(t *testing.T) {
 	spec := Build(Options{
-		ActorUID:      testActorUID,
-		ContainerName: "app",
-		VolumeMounts:  []*ateletpb.VolumeMount{{Name: "missing", MountPath: "/mnt/missing"}},
+		VolumeMounts: []*ateletpb.VolumeMount{{Name: "missing", MountPath: "/mnt/missing"}},
 	})
 	for _, m := range spec.Mounts {
 		if m.Destination == "/mnt/missing" {
@@ -104,7 +108,7 @@ func TestBuild_UnknownVolumeMountSkipped(t *testing.T) {
 // The resolved set lands in bounding, effective and permitted only.
 func TestBuild_Capabilities(t *testing.T) {
 	want := []string{"CAP_CHOWN", "CAP_KILL"}
-	spec := Build(Options{ActorUID: testActorUID, ContainerName: "app", Args: []string{"/app"}, Capabilities: want})
+	spec := Build(Options{Args: []string{"/app"}, Capabilities: want})
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -137,7 +141,7 @@ func TestBuild_Capabilities(t *testing.T) {
 
 // The pause container gets no capabilities.
 func TestBuild_NoCapabilitiesForPause(t *testing.T) {
-	spec := Build(Options{ActorUID: testActorUID, ContainerName: PauseContainer, Args: []string{"/pause"}})
+	spec := Build(Options{Args: []string{"/pause"}})
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -161,7 +165,7 @@ func TestBuild_NoCapabilitiesForPause(t *testing.T) {
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	bundle := t.TempDir()
-	want := Build(Options{ActorUID: testActorUID, ContainerName: "app", Args: []string{"/app"}, NetNSPath: "/run/netns/x"})
+	want := Build(Options{Args: []string{"/app"}, NetNSPath: "/run/netns/x"})
 	if err := Save(bundle, want); err != nil {
 		t.Fatalf("Save() = %v", err)
 	}
@@ -235,7 +239,7 @@ func TestOCIResources_NegativeIsUnset(t *testing.T) {
 
 // A container without limits carries no linux.resources at all.
 func TestBuild_NoResourcesLeavesLinuxUntouched(t *testing.T) {
-	spec := Build(Options{ActorUID: testActorUID, ContainerName: PauseContainer, Args: []string{"/pause"}})
+	spec := Build(Options{Args: []string{"/pause"}})
 	if spec.Linux.Resources != nil {
 		t.Errorf("Linux.Resources = %v, want nil when no limits are declared", spec.Linux.Resources)
 	}
@@ -243,7 +247,7 @@ func TestBuild_NoResourcesLeavesLinuxUntouched(t *testing.T) {
 
 func TestBuild_ResourcesApplied(t *testing.T) {
 	spec := Build(Options{
-		ActorUID: testActorUID, ContainerName: "app", Args: []string{"/app"},
+		Args:      []string{"/app"},
 		Resources: &ateletpb.ResourceLimits{MemoryBytes: 67108864},
 	})
 	if spec.Linux.Resources == nil || spec.Linux.Resources.Memory == nil {

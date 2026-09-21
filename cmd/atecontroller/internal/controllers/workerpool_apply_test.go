@@ -30,9 +30,9 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -713,7 +713,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			corev1ac.Volume().
 				WithName("run-ateom").
 				WithHostPath(corev1ac.HostPathVolumeSource().
-					WithPath(ateompath.BasePath).
+					WithPath(nodepath.BasePath).
 					WithType(corev1.HostPathDirectoryOrCreate)),
 			corev1ac.Volume().
 				WithName(atunnelIdentityVolume).
@@ -799,7 +799,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithReadOnly(true),
 				corev1ac.VolumeMount().
 					WithName("run-ateom").
-					WithMountPath(ateompath.BasePath).
+					WithMountPath(nodepath.BasePath).
 					WithMountPropagation(corev1.MountPropagationHostToContainer),
 				corev1ac.VolumeMount().
 					WithName(atunnelIdentityVolume).
