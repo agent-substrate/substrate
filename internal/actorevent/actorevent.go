@@ -157,24 +157,33 @@ func NewEmitter(lp log.LoggerProvider) *Emitter {
 	return &Emitter{logger: lp.Logger(ScopeName)}
 }
 
-// Log writes both copies of ev from one call. Both read attrs; neither changes it.
+// Log writes both copies of ev from one call, off one time.Now(), so a consumer
+// can join them on an exact timestamp. That is why the stdout record is built
+// here rather than through slog.LogAttrs, which would take its own reading.
 //
-// stdout goes first and unconditionally, because it is the copy that survives an
-// ungraceful exit. The two are not gated alike though: --log-level=warn silences
-// the stdout copy of an info event while the OTLP copy still ships.
+// --log-level=warn silences the stdout copy of an info event while the OTLP copy
+// still ships.
 func (e *Emitter) Log(ctx context.Context, ev Event, attrs []slog.Attr) {
-	slog.LogAttrs(ctx, ev.Level(), ev.Body, attrs...)
-	e.emit(ctx, ev, attrs)
+	now := time.Now()
+
+	level := ev.Level()
+	if l := slog.Default(); l.Enabled(ctx, level) {
+		rec := slog.NewRecord(now, level, ev.Body, 0)
+		rec.AddAttrs(attrs...)
+		_ = l.Handler().Handle(ctx, rec)
+	}
+
+	e.emit(ctx, ev, now, attrs)
 }
 
 // emit writes the OTLP copy. It is a no-op, and cheap, until InitLogging
 // installs a provider.
-func (e *Emitter) emit(ctx context.Context, ev Event, attrs []slog.Attr) {
+func (e *Emitter) emit(ctx context.Context, ev Event, t time.Time, attrs []slog.Attr) {
 	params := log.EnabledParameters{Severity: ev.Severity, EventName: ev.Name}
 	if !e.logger.Enabled(ctx, params) {
 		return
 	}
-	e.logger.Emit(ctx, BuildRecord(ev, time.Now(), attrs))
+	e.logger.Emit(ctx, BuildRecord(ev, t, attrs))
 }
 
 // The global provider delegates, so a Logger taken before InitLogging still

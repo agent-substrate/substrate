@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -589,11 +590,12 @@ func crashRecords(t *testing.T) *[]stdoutRecord {
 	return logRecords(t, actorevent.Crashed.Body)
 }
 
-// stdoutRecord is one captured record from the stdout copy. It keeps the level,
-// not just the attributes, so a test can hold it against the OTLP copy's
-// severity. The message is whatever logRecords filtered on.
+// stdoutRecord is one captured record from the stdout copy. It keeps the level
+// and the time, not just the attributes, so a test can hold those against the
+// OTLP copy. The message is whatever logRecords filtered on.
 type stdoutRecord struct {
 	level slog.Level
+	time  time.Time
 	attrs map[string]string
 }
 
@@ -607,7 +609,7 @@ func logRecords(t *testing.T, msg string) *[]stdoutRecord {
 		if r.Message != msg {
 			return
 		}
-		rec := stdoutRecord{level: r.Level, attrs: map[string]string{}}
+		rec := stdoutRecord{level: r.Level, time: r.Time, attrs: map[string]string{}}
 		r.Attrs(func(a slog.Attr) bool {
 			rec.attrs[a.Key] = a.Value.String()
 			return true
@@ -620,10 +622,11 @@ func logRecords(t *testing.T, msg string) *[]stdoutRecord {
 
 // otlpEvent is one captured record from the OTLP copy of a log record.
 type otlpEvent struct {
-	name     string
-	body     string
-	severity otellog.Severity
-	attrs    map[string]string
+	name      string
+	body      string
+	severity  otellog.Severity
+	timestamp time.Time
+	attrs     map[string]string
 }
 
 var (
@@ -639,10 +642,11 @@ func (otlpSinkExporter) Export(_ context.Context, records []sdklog.Record) error
 	defer otlpSinkMu.Unlock()
 	for _, r := range records {
 		e := otlpEvent{
-			name:     r.EventName(),
-			body:     r.Body().String(),
-			severity: r.Severity(),
-			attrs:    map[string]string{},
+			name:      r.EventName(),
+			body:      r.Body().String(),
+			severity:  r.Severity(),
+			timestamp: r.Timestamp(),
+			attrs:     map[string]string{},
 		}
 		r.WalkAttributes(func(kv otellog.KeyValue) bool {
 			e.attrs[kv.Key] = kv.Value.String()
@@ -707,6 +711,10 @@ func assertCopiesAgree(t *testing.T, stdout stdoutRecord, otlp otlpEvent, ev act
 	}
 	if otlp.body != ev.Body {
 		t.Errorf("OTLP body = %q, want %q", otlp.body, ev.Body)
+	}
+	// One time.Now() serves both, so a consumer can join them on it.
+	if !stdout.time.Equal(otlp.timestamp) {
+		t.Errorf("timestamps differ: stdout %v, OTLP %v", stdout.time, otlp.timestamp)
 	}
 }
 

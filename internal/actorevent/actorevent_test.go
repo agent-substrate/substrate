@@ -276,6 +276,10 @@ func TestLogWritesBothCopies(t *testing.T) {
 			if got := otlpRec.Severity(); got != tt.event.Severity {
 				t.Errorf("OTLP severity = %v, want %v", got, tt.event.Severity)
 			}
+			// One time.Now() serves both, so a consumer can join them on it.
+			if !stdoutRec.Time.Equal(otlpRec.Timestamp()) {
+				t.Errorf("timestamps differ: stdout %v, OTLP %v", stdoutRec.Time, otlpRec.Timestamp())
+			}
 
 			stdoutAttrs := map[string]string{}
 			stdoutRec.Attrs(func(a slog.Attr) bool {
@@ -307,7 +311,7 @@ func TestEmitCarriesTraceContext(t *testing.T) {
 	ctx, span := tp.Tracer("test").Start(context.Background(), "test")
 	defer span.End()
 
-	NewEmitter(lp).emit(ctx, StateChanged, stateChangedAttrs(ateattr.ActorStateRunning))
+	NewEmitter(lp).emit(ctx, StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
 
 	if len(exp.records) != 1 {
 		t.Fatalf("exported %d records, want 1", len(exp.records))
@@ -342,7 +346,7 @@ func TestEmitIsANoOpWithoutAProvider(t *testing.T) {
 
 	// The package default resolves the global provider, which no test installs.
 	// This asserts it does not panic rather than that it drops the record.
-	defaultEmitter().emit(context.Background(), StateChanged, stateChangedAttrs(ateattr.ActorStateRunning))
+	defaultEmitter().emit(context.Background(), StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
 }
 
 func TestBuildRecordKeepsValueKinds(t *testing.T) {
