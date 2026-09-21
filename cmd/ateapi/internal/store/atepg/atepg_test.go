@@ -24,9 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 func TestMain(m *testing.M) {
@@ -96,51 +94,4 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 		t.Skipf("PostgreSQL testcontainer unavailable (requires Docker): %v", containerErr)
 	}
 	return containerPool
-}
-
-// clearAll truncates every table so the next test starts from an empty store
-// without paying for a fresh database. Nothing in production mass-deletes
-// state, so the statement lives here rather than on Persistence.
-func clearAll(t *testing.T, p *Persistence) {
-	t.Helper()
-	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, tags, workers, worker_assignments, leases, worker_outbox, worker_outbox_trim`); err != nil {
-		t.Fatalf("truncating tables: %v", err)
-	}
-}
-
-func setupPostgresPersistence(t *testing.T) *Persistence {
-	t.Helper()
-	ctx := context.Background()
-	p, err := NewPersistence(ctx, requirePool(t))
-	if err != nil {
-		t.Fatalf("NewPersistence failed: %v", err)
-	}
-	t.Cleanup(p.Close)
-	clearAll(t, p)
-	return p
-}
-
-func setupPostgresStore(t *testing.T) store.Interface {
-	t.Helper()
-	return setupPostgresPersistence(t)
-}
-
-func newTestAtespace(name string) *ateapipb.Atespace {
-	return &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-}
-
-func createTestAtespace(t *testing.T, s *Persistence, name string) {
-	t.Helper()
-	if _, err := s.CreateAtespace(context.Background(), newTestAtespace(name)); err != nil {
-		t.Fatalf("CreateAtespace(%q) failed: %v", name, err)
-	}
-}
-
-func createTestActorTemplate(t *testing.T, s *Persistence, atespace, name string) {
-	t.Helper()
-	if _, err := s.CreateActorTemplate(context.Background(), &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-	}); err != nil {
-		t.Fatalf("CreateActorTemplate(%q/%q) failed: %v", atespace, name, err)
-	}
 }
