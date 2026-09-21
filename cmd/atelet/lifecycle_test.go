@@ -250,3 +250,104 @@ func TestLocalSnapshotGC(t *testing.T) {
 		t.Errorf("reading actor dir %s: %v", actorDir, err)
 	}
 }
+
+// A deleted worker pod takes its ateom with it and leaves the actor's state on
+// the node — gigabytes of it for a durdir actor. Terminate is the only path
+// that reclaims those directories, and nothing ever revisits a terminated
+// actor's UID, so a Terminate that refuses to run without a live ateom orphans
+// them for the life of the node. Both ways the sandbox can be absent are
+// covered: the pod's socket gone with it, and an actor that never started one.
+func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
+	const (
+		atespace  = "ate-demo"
+		actorName = "counter"
+		actorUID  = "actor-uid-1"
+		ateomUID  = "ateom-uid-1"
+	)
+
+	tests := []struct {
+		name string
+		// setup arranges the absence under test and reports it.
+		setup func(t *testing.T)
+	}{
+		{
+			name: "ateom socket gone with its pod",
+			setup: func(t *testing.T) {
+				orig := ateomSocketPath
+				missing := filepath.Join(t.TempDir(), "ateom.sock")
+				ateomSocketPath = func(string) string { return missing }
+				t.Cleanup(func() { ateomSocketPath = orig })
+			},
+		},
+		{
+			// The record is written at Run/Restore: without one, no sandbox
+			// was ever started for this actor here, so there is nothing to
+			// tear down and no runsc to tear it down with.
+			name: "ateom reachable but the actor has no sandbox record",
+			setup: func(t *testing.T) {
+				serveFakeAteom(t, &fakeAteom{})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+			tt.setup(t)
+
+			// The three directories that each hold a full copy of a durdir
+			// actor's payload, which is what makes one actor cost 3 GiB.
+			stateDirs := []string{
+				ateompath.DurableDirVolumeMountsDir(actorUID),
+				ateompath.CheckpointStateDir(actorUID),
+				ateompath.RestoreStateDir(actorUID),
+			}
+			for _, dir := range stateDirs {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "payload"), []byte("actor state"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+			}
+			snapshotDir := ateompath.LocalSnapshotDir(actorUID, "pause-snap-1")
+			if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+				t.Fatalf("seeding %s: %v", snapshotDir, err)
+			}
+
+			s := &AteomHerder{
+				ateomDialer:       newAteomDialer(1),
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+			}
+			if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				Spec:                  &ateletpb.WorkloadSpec{},
+			}); err != nil {
+				t.Fatalf("Terminate: %v", err)
+			}
+
+			// #1654 made Terminate remove the actor's directory outright
+			// rather than emptying the state dirs in place, so the seeded
+			// payloads go with it and the whole tree is the assertion.
+			if actorDir := ateompath.ActorPath(actorUID); !isGone(actorDir) {
+				entries, _ := os.ReadDir(actorDir)
+				t.Errorf("%s survived terminate with %d entries, want the actor's state reclaimed", actorDir, len(entries))
+			}
+			if localDir := ateompath.LocalCheckpointsDir(actorUID); !isGone(localDir) {
+				t.Errorf("%s survived terminate, want the local snapshots pruned", localDir)
+			}
+		})
+	}
+}
+
+// isGone reports whether path does not exist.
+func isGone(path string) bool {
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
+}

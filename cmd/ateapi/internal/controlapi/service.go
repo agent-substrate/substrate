@@ -102,7 +102,14 @@ func NewRPCService(
 		actorIDCAPool:          actorIDCAPool,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
-	s.workerWorkflow = NewWorkerWorkflow(impl)
+	// Converted through an explicit nil check: a nil *AteletDialer assigned
+	// straight to the interface would be a non-nil interface holding a nil
+	// pointer, and the worker workflow's nil check would not see it.
+	var nodeDialer ateletNodeDialer
+	if dialer != nil {
+		nodeDialer = dialer
+	}
+	s.workerWorkflow = NewWorkerWorkflow(impl, nodeDialer)
 	return s
 }
 

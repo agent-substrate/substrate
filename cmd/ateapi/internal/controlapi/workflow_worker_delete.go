@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -187,6 +188,14 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		markSkipped(ctx, "actor no longer points at this worker")
 		return nil
 	}
+	// Reclaim before the state checks below: the disk the actor left on the
+	// node has to go whether it suspended cleanly or crashed, and this is the
+	// last moment anything still knows which node that is. Once the record is
+	// released, the actor names no worker, no worker names a node, and nothing
+	// ever revisits the actor's UID — the directories are orphaned for the life
+	// of the node.
+	w.reclaimActorStateOnNode(ctx, worker, actor)
+
 	// If the actor is suspended, it's already been released.
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		markSkipped(ctx, "actor suspended cleanly before the pod went away")
@@ -238,6 +247,87 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		recordActorCrash(ctx, crashAttrs)
 	}
 	return nil
+}
+
+// reclaimActorStateOnNode asks the atelet on the worker's node to terminate the
+// actor, which is what reclaims the actor's state directory
+// (/var/lib/ateom-gvisor/actors/<uid>: durable dir, checkpoint and restore
+// images — gigabytes for a durdir actor) and unmounts its external volumes.
+//
+// The worker's pod is gone by the time this runs, so the atelet is reached by
+// node: the by-pod lookup the actor workflows use resolves through the pod that
+// has just disappeared, and returning "pod not found" there is exactly how this
+// state came to be orphaned. atelet tolerates the ateom being gone and reclaims
+// the directories anyway.
+//
+// Best-effort by construction: a node that cannot be reached must not wedge the
+// deregistration of its workers, and the reclaim has no record of its own to
+// retry from once the worker is deleted. What it misses — an unreachable atelet,
+// a node that never comes back, an abrupt eviction — is the orphan sweep's to
+// collect.
+func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *ateapipb.Worker, actor *ateapipb.Actor) {
+	ctx, done := stepSpan(ctx, "ReclaimActorStateOnNode")
+	defer func() { _ = done(nil) }()
+
+	if w.dialer == nil {
+		markSkipped(ctx, "no atelet dialer configured")
+		return
+	}
+	nodeName := worker.GetNodeName()
+	if nodeName == "" {
+		// Pre-dates the field, or a Worker registered before its pod was
+		// scheduled. Nothing names the node holding the state.
+		markSkipped(ctx, "worker records no node")
+		return
+	}
+	// A local snapshot is state this node holds deliberately, and Terminate
+	// prunes local checkpoints. Leaving it is the conservative choice: a
+	// wrongly-kept snapshot costs disk the sweep can still reclaim later, a
+	// wrongly-deleted one cannot be recovered at all.
+	if actor.GetStatus().GetLocalSnapshotInfo() != nil {
+		markSkipped(ctx, "actor has a local snapshot pinned to the node")
+		return
+	}
+
+	actorRef := resources.ActorRefFromActor(actor)
+	logAttrs := []any{
+		slog.Any("actor", actorRef),
+		slog.String("actor_uid", actor.GetMetadata().GetUid()),
+		slog.String("worker", worker.GetMetadata().GetName()),
+		slog.String("node", nodeName),
+	}
+
+	conn, err := w.dialer.DialForAteletOnNode(nodeName)
+	if err != nil {
+		// Includes ErrNoAteletOnNode: the atelet is restarting, or the node
+		// itself is gone. Nothing to reclaim against right now.
+		slog.WarnContext(ctx, "Could not reach the atelet holding a released actor's state; leaving it for the orphan sweep",
+			append(logAttrs, slog.Any("err", err))...)
+		return
+	}
+
+	slog.InfoContext(ctx, "Reclaiming the node state of an actor released from a worker whose pod is gone", logAttrs...)
+	// The template is not resolvable from this workflow — and would be the
+	// wrong thing to block on if it were, since a delete can outlive it. The
+	// fallback spec carries what the teardown acts on: the external volumes to
+	// unmount.
+	_, err = ateletpb.NewAteomHerderClient(conn).Terminate(ctx, &ateletpb.TerminateRequest{
+		TargetAteomUid:        worker.GetWorkerPodUid(),
+		Atespace:              actor.GetMetadata().GetAtespace(),
+		ActorName:             actor.GetMetadata().GetName(),
+		ActorUid:              actor.GetMetadata().GetUid(),
+		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+		ActorTemplateName:     actor.GetActorTemplate().GetName(),
+		Spec:                  fallbackWorkloadSpec(actor),
+	})
+	switch {
+	case err == nil:
+	case status.Code(err) == codes.NotFound:
+		slog.InfoContext(ctx, "Actor already terminated on its node", logAttrs...)
+	default:
+		slog.WarnContext(ctx, "Failed to reclaim a released actor's node state; leaving it for the orphan sweep",
+			append(logAttrs, slog.Any("err", err))...)
+	}
 }
 
 // finalizeDeleted removes the worker from the store and returns the deleted

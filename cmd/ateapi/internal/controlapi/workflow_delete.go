@@ -161,23 +161,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("actor", actorRef.Name),
 			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
 			slog.String("templateName", actor.GetActorTemplate().GetName()))
-		workloadSpec = &ateletpb.WorkloadSpec{}
-		for _, vol := range actor.GetStatus().GetActorVolumes() {
-			// StorageVolumeId is only populated once the volume is provisioned.
-			// Skip volumes that were never created (e.g. failed during PENDING state).
-			if vol.GetStorageVolumeId() != "" {
-				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-					Name: vol.GetVolumeName(),
-					Source: &ateletpb.Volume_External{
-						External: &ateletpb.ExternalVolumeSource{
-							StorageVolumeId: vol.GetStorageVolumeId(),
-							VolumeType:      vol.GetVolumeType(),
-							VolumeContext:   vol.GetVolumeContext(),
-						},
-					},
-				})
-			}
-		}
+		workloadSpec = fallbackWorkloadSpec(actor)
 	}
 
 	req := &ateletpb.TerminateRequest{
@@ -199,6 +183,32 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	return nil
+}
+
+// fallbackWorkloadSpec is the spec to terminate an actor with when its template
+// cannot be resolved — deleted, or never readable from the caller in the first
+// place. Only the external volumes recorded on the actor are carried, because
+// they are the one part of the spec a teardown still acts on: atelet unmounts
+// them from the node. A volume with no StorageVolumeId was never provisioned
+// (e.g. the actor failed while PENDING), so there is nothing mounted to name.
+func fallbackWorkloadSpec(actor *ateapipb.Actor) *ateletpb.WorkloadSpec {
+	spec := &ateletpb.WorkloadSpec{}
+	for _, vol := range actor.GetStatus().GetActorVolumes() {
+		if vol.GetStorageVolumeId() == "" {
+			continue
+		}
+		spec.Volumes = append(spec.Volumes, &ateletpb.Volume{
+			Name: vol.GetVolumeName(),
+			Source: &ateletpb.Volume_External{
+				External: &ateletpb.ExternalVolumeSource{
+					StorageVolumeId: vol.GetStorageVolumeId(),
+					VolumeType:      vol.GetVolumeType(),
+					VolumeContext:   vol.GetVolumeContext(),
+				},
+			},
+		})
+	}
+	return spec
 }
 
 // ensureVolumesDetachedForDelete detaches external volumes.
