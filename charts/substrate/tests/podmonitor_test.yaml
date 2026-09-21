@@ -1,0 +1,109 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The PodMonitors of the three components that serve /metrics. A PodMonitor
+# addresses a named container port, and the name differs per component
+# (ate-api-server and atelet name theirs `prometheus`, the router names its
+# `metrics`), so each object is pinned to the name its own pod declares: one
+# name for all three would match two pods and silently miss the third.
+suite: metrics PodMonitors
+templates:
+- podmonitor.yaml
+tests:
+- it: renders nothing by default
+  asserts:
+  - hasDocuments:
+      count: 0
+
+- it: renders one PodMonitor per component that serves metrics
+  set:
+    metrics.podMonitor.enabled: true
+  asserts:
+  - hasDocuments:
+      count: 3
+
+- it: addresses the port name ate-api-server's pod declares
+  set:
+    metrics.podMonitor.enabled: true
+  documentIndex: 0
+  asserts:
+  - isKind:
+      of: PodMonitor
+  - equal:
+      path: spec.selector.matchLabels.app
+      value: ate-api-server
+  - equal:
+      path: spec.podMetricsEndpoints[0].port
+      value: prometheus
+  - equal:
+      path: spec.podMetricsEndpoints[0].path
+      value: /metrics
+
+- it: addresses the port name the atelet's pod declares
+  set:
+    metrics.podMonitor.enabled: true
+  documentIndex: 1
+  asserts:
+  - equal:
+      path: spec.selector.matchLabels.app
+      value: atelet
+  - equal:
+      path: spec.podMetricsEndpoints[0].port
+      value: prometheus
+
+- it: addresses the router's own port name, which is not the other two
+  set:
+    metrics.podMonitor.enabled: true
+  documentIndex: 2
+  asserts:
+  - equal:
+      path: spec.selector.matchLabels.app
+      value: atenet-router
+  - equal:
+      path: spec.podMetricsEndpoints[0].port
+      value: metrics
+
+- it: scopes every monitor to the release namespace
+  set:
+    metrics.podMonitor.enabled: true
+  release:
+    namespace: ate-system
+  asserts:
+  - equal:
+      path: metadata.namespace
+      value: ate-system
+  - equal:
+      path: spec.namespaceSelector.matchNames[0]
+      value: ate-system
+
+- it: leaves the interval out when it is unset, so Prometheus' own default holds
+  set:
+    metrics.podMonitor.enabled: true
+  asserts:
+  - notExists:
+      path: spec.podMetricsEndpoints[0].interval
+
+- it: carries the interval and the discovery labels when they are set
+  set:
+    metrics.podMonitor.enabled: true
+    metrics.podMonitor.interval: 60s
+    metrics.podMonitor.labels:
+      release: prometheus
+  asserts:
+  - equal:
+      path: spec.podMetricsEndpoints[0].interval
+      value: 60s
+  - equal:
+      path: metadata.labels.release
+      value: prometheus

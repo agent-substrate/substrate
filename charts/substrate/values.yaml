@@ -70,6 +70,23 @@ credentialProvider:
 # Mounted via envFrom with optional=true. Created by the chart from these values.
 ateApiServerEnvVarsConfigMap: ate-api-server-envvars
 
+# Prometheus metrics. ate-api-server, atelet and the atenet router each serve
+# /metrics on their own pod port and already carry the prometheus.io/*
+# annotations, which only a Prometheus doing pod-annotation discovery reads. A
+# Prometheus Operator installation discovers PodMonitors, so turn these on
+# there or the metrics are served and never collected.
+metrics:
+  podMonitor:
+    # Requires the monitoring.coreos.com/v1 CRDs. Off by default: the object
+    # does not apply on a cluster without the Prometheus Operator.
+    enabled: false
+    # Scrape interval. Empty leaves Prometheus' own default.
+    interval: ""
+    # Labels on every PodMonitor. Set whatever the Prometheus' or the agent's
+    # podMonitorSelector matches on, and any tenant label a multi-tenant
+    # backend routes by.
+    labels: {}
+
 # OTLP export, following the OpenTelemetry SDK environment variable spec.
 # endpoint applies to every signal; a signal's own endpoint overrides it.
 # A signal exports only when it is enabled and resolves to an endpoint.
