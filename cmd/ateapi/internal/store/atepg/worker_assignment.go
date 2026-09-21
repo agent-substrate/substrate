@@ -26,8 +26,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Worker assignments and status.allocated are updated in one transaction.
-
 // getWorkerForUpdate reads a Worker and holds its row until the caller's
 // transaction commits, which is what serializes updates to its allocation. The
 // caller supplies the transaction; this only takes the lock.
