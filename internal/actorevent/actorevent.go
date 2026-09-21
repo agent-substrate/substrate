@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package actorevent emits the actor lifecycle events over OTLP. Events go over
-// OTLP; ordinary component logs stay on stdout. The caller passes the same
-// []slog.Attr to both copies, so the two cannot drift.
+// Package actorevent emits the actor lifecycle events. Log writes both copies of
+// a record, the stdout one and the OTLP one, from a single call, so nothing
+// about a record is kept in step by hand. Ordinary component logs stay on
+// stdout.
 //
 // This is not an slog bridge. A bridge would put every component record on the
 // wire, cannot set EventName, and would loop, because serverboot routes OTel SDK
 // errors through slog.
 //
 // serverboot.InitLogging pairs this with a batching processor. These records sit
-// on the actor resume path, so exporting inside Emit would put a blocking gRPC
+// on the actor resume path, so exporting inside Log would put a blocking gRPC
 // call there and make a slow collector look like control-plane latency.
 package actorevent
 
@@ -40,14 +41,9 @@ import (
 // ScopeName is how a consumer selects this stream.
 const ScopeName = "github.com/agent-substrate/substrate/internal/actorevent"
 
-// Bodies match the stdout record's message, so both read alike.
-const (
-	StateChangedBody = "Actor state changed"
-	CrashedBody      = "Actor crashed"
-)
-
 // Event is one name in the closed vocabulary. Name is the LogRecord's own event
-// name field, not an attribute.
+// name field, not an attribute. Body and Severity live here rather than at a
+// call site, so the two copies of a record cannot differ.
 //
 // Keys is the attribute set the name promises. An event name means a fixed
 // shape, so the tests hold the two in step and a caller cannot widen the record.
@@ -56,6 +52,21 @@ type Event struct {
 	Body     string
 	Severity log.Severity
 	Keys     []string
+}
+
+// Level is the stdout level for this event. slog has four levels to OTel's
+// twenty-four, so a sub-level collapses onto the range it sits in.
+func (ev Event) Level() slog.Level {
+	switch {
+	case ev.Severity >= log.SeverityError:
+		return slog.LevelError
+	case ev.Severity >= log.SeverityWarn:
+		return slog.LevelWarn
+	case ev.Severity >= log.SeverityInfo:
+		return slog.LevelInfo
+	default:
+		return slog.LevelDebug
+	}
 }
 
 // identityKeys is what ateattr.ActorLogAttrs writes, in its order.
@@ -72,7 +83,7 @@ var identityKeys = []string{
 var (
 	StateChanged = Event{
 		Name:     "ate.actor.state_changed",
-		Body:     StateChangedBody,
+		Body:     "Actor state changed",
 		Severity: log.SeverityInfo,
 		Keys: append(append([]string{}, identityKeys...),
 			string(ateattr.ActorOperationNameKey),
@@ -81,7 +92,7 @@ var (
 
 	Crashed = Event{
 		Name:     "ate.actor.crashed",
-		Body:     CrashedBody,
+		Body:     "Actor crashed",
 		Severity: log.SeverityError,
 		Keys: append(append([]string{}, identityKeys...),
 			string(ateattr.ActorOperationNameKey),
@@ -90,6 +101,10 @@ var (
 			string(ateattr.FailureDomainKey)),
 	}
 )
+
+// events is the whole vocabulary, which the registry test walks. An event left
+// out of it is never checked against docs/metrics/registry/events.yaml.
+var events = []Event{StateChanged, Crashed}
 
 // BuildRecord turns the stdout record into its OTLP form. Attributes carry
 // everything machine-readable, so the body stays the display string.
@@ -132,8 +147,8 @@ func logValue(v slog.Value) log.Value {
 	}
 }
 
-// Emitter writes events through one log.Logger. Tests construct one directly, so
-// they need no global provider and can run in parallel.
+// Emitter writes the OTLP copy through one log.Logger. Tests construct one
+// directly, so emit needs no global provider and can run in parallel.
 type Emitter struct {
 	logger log.Logger
 }
@@ -142,14 +157,33 @@ func NewEmitter(lp log.LoggerProvider) *Emitter {
 	return &Emitter{logger: lp.Logger(ScopeName)}
 }
 
-// Emit records ev. attrs is the same slice the caller gave its stdout record.
-// It is a no-op, and cheap, until InitLogging installs a provider.
-func (e *Emitter) Emit(ctx context.Context, ev Event, attrs []slog.Attr) {
+// Log writes both copies of ev from one call, off one time.Now(), so a consumer
+// can join them on an exact timestamp. That is why the stdout record is built
+// here rather than through slog.LogAttrs, which would take its own reading.
+//
+// --log-level=warn silences the stdout copy of an info event while the OTLP copy
+// still ships.
+func (e *Emitter) Log(ctx context.Context, ev Event, attrs []slog.Attr) {
+	now := time.Now()
+
+	level := ev.Level()
+	if l := slog.Default(); l.Enabled(ctx, level) {
+		rec := slog.NewRecord(now, level, ev.Body, 0)
+		rec.AddAttrs(attrs...)
+		_ = l.Handler().Handle(ctx, rec)
+	}
+
+	e.emit(ctx, ev, now, attrs)
+}
+
+// emit writes the OTLP copy. It is a no-op, and cheap, until InitLogging
+// installs a provider.
+func (e *Emitter) emit(ctx context.Context, ev Event, t time.Time, attrs []slog.Attr) {
 	params := log.EnabledParameters{Severity: ev.Severity, EventName: ev.Name}
 	if !e.logger.Enabled(ctx, params) {
 		return
 	}
-	e.logger.Emit(ctx, BuildRecord(ev, time.Now(), attrs))
+	e.logger.Emit(ctx, BuildRecord(ev, t, attrs))
 }
 
 // The global provider delegates, so a Logger taken before InitLogging still
@@ -158,7 +192,7 @@ var defaultEmitter = sync.OnceValue(func() *Emitter {
 	return NewEmitter(global.GetLoggerProvider())
 })
 
-// Emit records ev through the process-wide provider.
-func Emit(ctx context.Context, ev Event, attrs []slog.Attr) {
-	defaultEmitter().Emit(ctx, ev, attrs)
+// Log records ev through the process-wide provider.
+func Log(ctx context.Context, ev Event, attrs []slog.Attr) {
+	defaultEmitter().Log(ctx, ev, attrs)
 }

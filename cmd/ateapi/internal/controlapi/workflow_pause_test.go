@@ -92,10 +92,10 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if len(*records) != 1 {
 		t.Fatalf("got %d crash records, want 1", len(*records))
 	}
-	if got := (*records)[0][string(ateattr.ActorUIDKey)]; got == "" {
+	if got := (*records)[0].attrs[string(ateattr.ActorUIDKey)]; got == "" {
 		t.Error("crash record carries no ate.actor.uid")
 	}
-	if got := (*records)[0][string(ateattr.FailureDomainKey)]; got != ateattr.FailureDomainInfrastructure {
+	if got := (*records)[0].attrs[string(ateattr.FailureDomainKey)]; got != ateattr.FailureDomainInfrastructure {
 		t.Errorf("ate.failure.domain = %q, want %q", got, ateattr.FailureDomainInfrastructure)
 	}
 }

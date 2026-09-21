@@ -17,7 +17,8 @@
 #
 # An event name promises a fixed set of attributes. The list in each group is
 # the reviewable form of the Keys field on the matching internal/actorevent
-# Event, and a test in that package holds the two in step.
+# Event. TestEventsMatchTheRegistry in that package holds the two in step both
+# ways, so an event has to be declared here before it can ship.
 #
 # Metrics cannot answer what state an actor is in: the cardinality rule
 # no-actor-identity bars actor identity from metric labels. These events carry

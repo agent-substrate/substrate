@@ -94,7 +94,7 @@ func TestConnect_DedicatedWatchPool(t *testing.T) {
 // rolled-back write never produces an event, while a committed write always
 // does.
 func TestWorkerEvent_OnlyAfterCommit(t *testing.T) {
-	s := setupPostgresStore(t).(*Persistence)
+	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 
 	watch, err := s.WatchWorkers(ctx)
@@ -172,7 +172,7 @@ func TestWorkerEvent_OnlyAfterCommit(t *testing.T) {
 // must instead hold the committed sibling back until the older
 // transaction resolves, then deliver both in order.
 func TestWatchWorkers_OutOfOrderCommitNotSkipped(t *testing.T) {
-	s := setupPostgresStore(t).(*Persistence)
+	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 
 	watch, err := s.WatchWorkers(ctx)
@@ -902,7 +902,7 @@ func TestWatchWorkers_ClosesAfterPersistentPollFailure(t *testing.T) {
 // fell-behind close never fired: silent loss. The baseline must only cover
 // settled history below the cursor's own xmin snapshot.
 func TestWatchWorkers_BaselineDoesNotMaskOwedTrims(t *testing.T) {
-	s := setupPostgresStore(t).(*Persistence)
+	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 
 	// L: an old in-flight transaction pinning xmin — the fence stall.
@@ -1007,7 +1007,7 @@ func TestUnmarshalWorkerEvent_BoundaryAssertions(t *testing.T) {
 // that fails the boundary checks must close the watch (loss surfaced,
 // relist repairs) rather than advance the cursor past it silently.
 func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
-	s := setupPostgresStore(t).(*Persistence)
+	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 
 	watch, err := s.WatchWorkers(ctx)

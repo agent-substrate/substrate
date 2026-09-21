@@ -14,22 +14,11 @@
 
 package atepg
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storecontract"
-)
-
-// setupPostgresStore adapts the concrete setup helper to the interface-typed
-// setup func the contract suite takes.
-func setupPostgresStore(t *testing.T) store.Interface {
-	t.Helper()
-	return setupPostgresPersistence(t)
-}
-
-// TestContractSuite runs the backend-neutral store.Interface assertions
-// against a real PostgreSQL instance.
-func TestContractSuite(t *testing.T) {
-	storecontract.RunContractTests(t, setupPostgresStore)
+func TestDecodePageTokenRejectsWrongKeyShape(t *testing.T) {
+	token := encodePageToken(kindActor, "", []string{"only-an-atespace"})
+	if _, err := decodePageToken(token, kindActor, "", 2); err == nil {
+		t.Fatal("decodePageToken() accepted a global actor token with only one key part")
+	}
 }

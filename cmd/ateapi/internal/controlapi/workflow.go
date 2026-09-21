@@ -96,8 +96,7 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 	attrs = append(attrs,
 		slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)),
 		slog.String(string(ateattr.ActorStateKey), state))
-	slog.LogAttrs(ctx, slog.LevelInfo, actorevent.StateChangedBody, attrs...)
-	actorevent.Emit(ctx, actorevent.StateChanged, attrs)
+	actorevent.Log(ctx, actorevent.StateChanged, attrs)
 }
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.

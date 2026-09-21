@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package actorevent_test
+package actorevent
 
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -25,7 +26,6 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -78,7 +78,7 @@ func TestBuildRecord(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		event    actorevent.Event
+		event    Event
 		attrs    []slog.Attr
 		wantName string
 		wantBody string
@@ -87,10 +87,10 @@ func TestBuildRecord(t *testing.T) {
 	}{
 		{
 			name:     "state changed",
-			event:    actorevent.StateChanged,
+			event:    StateChanged,
 			attrs:    stateChangedAttrs(ateattr.ActorStateRunning),
 			wantName: "ate.actor.state_changed",
-			wantBody: actorevent.StateChangedBody,
+			wantBody: "Actor state changed",
 			wantSev:  log.SeverityInfo,
 			wantVals: map[string]string{
 				string(ateattr.ActorStateKey):         ateattr.ActorStateRunning,
@@ -100,10 +100,10 @@ func TestBuildRecord(t *testing.T) {
 		},
 		{
 			name:     "deleted is a state, not a name of its own",
-			event:    actorevent.StateChanged,
+			event:    StateChanged,
 			attrs:    stateChangedAttrs(ateattr.ActorStateDeleted),
 			wantName: "ate.actor.state_changed",
-			wantBody: actorevent.StateChangedBody,
+			wantBody: "Actor state changed",
 			wantSev:  log.SeverityInfo,
 			wantVals: map[string]string{
 				string(ateattr.ActorStateKey): ateattr.ActorStateDeleted,
@@ -111,10 +111,10 @@ func TestBuildRecord(t *testing.T) {
 		},
 		{
 			name:     "crashed",
-			event:    actorevent.Crashed,
+			event:    Crashed,
 			attrs:    crashedAttrs(),
 			wantName: "ate.actor.crashed",
-			wantBody: actorevent.CrashedBody,
+			wantBody: "Actor crashed",
 			wantSev:  log.SeverityError,
 			wantVals: map[string]string{
 				string(ateattr.ActorStateKey):    ateattr.ActorStateCrashed,
@@ -128,7 +128,7 @@ func TestBuildRecord(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			rec := actorevent.BuildRecord(tt.event, now, tt.attrs)
+			rec := BuildRecord(tt.event, now, tt.attrs)
 
 			if got := rec.EventName(); got != tt.wantName {
 				t.Errorf("EventName() = %q, want %q", got, tt.wantName)
@@ -170,6 +170,37 @@ func TestBuildRecord(t *testing.T) {
 	}
 }
 
+func TestEventLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		sev  log.Severity
+		want slog.Level
+	}{
+		{"unset falls to the quietest level", log.SeverityUndefined, slog.LevelDebug},
+		{"trace", log.SeverityTrace, slog.LevelDebug},
+		{"debug", log.SeverityDebug, slog.LevelDebug},
+		{"info", log.SeverityInfo, slog.LevelInfo},
+		{"warn", log.SeverityWarn, slog.LevelWarn},
+		{"error", log.SeverityError, slog.LevelError},
+		{"fatal is as high as slog goes", log.SeverityFatal, slog.LevelError},
+		{"a sub-level keeps its range", log.SeverityInfo3, slog.LevelInfo},
+		{"the state_changed event", StateChanged.Severity, slog.LevelInfo},
+		{"the crashed event", Crashed.Severity, slog.LevelError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := (Event{Severity: tt.sev}).Level(); got != tt.want {
+				t.Errorf("Level() for severity %v = %v, want %v", tt.sev, got, tt.want)
+			}
+		})
+	}
+}
+
 // memExporter collects records in memory. Small enough to keep here rather than
 // vendoring the SDK's test package.
 type memExporter struct {
@@ -182,6 +213,90 @@ func (e *memExporter) Export(_ context.Context, records []sdklog.Record) error {
 }
 func (e *memExporter) Shutdown(context.Context) error   { return nil }
 func (e *memExporter) ForceFlush(context.Context) error { return nil }
+
+// captureHandler keeps the stdout copy so a test can hold it beside the OTLP one.
+type captureHandler struct {
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+// TestLogWritesBothCopies is the invariant this package exists for: one call,
+// two copies, and no field either copy can hold alone.
+//
+// It swaps the slog default, so it cannot be parallel. Go finishes every
+// non-parallel test before it resumes the parallel ones, so it does not race
+// the rest of this file.
+func TestLogWritesBothCopies(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Event
+		attrs []slog.Attr
+	}{
+		{"state changed", StateChanged, stateChangedAttrs(ateattr.ActorStateRunning)},
+		{"crashed", Crashed, crashedAttrs()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout := &captureHandler{}
+			prev := slog.Default()
+			slog.SetDefault(slog.New(stdout))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			exp := &memExporter{}
+			lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(exp)))
+			t.Cleanup(func() { _ = lp.Shutdown(context.Background()) })
+
+			NewEmitter(lp).Log(context.Background(), tt.event, tt.attrs)
+
+			if len(stdout.records) != 1 {
+				t.Fatalf("wrote %d stdout records, want 1", len(stdout.records))
+			}
+			if len(exp.records) != 1 {
+				t.Fatalf("exported %d OTLP records, want 1", len(exp.records))
+			}
+			stdoutRec, otlpRec := stdout.records[0], exp.records[0]
+
+			if stdoutRec.Message != tt.event.Body {
+				t.Errorf("stdout message = %q, want %q", stdoutRec.Message, tt.event.Body)
+			}
+			if got := otlpRec.Body().String(); got != tt.event.Body {
+				t.Errorf("OTLP body = %q, want %q", got, tt.event.Body)
+			}
+			if stdoutRec.Level != tt.event.Level() {
+				t.Errorf("stdout level = %v, want %v", stdoutRec.Level, tt.event.Level())
+			}
+			if got := otlpRec.Severity(); got != tt.event.Severity {
+				t.Errorf("OTLP severity = %v, want %v", got, tt.event.Severity)
+			}
+			// One time.Now() serves both, so a consumer can join them on it.
+			if !stdoutRec.Time.Equal(otlpRec.Timestamp()) {
+				t.Errorf("timestamps differ: stdout %v, OTLP %v", stdoutRec.Time, otlpRec.Timestamp())
+			}
+
+			stdoutAttrs := map[string]string{}
+			stdoutRec.Attrs(func(a slog.Attr) bool {
+				stdoutAttrs[a.Key] = a.Value.String()
+				return true
+			})
+			otlpAttrs := map[string]string{}
+			otlpRec.WalkAttributes(func(kv log.KeyValue) bool {
+				otlpAttrs[kv.Key] = kv.Value.String()
+				return true
+			})
+			if !maps.Equal(stdoutAttrs, otlpAttrs) {
+				t.Errorf("attributes differ: stdout %v, OTLP %v", stdoutAttrs, otlpAttrs)
+			}
+		})
+	}
+}
 
 func TestEmitCarriesTraceContext(t *testing.T) {
 	t.Parallel()
@@ -196,7 +311,7 @@ func TestEmitCarriesTraceContext(t *testing.T) {
 	ctx, span := tp.Tracer("test").Start(context.Background(), "test")
 	defer span.End()
 
-	actorevent.NewEmitter(lp).Emit(ctx, actorevent.StateChanged, stateChangedAttrs(ateattr.ActorStateRunning))
+	NewEmitter(lp).emit(ctx, StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
 
 	if len(exp.records) != 1 {
 		t.Fatalf("exported %d records, want 1", len(exp.records))
@@ -231,7 +346,7 @@ func TestEmitIsANoOpWithoutAProvider(t *testing.T) {
 
 	// The package default resolves the global provider, which no test installs.
 	// This asserts it does not panic rather than that it drops the record.
-	actorevent.Emit(context.Background(), actorevent.StateChanged, stateChangedAttrs(ateattr.ActorStateRunning))
+	defaultEmitter().emit(context.Background(), StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
 }
 
 func TestBuildRecordKeepsValueKinds(t *testing.T) {
@@ -255,7 +370,7 @@ func TestBuildRecordKeepsValueKinds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			rec := actorevent.BuildRecord(actorevent.StateChanged, time.Now(), []slog.Attr{tt.attr})
+			rec := BuildRecord(StateChanged, time.Now(), []slog.Attr{tt.attr})
 			var got log.Value
 			rec.WalkAttributes(func(kv log.KeyValue) bool {
 				got = kv.Value
