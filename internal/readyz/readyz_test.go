@@ -43,10 +43,10 @@ func TestURL(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "default path",
+			name:    "missing path",
 			probe:   &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: 8080}},
 			actorIP: "169.254.17.2",
-			want:    "http://169.254.17.2:8080/readyz",
+			wantErr: true,
 		},
 		{
 			name:    "explicit path",
@@ -103,7 +103,7 @@ func TestWait_ReturnsOnFirst200(t *testing.T) {
 	defer srv.Close()
 
 	ip, port := splitHostPort(t, srv.URL)
-	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: int32(port)}}
+	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -124,7 +124,7 @@ func TestWait_WaitsForServerToBecomeReady(t *testing.T) {
 	defer srv.Close()
 
 	ip, port := splitHostPort(t, srv.URL)
-	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: int32(port)}}
+	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	flipAt := time.Now().Add(50 * time.Millisecond)
 	go func() {
@@ -151,7 +151,7 @@ func TestWait_ContextCancellation(t *testing.T) {
 	// Bind a port and immediately close to ensure connect-refused, so the
 	// poll loop is exercised but no server ever returns 200.
 	port := pickFreePort(t)
-	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: int32(port)}}
+	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -170,16 +170,17 @@ func TestWait_ContextCancellation(t *testing.T) {
 	}
 }
 
-func TestOverallTimeout(t *testing.T) {
+func TestPollTimeout(t *testing.T) {
 	tests := []struct {
-		name  string
-		probe *ateompb.Readyz
-		want  time.Duration
+		name    string
+		probe   *ateompb.Readyz
+		want    time.Duration
+		wantErr bool
 	}{
 		{
-			name:  "unset falls back to the default",
-			probe: &ateompb.Readyz{},
-			want:  DefaultOverallTimeout,
+			name:    "unset is rejected",
+			probe:   &ateompb.Readyz{},
+			wantErr: true,
 		},
 		{
 			name:  "explicit value is honored",
@@ -187,17 +188,19 @@ func TestOverallTimeout(t *testing.T) {
 			want:  300 * time.Second,
 		},
 		{
-			// A zero deadline could never be met, so it means "unset"
-			// rather than "fail immediately".
-			name:  "negative falls back to the default",
-			probe: &ateompb.Readyz{TimeoutSeconds: -1},
-			want:  DefaultOverallTimeout,
+			name:    "negative is rejected",
+			probe:   &ateompb.Readyz{TimeoutSeconds: -1},
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := overallTimeout(tt.probe); got != tt.want {
-				t.Errorf("overallTimeout = %v, want %v", got, tt.want)
+			got, err := pollTimeout(tt.probe)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("pollTimeout = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -208,7 +211,7 @@ func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
 	// probe's own deadline rather than the package default.
 	port := pickFreePort(t)
 	probe := &ateompb.Readyz{
-		HttpGet:        &ateompb.HTTPGetAction{Port: int32(port)},
+		HttpGet:        &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)},
 		TimeoutSeconds: 1,
 	}
 
@@ -227,7 +230,7 @@ func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
 		t.Errorf("Wait gave up after %v, before the probe's 1s timeout", elapsed)
 	}
 	if elapsed > 5*time.Second {
-		t.Errorf("Wait took %v; the probe timeout was ignored in favor of the %v default", elapsed, DefaultOverallTimeout)
+		t.Errorf("Wait took %v; the probe's 1s timeout was not honored", elapsed)
 	}
 }
 
@@ -280,7 +283,7 @@ func TestWaitAll_ReasonSurvivesTheRPCBoundary(t *testing.T) {
 	port := pickFreePort(t)
 	containers := []*ateompb.Container{{
 		Name:   "main",
-		Readyz: &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: int32(port)}, TimeoutSeconds: 1},
+		Readyz: &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1},
 	}}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

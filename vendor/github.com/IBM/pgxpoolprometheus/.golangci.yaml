@@ -1,0 +1,31 @@
+---
+version: "2"
+run:
+  allow-parallel-runners: true
+linters:
+  enable:
+    - "bidichk"
+    - "bodyclose"
+    - "errcheck"
+    - "errname"
+    - "errorlint"
+    - "gocritic"
+    - "goprintffuncname"
+    - "gosec"
+    - "govet"
+    - "importas"
+    - "ineffassign"
+    - "makezero"
+    - "perfsprint"
+    - "prealloc"
+    - "predeclared"
+    - "promlinter"
+    - "staticcheck"
+    - "unconvert"
+    - "wastedassign"
+    - "whitespace"
+    - "unused"
+  settings:
+    staticcheck:
+      checks:
+        - "all"

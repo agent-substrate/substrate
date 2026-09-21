@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -34,7 +35,7 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 	if inAtespace != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inAtespace.Metadata)
 		// no status field, but if there were, we would scrub it here
-		defaultAtespace(inAtespace)
+		defaults.Apply(inAtespace)
 	}
 
 	// Validate the request, including the object within it.

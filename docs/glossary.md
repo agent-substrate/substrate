@@ -64,7 +64,8 @@ for etcd.
 
 - **ateom**: the coordinator that runs inside each worker pod and drives the
   sandbox runtime on behalf of atelet. This decouples the physical pod
-  lifecycle from the sandboxed agent process.
+  lifecycle from the sandboxed agent process. It embeds a networking service
+  called `atunnel` that handles network traffic for the sandboxed Actor.
 
 - **atenet**: the networking stack. Its router resumes suspended Actors on
   demand and routes traffic to the right worker pod.

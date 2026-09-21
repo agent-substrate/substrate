@@ -16,17 +16,17 @@ name: Substrate Authorization Model Tests
 model_file: ./model.fga
 
 tuples:
-  # Cluster Scope
+  # Global Scope
   - user: user:carol
     relation: owner
-    object: cluster:root
+    object: global:root
   - user: user:frank
     relation: viewer
-    object: cluster:root
+    object: global:root
 
-  # Atespace Scope (space-1 linked to cluster:root)
-  - user: cluster:root
-    relation: parent_cluster
+  # Atespace Scope (space-1 linked to global:root)
+  - user: global:root
+    relation: parent_global
     object: atespace:space-1
   - user: user:alice
     relation: owner
@@ -71,15 +71,17 @@ tuples:
     object: actor:runner-1
 
 tests:
-  - name: 1. Cluster Superadmin & Viewer Propagation
+  - name: 1. Global Superadmin & Viewer Propagation
     check:
-      # Cluster Owner (Carol)
+      # Global Owner (Carol)
       - user: user:carol
-        object: cluster:root
+        object: global:root
         assertions:
           owner: true
           viewer: true
           can_create_atespace: true
+          can_set_policy: true
+          can_get_policy: true
           can_get: true
       - user: user:carol
         object: atespace:space-1
@@ -95,13 +97,15 @@ tests:
           can_update: true
           can_delete: true
 
-      # Cluster Viewer (Frank)
+      # Global Viewer (Frank)
       - user: user:frank
-        object: cluster:root
+        object: global:root
         assertions:
           owner: false
           viewer: true
           can_create_atespace: false
+          can_set_policy: false
+          can_get_policy: true
           can_get: true
       - user: user:frank
         object: atespace:space-1
@@ -186,7 +190,7 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-      - user: user:frank # Cluster viewer can get template via parent cluster
+      - user: user:frank # Global viewer can get template via parent global
         object: actor_template:private-template
         assertions:
           can_get: true

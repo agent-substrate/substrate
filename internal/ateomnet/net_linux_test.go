@@ -17,6 +17,7 @@
 package ateomnet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/roottest"
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -307,10 +309,41 @@ func sendUDP(t *testing.T, addr string) {
 	}
 }
 
+func TestActorEgressRedirectRuleExcludesDNS(t *testing.T) {
+	table := &nftables.Table{}
+	chain := &nftables.Chain{Table: table}
+
+	if rule := ActorEgressRedirectRule(table, chain, 0); rule != nil {
+		t.Fatal("ActorEgressRedirectRule returned a rule when tunneled egress is disabled")
+	}
+
+	rule := ActorEgressRedirectRule(table, chain, 15001)
+	if rule == nil {
+		t.Fatal("ActorEgressRedirectRule returned nil when tunneled egress is enabled")
+	}
+	if len(rule.Exprs) != 8 {
+		t.Fatalf("redirect rule has %d expressions, want 8", len(rule.Exprs))
+	}
+	payload, ok := rule.Exprs[4].(*expr.Payload)
+	if !ok {
+		t.Fatalf("redirect expression 4 is %T, want *expr.Payload", rule.Exprs[4])
+	}
+	if payload.Base != expr.PayloadBaseTransportHeader || payload.Offset != 2 || payload.Len != 2 {
+		t.Errorf("redirect destination-port payload = %+v, want transport-header offset 2 length 2", payload)
+	}
+	cmp, ok := rule.Exprs[5].(*expr.Cmp)
+	if !ok {
+		t.Fatalf("redirect expression 5 is %T, want *expr.Cmp", rule.Exprs[5])
+	}
+	if cmp.Op != expr.CmpOpNeq || !bytes.Equal(cmp.Data, binaryutil.BigEndian.PutUint16(dnsPort)) {
+		t.Errorf("redirect destination-port comparison = %+v, want destination port != %d", cmp, dnsPort)
+	}
+}
+
 // TestActorNonDNSUDPIsDropped covers the forward-chain rule behaviorally: only
-// TCP is redirected into atunnel, so UDP on any port but 53 must not reach the
-// masquerade, and DNS must still get through or the sandbox cannot resolve
-// anything.
+// TCP not destined for port 53 is redirected into atunnel, so UDP on any port
+// but 53 must not reach the masquerade, and DNS must still get through or the
+// sandbox cannot resolve anything.
 func TestActorNonDNSUDPIsDropped(t *testing.T) {
 	roottest.Require(t, "creating network namespaces, veth pairs, and nftables rules")
 	ctx := context.Background()

@@ -42,14 +42,9 @@ import (
 // a few seconds to bind; HTTPClient below is a var so tests can substitute
 // a transport that targets a test server's loopback address.
 const (
-	// DefaultOverallTimeout applies to probes that do not set
-	// timeout_seconds. A workload that needs longer says so on its
-	// ActorTemplate rather than having every actor wait as long.
-	DefaultOverallTimeout = 30 * time.Second
-	RequestTimeout        = 250 * time.Millisecond
-	PollInterval          = 1 * time.Millisecond
-	DefaultPath           = "/readyz"
-	maxIdleConnsHost      = 1
+	RequestTimeout   = 250 * time.Millisecond
+	PollInterval     = 1 * time.Millisecond
+	maxIdleConnsHost = 1
 )
 
 // HTTPClient builds a keep-alive HTTP client tuned for fast, repeated
@@ -98,11 +93,14 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 	if err != nil {
 		return fmt.Errorf("invalid readyz config for %q: %w", containerName, err)
 	}
+	timeout, err := pollTimeout(probe)
+	if err != nil {
+		return fmt.Errorf("invalid readyz config for %q: %w", containerName, err)
+	}
 
 	client := HTTPClient()
 	defer client.CloseIdleConnections()
 
-	timeout := overallTimeout(probe)
 	start := time.Now()
 	deadline := start.Add(timeout)
 	attempts := 0
@@ -143,15 +141,12 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 	}
 }
 
-// overallTimeout resolves how long Wait polls before giving up. A
-// non-positive timeout_seconds falls back to the default: unlike a warmup
-// delay, a zero deadline is never a meaningful request, so it means "unset"
-// rather than "fail immediately".
-func overallTimeout(probe *ateompb.Readyz) time.Duration {
-	if s := probe.GetTimeoutSeconds(); s > 0 {
-		return time.Duration(s) * time.Second
+func pollTimeout(probe *ateompb.Readyz) (time.Duration, error) {
+	s := probe.GetTimeoutSeconds()
+	if s <= 0 {
+		return 0, fmt.Errorf("timeout_seconds must be positive, got %d", s)
 	}
-	return DefaultOverallTimeout
+	return time.Duration(s) * time.Second, nil
 }
 
 func tryOnce(ctx context.Context, client *http.Client, url string) (bool, error) {
@@ -185,8 +180,9 @@ func URL(probe *ateompb.Readyz, actorIP string) (string, error) {
 	}
 	path := hg.GetPath()
 	if path == "" {
-		path = DefaultPath
-	} else if !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("path is required")
+	}
+	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
 	return fmt.Sprintf("http://%s:%d%s", actorIP, port, path), nil

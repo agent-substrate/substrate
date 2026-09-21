@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -363,6 +364,12 @@ func (p *Persistence) Close() {
 	}
 }
 
+// NewPool opens a dedicated PostgreSQL connection pool configured identically
+// to this persistence instance (including TLS rotation and search_path).
+func (p *Persistence) NewPool(ctx context.Context) (*pgxpool.Pool, error) {
+	return pgxpool.NewWithConfig(ctx, p.pool.Config())
+}
+
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
 // run either directly against the pool or inside an in-flight transaction.
 type querier interface {
@@ -373,8 +380,14 @@ type querier interface {
 
 // unmarshalStored decodes a stored proto, dropping fields this binary has no
 // descriptor for. This means a newer replica can have written such a field.
+// It also backfills defaults to make all resources are properly defaulted, even
+// the ones stored before a field with defaults was introduced.
 func unmarshalStored(b []byte, m proto.Message) error {
-	return proto.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(b, m)
+	if err := (proto.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, m); err != nil {
+		return err
+	}
+	defaults.Apply(m)
+	return nil
 }
 
 // TODO: EOL this in favor of setCreateMetadata

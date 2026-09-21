@@ -15,7 +15,7 @@
 model
   schema 1.1
 # Naming Conventions:
-# - Roles and graph edges are nouns (e.g. owner, editor, viewer, parent_cluster, host_node).
+# - Roles and graph edges are nouns (e.g. owner, editor, viewer, parent_global, host_node).
 # - Permission checks evaluated at runtime must start with the 'can_' prefix
 #   (e.g. can_get, can_set_policy, can_create_actor).
 
@@ -30,8 +30,8 @@ type worker
   relations
     define host_node: [node]
 
-# Global Cluster Scope (singleton: there will only ever be one instance, e.g. 'cluster:root')
-type cluster
+# Global Scope (singleton: there will only ever be one instance, e.g. 'global:root')
+type global
   relations
     define owner: [user]
     define viewer: [user] or owner
@@ -39,15 +39,19 @@ type cluster
     define can_create_atespace: owner
     define can_get: viewer
 
+    # --- Policy Governance (SetPolicy / GetPolicy) ---
+    define can_set_policy: owner
+    define can_get_policy: viewer
+
 type atespace
   relations
-    define parent_cluster: [cluster]
+    define parent_global: [global]
 
     # --- 1. Aligned 3-Tier Roles ---
-    # Cluster owner automatically inherits owner without explicit per-atespace tuples
-    define owner: [user] or owner from parent_cluster
+    # Global owner automatically inherits owner without explicit per-atespace tuples
+    define owner: [user] or owner from parent_global
     define editor: [user] or owner
-    define viewer: [user] or editor or viewer from parent_cluster
+    define viewer: [user] or editor or viewer from parent_global
 
     # --- 2. Policy Governance (SetPolicy / GetPolicy) ---
     define can_set_policy: owner

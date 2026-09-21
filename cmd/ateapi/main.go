@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -48,6 +49,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -160,6 +162,20 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown.
 	if closer, ok := persistence.(interface{ Close() }); ok {
 		defer closer.Close()
+	}
+
+	if poolProvider, ok := persistence.(interface {
+		NewPool(context.Context) (*pgxpool.Pool, error)
+	}); ok {
+		authzPool, err := poolProvider.NewPool(shutdownCtx)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)
+		}
+		authzSrv, err := authz.NewServer(shutdownCtx, authzPool)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
+		}
+		defer authzSrv.Close()
 	}
 
 	clientset, ateClient, err := newKubeClients()

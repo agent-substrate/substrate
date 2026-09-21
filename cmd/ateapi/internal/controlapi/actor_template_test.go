@@ -1297,7 +1297,7 @@ func TestValidateActorTemplate(t *testing.T) {
 // seedSubstrateTemplate stores a minimal substrate ActorTemplate in team-a.
 func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.Interface, name string) *ateapipb.ActorTemplate {
 	t.Helper()
-	stored, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+	created, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
 		SnapshotsConfig: &ateapipb.SnapshotsConfig{
 			StorageLocation: "gs://ate-snapshots/team-a/",
@@ -1309,6 +1309,10 @@ func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate: %v", err)
+	}
+	stored, err := persistence.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(created))
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
 	}
 	return stored
 }

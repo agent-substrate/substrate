@@ -2956,7 +2956,8 @@ type ContainerReadyz struct {
 	// +k8s:required
 	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// timeout_seconds bounds how long to poll http_get before failing the
-	// actor start. Defaults to 30 when unset.
+	// actor start.
+	// Defaults to 30 when unset.
 	//
 	// +k8s:required
 	// +k8s:minimum=1
@@ -3015,7 +3016,7 @@ type HTTPGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// path must be a URL path starting with "/", using only RFC 3986
 	// path-segment characters, without query or fragment.
-	// Defaults to "/readyz" when unset.
+	// Defaults to "/" when unset.
 	//
 	// +k8s:required
 	// +k8s:maxLength=1024
