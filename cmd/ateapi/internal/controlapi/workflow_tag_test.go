@@ -94,9 +94,6 @@ func TestTagActorSnapshot(t *testing.T) {
 	if want := mustReservedTagSnapshotURI(t, tag).String(); tagSnapshot != want {
 		t.Errorf("tag snapshot uri = %q, want UID-based URI %q", tagSnapshot, want)
 	}
-	if got, want := tag.GetStatus().GetSourceActorUid(), actor.GetMetadata().GetUid(); got != want {
-		t.Errorf("source actor uid = %q, want %q", got, want)
-	}
 	if got, want := tag.GetStatus().GetActorTemplateUid(), template.GetMetadata().GetUid(); got != want {
 		t.Errorf("actor template uid = %q, want %q", got, want)
 	}
@@ -404,8 +401,8 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTag after the rejected create: %v", err)
 	}
-	if got, want := stored.GetStatus().GetSourceActorUid(), first.GetMetadata().GetUid(); got != want {
-		t.Errorf("source actor uid = %q, want the first actor's %q", got, want)
+	if got, want := stored.GetSourceActor().GetName(), first.GetMetadata().GetName(); got != want {
+		t.Errorf("source actor = %q, want the first actor's %q", got, want)
 	}
 	// The second actor kept its own snapshot; the failed tag collected nothing.
 	if diff := cmp.Diff([]string{"other.json"}, objects.Snapshot(t, secondSnapshot)); diff != "" {

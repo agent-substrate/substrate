@@ -801,7 +801,6 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 				SnapshotUri:  uri.String(),
 				ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope(),
 			},
-			SourceActorUid: actor.GetMetadata().GetUid(),
 		},
 	}
 }

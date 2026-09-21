@@ -2230,7 +2230,6 @@ func TestSuspendActor(t *testing.T) {
 		Status: &ateapipb.TagStatus{
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			SourceActorUid:   sourceActor.GetMetadata().GetUid(),
 			StorageLocation:  tmpl.GetSnapshotsConfig().GetStorageLocation(),
 		},
 	}

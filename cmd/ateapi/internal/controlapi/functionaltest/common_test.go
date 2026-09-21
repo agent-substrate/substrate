@@ -459,7 +459,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		Status: &ateapipb.TagStatus{
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			ActorTemplateUid: created.GetMetadata().GetUid(),
-			SourceActorUid:   "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94",
 		},
 	})
 	if err != nil {

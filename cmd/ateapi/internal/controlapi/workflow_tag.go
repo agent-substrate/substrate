@@ -238,7 +238,6 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			// the actor itself would take.
 			ActorTemplateUid: actor.GetStatus().GetCurrentActorTemplateUid(),
 			StorageLocation:  location,
-			SourceActorUid:   actor.GetMetadata().GetUid(),
 		},
 	}
 

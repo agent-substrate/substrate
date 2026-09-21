@@ -27,36 +27,15 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-// createTestSuspendedActor seeds an actor holding an external snapshot, which
-// is what CreateTag tags.
-func createTestSuspendedActor(t *testing.T, s *Persistence, atespace, name string) *ateapipb.Actor {
-	t.Helper()
-
-	const testSnapshotOwnerUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
-	created, err := s.CreateActor(context.Background(), &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
-		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + atespace + "/actors/" + testSnapshotOwnerUID + "/snapshots/" + name, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateActor(%s/%s) failed: %v", atespace, name, err)
-	}
-	return created
-}
-
-// createTestTag creates tagName over its own copy of actor's
+// createTestTag creates tagName over its own copy of an actor's
 // external snapshot, already finalized.
-func createTestTag(t *testing.T, s *Persistence, actor *ateapipb.Actor, tagAtespace, tagName string) *ateapipb.Tag {
+func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *ateapipb.Tag {
 	t.Helper()
 	tag, err := s.CreateTag(context.Background(), &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagAtespace, Name: tagName},
 		Scope:    ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.TagStatus{
-			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
-			SourceActorUid: actor.GetMetadata().GetUid(),
+			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
 		},
 	})
 	if err != nil {
@@ -69,9 +48,7 @@ func TestUpdateTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
-	actorA := createTestSuspendedActor(t, s, "team-a", "actor-a")
-	actorB := createTestSuspendedActor(t, s, "team-a", "actor-b")
-	original := createTestTag(t, s, actorA, "team-a", "tag-a")
+	original := createTestTag(t, s, "team-a", "tag-a")
 
 	mutations := 0
 	var recreated *ateapipb.Tag
@@ -80,7 +57,7 @@ func TestUpdateTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}); err != nil {
 			return fmt.Errorf("deleting original tag: %w", err)
 		}
-		recreated = createTestTag(t, s, actorB, "team-a", "tag-a")
+		recreated = createTestTag(t, s, "team-a", "tag-a")
 		toUpdate.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
 		return nil
 	})
@@ -103,14 +80,12 @@ func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
-	actor := createTestSuspendedActor(t, s, "team-a", "actor-a")
 
 	// A tag in an atespace that does not exist trips the tag's atespace FK.
 	_, err := s.CreateTag(ctx, &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "latest"},
 		Status: &ateapipb.TagStatus{
 			StorageLocation: "gs://bucket",
-			SourceActorUid:  actor.GetMetadata().GetUid(),
 		},
 	})
 	if !errors.Is(err, store.ErrFailedPrecondition) {

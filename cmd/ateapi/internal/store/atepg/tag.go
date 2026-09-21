@@ -201,9 +201,6 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
 		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
-	if stored, mutated := storedTag.GetStatus().GetSourceActorUid(), mutatedTag.GetStatus().GetSourceActorUid(); stored != mutated {
-		return fmt.Errorf("status.source_actor_uid is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
 	return nil
 }
 

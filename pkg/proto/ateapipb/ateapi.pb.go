@@ -1777,11 +1777,8 @@ type TagStatus struct {
 	// and immutable thereafter. The full snapshot URI is available in
 	// snapshot.snapshot_uri once tag creation completes.
 	StorageLocation string `protobuf:"bytes,3,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
-	// source_actor_uid is the UID of the Actor this tag's snapshot was copied
-	// from.
-	SourceActorUid string `protobuf:"bytes,4,opt,name=source_actor_uid,json=sourceActorUid,proto3" json:"source_actor_uid,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *TagStatus) Reset() {
@@ -1831,13 +1828,6 @@ func (x *TagStatus) GetActorTemplateUid() string {
 func (x *TagStatus) GetStorageLocation() string {
 	if x != nil {
 		return x.StorageLocation
-	}
-	return ""
-}
-
-func (x *TagStatus) GetSourceActorUid() string {
-	if x != nil {
-		return x.SourceActorUid
 	}
 	return ""
 }
@@ -6956,12 +6946,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
 	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\x12\x1b\n" +
-	"\tnode_name\x18\a \x01(\tR\bnodeName\"\xc4\x01\n" +
+	"\tnode_name\x18\a \x01(\tR\bnodeName\"\x9a\x01\n" +
 	"\tTagStatus\x124\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x18.ateapi.ExternalSnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\x12)\n" +
-	"\x10storage_location\x18\x03 \x01(\tR\x0fstorageLocation\x12(\n" +
-	"\x10source_actor_uid\x18\x04 \x01(\tR\x0esourceActorUid\"\xc4\x01\n" +
+	"\x10storage_location\x18\x03 \x01(\tR\x0fstorageLocation\"\xc4\x01\n" +
 	"\x03Tag\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12)\n" +
 	"\x06status\x18\x02 \x01(\v2\x11.ateapi.TagStatusR\x06status\x12&\n" +

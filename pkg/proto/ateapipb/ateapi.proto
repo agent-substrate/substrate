@@ -672,10 +672,6 @@ message TagStatus {
   // and immutable thereafter. The full snapshot URI is available in
   // snapshot.snapshot_uri once tag creation completes.
   string storage_location = 3;
-
-  // source_actor_uid is the UID of the Actor this tag's snapshot was copied
-  // from.
-  string source_actor_uid = 4;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
