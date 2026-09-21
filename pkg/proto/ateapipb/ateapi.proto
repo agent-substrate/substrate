@@ -550,7 +550,6 @@ message ActorStatus {
   // snapshot the Actor is currently taking.
   //
   // +k8s:optional
-  // +k8s:maxLength=2048
   string in_progress_snapshot_uri = 3;
 
   // external_snapshot is the Actor's current external snapshot.
@@ -665,12 +664,18 @@ message TagStatus {
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be
   // seeded from a tag under the same template.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_template_uid = 2;
 
   // storage_location is the base object-storage URI for this tag's snapshot.
   // Set by the server from the source actor's template when the tag is created
   // and immutable thereafter. The full snapshot URI is available in
   // snapshot.snapshot_uri once tag creation completes.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024
   string storage_location = 3;
 }
 

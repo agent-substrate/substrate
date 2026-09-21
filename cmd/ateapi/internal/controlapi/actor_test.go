@@ -410,13 +410,6 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		nil,
 	}, {
-		"invalid actor.status.in_progress_snapshot_uri: too long",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.InProgressSnapshotUri = "gs://" + strings.Repeat("x", 2044)
-		})),
-		field.ErrorList{field.TooLong(field.NewPath("status", "in_progress_snapshot_uri"), nil, 2048).WithOrigin("maxLength")},
-	}, {
 		"valid actor.status.external_snapshot",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
