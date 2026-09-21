@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,17 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
+)
+
+// One Postgres container serves every test in this package; each test gets
+// isolation via clearAll rather than a fresh container, which would be
+// far slower. Tests in this package are not safe to run with -parallel.
+var (
+	containerOnce sync.Once
+	containerPool *pgxpool.Pool
+	containerDSN  string
+	containerPG   *postgres.PostgresContainer
+	containerErr  error
 )
 
 func TestMain(m *testing.M) {
