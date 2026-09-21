@@ -15,8 +15,9 @@
 package main
 
 // The ateom directory janitor removes ateoms/<pod-UID>/ directories left
-// behind by worker pods that no longer exist. Nothing else removes them, and
-// the stats sweep pays a dial and a probe for each one, every sweep.
+// behind by worker pods that no longer exist. A gracefully terminated ateom
+// removes its own; one killed outright leaves it, and the stats sweep pays a
+// dial and a probe for each leftover, every sweep.
 //
 // A wrong removal is severe and self-hiding: the live ateom keeps serving on
 // the unlinked socket inode, but every new connect fails ENOENT forever while

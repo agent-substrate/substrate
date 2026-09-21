@@ -246,7 +246,15 @@ func TestAteomGCStrikesPrunedWithDirectory(t *testing.T) {
 func TestAteomGCMissingAteomsDirIsQuiet(t *testing.T) {
 	f := newGCFixture(t)
 	f.g.ateomsDir = filepath.Join(f.dir, "absent")
-	f.passes(1) // must not panic or strike
+	f.g.listNodePodUIDs = func(context.Context) (map[string]struct{}, error) {
+		t.Fatal("pod list taken with no ateoms directory to reconcile against")
+		return nil, nil
+	}
+
+	f.passes(1)
+	if f.probes != 0 || len(f.g.strikes) != 0 {
+		t.Errorf("probes = %d, strikes = %v; want none", f.probes, f.g.strikes)
+	}
 }
 
 func TestAteomGCRunPassRecoversPanic(t *testing.T) {
