@@ -248,7 +248,7 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	return nil
 }
 
-// poolConfig parses a connection source into a pool configuration whose
+// poolConfig parses a connection source into a pool configuration whose user,
 // password and TLS material are refreshed for every new connection.
 //
 // pgx resolves sslcert, sslkey and sslrootcert once, when the connection
@@ -282,6 +282,7 @@ func poolConfig(source connectionStringSource, maxConnLifetime time.Duration) (*
 		if !sameConnectionIdentity(cc, fresh) {
 			return fmt.Errorf("PostgreSQL connection identity changed; restart is required")
 		}
+		cc.User = fresh.User
 		cc.Password = fresh.Password
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
@@ -290,8 +291,14 @@ func poolConfig(source connectionStringSource, maxConnLifetime time.Duration) (*
 	return cfg, nil
 }
 
+// sameConnectionIdentity reports whether fresh still points at the endpoint the
+// pool was built for. Only the endpoint is fenced: host, port, database and the
+// fallback hosts and ports. The user is not part of it. A rotation that issues
+// a new user each cycle, and keeps the previous one able to log in until the
+// cycle after, needs new connections to dial as the incoming user while older
+// connections finish on the outgoing one.
 func sameConnectionIdentity(current, fresh *pgx.ConnConfig) bool {
-	if current.Host != fresh.Host || current.Port != fresh.Port || current.Database != fresh.Database || current.User != fresh.User {
+	if current.Host != fresh.Host || current.Port != fresh.Port || current.Database != fresh.Database {
 		return false
 	}
 	if len(current.Fallbacks) != len(fresh.Fallbacks) {

@@ -94,7 +94,7 @@ func TestPoolConfigRefreshesFileSource(t *testing.T) {
 	cfg.ConnConfig.RuntimeParams["search_path"] = `"substrate"`
 	watchCfg := cfg.Copy()
 
-	writeConnectionString(t, path, "postgres://runtime:new-password@postgres:5432/atepg?sslmode=disable&search_path=wrong\n")
+	writeConnectionString(t, path, "postgres://runtime_v2:new-password@postgres:5432/atepg?sslmode=disable&search_path=wrong\n")
 	conn := cfg.ConnConfig.Copy()
 	if err := cfg.BeforeConnect(context.Background(), conn); err != nil {
 		t.Fatalf("BeforeConnect: %v", err)
@@ -102,10 +102,16 @@ func TestPoolConfigRefreshesFileSource(t *testing.T) {
 	if conn.Password != "new-password" {
 		t.Errorf("password = %q, want refreshed password", conn.Password)
 	}
+	// A rotation that issues a new user each cycle must be adopted, not refused:
+	// new connections dial as the incoming user while older ones finish on the
+	// outgoing one.
+	if conn.User != "runtime_v2" {
+		t.Errorf("user = %q, want the rotated user", conn.User)
+	}
 	if got := conn.RuntimeParams["search_path"]; got != `"substrate"` {
 		t.Errorf("search_path = %q, want explicit schema", got)
 	}
-	if cfg.ConnConfig.Password != "old-password" {
+	if cfg.ConnConfig.Password != "old-password" || cfg.ConnConfig.User != "runtime" {
 		t.Error("refresh modified the pool's pinned connection config")
 	}
 	if cfg.MaxConnLifetime != 5*time.Minute || watchCfg.MaxConnLifetime != 5*time.Minute {
@@ -115,8 +121,8 @@ func TestPoolConfigRefreshesFileSource(t *testing.T) {
 	if err := watchCfg.BeforeConnect(context.Background(), watchConn); err != nil {
 		t.Fatalf("watch BeforeConnect: %v", err)
 	}
-	if watchConn.Password != "new-password" {
-		t.Errorf("watch password = %q, want refreshed password", watchConn.Password)
+	if watchConn.Password != "new-password" || watchConn.User != "runtime_v2" {
+		t.Errorf("watch credentials = %q/%q, want the rotated user and password", watchConn.User, watchConn.Password)
 	}
 }
 
@@ -200,7 +206,6 @@ func TestPoolConfigRejectsIdentityChanges(t *testing.T) {
 		{"host", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://runtime:new-secret@two:5432/db?sslmode=disable"},
 		{"port", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://runtime:new-secret@one:5433/db?sslmode=disable"},
 		{"database", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://runtime:new-secret@one:5432/other?sslmode=disable"},
-		{"user", "postgres://runtime:old-secret@one:5432/db?sslmode=disable", "postgres://other:new-secret@one:5432/db?sslmode=disable"},
 		{"fallback host", "postgres://runtime:old-secret@one:5432,two:5433/db?sslmode=disable", "postgres://runtime:new-secret@one:5432,three:5433/db?sslmode=disable"},
 		{"fallback port", "postgres://runtime:old-secret@one:5432,two:5433/db?sslmode=disable", "postgres://runtime:new-secret@one:5432,two:5434/db?sslmode=disable"},
 		{"fallback order", "postgres://runtime:old-secret@one:5432,two:5433,three:5434/db?sslmode=disable", "postgres://runtime:new-secret@one:5432,three:5434,two:5433/db?sslmode=disable"},
