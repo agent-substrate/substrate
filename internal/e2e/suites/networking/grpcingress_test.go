@@ -101,7 +101,7 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 			t.Fatalf("h2c GET = %d (body %q), want 200: non-gRPC HTTP/2 must be downgraded for HTTP/1.1-only actors", resp.StatusCode, body)
 		}
 		if !strings.Contains(string(body), "ok") {
-			t.Errorf("h2c GET body = %q, want the actor's readyz payload", body)
+			t.Errorf("h2c GET body = %q, want the actor's health payload", body)
 		}
 	})
 

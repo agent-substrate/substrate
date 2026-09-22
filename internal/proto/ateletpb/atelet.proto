@@ -263,7 +263,7 @@ message Container {
   repeated string command = 3;
   repeated string args = 7;
   repeated EnvEntry env = 4;
-  Readyz readyz = 5;
+  WakeupProbe wakeup_probe = 5;
   repeated VolumeMount volume_mounts = 6;
   SecurityContext security_context = 8;
 
@@ -298,9 +298,9 @@ message EnvEntry {
   string value = 2 [ debug_redact = true ];
 }
 
-// Readyz describes how to check that a container is ready to serve.
+// WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
-message Readyz {
+message WakeupProbe {
   HTTPGetAction http_get = 1;
   // How long to keep polling before giving up and failing the actor start.
   int32 timeout_seconds = 2;

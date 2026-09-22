@@ -30,7 +30,7 @@ containers:
   volumeMounts:
   - name: system-info
     mountPath: /run/ate
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80

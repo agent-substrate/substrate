@@ -1543,7 +1543,7 @@ type Container struct {
 	Command         []string               `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	Args            []string               `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
 	Env             []*EnvEntry            `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
-	Readyz          *Readyz                `protobuf:"bytes,5,opt,name=readyz,proto3" json:"readyz,omitempty"`
+	WakeupProbe     *WakeupProbe           `protobuf:"bytes,5,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
 	VolumeMounts    []*VolumeMount         `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	SecurityContext *SecurityContext       `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources are the cgroup limits for this container, resolved by
@@ -1618,9 +1618,9 @@ func (x *Container) GetEnv() []*EnvEntry {
 	return nil
 }
 
-func (x *Container) GetReadyz() *Readyz {
+func (x *Container) GetWakeupProbe() *WakeupProbe {
 	if x != nil {
-		return x.Readyz
+		return x.WakeupProbe
 	}
 	return nil
 }
@@ -1853,9 +1853,9 @@ func (x *EnvEntry) GetValue() string {
 	return ""
 }
 
-// Readyz describes how to check that a container is ready to serve.
+// WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
-type Readyz struct {
+type WakeupProbe struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// How long to keep polling before giving up and failing the actor start.
@@ -1864,20 +1864,20 @@ type Readyz struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *Readyz) Reset() {
-	*x = Readyz{}
+func (x *WakeupProbe) Reset() {
+	*x = WakeupProbe{}
 	mi := &file_atelet_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Readyz) String() string {
+func (x *WakeupProbe) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Readyz) ProtoMessage() {}
+func (*WakeupProbe) ProtoMessage() {}
 
-func (x *Readyz) ProtoReflect() protoreflect.Message {
+func (x *WakeupProbe) ProtoReflect() protoreflect.Message {
 	mi := &file_atelet_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1889,19 +1889,19 @@ func (x *Readyz) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Readyz.ProtoReflect.Descriptor instead.
-func (*Readyz) Descriptor() ([]byte, []int) {
+// Deprecated: Use WakeupProbe.ProtoReflect.Descriptor instead.
+func (*WakeupProbe) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *Readyz) GetHttpGet() *HTTPGetAction {
+func (x *WakeupProbe) GetHttpGet() *HTTPGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
 	return nil
 }
 
-func (x *Readyz) GetTimeoutSeconds() int32 {
+func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 	if x != nil {
 		return x.TimeoutSeconds
 	}
@@ -2777,14 +2777,14 @@ const file_atelet_proto_rawDesc = "" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xe3\x02\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xf3\x02\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x03 \x03(\tR\acommand\x12\x12\n" +
 	"\x04args\x18\a \x03(\tR\x04args\x12\"\n" +
-	"\x03env\x18\x04 \x03(\v2\x10.atelet.EnvEntryR\x03env\x12&\n" +
-	"\x06readyz\x18\x05 \x01(\v2\x0e.atelet.ReadyzR\x06readyz\x128\n" +
+	"\x03env\x18\x04 \x03(\v2\x10.atelet.EnvEntryR\x03env\x126\n" +
+	"\fwakeup_probe\x18\x05 \x01(\v2\x13.atelet.WakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\x06 \x03(\v2\x13.atelet.VolumeMountR\fvolumeMounts\x12B\n" +
 	"\x10security_context\x18\b \x01(\v2\x17.atelet.SecurityContextR\x0fsecurityContext\x124\n" +
 	"\tresources\x18\t \x01(\v2\x16.atelet.ResourceLimitsR\tresources\"K\n" +
@@ -2799,8 +2799,8 @@ const file_atelet_proto_rawDesc = "" +
 	"cpu_millis\x18\x02 \x01(\x03R\tcpuMillis\"9\n" +
 	"\bEnvEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
-	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"c\n" +
-	"\x06Readyz\x120\n" +
+	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"h\n" +
+	"\vWakeupProbe\x120\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x15.atelet.HTTPGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
@@ -2929,7 +2929,7 @@ var file_atelet_proto_goTypes = []any{
 	(*Capabilities)(nil),                    // 27: atelet.Capabilities
 	(*ResourceLimits)(nil),                  // 28: atelet.ResourceLimits
 	(*EnvEntry)(nil),                        // 29: atelet.EnvEntry
-	(*Readyz)(nil),                          // 30: atelet.Readyz
+	(*WakeupProbe)(nil),                     // 30: atelet.WakeupProbe
 	(*HTTPGetAction)(nil),                   // 31: atelet.HTTPGetAction
 	(*RunResponse)(nil),                     // 32: atelet.RunResponse
 	(*LocalCheckpointConfiguration)(nil),    // 33: atelet.LocalCheckpointConfiguration
@@ -2966,12 +2966,12 @@ var file_atelet_proto_depIdxs = []int32{
 	22, // 17: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolume
 	17, // 18: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
 	29, // 19: atelet.Container.env:type_name -> atelet.EnvEntry
-	30, // 20: atelet.Container.readyz:type_name -> atelet.Readyz
+	30, // 20: atelet.Container.wakeup_probe:type_name -> atelet.WakeupProbe
 	24, // 21: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
 	26, // 22: atelet.Container.security_context:type_name -> atelet.SecurityContext
 	28, // 23: atelet.Container.resources:type_name -> atelet.ResourceLimits
 	27, // 24: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
-	31, // 25: atelet.Readyz.http_get:type_name -> atelet.HTTPGetAction
+	31, // 25: atelet.WakeupProbe.http_get:type_name -> atelet.HTTPGetAction
 	14, // 26: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
 	1,  // 27: atelet.CheckpointRequest.type:type_name -> atelet.CheckpointType
 	33, // 28: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration

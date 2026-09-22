@@ -36,7 +36,7 @@ containers:
   - --extra-port=9090
   - --tcp-port=9091
 ${VALIDATE_EXISTING_FILE_PATH_ARG}
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

@@ -394,7 +394,7 @@ groups:
               stability: development
               value: WORKLOAD_NOT_READY
               brief: >
-                A container started but never passed its readyz probe before the
+                A container started but never passed its wakeup probe before the
                 deadline of the probe. A slow node confounds this value: a cold
                 image or a throttled CPU also runs the probe out of time. The
                 phases of ate.actor.restore.duration separate the two.

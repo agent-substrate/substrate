@@ -33,7 +33,7 @@ import (
 )
 
 // TestSplitGRPCServesReadyzAndGRPCOnOneListener starts the grpc-mode handler
-// on a real listener and exercises both protocols against it: the readyz
+// on a real listener and exercises both protocols against it: the wakeup
 // probe is a plain HTTP GET, and it must not stop gRPC from being served.
 func TestSplitGRPCServesReadyzAndGRPCOnOneListener(t *testing.T) {
 	svc, err := New(t.TempDir())

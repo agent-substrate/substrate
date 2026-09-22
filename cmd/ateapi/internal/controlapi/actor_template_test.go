@@ -978,94 +978,94 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.TooMany(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add"), 65, 64).WithOrigin("maxItems")},
 	}, {
-		name: "valid readyz",
+		name: "valid wakeup probe",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: 60,
 			}
 		},
 	}, {
-		name: "readyz missing http_get",
+		name: "wakeup probe missing http_get",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TimeoutSeconds: 60}
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{TimeoutSeconds: 60}
 		},
-		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get"), "")},
 	}, {
-		name: "missing readyz timeout_seconds",
+		name: "missing wakeup probe timeout_seconds",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080}}
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080}}
 		},
-		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "timeout_seconds"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("wakeup_probe", "timeout_seconds"), "")},
 	}, {
-		name: "missing readyz http_get.path",
+		name: "missing wakeup probe http_get.path",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 8080}, TimeoutSeconds: 60}
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 8080}, TimeoutSeconds: 60}
 		},
-		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), "")},
 	}, {
-		name: "readyz timeout_seconds out of range",
+		name: "wakeup probe timeout_seconds out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: 3601,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "timeout_seconds"), nil, "").WithOrigin("maximum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "timeout_seconds"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "negative readyz timeout_seconds",
+		name: "negative wakeup probe timeout_seconds",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: -1,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "timeout_seconds"), nil, "").WithOrigin("minimum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "timeout_seconds"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "readyz missing port",
+		name: "wakeup probe missing port",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz"},
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "port"), "")},
 	}, {
-		name: "negative readyz port",
+		name: "negative wakeup probe port",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: -1},
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), nil, "").WithOrigin("minimum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "port"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "readyz port out of range",
+		name: "wakeup probe port out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 65536},
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), nil, "").WithOrigin("maximum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "port"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "readyz path with query string",
+		name: "wakeup probe path with query string",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/readyz?verbose=1", Port: 8080},
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "")},
 	}, {
-		name: "readyz path not starting with slash",
+		name: "wakeup probe path not starting with slash",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "readyz", Port: 8080},
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "")},
 	}, {
 		name: "valid volume_mount",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

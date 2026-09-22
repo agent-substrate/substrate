@@ -45,7 +45,7 @@ var prefaultingUntil = [3]int{0, 0, 0}
 //
 // It reports true when the version cannot be read or parsed. The two ways to be
 // wrong are not equal: choosing OnDemand on an affected version leaves the guest
-// unable to pass its readiness probe, because the prefault storm starves it, while
+// unable to pass its wakeup probe, because the prefault storm starves it, while
 // choosing eager on an unaffected one merely costs memory. Callers should log when
 // they fall back on an unknown version, since that cost is otherwise invisible.
 func (i VMMInfo) PrefaultsUnconditionally() bool {

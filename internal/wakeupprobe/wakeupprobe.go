@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package readyz polls a container's HTTP readiness endpoint from inside an
+// Package wakeupprobe polls a container's HTTP wakeup endpoint from inside an
 // ateom. The intent is to detect the moment a container's HTTP server
 // starts accepting connections with single-millisecond latency: while the
 // server is still booting the kernel returns RST in microseconds, so a
 // sub-millisecond poll loop spends almost no time blocked, and once the
 // listen socket is up the next iteration completes the GET on veth-local
 // latency.
-package readyz
+package wakeupprobe
 
 import (
 	"context"
@@ -60,9 +60,9 @@ var HTTPClient = func() *http.Client {
 	return &http.Client{Transport: tr, Timeout: RequestTimeout}
 }
 
-// WaitAll blocks until every container with a readyz probe set reports 200,
+// WaitAll blocks until every container with a wakeup probe set reports 200,
 // or returns the first error. Containers without a probe are skipped (their
-// absence means "no readiness gate").
+// absence means "no wakeup gate").
 //
 // Every caller is an ateom RPC handler, so a %w-wrapped Reason dies here:
 // errors.As cannot cross a process, and the interceptor would flatten it to a
@@ -71,12 +71,12 @@ var HTTPClient = func() *http.Client {
 func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP string) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ac := range containers {
-		if ac.GetReadyz() == nil {
+		if ac.GetWakeupProbe() == nil {
 			continue
 		}
 		ac := ac
 		g.Go(func() error {
-			return Wait(gctx, ac.GetName(), ac.GetReadyz(), actorIP)
+			return Wait(gctx, ac.GetName(), ac.GetWakeupProbe(), actorIP)
 		})
 	}
 	err := g.Wait()
@@ -88,14 +88,14 @@ func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP strin
 
 // Wait polls the configured HTTP endpoint until it returns 200, the context
 // is cancelled, or the overall deadline is exceeded.
-func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, actorIP string) error {
+func Wait(ctx context.Context, containerName string, probe *ateompb.WakeupProbe, actorIP string) error {
 	url, err := URL(probe, actorIP)
 	if err != nil {
-		return fmt.Errorf("invalid readyz config for %q: %w", containerName, err)
+		return fmt.Errorf("invalid wakeup probe config for %q: %w", containerName, err)
 	}
 	timeout, err := pollTimeout(probe)
 	if err != nil {
-		return fmt.Errorf("invalid readyz config for %q: %w", containerName, err)
+		return fmt.Errorf("invalid wakeup probe config for %q: %w", containerName, err)
 	}
 
 	client := HTTPClient()
@@ -107,12 +107,12 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("readyz cancelled for %q after %s (%d attempts, last error: %v): %w",
+			return fmt.Errorf("wakeup probe cancelled for %q after %s (%d attempts, last error: %v): %w",
 				containerName, time.Since(start), attempts, lastErr, err)
 		}
 		if time.Now().After(deadline) {
 			// Tagged only here: the cancellation above is ateom draining, not the actor failing.
-			return fmt.Errorf("%w: readyz for %q never returned 200 within %s (%d attempts, last error: %v)",
+			return fmt.Errorf("%w: wakeup probe for %q never returned 200 within %s (%d attempts, last error: %v)",
 				ateerrors.ReasonWorkloadNotReady, containerName, timeout, attempts, lastErr)
 		}
 
@@ -122,7 +122,7 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 			lastErr = err
 		}
 		if ok {
-			slog.InfoContext(ctx, "Readyz reached 200",
+			slog.InfoContext(ctx, "Wakeup probe reached 200",
 				slog.String("container", containerName),
 				slog.String("url", url),
 				slog.Duration("elapsed", time.Since(start)),
@@ -141,7 +141,7 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 	}
 }
 
-func pollTimeout(probe *ateompb.Readyz) (time.Duration, error) {
+func pollTimeout(probe *ateompb.WakeupProbe) (time.Duration, error) {
 	s := probe.GetTimeoutSeconds()
 	if s <= 0 {
 		return 0, fmt.Errorf("timeout_seconds must be positive, got %d", s)
@@ -169,7 +169,7 @@ func tryOnce(ctx context.Context, client *http.Client, url string) (bool, error)
 
 // URL builds the probe endpoint URL. Exported so callers and tests can
 // validate a probe spec before kicking off a Wait.
-func URL(probe *ateompb.Readyz, actorIP string) (string, error) {
+func URL(probe *ateompb.WakeupProbe, actorIP string) (string, error) {
 	hg := probe.GetHttpGet()
 	if hg == nil {
 		return "", fmt.Errorf("httpGet is required")

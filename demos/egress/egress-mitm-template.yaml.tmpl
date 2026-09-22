@@ -51,7 +51,7 @@ containers:
   # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info
     mountPath: /run/ate
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

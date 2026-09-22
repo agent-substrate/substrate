@@ -30,7 +30,7 @@ containers:
   - "--metrics-listen-addr=:9090"
   - "--data-dir=/var/lib/glutton"
   - "--mode=http"
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

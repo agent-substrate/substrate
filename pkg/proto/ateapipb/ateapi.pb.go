@@ -2645,11 +2645,12 @@ type Container struct {
 	// +k8s:listType=map # each variable is set at most once
 	// +k8s:listMapKey=name
 	Env []*EnvVar `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
-	// readyz is an optional HTTP readiness probe; when set the actor is not
-	// ready until the endpoint returns 200.
+	// wakeup_probe gates each wakeup on this container: ResumeActor returns
+	// only after the probe answers HTTP 200. Without it, ResumeActor returns
+	// as soon as the container has started, which may be before it listens.
 	//
 	// +k8s:optional
-	Readyz *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
+	WakeupProbe *ContainerWakeupProbe `protobuf:"bytes,6,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
 	// Keyed by mount_path: each path hosts exactly one mount, while a volume
 	// may be mounted at multiple paths.
 	//
@@ -2738,9 +2739,9 @@ func (x *Container) GetEnv() []*EnvVar {
 	return nil
 }
 
-func (x *Container) GetReadyz() *ContainerReadyz {
+func (x *Container) GetWakeupProbe() *ContainerWakeupProbe {
 	if x != nil {
-		return x.Readyz
+		return x.WakeupProbe
 	}
 	return nil
 }
@@ -2948,15 +2949,17 @@ func (x *EnvVar) GetValue() string {
 	return ""
 }
 
-// ContainerReadyz configures the readiness signal for a container.
-type ContainerReadyz struct {
+// ContainerWakeupProbe tells the platform when a container is serving. It is
+// polled on every wakeup, whether the actor cold-boots or is restored from a
+// snapshot, and not again while the actor stays running. A probe that does
+// not answer 200 within timeout_seconds crashes the actor.
+type ContainerWakeupProbe struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// http_get specifies the HTTP request to perform. Required.
+	// http_get is the request to poll.
 	//
 	// +k8s:required
 	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
-	// timeout_seconds bounds how long to poll http_get before failing the
-	// actor start.
+	// timeout_seconds is how long to keep polling before giving up.
 	// Defaults to 30 when unset.
 	//
 	// +k8s:required
@@ -2967,20 +2970,20 @@ type ContainerReadyz struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *ContainerReadyz) Reset() {
-	*x = ContainerReadyz{}
+func (x *ContainerWakeupProbe) Reset() {
+	*x = ContainerWakeupProbe{}
 	mi := &file_ateapi_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ContainerReadyz) String() string {
+func (x *ContainerWakeupProbe) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ContainerReadyz) ProtoMessage() {}
+func (*ContainerWakeupProbe) ProtoMessage() {}
 
-func (x *ContainerReadyz) ProtoReflect() protoreflect.Message {
+func (x *ContainerWakeupProbe) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2992,26 +2995,26 @@ func (x *ContainerReadyz) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ContainerReadyz.ProtoReflect.Descriptor instead.
-func (*ContainerReadyz) Descriptor() ([]byte, []int) {
+// Deprecated: Use ContainerWakeupProbe.ProtoReflect.Descriptor instead.
+func (*ContainerWakeupProbe) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{30}
 }
 
-func (x *ContainerReadyz) GetHttpGet() *HTTPGetAction {
+func (x *ContainerWakeupProbe) GetHttpGet() *HTTPGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
 	return nil
 }
 
-func (x *ContainerReadyz) GetTimeoutSeconds() int32 {
+func (x *ContainerWakeupProbe) GetTimeoutSeconds() int32 {
 	if x != nil {
 		return x.TimeoutSeconds
 	}
 	return 0
 }
 
-// HTTPGetAction describes an HTTP GET against the container's interior IP.
+// HTTPGetAction describes the HTTP GET the probe polls.
 type HTTPGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// path must be a URL path starting with "/", using only RFC 3986
@@ -3022,6 +3025,8 @@ type HTTPGetAction struct {
 	// +k8s:maxLength=1024
 	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// port is the container port to connect to.
+	//
 	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=65535
@@ -7090,14 +7095,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\ton_resume\x18\x03 \x01(\v2\x16.ateapi.OnResumeConfigR\bonResume\x12)\n" +
 	"\x10storage_location\x18\x04 \x01(\tR\x0fstorageLocation\"C\n" +
 	"\x0eOnResumeConfig\x121\n" +
-	"\tfrom_data\x18\x01 \x01(\x0e2\x14.ateapi.ResumeSourceR\bfromData\"\xe5\x02\n" +
+	"\tfrom_data\x18\x01 \x01(\x0e2\x14.ateapi.ResumeSourceR\bfromData\"\xf5\x02\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x03 \x03(\tR\acommand\x12\x12\n" +
 	"\x04args\x18\x04 \x03(\tR\x04args\x12 \n" +
-	"\x03env\x18\x05 \x03(\v2\x0e.ateapi.EnvVarR\x03env\x12/\n" +
-	"\x06readyz\x18\x06 \x01(\v2\x17.ateapi.ContainerReadyzR\x06readyz\x128\n" +
+	"\x03env\x18\x05 \x03(\v2\x0e.ateapi.EnvVarR\x03env\x12?\n" +
+	"\fwakeup_probe\x18\x06 \x01(\v2\x1c.ateapi.ContainerWakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\a \x03(\v2\x13.ateapi.VolumeMountR\fvolumeMounts\x12B\n" +
 	"\x10security_context\x18\b \x01(\v2\x17.ateapi.SecurityContextR\x0fsecurityContext\x12/\n" +
 	"\tresources\x18\t \x01(\v2\x11.ateapi.ResourcesR\tresources\"K\n" +
@@ -7108,8 +7113,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x04drop\x18\x02 \x03(\tR\x04drop\"7\n" +
 	"\x06EnvVar\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
-	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"l\n" +
-	"\x0fContainerReadyz\x120\n" +
+	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"q\n" +
+	"\x14ContainerWakeupProbe\x120\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x15.ateapi.HTTPGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
@@ -7448,7 +7453,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*SecurityContext)(nil),                    // 36: ateapi.SecurityContext
 	(*Capabilities)(nil),                       // 37: ateapi.Capabilities
 	(*EnvVar)(nil),                             // 38: ateapi.EnvVar
-	(*ContainerReadyz)(nil),                    // 39: ateapi.ContainerReadyz
+	(*ContainerWakeupProbe)(nil),               // 39: ateapi.ContainerWakeupProbe
 	(*HTTPGetAction)(nil),                      // 40: ateapi.HTTPGetAction
 	(*Volume)(nil),                             // 41: ateapi.Volume
 	(*ImageVolumeSource)(nil),                  // 42: ateapi.ImageVolumeSource
@@ -7572,12 +7577,12 @@ var file_ateapi_proto_depIdxs = []int32{
 	34,  // 46: ateapi.SnapshotsConfig.on_resume:type_name -> ateapi.OnResumeConfig
 	4,   // 47: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
 	38,  // 48: ateapi.Container.env:type_name -> ateapi.EnvVar
-	39,  // 49: ateapi.Container.readyz:type_name -> ateapi.ContainerReadyz
+	39,  // 49: ateapi.Container.wakeup_probe:type_name -> ateapi.ContainerWakeupProbe
 	50,  // 50: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
 	36,  // 51: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
 	28,  // 52: ateapi.Container.resources:type_name -> ateapi.Resources
 	37,  // 53: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
-	40,  // 54: ateapi.ContainerReadyz.http_get:type_name -> ateapi.HTTPGetAction
+	40,  // 54: ateapi.ContainerWakeupProbe.http_get:type_name -> ateapi.HTTPGetAction
 	43,  // 55: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
 	44,  // 56: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
 	45,  // 57: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource

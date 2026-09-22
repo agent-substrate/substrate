@@ -61,7 +61,7 @@ const (
 	ReasonLocalSnapshotGone Reason = "LOCAL_SNAPSHOT_GONE"
 
 	// ReasonWorkloadNotReady marks a container that started but never passed its
-	// readyz probe before the probe's deadline. First reason in the workload
+	// wakeup probe before the probe's deadline. First reason in the workload
 	// fault domain (ateattr.FailureDomain); the operation it failed under is
 	// ate.actor.operation.name, not part of this value.
 	//

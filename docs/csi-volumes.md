@@ -173,7 +173,7 @@ containers:
   volumeMounts:
   - name: shared-storage
     mountPath: /mnt/shared
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 8080

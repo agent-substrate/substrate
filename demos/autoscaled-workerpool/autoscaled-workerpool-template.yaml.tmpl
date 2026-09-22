@@ -28,7 +28,7 @@ containers:
   image: ko://github.com/agent-substrate/substrate/demos/counter
   command:
   - /ko-app/counter
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

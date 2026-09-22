@@ -27,7 +27,7 @@ containers:
 - name: egress
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

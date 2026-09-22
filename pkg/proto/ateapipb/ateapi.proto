@@ -959,11 +959,12 @@ message Container {
   // +k8s:listMapKey=name
   repeated EnvVar env = 5;
 
-  // readyz is an optional HTTP readiness probe; when set the actor is not
-  // ready until the endpoint returns 200.
+  // wakeup_probe gates each wakeup on this container: ResumeActor returns
+  // only after the probe answers HTTP 200. Without it, ResumeActor returns
+  // as soon as the container has started, which may be before it listens.
   //
   // +k8s:optional
-  ContainerReadyz readyz = 6;
+  ContainerWakeupProbe wakeup_probe = 6;
 
   // Keyed by mount_path: each path hosts exactly one mount, while a volume
   // may be mounted at multiple paths.
@@ -1038,15 +1039,17 @@ message EnvVar {
   string value = 2 [ debug_redact = true ];
 }
 
-// ContainerReadyz configures the readiness signal for a container.
-message ContainerReadyz {
-  // http_get specifies the HTTP request to perform. Required.
+// ContainerWakeupProbe tells the platform when a container is serving. It is
+// polled on every wakeup, whether the actor cold-boots or is restored from a
+// snapshot, and not again while the actor stays running. A probe that does
+// not answer 200 within timeout_seconds crashes the actor.
+message ContainerWakeupProbe {
+  // http_get is the request to poll.
   //
   // +k8s:required
   HTTPGetAction http_get = 1;
 
-  // timeout_seconds bounds how long to poll http_get before failing the
-  // actor start.
+  // timeout_seconds is how long to keep polling before giving up.
   // Defaults to 30 when unset.
   //
   // +k8s:required
@@ -1055,7 +1058,7 @@ message ContainerReadyz {
   int32 timeout_seconds = 2;
 }
 
-// HTTPGetAction describes an HTTP GET against the container's interior IP.
+// HTTPGetAction describes the HTTP GET the probe polls.
 message HTTPGetAction {
   // path must be a URL path starting with "/", using only RFC 3986
   // path-segment characters, without query or fragment.
@@ -1066,6 +1069,8 @@ message HTTPGetAction {
   // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
 
+  // port is the container port to connect to.
+  //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=65535

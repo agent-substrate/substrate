@@ -33,9 +33,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
+	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -49,7 +49,7 @@ import (
 // front.
 //
 // It is still the right choice on a VMM that prefaults, where OnDemand is not merely
-// wasteful but unusable: the prefault storm starves the guest and its readiness probe
+// wasteful but unusable: the prefault storm starves the guest and its wakeup probe
 // never passes.
 func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 	if !info.PrefaultsUnconditionally() {
@@ -147,7 +147,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// A Data snapshot holds no guest state, so this is a cold boot that
-		// happens to start with the volumes already populated. readyz gating comes
+		// happens to start with the volumes already populated. wakeup probe gating comes
 		// with the cold-boot path, so the actor is serving when we return.
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
@@ -353,9 +353,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	tResume := time.Now()
 
-	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
-		return fmt.Errorf("while waiting for container readyz: %w", err)
+	// Block until every wakeup-probe-enabled container reports 200.
+	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
+		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
 	// Where a resume goes. Like the boot phases, this used to be a single total,
@@ -372,7 +372,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		slog.Duration("vmm_launch", tLaunch.Sub(tTap)),
 		slog.Duration("vm_restore", tVMRestore.Sub(tLaunch)),
 		slog.Duration("resume", tResume.Sub(tVMRestore)),
-		slog.Duration("readyz", time.Since(tResume)),
+		slog.Duration("wakeup_probe", time.Since(tResume)),
 		slog.Duration("total", time.Since(tStart)))
 
 	// An eager restore has read the whole snapshot into guest memory, and nothing

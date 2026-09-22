@@ -31,12 +31,12 @@ containers:
 - name: egress
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
     # See ../counter/counter-microvm-template.yaml.tmpl: a micro-VM guest needs
-    # more than readyz's 30s default once CI's single kind node is under load.
+    # more than the wakeup probe's 30s default once CI's single kind node is under load.
     timeoutSeconds: 120
 # Sandbox size: without these the guest boots at ateom's default size
 # (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are

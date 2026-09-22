@@ -33,7 +33,7 @@ containers:
   - "--mode=http"
   # Data-scope resume is a cold boot; without this the router can reach the
   # sandbox before glutton is listening.
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

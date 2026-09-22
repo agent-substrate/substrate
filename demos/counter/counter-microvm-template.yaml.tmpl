@@ -33,14 +33,15 @@ containers:
   # in step with counter-template.yaml.tmpl — the networking suite runs
   # against whichever of the two the sandbox class under test selects.
   - --extra-port=9090
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
-    # Well above readyz.DefaultOverallTimeout (30s), which the gVisor counter
-    # is happy with. A micro-VM actor answers in a few seconds on an idle
-    # node, but CI runs every suite against this one pool on a single kind
-    # node and a guest boot stretches badly under that contention.
+    # Well above the 30s default ateapi applies when timeoutSeconds is unset,
+    # which the gVisor counter is happy with. A micro-VM actor answers in a
+    # few seconds on an idle node, but CI runs every suite against this one
+    # pool on a single kind node and a guest boot stretches badly under that
+    # contention.
     timeoutSeconds: 120
   # The counter writes its file counter here. With the durableDir volume
   # below it lands on a host-backed virtio-fs share instead of the guest-RAM
