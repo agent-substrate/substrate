@@ -41,7 +41,7 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplate.snapshots_config",
+    "subject": "ateapi.ActorTemplate.snapshot_config",
     "message": "field has no doc comment"
   },
   {
@@ -336,13 +336,13 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SnapshotContentScope",
-    "message": "enum has no doc comment"
+    "subject": "ateapi.SnapshotConfig",
+    "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SnapshotsConfig",
-    "message": "message has no doc comment"
+    "subject": "ateapi.SnapshotContentScope",
+    "message": "enum has no doc comment"
   },
   {
     "rule": "documented",

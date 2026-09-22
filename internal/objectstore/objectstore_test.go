@@ -222,7 +222,7 @@ func TestCopyPrefix(t *testing.T) {
 	}
 }
 
-// TestCopyPrefix_AcrossBuckets covers a template whose snapshotsConfig.location
+// TestCopyPrefix_AcrossBuckets covers a template whose snapshotConfig.location
 // moved: the copy still lands under the destination's own bucket.
 func TestCopyPrefix_AcrossBuckets(t *testing.T) {
 	src := mustActorSnapshotURI(t, "gs://old-bucket/root", "team-a", "actor-1", "snap-1")

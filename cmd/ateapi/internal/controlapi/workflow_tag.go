@@ -222,7 +222,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 	ctx, done := stepSpan(ctx, "ReserveTag")
 	defer func() { err = done(err) }()
 
-	location := actorTemplate.GetSnapshotsConfig().GetStorageLocation()
+	location := actorTemplate.GetSnapshotConfig().GetStorageLocation()
 	if err := resources.ValidateSnapshotLocation(location); err != nil {
 		return nil, fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
 	}

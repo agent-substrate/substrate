@@ -840,10 +840,10 @@ func Validate_ActorTemplate(
 		errs = append(errs, fn(fldPath.Child("volumes"), obj.Volumes, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ActorTemplate.SnapshotsConfig
+	{ // field ateapipb.ActorTemplate.SnapshotConfig
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.SnapshotsConfig,
+			obj, oldObj *ateapipb.SnapshotConfig,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -861,14 +861,14 @@ func Validate_ActorTemplate(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_SnapshotsConfig(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_SnapshotConfig(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ActorTemplate) *ateapipb.SnapshotsConfig {
-				return oldObj.SnapshotsConfig
+			func(oldObj *ateapipb.ActorTemplate) *ateapipb.SnapshotConfig {
+				return oldObj.SnapshotConfig
 			})
-		errs = append(errs, fn(fldPath.Child("snapshots_config"), obj.SnapshotsConfig, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("snapshot_config"), obj.SnapshotConfig, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.ActorTemplate.SandboxConfig
@@ -5707,18 +5707,18 @@ func Validate_SetWorkerCapacityRequest(
 	return errs
 }
 
-// Validate_SnapshotsConfig validates an instance of SnapshotsConfig according
+// Validate_SnapshotConfig validates an instance of SnapshotConfig according
 // to declarative validation rules in the API schema.
-func Validate_SnapshotsConfig(
+func Validate_SnapshotConfig(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.SnapshotsConfig) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.SnapshotConfig) (errs field.ErrorList) {
 
 	// custom validation
-	if e := ValidateCustom_SnapshotsConfig(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+	if e := ValidateCustom_SnapshotConfig(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 		errs = append(errs, e...)
 	}
 
-	{ // field ateapipb.SnapshotsConfig.OnPause
+	{ // field ateapipb.SnapshotConfig.OnPause
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.SnapshotContentScope,
@@ -5747,13 +5747,13 @@ func Validate_SnapshotsConfig(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SnapshotsConfig) *ateapipb.SnapshotContentScope {
+			func(oldObj *ateapipb.SnapshotConfig) *ateapipb.SnapshotContentScope {
 				return &oldObj.OnPause
 			})
 		errs = append(errs, fn(fldPath.Child("on_pause"), &obj.OnPause, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.SnapshotsConfig.OnCommit
+	{ // field ateapipb.SnapshotConfig.OnCommit
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.SnapshotContentScope,
@@ -5782,13 +5782,13 @@ func Validate_SnapshotsConfig(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SnapshotsConfig) *ateapipb.SnapshotContentScope {
+			func(oldObj *ateapipb.SnapshotConfig) *ateapipb.SnapshotContentScope {
 				return &oldObj.OnCommit
 			})
 		errs = append(errs, fn(fldPath.Child("on_commit"), &obj.OnCommit, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.SnapshotsConfig.OnResume
+	{ // field ateapipb.SnapshotConfig.OnResume
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.OnResumeConfig,
@@ -5813,13 +5813,13 @@ func Validate_SnapshotsConfig(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SnapshotsConfig) *ateapipb.OnResumeConfig {
+			func(oldObj *ateapipb.SnapshotConfig) *ateapipb.OnResumeConfig {
 				return oldObj.OnResume
 			})
 		errs = append(errs, fn(fldPath.Child("on_resume"), obj.OnResume, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.SnapshotsConfig.StorageLocation
+	{ // field ateapipb.SnapshotConfig.StorageLocation
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -5840,7 +5840,7 @@ func Validate_SnapshotsConfig(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_SnapshotsConfig_StorageLocation(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_SnapshotConfig_StorageLocation(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {
@@ -5849,7 +5849,7 @@ func Validate_SnapshotsConfig(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SnapshotsConfig) *string {
+			func(oldObj *ateapipb.SnapshotConfig) *string {
 				return &oldObj.StorageLocation
 			})
 		errs = append(errs, fn(fldPath.Child("storage_location"), &obj.StorageLocation, oldVal, oldObj != nil)...)

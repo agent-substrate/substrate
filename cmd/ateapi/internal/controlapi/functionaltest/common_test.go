@@ -62,7 +62,7 @@ import (
 const (
 	testAtespace = "test-atespace"
 	testActorID  = "id1"
-	// testStorageLocation is the snapshots_config.storage_location the test
+	// testStorageLocation is the snapshot_config.storage_location the test
 	// templates hand out. No object store is wired up behind it.
 	testStorageLocation = "gs://fake-fake-fake"
 
@@ -433,7 +433,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				Atespace: testAtespace,
 				Name:     "tmpl1",
 			},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
@@ -573,7 +573,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				Atespace: testAtespace,
 				Name:     name,
 			},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{

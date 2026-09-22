@@ -778,7 +778,7 @@ message ActorTemplate {
   repeated Volume volumes = 4;
 
   // +k8s:required
-  SnapshotsConfig snapshots_config = 5;
+  SnapshotConfig snapshot_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
   //
@@ -857,7 +857,7 @@ message SandboxConfig {
 }
 
 // +k8s:customValidation # on_commit must be a subset of on_pause
-message SnapshotsConfig {
+message SnapshotConfig {
   // on_pause defines the scope of the snapshot captured when an actor
   // is paused. Defaults to FULL when unset.
   //

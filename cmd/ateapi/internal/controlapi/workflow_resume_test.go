@@ -1021,7 +1021,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				SnapshotConfig: &ateapipb.SnapshotConfig{
 					OnPause:  tt.onPause,
 					OnResume: &ateapipb.OnResumeConfig{FromData: tt.fromData},
 				},
@@ -1711,7 +1711,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
 					OnPause:         tt.tmpl.onPause,
 					OnResume:        &ateapipb.OnResumeConfig{FromData: tt.tmpl.fromData},

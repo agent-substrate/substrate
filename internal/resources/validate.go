@@ -127,7 +127,7 @@ func ValidateRunscHash(sha256Hash string) error {
 	return nil
 }
 
-// ValidateSnapshotLocation ensures an ActorTemplate's snapshotsConfig.location
+// ValidateSnapshotLocation ensures an ActorTemplate's snapshotConfig.location
 // is a well-formed URI with a bucket, so a bad location fails fast instead of
 // deep inside an object-storage call. It deliberately does not restrict the
 // scheme: the storage layer only uses the host (bucket) and path, and which

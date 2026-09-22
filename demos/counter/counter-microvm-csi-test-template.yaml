@@ -32,7 +32,7 @@ containers:
   volumeMounts:
   - name: data
     mountPath: /home/counter
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_DATA
   onResume:

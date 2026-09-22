@@ -1200,7 +1200,7 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		// One actor at a time, plus a spare for the worker-deletion tests.
 		PoolReplicas: 2,
 		Labels:       map[string]string{"demo": nsObj.Name},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
 			OnPause:         onPause,
 			OnCommit:        onCommit,

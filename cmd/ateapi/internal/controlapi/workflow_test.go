@@ -93,7 +93,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, tmplAtespace)
 			if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
 					OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				},
@@ -207,8 +207,8 @@ func TestActorDeletedRecord(t *testing.T) {
 	persistence := newTestPersistence(t)
 	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata:        &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: testStorageLocation},
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
 	}); err != nil {
 		t.Fatalf("create template: %v", err)
 	}
@@ -253,8 +253,8 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	persistence := newTestPersistence(t)
 	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata:        &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: testStorageLocation},
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
 	}); err != nil {
 		t.Fatalf("create template: %v", err)
 	}

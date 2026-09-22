@@ -154,7 +154,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 
 			w := &ActorWorkflow{store: st}
 			tmpl := &ateapipb.ActorTemplate{
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{OnPause: tc.onPause},
+				SnapshotConfig: &ateapipb.SnapshotConfig{OnPause: tc.onPause},
 			}
 			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
 			if err != nil {

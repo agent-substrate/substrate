@@ -2068,7 +2068,7 @@ type ActorTemplate struct {
 	// +k8s:listMapKey=name
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	// +k8s:required
-	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
+	SnapshotConfig *SnapshotConfig `protobuf:"bytes,5,opt,name=snapshot_config,json=snapshotConfig,proto3" json:"snapshot_config,omitempty"`
 	// sandbox_config selects the sandbox runtime this version's actors run on.
 	//
 	// +k8s:required
@@ -2141,9 +2141,9 @@ func (x *ActorTemplate) GetVolumes() []*Volume {
 	return nil
 }
 
-func (x *ActorTemplate) GetSnapshotsConfig() *SnapshotsConfig {
+func (x *ActorTemplate) GetSnapshotConfig() *SnapshotConfig {
 	if x != nil {
-		return x.SnapshotsConfig
+		return x.SnapshotConfig
 	}
 	return nil
 }
@@ -2456,7 +2456,7 @@ func (x *SandboxConfig) GetConfigName() string {
 }
 
 // +k8s:customValidation # on_commit must be a subset of on_pause
-type SnapshotsConfig struct {
+type SnapshotConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// on_pause defines the scope of the snapshot captured when an actor
 	// is paused. Defaults to FULL when unset.
@@ -2491,20 +2491,20 @@ type SnapshotsConfig struct {
 	sizeCache       protoimpl.SizeCache
 }
 
-func (x *SnapshotsConfig) Reset() {
-	*x = SnapshotsConfig{}
+func (x *SnapshotConfig) Reset() {
+	*x = SnapshotConfig{}
 	mi := &file_ateapi_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SnapshotsConfig) String() string {
+func (x *SnapshotConfig) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SnapshotsConfig) ProtoMessage() {}
+func (*SnapshotConfig) ProtoMessage() {}
 
-func (x *SnapshotsConfig) ProtoReflect() protoreflect.Message {
+func (x *SnapshotConfig) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2516,33 +2516,33 @@ func (x *SnapshotsConfig) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SnapshotsConfig.ProtoReflect.Descriptor instead.
-func (*SnapshotsConfig) Descriptor() ([]byte, []int) {
+// Deprecated: Use SnapshotConfig.ProtoReflect.Descriptor instead.
+func (*SnapshotConfig) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{24}
 }
 
-func (x *SnapshotsConfig) GetOnPause() SnapshotContentScope {
+func (x *SnapshotConfig) GetOnPause() SnapshotContentScope {
 	if x != nil {
 		return x.OnPause
 	}
 	return SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
 }
 
-func (x *SnapshotsConfig) GetOnCommit() SnapshotContentScope {
+func (x *SnapshotConfig) GetOnCommit() SnapshotContentScope {
 	if x != nil {
 		return x.OnCommit
 	}
 	return SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
 }
 
-func (x *SnapshotsConfig) GetOnResume() *OnResumeConfig {
+func (x *SnapshotConfig) GetOnResume() *OnResumeConfig {
 	if x != nil {
 		return x.OnResume
 	}
 	return nil
 }
 
-func (x *SnapshotsConfig) GetStorageLocation() string {
+func (x *SnapshotConfig) GetStorageLocation() string {
 	if x != nil {
 		return x.StorageLocation
 	}
@@ -6967,15 +6967,15 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\";\n" +
 	"\tObjectRef\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xc5\x03\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xc2\x03\n" +
 	"\rActorTemplate\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x129\n" +
 	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x121\n" +
 	"\n" +
 	"containers\x18\x03 \x03(\v2\x11.ateapi.ContainerR\n" +
 	"containers\x12(\n" +
-	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12B\n" +
-	"\x10snapshots_config\x18\x05 \x01(\v2\x17.ateapi.SnapshotsConfigR\x0fsnapshotsConfig\x12<\n" +
+	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12?\n" +
+	"\x0fsnapshot_config\x18\x05 \x01(\v2\x16.ateapi.SnapshotConfigR\x0esnapshotConfig\x12<\n" +
 	"\x0esandbox_config\x18\x06 \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12/\n" +
 	"\tresources\x18\a \x01(\v2\x11.ateapi.ResourcesR\tresources\x123\n" +
 	"\x06status\x18\b \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status\"3\n" +
@@ -6994,8 +6994,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rSandboxConfig\x129\n" +
 	"\rsandbox_class\x18\x01 \x01(\x0e2\x14.ateapi.SandboxClassR\fsandboxClass\x12\x1f\n" +
 	"\vconfig_name\x18\x02 \x01(\tR\n" +
-	"configName\"\xe5\x01\n" +
-	"\x0fSnapshotsConfig\x127\n" +
+	"configName\"\xe4\x01\n" +
+	"\x0eSnapshotConfig\x127\n" +
 	"\bon_pause\x18\x01 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\aonPause\x129\n" +
 	"\ton_commit\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\bonCommit\x123\n" +
 	"\ton_resume\x18\x03 \x01(\v2\x16.ateapi.OnResumeConfigR\bonResume\x12)\n" +
@@ -7349,7 +7349,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*GoldenSnapshotStatus)(nil),               // 30: ateapi.GoldenSnapshotStatus
 	(*ActorTemplateStatus)(nil),                // 31: ateapi.ActorTemplateStatus
 	(*SandboxConfig)(nil),                      // 32: ateapi.SandboxConfig
-	(*SnapshotsConfig)(nil),                    // 33: ateapi.SnapshotsConfig
+	(*SnapshotConfig)(nil),                     // 33: ateapi.SnapshotConfig
 	(*OnResumeConfig)(nil),                     // 34: ateapi.OnResumeConfig
 	(*Container)(nil),                          // 35: ateapi.Container
 	(*SecurityContext)(nil),                    // 36: ateapi.SecurityContext
@@ -7463,7 +7463,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	11,  // 32: ateapi.ActorTemplate.worker_selector:type_name -> ateapi.Selector
 	35,  // 33: ateapi.ActorTemplate.containers:type_name -> ateapi.Container
 	41,  // 34: ateapi.ActorTemplate.volumes:type_name -> ateapi.Volume
-	33,  // 35: ateapi.ActorTemplate.snapshots_config:type_name -> ateapi.SnapshotsConfig
+	33,  // 35: ateapi.ActorTemplate.snapshot_config:type_name -> ateapi.SnapshotConfig
 	32,  // 36: ateapi.ActorTemplate.sandbox_config:type_name -> ateapi.SandboxConfig
 	28,  // 37: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
 	31,  // 38: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
@@ -7472,9 +7472,9 @@ var file_ateapi_proto_depIdxs = []int32{
 	108, // 41: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
 	30,  // 42: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
 	3,   // 43: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
-	0,   // 44: ateapi.SnapshotsConfig.on_pause:type_name -> ateapi.SnapshotContentScope
-	0,   // 45: ateapi.SnapshotsConfig.on_commit:type_name -> ateapi.SnapshotContentScope
-	34,  // 46: ateapi.SnapshotsConfig.on_resume:type_name -> ateapi.OnResumeConfig
+	0,   // 44: ateapi.SnapshotConfig.on_pause:type_name -> ateapi.SnapshotContentScope
+	0,   // 45: ateapi.SnapshotConfig.on_commit:type_name -> ateapi.SnapshotContentScope
+	34,  // 46: ateapi.SnapshotConfig.on_resume:type_name -> ateapi.OnResumeConfig
 	4,   // 47: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
 	38,  // 48: ateapi.Container.env:type_name -> ateapi.EnvVar
 	39,  // 49: ateapi.Container.wakeup_probe:type_name -> ateapi.ContainerWakeupProbe

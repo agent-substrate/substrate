@@ -34,7 +34,7 @@ resources:
   limits:
   - name: memory
     quantity: ${ACTOR_MEMORY}
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/sleep/

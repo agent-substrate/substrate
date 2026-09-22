@@ -348,7 +348,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	// The template that holds the storage location is gone (was never written to storage).
 	// We should still be able to access/delete the current snapshot for this actor.
 	inFlight := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: testStorageLocation},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
 	}, actor, "abandoned")
 	objects.PutSnapshot(t, inFlight, "manifest.json")
 	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
