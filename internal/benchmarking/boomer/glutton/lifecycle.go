@@ -199,6 +199,9 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 			cfg:         r.cfg,
 			actorName:   "sb-" + uuid.NewString(),
 			firstResume: true,
+			// Drawn per actor rather than per VU so a VU with several
+			// actors still spreads them over the pools.
+			pool: r.cfg.Pools.Pick(),
 		}
 		// Ensuring the atespace is idempotent (swallows AlreadyExists), so
 		// doing it once per VU is enough — subsequent actors would just make
@@ -301,6 +304,10 @@ type gluttonActor struct {
 	// rehabilitates a crashed actor, so retrying would just fail forever.
 	// The VU's other actors are unaffected.
 	crashed bool
+	// pool is the worker pool this actor is pinned to, drawn once in
+	// startUser and never redrawn (see userclass.PoolPicker). Empty means no
+	// per-actor constraint.
+	pool string
 }
 
 func (u *gluttonActor) ref() *ateapipb.ObjectRef {
@@ -331,12 +338,16 @@ func (u *gluttonActor) ensureAtespace(ctx context.Context) error {
 }
 
 func (u *gluttonActor) create(ctx context.Context) error {
+	actor := &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+	}
+	// ANDed with the template's workerSelector by the scheduler, so this only
+	// narrows the actor to one pool. Nil when no pools are configured.
+	actor.WorkerSelector = u.cfg.Pools.SelectorFor(u.pool)
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
-			},
+			Actor: actor,
 		}, grpc.Trailer(tr))
 		return err
 	})

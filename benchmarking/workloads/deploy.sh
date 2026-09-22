@@ -30,19 +30,27 @@ if [[ -z "${BUCKET_NAME:-}" ]]; then
 fi
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
-POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
+NAMESPACE_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
+WORKER_POOL_MANIFEST="${MANIFEST_DIR}/workerpool.yaml.tmpl"
 # The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
 # through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default.
 read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
 
-if [[ ! -f "${POOL_MANIFEST}" ]]; then
-  echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
-  exit 1
-fi
+for manifest in "${NAMESPACE_MANIFEST}" "${WORKER_POOL_MANIFEST}"; do
+  if [[ ! -f "${manifest}" ]]; then
+    echo "Error: ${manifest} not found in $(pwd)" >&2
+    exit 1
+  fi
+done
 
 WORKER_COUNT=1
+# Worker pools to create, as name:weight[:nodeSelectorKey=value] entries. Empty
+# means the single pool named benchmark-ateom that this script has always
+# created. Use the same weights the boomer workers run with, so each pool gets
+# the actors its workers can hold.
+WORKER_POOLS=""
 SANDBOX_CLASS="gvisor"
 # Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
@@ -63,7 +71,12 @@ usage() {
   echo "Options:"
   echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
-  echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
+  echo "  --worker-count N            Total number of WorkerPool replicas across all pools (default: 1)"
+  echo "  --worker-pools LIST         Comma-separated name:weight[:nodeSelectorKey=value] entries."
+  echo "                              One WorkerPool per entry, labelled pool=<name>, with"
+  echo "                              --worker-count split between them by weight. Pass the same"
+  echo "                              name:weight list to the boomer workers (--worker-pools)."
+  echo "                              Default: a single pool named benchmark-ateom."
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
@@ -128,12 +141,135 @@ substitute() {
   esac
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
+      -e "s|\${POOL_NAME}|${POOL_NAME:-}|g" \
+      -e "s|\${POOL_WORKERPOOL_NAME}|${POOL_WORKERPOOL_NAME:-}|g" \
+      -e "s|\${POOL_WORKER_COUNT}|${POOL_WORKER_COUNT:-}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${SANDBOX_CLASS_ENUM}|${sandbox_class_enum}|g" \
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       "${manifest}"
+}
+
+# Parsed form of WORKER_POOLS, filled by parse_worker_pools. Index i of each
+# array describes the same pool.
+POOL_NAMES=()
+POOL_WEIGHTS=()
+POOL_NODE_SELECTORS=()
+POOL_WORKER_COUNTS=()
+
+# parse_worker_pools reads WORKER_POOLS into the POOL_* arrays and splits
+# WORKER_COUNT between the pools by weight. An empty WORKER_POOLS yields the
+# historical single pool, so a caller that does not know about pools keeps the
+# layout it had.
+parse_worker_pools() {
+  POOL_NAMES=()
+  POOL_WEIGHTS=()
+  POOL_NODE_SELECTORS=()
+  POOL_WORKER_COUNTS=()
+
+  if [[ -z "${WORKER_POOLS}" ]]; then
+    POOL_NAMES=("benchmark-ateom")
+    POOL_WEIGHTS=(1)
+    POOL_NODE_SELECTORS=("")
+    POOL_WORKER_COUNTS=("${WORKER_COUNT}")
+    return 0
+  fi
+
+  local entry name weight selector rest
+  local IFS=,
+  for entry in ${WORKER_POOLS}; do
+    [[ -z "${entry}" ]] && continue
+    name="${entry%%:*}"
+    rest="${entry#*:}"
+    if [[ "${rest}" == "${entry}" ]]; then
+      echo "Error: worker pool '${entry}': want name:weight[:nodeSelectorKey=value]" >&2
+      exit 1
+    fi
+    weight="${rest%%:*}"
+    # A third field is optional; without it rest still holds just the weight.
+    if [[ "${rest}" == *:* ]]; then
+      selector="${rest#*:}"
+    else
+      selector=""
+    fi
+    if [[ -z "${name}" ]]; then
+      echo "Error: worker pool '${entry}': name must not be empty" >&2
+      exit 1
+    fi
+    if ! [[ "${weight}" =~ ^[0-9]+$ ]] || (( weight == 0 )); then
+      echo "Error: worker pool '${entry}': weight must be a positive integer" >&2
+      exit 1
+    fi
+    if [[ -n "${selector}" && "${selector}" != *=* ]]; then
+      echo "Error: worker pool '${entry}': node selector must be key=value" >&2
+      exit 1
+    fi
+    POOL_NAMES+=("${name}")
+    POOL_WEIGHTS+=("${weight}")
+    POOL_NODE_SELECTORS+=("${selector}")
+  done
+
+  if (( ${#POOL_NAMES[@]} == 0 )); then
+    echo "Error: --worker-pools is set but names no pool" >&2
+    exit 1
+  fi
+
+  local total=0 weight
+  for weight in "${POOL_WEIGHTS[@]}"; do
+    total=$((total + weight))
+  done
+
+  # Round each pool but the last to nearest and give the last the remainder, so
+  # the counts sum to WORKER_COUNT exactly. A share that rounds to zero still
+  # gets one worker: a pool with none can never serve the actors pinned to it.
+  local i assigned=0 count
+  for (( i = 0; i < ${#POOL_NAMES[@]} - 1; i++ )); do
+    count=$(( (WORKER_COUNT * POOL_WEIGHTS[i] + total / 2) / total ))
+    (( count < 1 )) && count=1
+    POOL_WORKER_COUNTS+=("${count}")
+    assigned=$((assigned + count))
+  done
+  count=$((WORKER_COUNT - assigned))
+  if (( count < 1 )); then
+    echo "Error: --worker-count ${WORKER_COUNT} is too small to give every one of ${#POOL_NAMES[@]} pools a worker" >&2
+    exit 1
+  fi
+  POOL_WORKER_COUNTS+=("${count}")
+}
+
+# render_worker_pool writes the WorkerPool manifest for pool index $1. The node
+# selector is appended rather than templated: it is an optional nested block,
+# which a line-oriented placeholder cannot express without leaving a dangling
+# `nodeSelector:` behind when it is unset.
+render_worker_pool() {
+  local idx="$1"
+  local POOL_NAME="${POOL_NAMES[idx]}"
+  local POOL_WORKER_COUNT="${POOL_WORKER_COUNTS[idx]}"
+  local POOL_WORKERPOOL_NAME
+  POOL_WORKERPOOL_NAME="$(worker_pool_deployment_name "${idx}")"
+
+  substitute "${WORKER_POOL_MANIFEST}"
+
+  local selector="${POOL_NODE_SELECTORS[idx]}"
+  if [[ -n "${selector}" ]]; then
+    # Split on the first = only, so a value may contain one.
+    printf '  template:\n    nodeSelector:\n      %s: %s\n' "${selector%%=*}" "${selector#*=}"
+  fi
+}
+
+# worker_pool_deployment_name is both the WorkerPool name and the name of the
+# Deployment ate-controller derives from it, which is what deploy waits on.
+worker_pool_deployment_name() {
+  local idx="$1"
+  if [[ -z "${WORKER_POOLS}" ]]; then
+    # Unchanged from the single-pool layout, so existing tooling that waits on
+    # deployment/benchmark-ateom keeps working.
+    echo "benchmark-ateom"
+    return
+  fi
+  echo "benchmark-ateom-${POOL_NAMES[idx]}"
 }
 
 # wait_actortemplate_ready polls a substrate ActorTemplate resource until its
@@ -183,13 +319,24 @@ wait_templates_ready() {
 
 deploy() {
   resolve_otlp_endpoint
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, otlp_endpoint=${OTLP_ENDPOINT})..."
-  substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
-  echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
-  kubectl wait --for=create deployment/benchmark-ateom \
-    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-  kubectl rollout status deployment/benchmark-ateom \
-    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+  parse_worker_pools
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, pools=${#POOL_NAMES[@]}, actor_memory=${ACTOR_MEMORY}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  substitute "${NAMESPACE_MANIFEST}" | kubectl apply -f -
+
+  local idx deployment
+  for idx in "${!POOL_NAMES[@]}"; do
+    echo "  pool ${POOL_NAMES[idx]}: ${POOL_WORKER_COUNTS[idx]} worker(s)${POOL_NODE_SELECTORS[idx]:+ on ${POOL_NODE_SELECTORS[idx]}}"
+    render_worker_pool "${idx}" | hack/run-tool.sh ko apply -f -
+  done
+
+  echo "Waiting for worker pools to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
+  for idx in "${!POOL_NAMES[@]}"; do
+    deployment="$(worker_pool_deployment_name "${idx}")"
+    kubectl wait --for=create "deployment/${deployment}" \
+      --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+    kubectl rollout status "deployment/${deployment}" \
+      --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+  done
 
   # The store enforces that a template's atespace exists at create time.
   run_kubectl_ate create atespace benchmark-workloads >/dev/null 2>&1 \
@@ -223,9 +370,15 @@ delete() {
   done
   run_kubectl_ate delete atespace benchmark-workloads >/dev/null 2>&1 \
     || echo "atespace benchmark-workloads not deleted (may not exist or is not empty)"
-  # The pool manifest contains ko:// image references; route through
-  # `ko delete` so they get resolved before kubectl sees them.
-  substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko delete --ignore-not-found -f -
+  # The WorkerPool manifests contain ko:// image references; route through
+  # `ko delete` so they get resolved before kubectl sees them. The namespace
+  # goes last, after the pools it holds.
+  parse_worker_pools
+  local idx
+  for idx in "${!POOL_NAMES[@]}"; do
+    render_worker_pool "${idx}" | hack/run-tool.sh ko delete --ignore-not-found -f -
+  done
+  substitute "${NAMESPACE_MANIFEST}" | kubectl delete --ignore-not-found -f -
 }
 
 if [[ "$#" -eq 0 ]]; then
@@ -248,6 +401,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --worker-count=*)
       WORKER_COUNT="${1#*=}"
+      ;;
+    --worker-pools)
+      shift
+      WORKER_POOLS="$1"
+      ;;
+    --worker-pools=*)
+      WORKER_POOLS="${1#*=}"
       ;;
     --sandbox-class)
       shift
