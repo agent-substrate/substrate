@@ -172,7 +172,17 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 			return err
 		}
 	}
-	return nil
+	return e.waitSnapshotStorage(ctx)
+}
+
+func (e *Env) waitSnapshotStorage(ctx context.Context) error {
+	if !e.Cfg.Kind {
+		return nil
+	}
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "rustfs", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.Kube.WaitJobComplete(ctx, NamespaceAteSystem, "rustfs-bucket-init", e.Cfg.RolloutTimeout)
 }
 
 // applyPodcertWorkersOverride sets WORKERS_PER_SIGNER on podcertificate-controller if configured.

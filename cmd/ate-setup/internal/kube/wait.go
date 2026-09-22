@@ -20,6 +20,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -167,6 +168,32 @@ func (c *Client) statefulSetRolledOut(ctx context.Context, namespace, name strin
 		return false, "waiting for the update revision to become current", nil
 	}
 	return true, "rolled out", nil
+}
+
+// WaitJobComplete waits for successful completion, failing early for a failed Job.
+func (c *Client) WaitJobComplete(ctx context.Context, namespace, name string, timeout time.Duration) error {
+	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+		job, err := c.Typed.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		for _, condition := range job.Status.Conditions {
+			if condition.Status != corev1.ConditionTrue {
+				continue
+			}
+			switch condition.Type {
+			case batchv1.JobFailed:
+				return false, fmt.Errorf("%s: %s", condition.Reason, condition.Message)
+			case batchv1.JobComplete:
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("waiting for job/%s in %s to complete: %w", name, namespace, err)
+	}
+	return nil
 }
 
 // WaitNamespaceActive replaces

@@ -1006,6 +1006,11 @@ deploy_ate_system() {
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n ate-system --timeout="$(rollout_timeout)"
 
+  if [[ "${ATE_INSTALL_KIND:-}" == "true" ]]; then
+    run_kubectl rollout status deployment/rustfs -n ate-system --timeout="$(rollout_timeout)"
+    run_kubectl wait --for=condition=Complete job/rustfs-bucket-init -n ate-system --timeout="$(rollout_timeout)"
+  fi
+
   # After the bundle, which carries its own copy of ate-otel-config.
   apply_otel_endpoint_override
 }
