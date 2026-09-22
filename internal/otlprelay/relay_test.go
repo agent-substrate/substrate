@@ -36,9 +36,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -52,8 +54,10 @@ type fakeCollector struct {
 	mu       sync.Mutex
 	traces   []*coltracepb.ExportTraceServiceRequest
 	metrics  []*colmetricspb.ExportMetricsServiceRequest
+	logs     []*collogspb.ExportLogsServiceRequest
 	traceMD  []metadata.MD
 	metricMD []metadata.MD
+	logMD    []metadata.MD
 	got      chan struct{}
 }
 
@@ -86,6 +90,22 @@ func (m *metricsSink) Export(ctx context.Context, req *colmetricspb.ExportMetric
 	return &colmetricspb.ExportMetricsServiceResponse{}, nil
 }
 
+type logsSink struct {
+	collogspb.UnimplementedLogsServiceServer
+	parent *fakeCollector
+}
+
+func (l *logsSink) Export(ctx context.Context, req *collogspb.ExportLogsServiceRequest) (*collogspb.ExportLogsServiceResponse, error) {
+	l.parent.mu.Lock()
+	l.parent.logs = append(l.parent.logs, req)
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		l.parent.logMD = append(l.parent.logMD, md.Copy())
+	}
+	l.parent.mu.Unlock()
+	l.parent.got <- struct{}{}
+	return &collogspb.ExportLogsServiceResponse{}, nil
+}
+
 // startFakeCollector serves the OTLP collector services on a loopback TCP port
 // (the shape the relay forwards to) and returns the sink and its host:port.
 func startFakeCollector(t *testing.T) (*fakeCollector, string) {
@@ -98,6 +118,7 @@ func startFakeCollector(t *testing.T) (*fakeCollector, string) {
 	srv := grpc.NewServer()
 	coltracepb.RegisterTraceServiceServer(srv, sink)
 	colmetricspb.RegisterMetricsServiceServer(srv, &metricsSink{parent: sink})
+	collogspb.RegisterLogsServiceServer(srv, &logsSink{parent: sink})
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return sink, lis.Addr().String()
@@ -245,6 +266,73 @@ func TestRelayForwardsMetrics(t *testing.T) {
 	}
 	if diff := cmp.Diff(req, sink.metrics[0], protocmp.Transform()); diff != "" {
 		t.Errorf("forwarded request differs from what was sent (-sent +received):\n%s", diff)
+	}
+}
+
+// usageLogs is an ateom log batch.
+func usageLogs() *collogspb.ExportLogsServiceRequest {
+	return &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			Resource: serviceResource("ateom-gvisor"),
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{EventName: "ate.actor.usage_sampled"}},
+			}},
+		}},
+	}
+}
+
+func TestRelayForwardsLogsVerbatim(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	req := usageLogs()
+	if _, err := collogspb.NewLogsServiceClient(conn).Export(context.Background(), req); err != nil {
+		t.Fatalf("Export through the relay: %v", err)
+	}
+
+	select {
+	case <-sink.got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector never received the forwarded log export")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.logs) != 1 {
+		t.Fatalf("collector got %d log exports, want 1", len(sink.logs))
+	}
+	if diff := cmp.Diff(req, sink.logs[0], protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded request differs from what was sent (-sent +received):\n%s", diff)
+	}
+}
+
+func TestRelayRefusesNonAteomLogs(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	req := usageLogs()
+	req.ResourceLogs[0].Resource = serviceResource("ateapi")
+	_, err = collogspb.NewLogsServiceClient(conn).Export(context.Background(), req)
+	if got := status.Code(err); got != codes.PermissionDenied {
+		t.Errorf("log Export from service.name ateapi = code %v (%v), want %v", got, err, codes.PermissionDenied)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.logs) != 0 {
+		t.Errorf("collector received %d log exports from a refused source, want none", len(sink.logs))
 	}
 }
 

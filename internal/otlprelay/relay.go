@@ -14,7 +14,7 @@
 
 // Package otlprelay carries ateom's OTLP telemetry to the collector over a unix
 // socket served by atelet, so a worker pod needs no network path of its own to
-// export spans and metrics.
+// export spans, metrics, and log records.
 //
 // Motivation. ateom runs inside the worker pod that hosts the actor, and until
 // now exported OTLP straight to the collector over the pod's network (the
@@ -71,6 +71,7 @@ import (
 	"k8s.io/utils/lru"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
@@ -97,6 +98,7 @@ const (
 	headersEnv        = "OTEL_EXPORTER_OTLP_HEADERS"
 	tracesHeadersEnv  = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
 	metricsHeadersEnv = "OTEL_EXPORTER_OTLP_METRICS_HEADERS"
+	logsHeadersEnv    = "OTEL_EXPORTER_OTLP_LOGS_HEADERS"
 
 	// otlpDefaultPort matches atenet's normalizeOtlpCollector.
 	otlpDefaultPort = "4317"
@@ -286,10 +288,10 @@ func upstreamHeaders(signalEnv string) (metadata.MD, error) {
 	return md, nil
 }
 
-// The two OTLP services both declare a method named Export, with different
-// request types, so one type cannot implement both: the embedded Unimplemented
-// structs would give Server an ambiguous promoted Export and satisfy neither
-// interface. Each service gets its own tiny forwarder instead.
+// The OTLP services all declare a method named Export, with different request
+// types, so one type cannot implement more than one: the embedded Unimplemented
+// structs would give Server an ambiguous promoted Export and satisfy none of the
+// interfaces. Each service gets its own tiny forwarder instead.
 
 type traceRelay struct {
 	coltracepb.UnimplementedTraceServiceServer
@@ -333,6 +335,23 @@ func (m *metricRelay) Export(ctx context.Context, req *colmetricspb.ExportMetric
 		}
 	}
 	return m.upstream.Export(upstreamContext(ctx, m.headers), req)
+}
+
+type logRelay struct {
+	collogspb.UnimplementedLogsServiceServer
+	upstream collogspb.LogsServiceClient
+	headers  metadata.MD
+	gate     *sourceGate
+}
+
+// Export forwards a batch of log records to the collector unchanged.
+func (l *logRelay) Export(ctx context.Context, req *collogspb.ExportLogsServiceRequest) (*collogspb.ExportLogsServiceResponse, error) {
+	for _, rl := range req.GetResourceLogs() {
+		if err := l.gate.check(ctx, rl.GetResource()); err != nil {
+			return nil, err
+		}
+	}
+	return l.upstream.Export(upstreamContext(ctx, l.headers), req)
 }
 
 // validateSocketPath rejects a relative path, which gRPC does not resolve:
@@ -385,6 +404,10 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	logHeaders, err := upstreamHeaders(logsHeadersEnv)
+	if err != nil {
+		return nil, err
+	}
 
 	dialOpts := []grpc.DialOption{
 		// Plaintext by design today; TLS support for the upstream leg will be added
@@ -418,12 +441,18 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 		headers:  metricHeaders,
 		gate:     gate,
 	})
+	collogspb.RegisterLogsServiceServer(s.grpc, &logRelay{
+		upstream: collogspb.NewLogsServiceClient(upstream),
+		headers:  logHeaders,
+		gate:     gate,
+	})
 	// Header names only: the values are credentials.
 	slog.InfoContext(ctx, "OTLP relay forwarding to collector",
 		slog.String("collector", target),
 		slog.String("compression", comp),
 		slog.Any("traceHeaders", headerNames(traceHeaders)),
-		slog.Any("metricHeaders", headerNames(metricHeaders)))
+		slog.Any("metricHeaders", headerNames(metricHeaders)),
+		slog.Any("logHeaders", headerNames(logHeaders)))
 	return s, nil
 }
 
