@@ -31,9 +31,10 @@ import (
 // actors an allow-everything policy and prove traffic flows; these give theirs
 // a narrow one and prove what does not. A request either gateway can read is
 // decided per request on its Host, by the http rules in the clear and the
-// https rules once decrypted. Opaque TCP, and TLS on the plain gateway, are
-// decided at the CONNECT by the tls_passthrough rules, which the gateway can
-// only match through "*" until it reads the ClientHello.
+// https rules once decrypted. TLS on the plain gateway is decided at the
+// CONNECT by the tls_passthrough rules, which the gateway can only match
+// through "*" until it reads the ClientHello. Opaque TCP is not decided at
+// all and refused.
 
 // egressMITM reports whether the suite runs against the sdsmint gateway.
 func egressMITM() bool { return os.Getenv("E2E_EGRESS_MITM") != "" }

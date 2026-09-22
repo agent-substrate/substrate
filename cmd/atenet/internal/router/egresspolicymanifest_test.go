@@ -33,6 +33,8 @@ const (
 	setFilterStateFilter = "envoy.filters.http.set_filter_state"
 	extProcServerCluster = "ext_proc_server"
 	passthroughCluster   = "egress_tcp_passthrough"
+	deniedCluster        = "egress_denied_blackhole"
+	deniedChain          = "egress_denied"
 	originalDstKey       = "envoy.network.transport_socket.original_dst_address"
 	dfpClusterType       = "envoy.clusters.dynamic_forward_proxy"
 )
@@ -323,19 +325,24 @@ func TestEgressManifestsConnectLegDecidesThePassthroughDestination(t *testing.T)
 				t.Errorf("%s is not skip_if_empty; an absent answer would be written as an unparseable address", originalDstKey)
 			}
 			if str(entry, "shared_with_upstream") == "" {
-				t.Errorf("%s is not shared with upstream; the passthrough chain would never see it", originalDstKey)
+				t.Errorf("%s is not shared with upstream; the inner listener would never see it", originalDstKey)
 			}
 		})
 	}
 }
 
-// Every inner chain without an HCM is a passthrough chain: a plain tcp_proxy
-// to the ORIGINAL_DST cluster, dialing the filter state the CONNECT leg's
-// answer produced and nothing else. The plain gateway needs one per transport
-// protocol; on sdsmint egress_tls_mitm claims tls, so only raw_buffer is left.
-// See TestEgressManifestsClaimEveryTransportProtocol.
+// Every inner chain without an HCM is a plain tcp_proxy, and there are only
+// two kinds. A passthrough chain relays to the ORIGINAL_DST cluster, dialing
+// the filter state the CONNECT leg's answer produced and nothing else; only a
+// stream the inspectors named can be one, because a name is what a rule is
+// evaluated against. The deny chain is everything else, and it relays nowhere.
+//
+// The plain gateway does not terminate TLS, so its TLS chain is a passthrough,
+// and raw_buffer falls to the deny chain. The sdsmint gateway picks its chain
+// with the egress-policy filter_chain_matcher instead; egress_passthrough is
+// what its "passthrough" answer names.
 var wantPassthroughChains = map[string][]string{
-	egressManifests[0]: {"egress_passthrough", "egress_tls_passthrough"},
+	egressManifests[0]: {"egress_tls_passthrough"},
 	egressManifests[1]: {"egress_passthrough"},
 }
 
@@ -355,8 +362,14 @@ func TestEgressManifestsPassthroughChainDialsOnlyTheDecidedAddress(t *testing.T)
 					continue
 				}
 				proxy := child(filters[0], "typed_config")
-				if got := str(proxy, "cluster"); got != passthroughCluster {
-					t.Errorf("chain %q tcp_proxy dials %q, want %q", name, got, passthroughCluster)
+				switch got := str(proxy, "cluster"); got {
+				case deniedCluster:
+					// The deny chain; TestEgressManifestsDenyOpaqueTCP owns it.
+					continue
+				case passthroughCluster:
+				default:
+					t.Errorf("chain %q tcp_proxy dials %q, want %q or %q", name, got, passthroughCluster, deniedCluster)
+					continue
 				}
 				if proxy["tunneling_config"] != nil {
 					t.Errorf("chain %q wraps the connection in a CONNECT; the passthrough chain relays bytes as they are", name)
@@ -392,15 +405,111 @@ func TestEgressManifestsPassthroughChainDialsOnlyTheDecidedAddress(t *testing.T)
 	}
 }
 
-// Envoy buckets a listener's filter chains by transport protocol and never
-// falls back out of a populated bucket. egress_cleartext claims raw_buffer
-// with HTTP application protocols alone, so a chain that matches nothing is
-// unreachable and every opaque or unclassified connection is closed as
-// no_filter_chain_match, allowed or not.
-//
-// The inner listener's filters produce exactly two transport protocols: tls
-// from tls_inspector, and raw_buffer for everything else, sniff timeout
-// included. Each needs a chain with no application_protocols as its catch-all.
+// Opaque TCP, a non-TLS stream http_inspector could not name, lands on a deny
+// chain on both gateways. The plain gateway selects chains by filter_chain_match,
+// so its deny chain is the raw_buffer catch-all. The sdsmint gateway selects
+// them with a filter_chain_matcher, so the matcher is what must send it there.
+func TestEgressManifestsDenyOpaqueTCP(t *testing.T) {
+	for _, path := range egressManifests {
+		t.Run(path, func(t *testing.T) {
+			tree := bootstrapTree(t, path)
+
+			var found []string
+			for _, lc := range allChains(tree) {
+				if str(lc.listener, "name") == "egress" {
+					continue
+				}
+				chain := lc.chain
+				name := str(chain, "name")
+				filters := list(chain, "filters")
+				if len(filters) != 1 || str(child(filters[0], "typed_config"), "cluster") != deniedCluster {
+					continue
+				}
+				found = append(found, name)
+
+				if name != deniedChain {
+					t.Errorf("chain %q dials %s but is not named %q; the name is what makes a denial legible in a config dump", name, deniedCluster, deniedChain)
+				}
+				if matcher := child(lc.listener, "filter_chain_matcher"); len(matcher) != 0 {
+					checkMatcherDeniesOpaque(t, matcher)
+				} else {
+					// It must be the raw_buffer catch-all. Narrowing the match with
+					// application_protocols would let opaque traffic fall out of the
+					// bucket and go unclaimed, and matching tls would deny the
+					// streams the gateway can actually police.
+					match := child(chain, "filter_chain_match")
+					if got := str(match, "transport_protocol"); got != "raw_buffer" {
+						t.Errorf("chain %q matches transport protocol %q, want raw_buffer", name, got)
+					}
+					if got := strs(match, "application_protocols"); len(got) != 0 {
+						t.Errorf("chain %q matches application protocols %v; it must catch everything egress_cleartext did not", name, got)
+					}
+				}
+				proxy := child(filters[0], "typed_config")
+				if proxy["tunneling_config"] != nil {
+					t.Errorf("chain %q wraps the connection in a CONNECT; a denied connection goes nowhere", name)
+				}
+				if len(list(proxy, "access_log")) == 0 {
+					t.Errorf("chain %q has no access log, so a refusal names neither the actor nor the destination", name)
+				}
+			}
+			if len(found) != 1 {
+				t.Fatalf("inner listener has %d chains dialing %s (%v), want exactly one", len(found), deniedCluster, found)
+			}
+
+			// A STATIC cluster with no endpoints: host selection fails before
+			// any byte is relayed. An endpoint here would turn the deny into a
+			// relay without touching the chain above.
+			cluster := byName(clusters(tree), deniedCluster)
+			if cluster == nil {
+				t.Fatalf("no %s cluster", deniedCluster)
+			}
+			if got := str(cluster, "type"); got != "STATIC" {
+				t.Errorf("%s is of type %q, want STATIC; any type that can resolve an address can relay", deniedCluster, got)
+			}
+			if eps := list(child(cluster, "load_assignment"), "endpoints"); len(eps) != 0 {
+				t.Errorf("%s has %d endpoints, want none; the whole point is that host selection fails", deniedCluster, len(eps))
+			}
+		})
+	}
+}
+
+// httpApplicationProtocols are the values http_inspector sets, as
+// ApplicationProtocolInput quotes them.
+var httpApplicationProtocols = []string{"'h2c'", "'http/1.0'", "'http/1.1'"}
+
+// checkMatcherDeniesOpaque checks that the egress-policy module's "cleartext"
+// answer, which means only "not TLS", reaches the HTTP chain only for the
+// protocols http_inspector named, and the deny chain otherwise.
+func checkMatcherDeniesOpaque(t *testing.T, matcher node) {
+	t.Helper()
+	answers := child(child(child(matcher, "matcher_tree"), "exact_match_map"), "map")
+	cleartext := child(answers, "cleartext")
+	if len(child(cleartext, "action")) != 0 {
+		t.Fatalf(`the "cleartext" answer selects a chain directly; every non-TLS stream, HTTP or not, would reach it`)
+	}
+	tree := child(child(cleartext, "matcher"), "matcher_tree")
+	if got := str(child(child(tree, "input"), "typed_config"), "@type"); !strings.HasSuffix(got, ".ApplicationProtocolInput") {
+		t.Errorf(`the "cleartext" answer is split on %q, want ApplicationProtocolInput`, got)
+	}
+	var httpProtocols []string
+	for protocol, raw := range child(child(tree, "exact_match_map"), "map") {
+		onMatch, _ := raw.(node)
+		if got := str(child(child(onMatch, "action"), "typed_config"), "value"); got != extproc.EgressCleartextFilterChainName {
+			t.Errorf("application protocol %s selects %q, want %q", protocol, got, extproc.EgressCleartextFilterChainName)
+		}
+		httpProtocols = append(httpProtocols, protocol)
+	}
+	slices.Sort(httpProtocols)
+	if !slices.Equal(httpProtocols, httpApplicationProtocols) {
+		t.Errorf("application protocols sent to %s = %v, want %v", extproc.EgressCleartextFilterChainName, httpProtocols, httpApplicationProtocols)
+	}
+	onNoMatch := child(child(cleartext, "matcher"), "on_no_match")
+	if got := str(child(child(onNoMatch, "action"), "typed_config"), "value"); got != deniedChain {
+		t.Errorf("a non-TLS stream with no HTTP protocol selects %q, want %q", got, deniedChain)
+	}
+}
+
 // Every ORIGINAL_DST cluster, the by-address routes' included, dials the
 // filter state alone. A metadata_key, use_http_header or port_override would
 // give a request a way to name an address other than the one the CONNECT leg
@@ -420,7 +529,7 @@ func TestEgressManifestsOriginalDstClustersDialTheFilterStateAlone(t *testing.T)
 				}
 			}
 			if found < 2 {
-				t.Errorf("found %d ORIGINAL_DST clusters, want at least the passthrough and the by-address ones", found)
+				t.Errorf("found %d ORIGINAL_DST clusters, want at least the by-address ones the request legs route to", found)
 			}
 		})
 	}

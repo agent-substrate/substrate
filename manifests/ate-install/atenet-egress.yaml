@@ -221,11 +221,11 @@ data:
                     receiving_namespaces:
                       untyped:
                       - dev.ate.egress
-              # The address the passthrough chains may dial, from the CONNECT
+              # The address the TLS passthrough chain may dial, from the CONNECT
               # leg's answer, shared with the inner listener as the filter state
               # the ORIGINAL_DST cluster reads. With no answer nothing is written
-              # (omit_empty_values plus skip_if_empty), and a TLS or opaque
-              # connection is closed. Must stay after ext_proc.
+              # (omit_empty_values plus skip_if_empty), and the TLS connection is
+              # closed. Must stay after ext_proc.
               - name: envoy.filters.http.set_filter_state
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
@@ -246,8 +246,9 @@ data:
       # envoy_internal_address. The CONNECT authority is an IP:port, so a Host
       # is visible only inside the tunnel: cleartext HTTP is decided per
       # request on its Host and the dialed address, and routed to whichever
-      # the matching rule checked; everything else is passed through to the
-      # address the CONNECT leg allowed, if any. Chain names must match
+      # the matching rule checked; TLS is passed through to the address the
+      # CONNECT leg allowed, if any. Anything else is opaque and is refused.
+      # Chain names must match
       # cmd/atenet/internal/router/extproc/dispatch.go.
       # ---------------------------------------------------------------------
       - name: inner_listener
@@ -256,8 +257,12 @@ data:
         # Both inspectors wait for the client's first bytes, so a
         # server-speaks-first protocol (SSH, SMTP, MySQL) would deadlock. On
         # timeout the connection continues with no transport protocol
-        # detected, which Envoy treats as raw_buffer, so it lands on the raw
-        # passthrough chain and is still policed on its destination.
+        # detected, which Envoy treats as raw_buffer, so it lands on the deny
+        # chain below -- the same place an unclassifiable protocol lands.
+        #
+        # This is why the chain a connection gets cannot be chosen by an actor
+        # that withholds its first bytes: waiting past the timeout selects the
+        # denial, not a relay.
         listener_filters_timeout: 1s
         continue_on_listener_filters_timeout: true
         listener_filters:
@@ -406,15 +411,9 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 
-        # The passthrough chains: TLS this gateway does not terminate, and
-        # everything the inspectors could not claim. Two chains because Envoy
-        # buckets filter chains by transport protocol and never falls back out
-        # of a populated bucket: egress_cleartext owns the raw_buffer bucket
-        # with its HTTP application protocols, so a chain matching nothing
-        # would be unreachable. Nothing here decides: tcp_proxy dials the
-        # original_dst_address filter state the CONNECT leg produced, and with
-        # none present the connection is closed before a byte is relayed
-        # (flags UH in the log).
+        # The passthrough chain: TLS this gateway does not terminate. It
+        # decides nothing -- tcp_proxy dials the original_dst_address filter
+        # state the CONNECT leg produced.
         - name: egress_tls_passthrough
           filter_chain_match:
             transport_protocol: tls
@@ -446,17 +445,23 @@ data:
                       upstream_failure: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
                       termination: "%CONNECTION_TERMINATION_DETAILS%"
 
-        # Everything else: an opaque protocol, a client the inspectors could
-        # not classify, or one that said nothing before the sniff timeout.
-        - name: egress_passthrough
+        # The deny chain: an opaque protocol, a client the inspectors could not
+        # classify, or one that said nothing before the sniff timeout. 
+        # The chain exists, rather than being deleted, so that the refusal is
+        # logged: a deleted chain leaves only an increment of
+        # no_filter_chain_match, which names neither the actor nor where it was
+        # going. tcp_proxy to a cluster with no endpoints fails host selection
+        # immediately, so the connection closes with no bytes relayed and the
+        # log line below carries flags NC (No Cluster found).
+        - name: egress_denied
           filter_chain_match:
             transport_protocol: raw_buffer
           filters:
           - name: envoy.filters.network.tcp_proxy
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-              stat_prefix: passthrough
-              cluster: egress_tcp_passthrough
+              stat_prefix: denied
+              cluster: egress_denied_blackhole
               access_log:
               - name: envoy.access_loggers.file
                 typed_config:
@@ -464,13 +469,12 @@ data:
                   path: /dev/stdout
                   log_format:
                     json_format:
-                      leg: passthrough
+                      leg: denied
                       time: "%START_TIME%"
                       actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
-                      # Always empty here; kept so both passthrough chains log
-                      # the same shape.
+                      # Always empty here; kept so this chain logs the same
+                      # shape as egress_tls_passthrough.
                       sni: "%REQUESTED_SERVER_NAME%"
-                      # The address an address rule allowed; null when nothing was dialed.
                       destination: "%FILTER_STATE(envoy.network.transport_socket.original_dst_address:PLAIN)%"
                       flags: "%RESPONSE_FLAGS%"
                       duration_ms: "%DURATION%"
@@ -559,8 +563,8 @@ data:
               http2_protocol_options: {}
 
       # The cleartext chain's by-address upstream: the address the actor
-      # dialed, from the same original_dst_address filter state the passthrough
-      # chains use. Plaintext, like the forward proxy above.
+      # dialed, from the same original_dst_address filter state the TLS
+      # passthrough chain uses. Plaintext, like the forward proxy above.
       - name: egress_original_dst_cleartext
         type: ORIGINAL_DST
         lb_policy: CLUSTER_PROVIDED
@@ -572,13 +576,26 @@ data:
               http_protocol_options: {}
               http2_protocol_options: {}
 
-      # The passthrough chains' upstream. It dials the original_dst_address
+      # The TLS passthrough chain's upstream. It dials the original_dst_address
       # filter state the CONNECT leg produced and has no other source of an
       # address; without it the connection is closed.
       - name: egress_tcp_passthrough
         type: ORIGINAL_DST
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+
+      # The deny chain's upstream: STATIC with an empty load_assignment, so
+      # host selection always fails and nothing is ever dialed. It exists only
+      # to give that chain a tcp_proxy to terminate against, which is what
+      # makes the refusal show up in an access log rather than as an anonymous
+      # no_filter_chain_match. Adding an endpoint here would silently turn the
+      # deny back into a relay.
+      - name: egress_denied_blackhole
+        type: STATIC
+        connect_timeout: 1s
+        load_assignment:
+          cluster_name: egress_denied_blackhole
+          endpoints: []
 
   # SDS resource for the gateway serving cert. kubelet rotates the projected
   # volume by swapping its ..data symlink, which fires the watch and makes
