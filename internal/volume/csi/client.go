@@ -17,7 +17,10 @@ package csi
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
@@ -40,16 +43,45 @@ func parseEndpoint(endpoint string) (string, string, error) {
 	}
 	switch u.Scheme {
 	case "unix":
-		if u.Path == "" {
-			return "", "", fmt.Errorf("unix endpoint missing path: %s", endpoint)
+		if !strings.HasPrefix(endpoint, "unix:///") || strings.HasPrefix(endpoint, "unix:////") || u.Host != "" || u.Path == "" {
+			return "", "", fmt.Errorf("unix endpoint missing path or specifies an authority (use unix:///<path>): %s", endpoint)
 		}
 		return "unix", endpoint, nil
 	case "tcp":
 		if u.Host == "" {
 			return "", "", fmt.Errorf("tcp endpoint missing host:port: %s", endpoint)
 		}
+		host, portStr, err := net.SplitHostPort(u.Host)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid tcp endpoint %q: %w", endpoint, err)
+		}
+		if host == "" {
+			return "", "", fmt.Errorf("tcp endpoint missing host in %q", endpoint)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return "", "", fmt.Errorf("tcp endpoint has invalid port %q in %q (must be 1-65535)", portStr, endpoint)
+		}
 		return "tcp", u.Host, nil
 	case "dns":
+		if !strings.HasPrefix(endpoint, "dns:///") || u.Host != "" {
+			return "", "", fmt.Errorf("dns endpoint must not specify an authority (use dns:///<target>): %s", endpoint)
+		}
+		target := strings.TrimPrefix(u.Path, "/")
+		if target == "" {
+			return "", "", fmt.Errorf("dns endpoint missing host:port: %s", endpoint)
+		}
+		host, portStr, err := net.SplitHostPort(target)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid dns endpoint %q (must be host:port): %w", endpoint, err)
+		}
+		if host == "" {
+			return "", "", fmt.Errorf("dns endpoint missing host in %q", endpoint)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return "", "", fmt.Errorf("dns endpoint has invalid port %q in %q (must be 1-65535)", portStr, endpoint)
+		}
 		return "dns", endpoint, nil
 	default:
 		return "", "", fmt.Errorf("unsupported scheme %q, must be unix, tcp or dns", u.Scheme)
