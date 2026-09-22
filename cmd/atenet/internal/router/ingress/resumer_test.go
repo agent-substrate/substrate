@@ -159,8 +159,16 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
+		// The caller selects on its own context and on the flight's completion.
+		// Hold the flight open for the whole call, so only the cancellation can
+		// be ready. A flight that can finish first makes both cases ready, and
+		// the select picks one of them at random.
+		gate := make(chan struct{})
+		defer close(gate)
+
 		mock := &resumerMockClient{
 			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				<-gate
 				return &ateapipb.ResumeActorResponse{Resumed: true}, nil
 			},
 		}
