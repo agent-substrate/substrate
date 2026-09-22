@@ -85,6 +85,7 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterName, "cluster-name", getEnv("CLUSTER_NAME", "substrate-poc"), "Name of the GKE cluster [env: CLUSTER_NAME]")
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterLocation, "cluster-location", getEnv("CLUSTER_LOCATION", "us-west1-c"), "Zone or region for the cluster [env: CLUSTER_LOCATION]")
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterVersion, "cluster-version", getEnv("CLUSTER_VERSION", ""), "Kubernetes version [env: CLUSTER_VERSION]")
+	bootstrapCmd.Flags().StringVar(&cfg.ReleaseChannel, "release-channel", getEnv("RELEASE_CHANNEL", ""), "Release channel for a new cluster: rapid, regular, stable, or none to unenroll; empty = GKE's default channel [env: RELEASE_CHANNEL]")
 	bootstrapCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	bootstrapCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
 	bootstrapCmd.Flags().StringVar(&cfg.MachineType, "machine-type", resolveMachineTypeDefault(), "Machine type for the node pool [env: NODE_MACHINE_TYPE]")

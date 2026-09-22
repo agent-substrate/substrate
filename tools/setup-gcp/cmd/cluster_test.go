@@ -393,3 +393,132 @@ func TestValidateClusterLocation(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateReleaseChannel(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		want    string
+		wantErr string
+	}{
+		{
+			name: "unset leaves the cluster on GKE's default channel",
+			cfg:  Config{ReleaseChannel: ""},
+		},
+		{
+			name: "rapid",
+			cfg:  Config{ReleaseChannel: "rapid"},
+			want: "rapid",
+		},
+		{
+			name: "none is a real choice, not the same as unset",
+			cfg:  Config{ReleaseChannel: "none"},
+			want: "none",
+		},
+		{
+			name: "case and surrounding space are normalized",
+			cfg:  Config{ReleaseChannel: "  Regular "},
+			want: "regular",
+		},
+		{
+			name:    "unknown channel",
+			cfg:     Config{ReleaseChannel: "nightly"},
+			wantErr: `release channel "nightly" is invalid: must be one of extended, none, rapid, regular, stable`,
+		},
+		{
+			name:    "extended cannot carry the beta APIs this tool enables",
+			cfg:     Config{ReleaseChannel: "extended"},
+			wantErr: "does not allow the Kubernetes beta APIs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgCopy := tt.cfg
+			err := validateReleaseChannel(&cfgCopy)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("got error %q, want containing %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfgCopy.ReleaseChannel != tt.want {
+				t.Errorf("got normalized channel %q, want %q", cfgCopy.ReleaseChannel, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCreateClusterRequest_ReleaseChannel(t *testing.T) {
+	tests := []struct {
+		name        string
+		channel     string
+		wantSet     bool
+		wantChannel containerpb.ReleaseChannel_Channel
+	}{
+		{
+			// The important case: no channel field at all, so GKE applies its
+			// own default. Sending UNSPECIFIED here instead would unenroll the
+			// cluster from release channels, which is a different cluster.
+			name:    "unset sends no channel",
+			channel: "",
+			wantSet: false,
+		},
+		{
+			name:        "rapid",
+			channel:     "rapid",
+			wantSet:     true,
+			wantChannel: containerpb.ReleaseChannel_RAPID,
+		},
+		{
+			name:        "regular",
+			channel:     "regular",
+			wantSet:     true,
+			wantChannel: containerpb.ReleaseChannel_REGULAR,
+		},
+		{
+			name:        "stable",
+			channel:     "stable",
+			wantSet:     true,
+			wantChannel: containerpb.ReleaseChannel_STABLE,
+		},
+		{
+			name:        "none unenrolls the cluster explicitly",
+			channel:     "none",
+			wantSet:     true,
+			wantChannel: containerpb.ReleaseChannel_UNSPECIFIED,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				ProjectID:       "test-project",
+				ClusterName:     "test-cluster",
+				ClusterLocation: "us-west1-c",
+				MachineType:     "c3-standard-4",
+				ReleaseChannel:  tt.channel,
+			}
+			req := buildCreateClusterRequest("projects/test-project/locations/us-west1-c", cfg)
+			got := req.Cluster.ReleaseChannel
+			if !tt.wantSet {
+				if got != nil {
+					t.Fatalf("expected no ReleaseChannel, got %v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("expected ReleaseChannel to be set, got nil")
+			}
+			if got.Channel != tt.wantChannel {
+				t.Errorf("got channel %v, want %v", got.Channel, tt.wantChannel)
+			}
+		})
+	}
+}
