@@ -51,7 +51,7 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 		"postgres://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=%s&sslcert=%s&sslkey=%s",
 		rootPath, bundlePath, bundlePath)
 
-	cfg, err := poolConfig(mustConnectionStringSource(t, dsn), 0)
+	cfg, err := poolConfig(mustConnectionStringSource(t, dsn), "", 0)
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
@@ -87,9 +87,12 @@ func TestPoolConfigRefreshesFileSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newConnectionStringSource: %v", err)
 	}
-	cfg, err := poolConfig(source, 5*time.Minute)
+	cfg, err := poolConfig(source, "runtime_access", 5*time.Minute)
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
+	}
+	if cfg.AfterConnect == nil {
+		t.Fatal("AfterConnect is nil, stable role would never be assumed")
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = `"substrate"`
 	watchCfg := cfg.Copy()
@@ -126,6 +129,21 @@ func TestPoolConfigRefreshesFileSource(t *testing.T) {
 	}
 }
 
+func TestPoolConfigRejectsRotatedUserWithoutStableRole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connection-string")
+	writeConnectionString(t, path, "postgres://runtime:old-password@postgres:5432/atepg?sslmode=disable")
+	cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeConnectionString(t, path, "postgres://runtime_v2:new-password@postgres:5432/atepg?sslmode=disable")
+	err = cfg.BeforeConnect(context.Background(), cfg.ConnConfig.Copy())
+	if err == nil || !strings.Contains(err.Error(), "without a stable role") {
+		t.Fatalf("BeforeConnect error = %v, want stable-role error", err)
+	}
+}
+
 func TestConnectionStringSources(t *testing.T) {
 	runtimePath := filepath.Join(t.TempDir(), "runtime-dsn")
 	ddlPath := filepath.Join(t.TempDir(), "ddl-dsn")
@@ -137,11 +155,11 @@ func TestConnectionStringSources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		runtimeCfg, err := poolConfig(runtimeSource, 5*time.Minute)
+		runtimeCfg, err := poolConfig(runtimeSource, "", 5*time.Minute)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ddlCfg, err := poolConfig(ddlSource, 5*time.Minute)
+		ddlCfg, err := poolConfig(ddlSource, "", 5*time.Minute)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,11 +185,11 @@ func TestConnectionStringSources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		runtimeCfg, err := poolConfig(runtimeSource, 0)
+		runtimeCfg, err := poolConfig(runtimeSource, "", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ddlCfg, err := poolConfig(ddlSource, 0)
+		ddlCfg, err := poolConfig(ddlSource, "", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -215,7 +233,7 @@ func TestPoolConfigRejectsIdentityChanges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "connection-string")
 			writeConnectionString(t, path, tt.initial)
-			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), 0)
+			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "", 0)
 			if err != nil {
 				t.Fatalf("poolConfig: %v", err)
 			}
@@ -248,7 +266,7 @@ func TestPoolConfigRefreshFailuresAreSafe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "connection-string")
 			writeConnectionString(t, path, "postgres://runtime:old-secret@postgres:5432/atepg?sslmode=disable")
-			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), 0)
+			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "", 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -280,7 +298,7 @@ func TestConnectionStringFileSourceValidation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newConnectionStringSource(%q): %v", value, err)
 		}
-		if _, err := poolConfig(source, 0); err == nil {
+		if _, err := poolConfig(source, "", 0); err == nil {
 			t.Errorf("poolConfig accepted invalid source %q", value)
 		} else if !strings.Contains(err.Error(), strings.TrimPrefix(value, "@file:")) {
 			t.Errorf("poolConfig error %q does not identify its source path", err)
@@ -289,7 +307,7 @@ func TestConnectionStringFileSourceValidation(t *testing.T) {
 
 	malformedPath := filepath.Join(t.TempDir(), "malformed")
 	writeConnectionString(t, malformedPath, "://startup-secret")
-	_, err := poolConfig(mustConnectionStringSource(t, "@file:"+malformedPath), 0)
+	_, err := poolConfig(mustConnectionStringSource(t, "@file:"+malformedPath), "", 0)
 	if err == nil {
 		t.Fatal("poolConfig accepted a malformed file source")
 	}
@@ -404,7 +422,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", "", schema, 0)
+	persistence, err := Connect(ctx, dsn+"&search_path=public", "", "", "", schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -453,40 +471,72 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	admin := requirePool(t)
 	ctx := t.Context()
 	const (
-		schema      = "separate-role-test"
-		runtimeRole = "atepg_runtime_test"
-		ddlRole     = "atepg_ddl_test"
-		password    = "test-password"
+		schema        = "separate-role-test"
+		runtimeRole   = "atepg_runtime_test"
+		ddlRole       = "atepg_ddl_test"
+		runtimeLoginA = "atepg_runtime_login_a"
+		runtimeLoginB = "atepg_runtime_login_b"
+		ddlLoginA     = "atepg_ddl_login_a"
+		ddlLoginB     = "atepg_ddl_login_b"
+		password      = "test-password"
 	)
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`
 		DROP SCHEMA IF EXISTS %s CASCADE;
 		DROP ROLE IF EXISTS %s;
 		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		CREATE ROLE %s NOLOGIN;
+		CREATE ROLE %s NOLOGIN;
 		CREATE ROLE %s LOGIN PASSWORD '%s';
 		CREATE ROLE %s LOGIN PASSWORD '%s';
+		CREATE ROLE %s LOGIN PASSWORD '%s';
+		CREATE ROLE %s LOGIN PASSWORD '%s';
+		GRANT %s TO %s, %s;
+		GRANT %s TO %s, %s;
 		GRANT CREATE ON DATABASE atepg TO %s`,
-		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize(),
-		pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize(), password,
-		pgx.Identifier{ddlRole}.Sanitize(), password, pgx.Identifier{ddlRole}.Sanitize())); err != nil {
+		pgx.Identifier{schema}.Sanitize(),
+		pgx.Identifier{runtimeLoginA}.Sanitize(), pgx.Identifier{runtimeLoginB}.Sanitize(),
+		pgx.Identifier{ddlLoginA}.Sanitize(), pgx.Identifier{ddlLoginB}.Sanitize(),
+		pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+		pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+		pgx.Identifier{runtimeLoginA}.Sanitize(), password,
+		pgx.Identifier{runtimeLoginB}.Sanitize(), password,
+		pgx.Identifier{ddlLoginA}.Sanitize(), password,
+		pgx.Identifier{ddlLoginB}.Sanitize(), password,
+		pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{runtimeLoginA}.Sanitize(), pgx.Identifier{runtimeLoginB}.Sanitize(),
+		pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{ddlLoginA}.Sanitize(), pgx.Identifier{ddlLoginB}.Sanitize(),
+		pgx.Identifier{ddlRole}.Sanitize())); err != nil {
 		t.Fatalf("creating PostgreSQL test roles: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`
 			DROP SCHEMA IF EXISTS %s CASCADE;
 			REVOKE ALL ON DATABASE atepg FROM %s;
-			REVOKE ALL ON DATABASE atepg FROM %s;
+			DROP ROLE IF EXISTS %s;
+			DROP ROLE IF EXISTS %s;
+			DROP ROLE IF EXISTS %s;
+			DROP ROLE IF EXISTS %s;
 			DROP ROLE IF EXISTS %s;
 			DROP ROLE IF EXISTS %s`, pgx.Identifier{schema}.Sanitize(),
-			pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+			pgx.Identifier{ddlRole}.Sanitize(),
+			pgx.Identifier{runtimeLoginA}.Sanitize(), pgx.Identifier{runtimeLoginB}.Sanitize(),
+			pgx.Identifier{ddlLoginA}.Sanitize(), pgx.Identifier{ddlLoginB}.Sanitize(),
 			pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize()))
 	})
 
-	runtimeDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+runtimeRole+":"+password+"@", 1)
-	ddlDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+ddlRole+":"+password+"@", 1)
+	runtimeDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+runtimeLoginA+":"+password+"@", 1)
+	ddlDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+ddlLoginA+":"+password+"@", 1)
 	if runtimeDSN == containerDSN || ddlDSN == containerDSN {
 		t.Fatalf("unexpected test DSN format: %q", containerDSN)
 	}
-	p, err := Connect(ctx, runtimeDSN, ddlDSN, schema, 0)
+	runtimePath := filepath.Join(t.TempDir(), "runtime-dsn")
+	ddlPath := filepath.Join(t.TempDir(), "ddl-dsn")
+	writeConnectionString(t, runtimePath, runtimeDSN)
+	writeConnectionString(t, ddlPath, ddlDSN)
+	p, err := Connect(ctx, "@file:"+runtimePath, "@file:"+ddlPath, runtimeRole, ddlRole, schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -506,6 +556,20 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		t.Fatalf("DDL maintenance failed: %v", err)
 	}
 
+	writeConnectionString(t, runtimePath, strings.Replace(containerDSN, "://atepg:atepg@", "://"+runtimeLoginB+":"+password+"@", 1))
+	writeConnectionString(t, ddlPath, strings.Replace(containerDSN, "://atepg:atepg@", "://"+ddlLoginB+":"+password+"@", 1))
+	p.pool.Reset()
+	p.watchPool.Reset()
+	p.ownerPool.Reset()
+
+	var sessionUser, currentUser string
+	if err := p.pool.QueryRow(ctx, `SELECT session_user, current_user`).Scan(&sessionUser, &currentUser); err != nil {
+		t.Fatalf("querying rotated runtime identity: %v", err)
+	}
+	if sessionUser != runtimeLoginB || currentUser != runtimeRole {
+		t.Fatalf("rotated runtime identity = %q/%q, want %q/%q", sessionUser, currentUser, runtimeLoginB, runtimeRole)
+	}
+
 	// A subsystem that brings its own tables (OpenFGA) creates them as the DDL
 	// role, then reads and writes them through the runtime pool. Connect
 	// granted the runtime role DML before these tables existed.
@@ -520,6 +584,14 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	}
 	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_data VALUES (1)`); err != nil {
 		t.Errorf("runtime role cannot write a table MigrateAsOwner created: %v", err)
+	}
+	var owner string
+	if err := admin.QueryRow(ctx, `SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = $1::regclass`,
+		pgx.Identifier{schema, "subsystem_data"}.Sanitize()).Scan(&owner); err != nil {
+		t.Fatalf("querying subsystem table owner: %v", err)
+	}
+	if owner != ddlRole {
+		t.Errorf("subsystem table owner = %q, want stable DDL role %q", owner, ddlRole)
 	}
 	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_ledger VALUES (1)`); err == nil {
 		t.Error("runtime role modified a subsystem migration ledger")
@@ -555,7 +627,7 @@ func TestConnectSingleRoleDoesNotRequireSchemaOwnership(t *testing.T) {
 	})
 
 	dsn := strings.Replace(containerDSN, "://atepg:atepg@", "://"+role+":"+password+"@", 1)
-	p, err := Connect(ctx, dsn, "", schema, 0)
+	p, err := Connect(ctx, dsn, "", "", "", schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

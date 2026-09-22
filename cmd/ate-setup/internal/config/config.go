@@ -98,6 +98,10 @@ type Config struct {
 	// string. Empty means use the runtime string for an external database; a
 	// non-empty value requires PostgresConnectionString.
 	PostgresDDLConnectionString string
+	// PostgresRuntimeRole and PostgresDDLRole are stable NOLOGIN roles assumed
+	// after authentication when login usernames rotate.
+	PostgresRuntimeRole string
+	PostgresDDLRole     string
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
@@ -231,6 +235,8 @@ func Load(opts Options) (*Config, error) {
 		Images:                                loadImageSource(opts, env),
 		PostgresConnectionString:              env["ATE_API_POSTGRES_CONNECTION_STRING"],
 		PostgresDDLConnectionString:           env["ATE_API_POSTGRES_DDL_CONNECTION_STRING"],
+		PostgresRuntimeRole:                   env["ATE_API_POSTGRES_RUNTIME_ROLE"],
+		PostgresDDLRole:                       env["ATE_API_POSTGRES_DDL_ROLE"],
 		PostgresSchema:                        env["ATE_API_POSTGRES_SCHEMA"],
 		RolloutTimeout:                        rolloutTimeout,
 		rolloutTimeoutSet:                     timeoutStr != "",

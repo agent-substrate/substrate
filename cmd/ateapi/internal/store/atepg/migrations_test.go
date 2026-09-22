@@ -83,7 +83,7 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			p, err := Connect(ctx, containerDSN, "", "concurrent-startup", 0)
+			p, err := Connect(ctx, containerDSN, "", "", "", "concurrent-startup", 0)
 			if p != nil {
 				p.Close()
 				p.pool.Close()
@@ -183,7 +183,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`)
 		})
 
-		p, err := Connect(ctx, containerDSN, "", "migration-ahead", 0)
+		p, err := Connect(ctx, containerDSN, "", "", "", "migration-ahead", 0)
 		if err != nil {
 			t.Fatalf("creating current schema: %v", err)
 		}
@@ -193,7 +193,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			t.Fatalf("setting ahead migration state: %v", err)
 		}
 
-		p, err = Connect(ctx, containerDSN, "", "migration-ahead", 0)
+		p, err = Connect(ctx, containerDSN, "", "", "", "migration-ahead", 0)
 		if err != nil {
 			t.Fatalf("Connect with an ahead clean schema failed: %v", err)
 		}
@@ -212,7 +212,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-legacy" CASCADE`)
 		})
 
-		_, err := Connect(ctx, containerDSN, "", "migration-legacy", 0)
+		_, err := Connect(ctx, containerDSN, "", "", "", "migration-legacy", 0)
 		if err == nil || !strings.Contains(err.Error(), "Substrate tables exist without a migration ledger") {
 			t.Fatalf("Connect error = %v, want unsupported schema error", err)
 		}

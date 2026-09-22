@@ -140,7 +140,9 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Infof("POSTGRES_DDL_CONNECTION_STRING: configured")
 
 	configVars := map[string]string{
-		"ATE_API_POSTGRES_SCHEMA": e.Cfg.PostgresSchemaName(),
+		"ATE_API_POSTGRES_RUNTIME_ROLE": e.Cfg.PostgresRuntimeRole,
+		"ATE_API_POSTGRES_DDL_ROLE":     e.Cfg.PostgresDDLRole,
+		"ATE_API_POSTGRES_SCHEMA":       e.Cfg.PostgresSchemaName(),
 	}
 	secretVars := buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN)
 	if err := e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, configVars); err != nil {
@@ -160,7 +162,9 @@ func buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN string) map[string]string {
 }
 
 func apiServerEnvHash(configVars, secretVars map[string]string) string {
-	payload := configVars["ATE_API_POSTGRES_SCHEMA"] + "\x00" +
+	payload := configVars["ATE_API_POSTGRES_RUNTIME_ROLE"] + "\x00" +
+		configVars["ATE_API_POSTGRES_DDL_ROLE"] + "\x00" +
+		configVars["ATE_API_POSTGRES_SCHEMA"] + "\x00" +
 		secretVars["ATE_API_POSTGRES_CONNECTION_STRING"] + "\x00" +
 		secretVars["ATE_API_POSTGRES_DDL_CONNECTION_STRING"]
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))

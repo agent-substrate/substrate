@@ -129,6 +129,8 @@ function usage() {
   echo "  ATE_API_POSTGRES_CONNECTION_STRING     Runtime/DML DSN for any external PostgreSQL (stored in a Secret;"
   echo "                                         pair with ATE_API_POSTGRES_SERVER_CA_FILE for sslmode=verify-ca)"
   echo "  ATE_API_POSTGRES_DDL_CONNECTION_STRING DDL/migration DSN (requires a runtime DSN; defaults to it)"
+  echo "  ATE_API_POSTGRES_RUNTIME_ROLE          Stable runtime role for username-changing rotation"
+  echo "  ATE_API_POSTGRES_DDL_ROLE              Stable DDL owner role (defaults to the runtime role with one DSN)"
   echo "  ATE_API_POSTGRES_CLOUDSQL_INSTANCE     Cloud SQL instance connection name (project:region:instance)."
   echo "                                         Deploys the Cloud SQL Auth Proxy sidecar: connector-managed TLS"
   echo "                                         and automatic IAM database auth, no passwords (see tools/setup-gcp/cloud-sql.md)."
@@ -686,6 +688,8 @@ create_api_server_env_vars() {
 
   local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
   local postgres_ddl_connection_string="${ATE_API_POSTGRES_DDL_CONNECTION_STRING:-}"
+  local postgres_runtime_role="${ATE_API_POSTGRES_RUNTIME_ROLE:-}"
+  local postgres_ddl_role="${ATE_API_POSTGRES_DDL_ROLE:-}"
   local postgres_schema="${ATE_API_POSTGRES_SCHEMA:-public}"
   if [[ -n "${postgres_ddl_connection_string}" && -z "${postgres_connection_string}" ]]; then
     echo "Error: ATE_API_POSTGRES_DDL_CONNECTION_STRING requires ATE_API_POSTGRES_CONNECTION_STRING" >&2
@@ -827,6 +831,8 @@ create_api_server_env_vars() {
   fi
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     ${cm_args[@]+"${cm_args[@]}"} \
+    --from-literal=ATE_API_POSTGRES_RUNTIME_ROLE="${postgres_runtime_role}" \
+    --from-literal=ATE_API_POSTGRES_DDL_ROLE="${postgres_ddl_role}" \
     --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -

@@ -58,6 +58,7 @@ Store migration files in `cmd/ateapi/internal/store/atepg/migrations`.
 - Do not use `IF NOT EXISTS` for a schema change.
 - Keep each startup migration short.
 - Runtime DML privileges are granted to all tables and sequences after migrations. Add an explicit exception for any new DDL-only table, like the Goose migration ledger.
+- Username-changing credential rotation must use stable `NOLOGIN` runtime and DDL roles. Connections authenticate as rotating login roles and immediately `SET ROLE`; migrations therefore keep stable ownership and grants. ateapi does not create these roles or grant membership: database provisioning creates the stable roles, and the credential rotator grants each generated login membership before publishing its connection string.
 
 Before the first stable v1 release, developers can change or squash migration files. Recreate a development database after its migration history changes.
 

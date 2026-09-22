@@ -99,7 +99,9 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 		return err
 	}
 	if err := e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, map[string]string{
-		"ATE_API_POSTGRES_SCHEMA": e.Cfg.PostgresSchemaName(),
+		"ATE_API_POSTGRES_RUNTIME_ROLE": e.Cfg.PostgresRuntimeRole,
+		"ATE_API_POSTGRES_DDL_ROLE":     e.Cfg.PostgresDDLRole,
+		"ATE_API_POSTGRES_SCHEMA":       e.Cfg.PostgresSchemaName(),
 	}); err != nil {
 		return err
 	}

@@ -51,18 +51,26 @@ func TestConnectStoreRejectsNegativeMaxConnectionLifetime(t *testing.T) {
 
 func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	oldRuntime, oldDDL := *postgresConnectionString, *postgresDDLConnectionString
+	oldRuntimeRole, oldDDLRole := *postgresRuntimeRole, *postgresDDLRole
 	t.Cleanup(func() {
 		*postgresConnectionString = oldRuntime
 		*postgresDDLConnectionString = oldDDL
+		*postgresRuntimeRole = oldRuntimeRole
+		*postgresDDLRole = oldDDLRole
 	})
 	*postgresConnectionString = "@env"
 	*postgresDDLConnectionString = "@env"
+	*postgresRuntimeRole = "@env"
+	*postgresDDLRole = "@env"
 	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", "runtime-a")
 	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "ddl-a")
+	t.Setenv("ATE_API_POSTGRES_RUNTIME_ROLE", "runtime-role")
+	t.Setenv("ATE_API_POSTGRES_DDL_ROLE", "ddl-role")
 
 	loadFlagsFromEnv()
-	if *postgresConnectionString != "runtime-a" || *postgresDDLConnectionString != "ddl-a" {
-		t.Fatalf("resolved values = %q, %q", *postgresConnectionString, *postgresDDLConnectionString)
+	if *postgresConnectionString != "runtime-a" || *postgresDDLConnectionString != "ddl-a" ||
+		*postgresRuntimeRole != "runtime-role" || *postgresDDLRole != "ddl-role" {
+		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresConnectionString, *postgresDDLConnectionString, *postgresRuntimeRole, *postgresDDLRole)
 	}
 	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", "runtime-b")
 	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "ddl-b")

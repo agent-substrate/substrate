@@ -61,6 +61,7 @@ type Persistence struct {
 	// partition maintenance for the life of the process.
 	watchPool             *pgxpool.Pool
 	ownerPool             *pgxpool.Pool
+	runtimeRole           string
 	ownsWatchPool         bool
 	ownsOwnerPool         bool
 	leaseTTL              time.Duration
@@ -116,8 +117,9 @@ var _ store.Interface = (*Persistence)(nil)
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
 // Connect opens runtime and DDL pools, creates schema if necessary, and
-// applies pending schema migrations. An empty ddlDSN uses dsn for both roles.
-func Connect(ctx context.Context, dsn, ddlDSN, schema string, maxConnLifetime time.Duration) (*Persistence, error) {
+// applies pending schema migrations. An empty ddlDSN uses dsn for both roles;
+// an empty ddlRole likewise uses runtimeRole.
+func Connect(ctx context.Context, dsn, ddlDSN, runtimeRole, ddlRole, schema string, maxConnLifetime time.Duration) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
@@ -128,12 +130,15 @@ func Connect(ctx context.Context, dsn, ddlDSN, schema string, maxConnLifetime ti
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := poolConfig(runtimeSource, maxConnLifetime)
+	cfg, err := poolConfig(runtimeSource, runtimeRole, maxConnLifetime)
 	if err != nil {
 		return nil, err
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	ownerCfg, err := poolConfig(ddlSource, maxConnLifetime)
+	if ddlRole == "" && ddlDSN == "" {
+		ddlRole = runtimeRole
+	}
+	ownerCfg, err := poolConfig(ddlSource, ddlRole, maxConnLifetime)
 	if err != nil {
 		return nil, fmt.Errorf("parsing PostgreSQL DDL connection string: %w", err)
 	}
@@ -177,7 +182,11 @@ func Connect(ctx context.Context, dsn, ddlDSN, schema string, maxConnLifetime ti
 		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
 	}
 
-	p, err := newPersistence(ctx, pool, watchPool, ownerPool)
+	grantRole := runtimeRole
+	if grantRole == "" {
+		grantRole = cfg.ConnConfig.User
+	}
+	p, err := newPersistence(ctx, pool, watchPool, ownerPool, grantRole)
 	if err != nil {
 		watchPool.Close()
 		ownerPool.Close()
@@ -258,7 +267,7 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 // certificate it started with, and keep trusting only the CAs it started with,
 // until connections started failing. Re-parsing in BeforeConnect costs one
 // small file read per new connection and picks up every rotation.
-func poolConfig(source connectionStringSource, maxConnLifetime time.Duration) (*pgxpool.Config, error) {
+func poolConfig(source connectionStringSource, role string, maxConnLifetime time.Duration) (*pgxpool.Config, error) {
 	dsn, err := source()
 	if err != nil {
 		return nil, err
@@ -282,11 +291,22 @@ func poolConfig(source connectionStringSource, maxConnLifetime time.Duration) (*
 		if !sameConnectionIdentity(cc, fresh) {
 			return fmt.Errorf("PostgreSQL connection identity changed; restart is required")
 		}
+		if role == "" && cc.User != fresh.User {
+			return fmt.Errorf("PostgreSQL user changed without a stable role; restart is required")
+		}
 		cc.User = fresh.User
 		cc.Password = fresh.Password
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
 		return nil
+	}
+	if role != "" {
+		cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			if _, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+				return fmt.Errorf("assuming PostgreSQL role %q: %w", role, err)
+			}
+			return nil
+		}
 	}
 	return cfg, nil
 }
@@ -316,14 +336,14 @@ func sameConnectionIdentity(current, fresh *pgx.ConnConfig) bool {
 // Callers that already hold a pool (e.g. tests using testcontainers) use
 // this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
-	return newPersistence(ctx, pool, pool, pool)
+	return newPersistence(ctx, pool, pool, pool, pool.Config().ConnConfig.User)
 }
 
-func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Pool) (*Persistence, error) {
+func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Pool, runtimeRole string) (*Persistence, error) {
 	if err := applyMigrations(ctx, ownerPool); err != nil {
 		return nil, err
 	}
-	if err := grantRuntimePrivileges(ctx, ownerPool, pool.Config().ConnConfig.User); err != nil {
+	if err := grantRuntimePrivileges(ctx, ownerPool, runtimeRole); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
@@ -331,6 +351,7 @@ func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Poo
 		pool:                  pool,
 		watchPool:             watchPool,
 		ownerPool:             ownerPool,
+		runtimeRole:           runtimeRole,
 		leaseTTL:              defaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
@@ -390,7 +411,7 @@ func (p *Persistence) MigrateAsOwner(ctx context.Context, migrate func(context.C
 	if err := migrate(ctx, p.ownerPool); err != nil {
 		return err
 	}
-	return grantRuntimePrivileges(ctx, p.ownerPool, p.pool.Config().ConnConfig.User, ledgerTables...)
+	return grantRuntimePrivileges(ctx, p.ownerPool, p.runtimeRole, ledgerTables...)
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers

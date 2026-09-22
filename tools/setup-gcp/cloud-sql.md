@@ -157,6 +157,13 @@ Optional environment variables:
   database when ateapi needs to create that schema. Use a schema dedicated to
   Substrate when configuring separate identities: runtime grants cover all
   tables and sequences in that schema.
+- `ATE_API_POSTGRES_RUNTIME_ROLE` and `ATE_API_POSTGRES_DDL_ROLE` — stable
+  `NOLOGIN` roles for credential systems that rotate PostgreSQL usernames.
+  Neither ateapi nor the installer creates these roles or grants membership.
+  Database provisioning must create the roles, and the credential rotator must
+  grant each incoming login membership before publishing its connection string.
+  ateapi assumes these roles on every new connection, keeping DML grants and
+  object ownership stable across rotations.
 - `ATE_API_POSTGRES_SCHEMA` — the schema holding the store's tables
   (default `public`). A dedicated schema such as `substrate` is recommended
   when using separate runtime and DDL roles. If using a custom schema, the

@@ -75,6 +75,8 @@ var (
 	authenticationConfigFile    = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString    = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN, URI, or @file:/absolute/path).")
 	postgresDDLConnectionString = pflag.String("postgres-ddl-connection-string", "", "PostgreSQL DDL and maintenance connection string (libpq DSN, URI, or @file:/absolute/path). Defaults to --postgres-connection-string.")
+	postgresRuntimeRole         = pflag.String("postgres-runtime-role", "", "Stable PostgreSQL role assumed by runtime connections. Required for rotation to a different login user.")
+	postgresDDLRole             = pflag.String("postgres-ddl-role", "", "Stable PostgreSQL role assumed by DDL connections. Defaults to --postgres-runtime-role when the DDL connection is omitted.")
 	postgresSchema              = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresMaxConnLifetime     = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
 
@@ -355,6 +357,8 @@ func loadFlagsFromEnv() {
 	}{
 		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
 		{postgresDDLConnectionString, "ATE_API_POSTGRES_DDL_CONNECTION_STRING"},
+		{postgresRuntimeRole, "ATE_API_POSTGRES_RUNTIME_ROLE"},
+		{postgresDDLRole, "ATE_API_POSTGRES_DDL_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 	}
 	for _, o := range overrides {
@@ -371,6 +375,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.Bool("postgres-connection-string-set", *postgresConnectionString != ""),
 		slog.Bool("postgres-ddl-connection-string-set", *postgresDDLConnectionString != ""),
+		slog.String("postgres-runtime-role", *postgresRuntimeRole),
+		slog.String("postgres-ddl-role", *postgresDDLRole),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Duration("postgres-max-conn-lifetime", *postgresMaxConnLifetime),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
@@ -435,7 +441,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresDDLConnectionString, *postgresSchema, *postgresMaxConnLifetime)
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresDDLConnectionString, *postgresRuntimeRole, *postgresDDLRole, *postgresSchema, *postgresMaxConnLifetime)
 		if err == nil {
 			return persistence, nil
 		}
