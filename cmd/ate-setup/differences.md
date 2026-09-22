@@ -1,16 +1,19 @@
 # ate-setup vs. the install shell scripts
 
 `ate-setup` is a Go port of `hack/install-ate.sh`, the seven
-`hack/install-demo-*.sh` scripts it sources, and `hack/setup-csi-*-kind.sh`.
+`hack/install-demo-*.sh` scripts it sourced, and `hack/setup-csi-*-kind.sh`.
 
-The shell scripts are still present and still work; this is an additive
-alternative to them, not yet a replacement. Retiring them behind compatibility
-shims is left to a follow-up, so for now the two installers coexist and either
-can be used against the same cluster. See [`commands.md`](commands.md) for the
-flag-by-flag mapping between them.
+The port has replaced them. The demo scripts are deleted, and
+`hack/install-ate.sh` is a shim holding no install logic of its own: it
+translates the flags and environment variables the installer has always
+accepted onto `ate-setup` commands, so existing command lines keep working. See
+[`commands.md`](commands.md) for the flag-by-flag mapping.
 
-This document covers what changed *behind* that mapping. For anything not listed
-here, the port is intended to be behavior-preserving.
+This document covers what changed *behind* that mapping: the design decisions
+of the port, against the shell it replaced. For what a user of
+`hack/install-ate.sh` can observe after the switch, see
+[`cli-diff.md`](cli-diff.md). For anything listed in neither, the port is
+intended to be behavior-preserving.
 
 ## What is deliberately unchanged
 
@@ -18,8 +21,8 @@ These were treated as contracts and reproduced exactly:
 
 - **Step log lines.** `log.Step` prints the same cyan `[step]: name` and the
   same step names (`deploy_ate_system`, `create_api_server_env_vars`,
-  `demo-counter_deploy (with_external_volume=true)`), so CI log scrapers keep
-  working.
+  `demo-counter_deploy`), so CI log scrapers keep working. Two lines lost a
+  parenthesized qualifier; see [`cli-diff.md`](cli-diff.md).
 - **Manifest ordering.** Applying a directory is non-recursive and lexical, as
   `kubectl apply -f <dir>` was. `deploy_ate_system` depended on that ordering
   and the shell comments called out specific filename hazards, so
@@ -35,8 +38,8 @@ These were treated as contracts and reproduced exactly:
   its historical value otherwise, so the 60s default cannot shorten the slow
   bootstrap paths.
 - **Rendered bytes.** `authentication.yaml` is trimmed of its trailing newline
-  because the shell built it inside `$(...)`, which strips them. Switching
-  between the two installers must not rewrite the ConfigMap.
+  because the shell built it inside `$(...)`, which strips them. Installing
+  over a shell-installed cluster must not rewrite the ConfigMap.
 - **ko's ldflags.** `make ldflags` emitted `-X=<version pkg>.Version=$(git
   describe --tags --always --dirty)`; `ko.Runner.ldflags` computes the identical
   string without depending on make.
@@ -52,13 +55,16 @@ These were treated as contracts and reproduced exactly:
 | Repository root | `git rev-parse --show-toplevel`, then `cd` | walk up for `go.mod`; no `chdir`, all paths absolute |
 
 The one-action-per-run change is the most visible: a line that passed
-`--deploy-ate-system --deploy-demo-counter` becomes two `ate-setup` calls.
-`hack/install-ate.sh` still accepts the combined form.
+`--deploy-ate-system --deploy-demo-counter` becomes two `ate-setup` calls. That
+is what the shim does with it, so the combined form keeps working.
 
 Invalid input now fails before any cluster mutation. `--atenet-dataplane=nginx`
 used to be caught by a pre-scan validation pass; `--worker-count 0` was not
 caught at all and surfaced from inside `deploy_locust.sh` after the microvm
-dependencies had already been installed.
+dependencies had already been installed. `--setup-csi` is checked the same way:
+an unknown driver is rejected during argument validation, before the
+configuration is even loaded, and `--setup-csi=hostpath` against a cluster that
+is not Kind is refused before `deploy ate-system` installs anything.
 
 `.ate-dev-env.sh` is still sourced through bash — a developer's file can contain
 arbitrary shell — but its variables are then layered under the process
@@ -234,8 +240,8 @@ instead of vanishing.
 
 **Actor cleanup uses the API directly.** `delete_demo_actors` required `jq`,
 listed actors with `kubectl-ate get actors -A -o json`, and filtered with a jq
-expression. `steps.DeleteDemoActors` uses `internal/ateclient` and pages through
-`ListActors`. The tolerances are preserved: no `ate-api-server`, or an apiserver
+expression. `steps.DeleteSubstrateDemo` uses `internal/ateclient` and pages
+through `ListActors`. The tolerances are preserved: no `ate-api-server`, or an apiserver
 that cannot be reached, skips cleanup rather than failing, because `delete all`
 runs this for every demo.
 
@@ -259,23 +265,37 @@ stdout/stderr split matches under CI log capture.
 
 ## Known differences worth flagging
 
-**`--setup-csi` on a non-Kind cluster.** Both installers now accept `nfs` off
-Kind — only the hostpath plugin is patched for the single-node Kind layout, and
-both reject `hostpath` and `both` there with a hard error rather than the
-shell's old warn-and-continue.
+**`--setup-csi` on a non-Kind cluster.** `nfs` is accepted off Kind, as it was
+— only the hostpath plugin is patched for the single-node Kind layout — but
+`hostpath` and `both` are a hard error there rather than the shell's old
+warn-and-continue.
 
-**Cloud SQL is shell-only.** `hack/install-ate.sh` automates Cloud SQL setup
-with IAM authentication, synthesized DSNs, and the Auth Proxy sidecar
-([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)). `ate-setup` does not yet
-port this: while it honors `ATE_API_POSTGRES_CONNECTION_STRING` for generic
-external databases, it ignores `ATE_API_POSTGRES_CLOUDSQL_*` and deploys the
-bundled StatefulSet. Running `ate-setup` on a Cloud SQL cluster reverts the DSN
-to the in-cluster database, leaving behind an orphaned proxy. Use
-`hack/install-ate.sh` for Cloud SQL clusters until ported.
+**The env-hash digest does not agree with the shell's.** Both stamp
+`ate.dev/env-hash` on the `ate-api-server` pod template so that a changed
+environment rolls the Deployment, but the shell computed it with `openssl
+dgst -sha256` over jsonpath output and `ate-setup` digests the ConfigMap and
+Secret contents directly. The value is opaque — only changes to it matter — so
+the only consequence is that the first `ate-setup` install over a
+shell-installed cluster rolls `ate-api-server` once.
+
+**Cloud SQL DSNs are synthesized, not adopted verbatim.** With
+`ATE_API_POSTGRES_CLOUDSQL_INSTANCE` set and no explicit
+`ATE_API_POSTGRES_CONNECTION_STRING`, the DSN is built passwordless
+against the proxy's loopback listener from the GSA's email
+([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)), so
+`ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false` is rejected rather than producing a
+DSN that cannot authenticate. An *unset* instance variable is distinct from an
+exported empty one: unset adopts whatever the cluster already records in
+`ate-api-server-envvars`, including the IP type and the GSA from the
+`iam.gke.io/gcp-service-account` annotation, so a redeploy from a shell that
+never exported the variables leaves a working proxy alone. Exporting it empty
+removes the sidecar and the annotation and falls back to the bundled
+StatefulSet.
 
 ## Testing
 
 The shell installer had no tests. `cmd/ate-setup` has unit tests for template
 rendering, overlay selection, config resolution, the authentication config, the
-apiserver environment ConfigMap, delegated script arguments, manifest deletion,
-per-demo rendering, and image reference rewriting.
+apiserver environment ConfigMap and Secret, Cloud SQL resolution, the OTLP
+endpoint override, delegated script arguments, manifest deletion, per-demo
+rendering, and image reference rewriting.

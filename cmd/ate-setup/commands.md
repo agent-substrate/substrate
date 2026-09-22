@@ -2,8 +2,10 @@
 
 Every `ate-setup` command alongside the equivalent `hack/install-ate.sh` flag.
 
-Both installers work today; `ate-setup` does not yet replace the shell scripts.
-Use this table to translate an existing invocation.
+`ate-setup` is the installer. `hack/install-ate.sh` is a shim that translates
+the flags below onto these commands, so an existing invocation keeps working;
+this table is how to write it directly, and
+[`cli-diff.md`](cli-diff.md) covers what the translation does not cover.
 
 ```
 go run ./cmd/ate-setup [global flags] <command> [flags]
@@ -12,7 +14,7 @@ go run ./cmd/ate-setup [global flags] <command> [flags]
 `hack/install-ate.sh` accepts its flags in any order and runs one action per
 flag, in command line order. `ate-setup` runs exactly one command per
 invocation, so a shell line that passed several `--deploy-*` flags becomes
-several `ate-setup` calls.
+several `ate-setup` calls — which is what the shim does with it.
 
 ## Global flags
 
@@ -27,7 +29,8 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--podcert-workers-per-signer N` | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |
 | `--experimental-use-sdsmint` | `--experimental-use-sdsmint` | Mint TLS certificates on-demand via SDS in atenet egress gateway |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
-| `--experimental-egress-credential-injection` | `--experimental-egress-credential-injection` | Egress credential injection on the sdsmint gateway's MITM leg. `--credential-provider-name` / `--credential-provider-address` select the provider |
+| `--experimental-egress-credential-injection` | `--experimental-egress-credential-injection` | Egress credential injection on the sdsmint gateway's MITM leg (`--credential-provider-name` and `--credential-provider-address` select the provider) |
+| `--otlp-endpoint URL` | `--otlp-endpoint URL`, or `ATE_OTLP_ENDPOINT=URL` | Send control plane telemetry to `URL` instead of the cluster default (see [`benchmarking/telemetry/README.md`](../../benchmarking/telemetry/README.md)) |
 | `--context NAME` | `KUBECTL_CONTEXT=NAME` | Kubeconfig context; still defaults to `KUBECTL_CONTEXT` |
 | `--kubeconfig PATH` | `KUBECONFIG=PATH` | Explicit kubeconfig path |
 | `--no-dev-env` | `NO_DEV_ENV=1` | Skip `.ate-dev-env.sh` at the repository root |
@@ -81,7 +84,7 @@ that already names a manifest is used as written, and is not looked up.
 | `deploy apiserver` | `--deploy-ate-apiserver` |
 | `deploy ate-controller` | (no shell equivalent) |
 | `deploy atenet` | `--deploy-atenet` |
-| `deploy postgres` | `--deploy-postgres` |
+| `deploy postgres` | (no shell equivalent) |
 
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the
 apiserver, the controller, atenet, and atelet. It creates every `create`
@@ -139,8 +142,12 @@ restriction, but it does need the `nfsd` kernel module loaded on the nodes.
 | `delete benchmarks` | `--delete-benchmarks` |
 | `--worker-count N` | `--benchmark-worker-count N` (default `1`) |
 | `--sandbox-class gvisor\|microvm` | `--benchmark-sandbox-class CLASS` (default `gvisor`) |
+| `BENCHMARK_ACTOR_MEMORY=SIZE` | `--benchmark-actor-memory SIZE` (default `256Mi`) |
 
-The two flags are per-command in `ate-setup` and global in
+The memory limit has no flag: `benchmarking/workloads/deploy.sh` has always
+taken it from the environment, and the shim exports it.
+
+The other two flags are per-command in `ate-setup` and global in
 `hack/install-ate.sh`, which forwards them to whichever benchmark action runs.
 See
 [`benchmarking/README.md`](../../benchmarking/README.md).
@@ -158,7 +165,12 @@ See
 |---|---|---|
 | `deploy demo counter` | `--deploy-demo-counter` | A counter actor exercising snapshot, resume, and atenet ingress |
 | `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate. Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
+| `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
 | `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet |
+| `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
+| `deploy demo egress-mitm` | `--deploy-demo-egress-mitm` | Egress with TLS interception. Needs an sdsmint install (`deploy atenet --experimental-use-sdsmint`) for the trust bundle |
+| `deploy demo egress-microvm-mitm` | `--deploy-demo-egress-microvm-mitm` | Interception on micro-VM workers; needs both of the above |
+| `deploy demo jupyter` | `--deploy-demo-jupyter` | A Jupyter notebook server per actor, reached through atenet ingress |
 | `deploy demo sandbox` | `--deploy-demo-sandbox` | An on-demand sandbox actor driven by the sandbox client |
 | `deploy demo multi-template` | `--deploy-demo-multi-template` | Two ActorTemplates sharing one WorkerPool |
 | `deploy demo parking` | `--deploy-demo-parking` | Actor parking and unparking on a small WorkerPool |
@@ -171,9 +183,6 @@ to the deploy side only; teardown never reads them.
 The demo list is not hard-coded here — it is built from the registry in
 [`internal/demos`](internal/demos), one package per demo, so
 `go run ./cmd/ate-setup deploy demo --help` is authoritative for both the list
-and the per-demo flags.
-
-The demos also each have a `hack/install-demo-*.sh`, sourced by
-`hack/install-ate.sh`, which registers `--deploy-demo-NAME` /
-`--delete-demo-NAME` flags on that installer. ate-setup does not use those
-scripts; its demos live in [`internal/demos`](internal/demos).
+and the per-demo flags. A new demo is a new package there, added to
+[`internal/demos/all`](internal/demos/all) and mirrored into the `ATE_DEMOS`
+list in `hack/install-ate.sh`, which a test keeps in step with the registry.

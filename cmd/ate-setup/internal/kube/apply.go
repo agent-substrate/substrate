@@ -26,7 +26,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 )
 
 // crdKind is the kind whose creation invalidates discovery for later objects.
@@ -60,20 +62,57 @@ func (c *Client) Apply(ctx context.Context, objs []*unstructured.Unstructured) e
 	return nil
 }
 
-// ApplyOne server-side applies a single object.
+// applyBackoff paces the retries of a failed apply. Five attempts over roughly
+// eight seconds covers the two things that routinely fail here — a validating
+// webhook whose pod is still starting, and a namespace or CRD whose creation
+// has not reached the apiserver handling this request — without turning a
+// genuinely broken cluster into a long wait.
+var applyBackoff = wait.Backoff{
+	Steps:    5,
+	Duration: 500 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.1,
+}
+
+// ApplyOne server-side applies a single object, retrying the failures that
+// clear on their own.
+//
+// Each kubectl invocation in the shell scripts was its own process and the
+// install re-ran applies freely; in one process a single unlucky response ends
+// the whole run. Both of the common failures land here rather than in a wait:
+// the apply is what hits a webhook that is not serving yet, and the apply is
+// what races the propagation of a namespace or CRD created moments earlier.
 func (c *Client) ApplyOne(ctx context.Context, obj *unstructured.Unstructured) error {
 	ri, err := c.resourceFor(obj)
 	if err != nil {
 		return err
 	}
-	_, err = ri.Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{
-		FieldManager: FieldManager,
-		Force:        true,
+	return applyWithRetry(ctx, ri, obj)
+}
+
+func applyWithRetry(ctx context.Context, ri dynamicResource, obj *unstructured.Unstructured) error {
+	retryable := func(err error) bool {
+		// A cancelled context will not get better by being asked again.
+		return ctx.Err() == nil && retryableApplyError(err)
+	}
+	err := retry.OnError(applyBackoff, retryable, func() error {
+		_, err := ri.Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{
+			FieldManager: FieldManager,
+			Force:        true,
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("while applying %s: %w", Describe(obj), err)
 	}
 	return nil
+}
+
+// retryableApplyError reports whether a failed apply is worth re-sending.
+func retryableApplyError(err error) bool {
+	// Apply is forced, so it never loses a field-ownership argument. A conflict
+	// is a resourceVersion race with another writer, which re-sending settles.
+	return apierrors.IsConflict(err) || retryableWaitError(err)
 }
 
 // ApplyPath applies a manifest file or directory.
@@ -232,12 +271,54 @@ type dynamicResource interface {
 	Get(ctx context.Context, name string, opts metav1.GetOptions, subresources ...string) (*unstructured.Unstructured, error)
 }
 
-// pollInterval is how often the wait helpers re-check cluster state.
-const pollInterval = 2 * time.Second
+// pollInterval is how often the wait helpers re-check cluster state. It is a
+// variable so that tests of the retry behavior do not have to sleep for it.
+var pollInterval = 2 * time.Second
 
 // poll runs check until it reports done, the timeout expires, or ctx is
-// cancelled. Transient errors from check abort the wait; returning (false, nil)
-// means "not ready yet".
+// cancelled. Returning (false, nil) means "not ready yet".
+//
+// A retryable error from check does not end the wait. These waits run for a
+// minute or two against a control plane that is itself being installed, so one
+// 429 from priority-and-fairness, one 503 from an aggregated API still coming
+// up, or one dropped connection while the apiserver restarts would otherwise
+// fail the whole install — where `kubectl rollout status`, which the shell
+// scripts used, would have carried on. The last such error is remembered and
+// attached to the timeout, so a wait that never recovers still says why.
 func poll(ctx context.Context, timeout time.Duration, check func(context.Context) (bool, error)) error {
-	return wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, check)
+	var lastErr error
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		done, err := check(ctx)
+		if err != nil && retryableWaitError(err) {
+			lastErr = err
+			return false, nil
+		}
+		lastErr = nil
+		return done, err
+	})
+	if err != nil && lastErr != nil {
+		return fmt.Errorf("%w (last error: %v)", err, lastErr)
+	}
+	return err
+}
+
+// retryableWaitError reports whether an error seen while polling is worth
+// another attempt rather than grounds for failing the install.
+func retryableWaitError(err error) bool {
+	switch {
+	case apierrors.IsTooManyRequests(err), // 429: priority-and-fairness shedding load
+		apierrors.IsServiceUnavailable(err), // 503: an apiserver or aggregated API still coming up
+		apierrors.IsInternalError(err),      // 500: typically a webhook that is not serving yet
+		apierrors.IsTimeout(err),
+		apierrors.IsServerTimeout(err),
+		apierrors.IsUnexpectedServerError(err):
+		return true
+	}
+	// A control plane that restarts mid-wait drops the connection, which never
+	// reaches the client as a Status at all.
+	return utilnet.IsConnectionRefused(err) ||
+		utilnet.IsConnectionReset(err) ||
+		utilnet.IsHTTP2ConnectionLost(err) ||
+		utilnet.IsProbableEOF(err) ||
+		utilnet.IsTimeout(err)
 }

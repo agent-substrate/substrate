@@ -56,6 +56,23 @@ const (
 	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
 
+// TemplateUnknown is the fallback for a template dimension the emitter cannot
+// resolve. "unknown" is a legal atespace or template name, so a real object
+// with that name collides with the fallback. Like ate.sandbox.class="unknown",
+// the registry accepts that collision to keep the dimension bounded and
+// non-empty.
+const TemplateUnknown = "unknown"
+
+// NormalizeTemplateDimension returns dim, or TemplateUnknown when dim is empty.
+// Only the router calls it today. The other metrics that carry ate.template.*
+// emit the raw value.
+func NormalizeTemplateDimension(dim string) string {
+	if dim == "" {
+		return TemplateUnknown
+	}
+	return dim
+}
+
 // ReservedNamespace is substrate's. A producer that merges untrusted fields into a
 // record drops everything under it, so nothing a workload sets can read as
 // platform-issued attribution downstream.
@@ -240,12 +257,19 @@ const (
 
 // Values for RouterResumeKey.
 const (
-	// RouterResumeNone indicates the actor was already running (steady-state route).
+	// RouterResumeNone indicates the resume completed and found the actor already
+	// running (steady-state route).
 	RouterResumeNone = "none"
-	// RouterResumeTriggered indicates this request won the singleflight lock and initiated cold activation.
+	// RouterResumeTriggered indicates this request won the singleflight lock and
+	// completed a cold activation.
 	RouterResumeTriggered = "triggered"
-	// RouterResumeJoined indicates this request parked on an in-flight singleflight resume.
+	// RouterResumeJoined indicates this request waited on another request's
+	// singleflight resume, which completed a cold activation.
 	RouterResumeJoined = "joined"
+	// RouterResumeUnknown indicates the resume did not complete, so the router
+	// cannot tell whether an activation ran. The resume failed, or the request
+	// stopped first, or the direction never resumes an actor.
+	RouterResumeUnknown = "unknown"
 )
 
 // Values for ImageCacheOutcomeKey. A hit is a complete image record; a miss

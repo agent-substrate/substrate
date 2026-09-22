@@ -26,6 +26,13 @@ KO := hack/run-tool.sh ko
 # Empty by default, so ko runs on its own defaults and whatever .ko.yaml configures.
 KO_FLAGS ?=
 
+# Image naming, kept out of KO_FLAGS so that overriding those does not drop it.
+# Each image is published as <repo>/<last element of its import path>, which is
+# the name `ate-setup deploy --image-repo` looks for. ko's default appends an
+# md5 of the full import path instead, which nothing outside ko can predict.
+# cmd/ate-setup/internal/ko passes the same flag.
+KO_NAMING := --base-import-paths
+
 # Binaries
 BINDIR := bin/
 ATECTL := $(BINDIR)/kubectl-ate
@@ -71,7 +78,7 @@ build: build-images build-atectl build-ate-setup
 
 .PHONY: build-images
 build-images:
-	$(KO) build $(KO_FLAGS) \
+	$(KO) build $(KO_NAMING) $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
 	    $(IMAGES)
 
@@ -79,8 +86,8 @@ build-images:
 build-atectl:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate
 
-# The cluster installer, a Go port of hack/install-ate.sh. Both work today; see
-# cmd/ate-setup/commands.md for the flag-by-flag mapping between them.
+# The cluster installer. hack/install-ate.sh is a shim over it; see
+# cmd/ate-setup/commands.md for the flag-by-flag mapping between the two.
 .PHONY: build-ate-setup
 build-ate-setup:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATESETUP) ./cmd/ate-setup
@@ -91,7 +98,7 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build $(KO_FLAGS) \
+	$(KO) build $(KO_NAMING) $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
 	    $(DEMOS)
 

@@ -21,11 +21,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.TagScope",
-    "message": "enum has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorState",
     "message": "enum has no doc comment"
   },
@@ -116,16 +111,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteTagRequest",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.DeleteTagRequest.tag",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.DeleteActorTemplateRequest",
     "message": "message has no doc comment"
   },
@@ -142,6 +127,16 @@
   {
     "rule": "documented",
     "subject": "ateapi.DeleteAtespaceRequest.atespace",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteTagRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
@@ -181,16 +176,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetTagRequest",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.GetTagRequest.tag",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.GetActorTemplateRequest",
     "message": "message has no doc comment"
   },
@@ -207,6 +192,16 @@
   {
     "rule": "documented",
     "subject": "ateapi.GetAtespaceRequest.atespace",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetTagRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
@@ -241,26 +236,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListTagsRequest",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListTagsResponse",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListTagsResponse.tags",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListTagsResponse.next_page_token",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ListActorTemplatesRequest",
     "message": "message has no doc comment"
   },
@@ -283,6 +258,26 @@
     "rule": "documented",
     "subject": "ateapi.ListAtespacesResponse",
     "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsRequest",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsResponse",
+    "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsResponse.next_page_token",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ListTagsResponse.tags",
+    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -383,6 +378,11 @@
     "rule": "documented",
     "subject": "ateapi.SystemInfoDataSource.trust_bundle",
     "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.TagScope",
+    "message": "enum has no doc comment"
   },
   {
     "rule": "documented",

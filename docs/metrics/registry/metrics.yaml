@@ -160,18 +160,28 @@ groups:
     brief: >
       The identity of an ActorTemplate. The values are not limited to a list.
       But an operator makes each template. No value comes from a request. Thus
-      the number of values stays small.
+      the number of values stays small. One metric,
+      atenet.router.route.duration, also reports the literal "unknown" when it
+      has no template to name.
     attributes:
       - id: ate.template.atespace
         stability: development
         type: string
-        brief: The atespace of the ActorTemplate of the actor.
-        examples: [ate-demo-counter]
+        brief: >
+          The atespace of the ActorTemplate of the actor. On
+          atenet.router.route.duration only, the value is "unknown" when the
+          direction has no template, or the request failed before the router
+          resolved one.
+        examples: [ate-demo-counter, unknown]
       - id: ate.template.name
         stability: development
         type: string
-        brief: The name of the ActorTemplate of the actor.
-        examples: [counter]
+        brief: >
+          The name of the ActorTemplate of the actor. On
+          atenet.router.route.duration only, the value is "unknown" when the
+          direction has no template, or the request failed before the router
+          resolved one.
+        examples: [counter, unknown]
 
   - id: registry.ate.workerpool
     type: attribute_group
@@ -504,16 +514,26 @@ groups:
               stability: development
               value: triggered
               brief: >
-                This request got the singleflight lock and did the resume. Its
-                time is the activation time. Its rate is the number of resumes
-                each second.
+                This request got the singleflight lock and completed the resume.
+                Its time is the activation time. Its rate is the number of
+                resumes each second.
             - id: joined
               stability: development
               value: joined
               brief: >
-                A resume was already in operation. This request waited for it.
-                This value is separate because it is not a correct sample. One
-                cold start with 50 requests is one slow activation and not 51.
+                A resume was already in operation. This request waited for it,
+                and the resume activated the actor. This value is separate
+                because it is not a correct sample. One cold start with 50
+                requests is one slow activation and not 51.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: >
+                The resume did not complete, thus the router cannot tell whether
+                an activation ran. The resume failed, or the request stopped
+                before the resume gave an answer, or the direction does not
+                resume an actor. Do not read the time in this series as an
+                activation time.
       - id: ate.router.outcome
         stability: development
         brief: The result of the route attempt.
@@ -1191,7 +1211,9 @@ groups:
       This is the measurement at the user boundary. Divide the data by
       ate.router.resume before you read it. The triggered series is the
       activation time. The none series is the usual warm route. A sum across the
-      two series puts milliseconds and tens of seconds in one distribution.
+      two series puts milliseconds and tens of seconds in one distribution. The
+      unknown series holds the resumes that did not complete, thus it is neither
+      an activation time nor a warm route.
     annotations:
       substrate:
         emitted_by: [atenet-router]
