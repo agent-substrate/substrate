@@ -232,6 +232,42 @@ kubectl ate create actor <actor-name> -a <atespace> --template <template-name> -
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
 
+### Egress Policies
+
+<!-- TODO(#1550): link docs/egress-policy.md for the rule types and their evaluation order once that page exists. -->
+
+An actor has at most one egress policy.
+
+```bash
+# Get an actor's egress policy.
+kubectl ate get egress-policy <actor-name> -a <atespace>
+kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml
+
+# Create an egress policy.
+kubectl ate create egress-policy <actor-name> -a <atespace> -f policy.yaml
+
+# Copy the egress policy of another actor.
+kubectl ate get egress-policy <src-actor> -a <atespace> -o yaml | \
+  kubectl ate create egress-policy <actor-name> -a <atespace> -f -
+```
+
+The manifest is one `EgressPolicy` in YAML or JSON; `metadata` may be omitted
+and server-managed fields are ignored, so the output of `get -o yaml` is a valid
+manifest as is.
+
+`get` exits 1 when the actor does not exist; an actor without a policy prints a
+note on stderr and exits 0.
+
+#### `kubectl ate get egress-policy` output columns
+
+| Column | Meaning |
+|---|---|
+| `ATESPACE` | The atespace the actor and its policy belong to. |
+| `ACTOR` | The actor the policy applies to. |
+| `RULES` | Number of rules; `-o yaml` shows them in evaluation order. |
+| `VERSION` | The policy's version, bumped on every update. |
+| `AGE` | Time elapsed since the policy was created. |
+
 ### Logs
 
 `kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
