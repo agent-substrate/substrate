@@ -22,6 +22,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/env"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -49,6 +50,40 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
+var otelEndpointEnv = env.Var[string]{
+	Name:        "OTEL_EXPORTER_OTLP_ENDPOINT",
+	Default:     "",
+	Description: "Default for --otel-exporter-otlp-endpoint. Empty disables injection of worker telemetry settings; a flag overrides the environment.",
+}
+
+var otelMetricExportIntervalEnv = env.Var[string]{
+	Name:    "OTEL_METRIC_EXPORT_INTERVAL",
+	Default: "",
+	Description: `Metric export interval in milliseconds, used as the default for --otel-metric-export-interval.
+An explicit flag overrides this value. Forwarded unchanged to workers when an OTLP endpoint is set;
+validation is left to the worker SDK. Empty uses the SDK default of 60000 ms.`,
+}
+
+var otelMetricExportTimeoutEnv = env.Var[string]{
+	Name:    "OTEL_METRIC_EXPORT_TIMEOUT",
+	Default: "",
+	Description: `Per-export timeout in milliseconds, used as the default for --otel-metric-export-timeout.
+An explicit flag overrides this value. Forwarded unchanged to workers when an OTLP endpoint is set;
+validation is left to the worker SDK. Empty uses the SDK default of 30000 ms.`,
+}
+
+var otelTracesSamplerEnv = env.Var[string]{
+	Name:        "OTEL_TRACES_SAMPLER",
+	Default:     "",
+	Description: "Default for --otel-traces-sampler, forwarded to workers when an OTLP endpoint is set. Empty keeps the worker sampling default.",
+}
+
+var otelTracesSamplerArgEnv = env.Var[string]{
+	Name:        "OTEL_TRACES_SAMPLER_ARG",
+	Default:     "",
+	Description: "Default for --otel-traces-sampler-arg, forwarded to workers only when an OTLP endpoint and sampler are set.",
+}
+
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
@@ -58,19 +93,19 @@ var (
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
-	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", otelEndpointEnv.Get(),
 		"OTLP endpoint set on ateom worker pods so they push telemetry. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
 
-	otelMetricExportInterval = pflag.String("otel-metric-export-interval", os.Getenv("OTEL_METRIC_EXPORT_INTERVAL"),
+	otelMetricExportInterval = pflag.String("otel-metric-export-interval", otelMetricExportIntervalEnv.Get(),
 		"Metric export interval in milliseconds set on ateom worker pods. Empty keeps the OTel SDK's 60s default. Defaults to the controller's own OTEL_METRIC_EXPORT_INTERVAL.")
 
-	otelMetricExportTimeout = pflag.String("otel-metric-export-timeout", os.Getenv("OTEL_METRIC_EXPORT_TIMEOUT"),
+	otelMetricExportTimeout = pflag.String("otel-metric-export-timeout", otelMetricExportTimeoutEnv.Get(),
 		"Per-export timeout in milliseconds set on ateom worker pods. Empty keeps the OTel SDK's 30s default. Defaults to the controller's own OTEL_METRIC_EXPORT_TIMEOUT.")
 
-	otelTracesSampler = pflag.String("otel-traces-sampler", os.Getenv("OTEL_TRACES_SAMPLER"),
+	otelTracesSampler = pflag.String("otel-traces-sampler", otelTracesSamplerEnv.Get(),
 		"Trace sampler set on ateom worker pods. Empty keeps the ateom binary's default. Defaults to the controller's own OTEL_TRACES_SAMPLER.")
 
-	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
+	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", otelTracesSamplerArgEnv.Get(),
 		"Trace sampler argument set on ateom worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
 
 	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert.")
