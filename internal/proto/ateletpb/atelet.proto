@@ -176,10 +176,7 @@ message SandboxAssets {
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
-  repeated Volume volumes = 3;
-
-  reserved 2;
-  reserved "pause_image"; // moved to SandboxAssets
+  repeated Volume volumes = 2;
 }
 
 message DurableDirVolume {
