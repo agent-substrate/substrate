@@ -43,5 +43,5 @@ message FetchSecretRequest {
 // FetchSecretResponse carries the resolved credential.
 message FetchSecretResponse {
   // The raw bytes contains the secret.
-  bytes opaque_bytes = 1;
+  bytes opaque_bytes = 1 [ debug_redact = true ];
 }

@@ -7105,10 +7105,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\fcapabilities\x18\x01 \x01(\v2\x14.ateapi.CapabilitiesR\fcapabilities\"4\n" +
 	"\fCapabilities\x12\x10\n" +
 	"\x03add\x18\x01 \x03(\tR\x03add\x12\x12\n" +
-	"\x04drop\x18\x02 \x03(\tR\x04drop\"2\n" +
+	"\x04drop\x18\x02 \x03(\tR\x04drop\"7\n" +
 	"\x06EnvVar\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"l\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
+	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"l\n" +
 	"\x0fContainerReadyz\x120\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x15.ateapi.HTTPGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
@@ -7214,9 +7214,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13MintActorJWTRequest\x12'\n" +
 	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\a \x01(\tR\bactorUid\x12\x1a\n" +
-	"\baudience\x18\x01 \x03(\tR\baudience\"3\n" +
-	"\x14MintActorJWTResponse\x12\x1b\n" +
-	"\tactor_jwt\x18\x01 \x01(\tR\bactorJwt\"\xde\x01\n" +
+	"\baudience\x18\x01 \x03(\tR\baudience\"8\n" +
+	"\x14MintActorJWTResponse\x12 \n" +
+	"\tactor_jwt\x18\x01 \x01(\tB\x03\x80\x01\x01R\bactorJwt\"\xde\x01\n" +
 	"\x1bMintActorCertificateRequest\x12'\n" +
 	"\x05actor\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\a \x01(\tR\bactorUid\x12>\n" +

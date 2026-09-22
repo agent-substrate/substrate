@@ -1035,7 +1035,7 @@ message EnvVar {
   //
   // +k8s:optional
   // +k8s:maxLength=32768 # guardrail;
-  string value = 2;
+  string value = 2 [ debug_redact = true ];
 }
 
 // ContainerReadyz configures the readiness signal for a container.
@@ -1536,7 +1536,7 @@ message MintActorJWTResponse {
   // * `ate.dev`: Ate/Substrate Extension - JSON object
   //   * atespace: (string) The atespace the actor belongs to
   //   * actorName: (string) The actor's name, unique within its atespace
-  string actor_jwt = 1;
+  string actor_jwt = 1 [ debug_redact = true ];
 }
 
 // Request message for MintActorCertificate.

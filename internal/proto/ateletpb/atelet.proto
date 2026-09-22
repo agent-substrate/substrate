@@ -295,7 +295,7 @@ message ResourceLimits {
 
 message EnvEntry {
   string name = 1;
-  string value = 2;
+  string value = 2 [ debug_redact = true ];
 }
 
 // Readyz describes how to check that a container is ready to serve.

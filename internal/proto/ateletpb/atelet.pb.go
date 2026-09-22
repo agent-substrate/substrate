@@ -2796,10 +2796,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0eResourceLimits\x12!\n" +
 	"\fmemory_bytes\x18\x01 \x01(\x03R\vmemoryBytes\x12\x1d\n" +
 	"\n" +
-	"cpu_millis\x18\x02 \x01(\x03R\tcpuMillis\"4\n" +
+	"cpu_millis\x18\x02 \x01(\x03R\tcpuMillis\"9\n" +
 	"\bEnvEntry\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"c\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
+	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"c\n" +
 	"\x06Readyz\x120\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x15.atelet.HTTPGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +

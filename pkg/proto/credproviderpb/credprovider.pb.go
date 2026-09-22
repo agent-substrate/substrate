@@ -146,9 +146,9 @@ const file_credprovider_proto_rawDesc = "" +
 	"\x12credprovider.proto\x12\fcredprovider\"N\n" +
 	"\x12FetchSecretRequest\x12\x10\n" +
 	"\x03uri\x18\x01 \x01(\tR\x03uri\x12&\n" +
-	"\x0factor_spiffe_id\x18\x02 \x01(\tR\ractorSpiffeId\"8\n" +
-	"\x13FetchSecretResponse\x12!\n" +
-	"\fopaque_bytes\x18\x01 \x01(\fR\vopaqueBytes2j\n" +
+	"\x0factor_spiffe_id\x18\x02 \x01(\tR\ractorSpiffeId\"=\n" +
+	"\x13FetchSecretResponse\x12&\n" +
+	"\fopaque_bytes\x18\x01 \x01(\fB\x03\x80\x01\x01R\vopaqueBytes2j\n" +
 	"\x12CredentialProvider\x12T\n" +
 	"\vFetchSecret\x12 .credprovider.FetchSecretRequest\x1a!.credprovider.FetchSecretResponse\"\x00B?Z=github.com/agent-substrate/substrate/pkg/proto/credproviderpbb\x06proto3"
 
