@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -131,4 +132,23 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			t.Errorf("serial file = %q, want %q", cfg.Serial.File, want)
 		}
 	})
+}
+
+func TestNewReseedNonce(t *testing.T) {
+	a, err := newReseedNonce()
+	if err != nil {
+		t.Fatalf("newReseedNonce: %v", err)
+	}
+	if len(a) != 32 {
+		t.Fatalf("nonce length = %d, want 32", len(a))
+	}
+	// The reseed only makes clones of one snapshot diverge if each restore mixes in
+	// distinct bytes, so two nonces must never be equal.
+	b, err := newReseedNonce()
+	if err != nil {
+		t.Fatalf("newReseedNonce (second call): %v", err)
+	}
+	if bytes.Equal(a, b) {
+		t.Fatal("two nonces are identical; reseed would not make clones diverge")
+	}
 }
