@@ -229,9 +229,9 @@ from the cluster, works for a manual run.
 ## Notes / limitations
 
 - The gateway **authenticates** identity (is this a real, running actor?) and **authorizes**
-  destinations against the Actor's `EgressPolicy`. Injecting upstream credentials/tokens is a
-  follow-up in the same `ext_proc`; a policy rule that declares an injection is denied (501)
-  until it lands.
+  destinations against the Actor's `EgressPolicy`. The same `ext_proc` can also inject upstream
+  credentials on the sdsmint gateway's decrypted leg — see
+  [docs/egress-credential-injection.md](../../docs/egress-credential-injection.md).
 - Identity comes entirely from the actor certificate: the atespace, actor name, and UID are read
   out of the `ActorIdentity` extension and the UID is matched against the live actor, so a
   certificate cannot survive its actor being deleted and recreated under the same name. Nothing
