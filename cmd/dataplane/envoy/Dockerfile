@@ -15,7 +15,7 @@
 # Stage 1: Build the release version of the Rust dynamic module
 FROM rust:bookworm AS builder
 
-WORKDIR /usr/src/rust-module
+WORKDIR /usr/src/dynamic-modules/egress-policy
 
 # Install build dependencies required by bindgen for generating Envoy ABI bindings
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy rust module source code
-COPY rust-module/ .
+COPY dynamic-modules/egress-policy/ .
 
 # Build release version of the dynamic module shared library
 RUN cargo build --release
@@ -33,7 +33,7 @@ RUN cargo build --release
 FROM envoyproxy/envoy:v1.39-latest
 
 # Copy the built dynamic module shared library from the builder stage
-COPY --from=builder /usr/src/rust-module/target/release/libenvoy_sni_matcher_policy.so /usr/local/lib/libenvoy_sni_matcher_policy.so
+COPY --from=builder /usr/src/dynamic-modules/egress-policy/target/release/libenvoy_substrate_egress_policy.so /usr/local/lib/libenvoy_substrate_egress_policy.so
 
 # Set default search path for Envoy dynamic modules
 ENV ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib

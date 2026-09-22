@@ -91,7 +91,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "envoy-sni-matcher-policy"
+name = "envoy-substrate-egress-policy"
 version = "0.1.0"
 dependencies = [
  "envoy-proxy-dynamic-modules-rust-sdk",

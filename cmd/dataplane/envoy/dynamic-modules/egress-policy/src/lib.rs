@@ -18,11 +18,11 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   EnvoyListenerFilterConfig, ListenerFilter, ListenerFilterConfig,
 };
 
-/// Key of the filter state object holding the egress SNI passthrough policy.
-pub const ATE_POLICY_EGRESS_SNI_PASSTHROUGH: &[u8] = b"ate.policy.egress.sni-passthrough";
+/// Key of the filter state object holding the Substrate egress policy.
+pub const ATE_POLICY_EGRESS: &[u8] = b"ate.policy.egress";
 
 /// Key of the filter state object holding the SNI passthrough match result.
-pub const SNI_PASSTHROUGH_MATCH_FILTER_STATE_KEY: &[u8] = b"sni.passthrough.match";
+pub const ATE_POLICY_EGRESS_PASSTHROUGH: &[u8] = b"sni.passthrough.match";
 
 /// Empty filter configuration for the listener filter.
 pub struct EmptyFilterConfig;
@@ -45,15 +45,13 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
       .get_requested_server_name()
       .map(|server_name| {
         let s = String::from_utf8_lossy(server_name.as_slice()).into_owned();
-        envoy_log_info!("get_requested_server_name: {}", s);
         s
       });
 
     let sni_passthrough_policy_str = envoy_filter
-      .get_filter_state_bytes(ATE_POLICY_EGRESS_SNI_PASSTHROUGH)
+      .get_filter_state_bytes(ATE_POLICY_EGRESS)
       .map(|sni_passthrough_policy| {
         let s = String::from_utf8_lossy(sni_passthrough_policy.as_slice()).into_owned();
-        envoy_log_info!("ate.policy.egress.sni-passthrough: {}", s);
         s
       });
 
@@ -63,7 +61,7 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
     };
 
     envoy_filter.set_filter_state_bytes(
-      SNI_PASSTHROUGH_MATCH_FILTER_STATE_KEY,
+      ATE_POLICY_EGRESS_PASSTHROUGH,
       comparison_result.as_bytes(),
     );
     envoy_log_info!("sni.passthrough.match: {}", comparison_result);
@@ -109,7 +107,7 @@ mod tests {
     let config = new_listener_filter_config_fn::<
       MockEnvoyListenerFilterConfig,
       MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_sni_matcher_policy", b"");
+    >(&mut mock_config, "envoy_substrate_egress_policy", b"");
     assert!(config.is_some());
     let config = config.unwrap();
 
@@ -123,7 +121,7 @@ mod tests {
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(|key, value| {
-        key == SNI_PASSTHROUGH_MATCH_FILTER_STATE_KEY && value == b"false"
+        key == ATE_POLICY_EGRESS_PASSTHROUGH && value == b"false"
       })
       .times(1)
       .returning(|_, _| true);
@@ -149,7 +147,7 @@ mod tests {
     let config = new_listener_filter_config_fn::<
       MockEnvoyListenerFilterConfig,
       MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_sni_matcher_policy", b"")
+    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
     .unwrap();
 
     let mut mock_filter = MockEnvoyListenerFilter::new();
@@ -158,12 +156,12 @@ mod tests {
       .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
     mock_filter
       .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS_SNI_PASSTHROUGH)
+      .withf(|key| key == ATE_POLICY_EGRESS)
       .returning(|_| Some(EnvoyBuffer::new(b"www.google.com")));
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(|key, value| {
-        key == SNI_PASSTHROUGH_MATCH_FILTER_STATE_KEY && value == b"true"
+        key == ATE_POLICY_EGRESS_PASSTHROUGH && value == b"true"
       })
       .times(1)
       .returning(|_, _| true);
@@ -183,7 +181,7 @@ mod tests {
     let config = new_listener_filter_config_fn::<
       MockEnvoyListenerFilterConfig,
       MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_sni_matcher_policy", b"")
+    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
     .unwrap();
 
     let mut mock_filter = MockEnvoyListenerFilter::new();
@@ -192,12 +190,12 @@ mod tests {
       .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
     mock_filter
       .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS_SNI_PASSTHROUGH)
+      .withf(|key| key == ATE_POLICY_EGRESS)
       .returning(|_| Some(EnvoyBuffer::new(b"api.google.com")));
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(|key, value| {
-        key == SNI_PASSTHROUGH_MATCH_FILTER_STATE_KEY && value == b"false"
+        key == ATE_POLICY_EGRESS_PASSTHROUGH && value == b"false"
       })
       .times(1)
       .returning(|_, _| true);
@@ -217,7 +215,7 @@ mod tests {
     let config = new_listener_filter_config_fn::<
       MockEnvoyListenerFilterConfig,
       MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_sni_matcher_policy", b"")
+    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
     .unwrap();
 
     let mut mock_filter = MockEnvoyListenerFilter::new();
@@ -226,12 +224,12 @@ mod tests {
       .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
     mock_filter
       .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS_SNI_PASSTHROUGH)
+      .withf(|key| key == ATE_POLICY_EGRESS)
       .returning(|_| None);
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(|key, value| {
-        key == SNI_PASSTHROUGH_MATCH_FILTER_STATE_KEY && value == b"false"
+        key == ATE_POLICY_EGRESS_PASSTHROUGH && value == b"false"
       })
       .times(1)
       .returning(|_, _| true);
@@ -251,7 +249,7 @@ mod tests {
     let config = new_listener_filter_config_fn::<
       MockEnvoyListenerFilterConfig,
       MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_sni_matcher_policy", b"")
+    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
     .unwrap();
 
     let mut mock_filter = MockEnvoyListenerFilter::new();
@@ -260,12 +258,12 @@ mod tests {
       .returning(|| None);
     mock_filter
       .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS_SNI_PASSTHROUGH)
+      .withf(|key| key == ATE_POLICY_EGRESS)
       .returning(|_| Some(EnvoyBuffer::new(b"www.google.com")));
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(|key, value| {
-        key == SNI_PASSTHROUGH_MATCH_FILTER_STATE_KEY && value == b"false"
+        key == ATE_POLICY_EGRESS_PASSTHROUGH && value == b"false"
       })
       .times(1)
       .returning(|_, _| true);

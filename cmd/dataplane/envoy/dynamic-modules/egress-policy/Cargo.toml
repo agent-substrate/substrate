@@ -13,12 +13,12 @@
 # limitations under the License.
 
 [package]
-name = "envoy-sni-matcher-policy"
+name = "envoy-substrate-egress-policy"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "envoy_sni_matcher_policy"
+name = "envoy_substrate_egress_policy"
 crate-type = ["cdylib"]
 
 [dependencies]

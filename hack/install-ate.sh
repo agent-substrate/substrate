@@ -395,6 +395,10 @@ render_atenet_egress_manifest() {
     return
   fi
 
+  # Build envoy dataplane image
+  docker buildx create --driver-opt network=host --name host-builder
+  docker buildx build --push -t 127.0.0.1:5001/envoy-dataplane:latest --builder=host-builder cmd/dataplane/envoy/.
+
   # Envoy. The general additional-ext_proc filter and egress credential injection
   # are independent splices with their own markers, so compose them: the general
   # patch reads the manifest file and the injection patch reads stdin.

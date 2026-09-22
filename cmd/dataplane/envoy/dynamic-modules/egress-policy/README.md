@@ -1,4 +1,4 @@
-# Envoy SNI Matcher Policy - Rust Dynamic Module
+# Envoy Substrate Egress Policy Implementation - Rust Dynamic Module
 
 This directory contains an Envoy Dynamic Module written in Rust implementing a custom listener filter.
 
@@ -17,7 +17,7 @@ Prerequisites: Rust toolchain (Cargo, rustc 1.75+).
 cargo build --release
 ```
 
-The compiled shared object will be located at `target/release/libenvoy_sni_matcher_policy.so`.
+The compiled shared object will be located at `target/release/libenvoy_substrate_egress_policy.so`.
 
 ## Testing
 
@@ -35,9 +35,9 @@ listener_filters:
   typed_config:
     "@type": type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter
     dynamic_module_config:
-      name: envoy_sni_matcher_policy
-    filter_name: envoy_sni_matcher_policy
+      name: envoy_substrate_egress_policy
+    filter_name: envoy_substrate_egress_policy
     filter_config: {}
 ```
 
-Set the environment variable `ENVOY_DYNAMIC_MODULES_SEARCH_PATH` to the directory containing `libenvoy_sni_matcher_policy.so` (e.g. `export ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/path/to/target/release`).
+Set the environment variable `ENVOY_DYNAMIC_MODULES_SEARCH_PATH` to the directory containing `libenvoy_substrate_egress_policy.so` (e.g. `export ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/path/to/target/release`).
