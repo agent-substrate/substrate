@@ -154,5 +154,5 @@ func TestActorEgressGRPC(t *testing.T) {
 	// Everything above would also pass if the Actor's traffic had been
 	// masqueraded straight out instead of tunneled. This is what says it went
 	// through the gateway, on this Actor's own certificate.
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(grpcEcho.Port))
+	assertEgressGatewayConnect(t, ctx, since, networkingAtespace, actorName, strconv.Itoa(grpcEcho.Port))
 }

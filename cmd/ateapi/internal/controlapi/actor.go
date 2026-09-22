@@ -704,9 +704,6 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, status.Errorf(codes.InvalidArgument, "Failed to verify CSR signature")
 	}
 
-	// TODO(identity): Atunnel certificates should probably have a separate RPC,
-	// since different callers will be authorized to get atunnel certificates vs
-	// actor self-identity certificates.
 	var template *x509.Certificate
 	switch req.GetPurpose() {
 	case ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL:

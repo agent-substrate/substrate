@@ -110,7 +110,9 @@ func TestActorEgress(t *testing.T) {
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress", egressFixture(), e2e.EgressAllowAll())
+	fixture := egressFixture()
+
+	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress", fixture, e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -126,7 +128,7 @@ func TestActorEgress(t *testing.T) {
 	}
 	t.Logf("Actor egress fetch of %s succeeded; body: %s", url, body)
 
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(origin.Port))
+	assertEgressGatewayConnect(t, ctx, since, fixture.Namespace, actorName, strconv.Itoa(origin.Port))
 
 	// The Actor resolves the name itself -- DNS leaves over the UDP masquerade,
 	// not the tunnel, and atunnel forwards the resolved address, never the
@@ -148,7 +150,8 @@ func TestActorEgress(t *testing.T) {
 // between the Actor and the origin.
 func TestActorEgressHTTPS(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", egressFixture(), e2e.EgressAllowAll())
+	fixture := egressFixture()
+	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", fixture, e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -163,7 +166,7 @@ func TestActorEgressHTTPS(t *testing.T) {
 	}
 	t.Logf("Actor HTTPS egress fetch succeeded; body: %s", body)
 
-	assertEgressGatewayConnect(t, ctx, since, actorName, "443")
+	assertEgressGatewayConnect(t, ctx, since, fixture.Namespace, actorName, "443")
 }
 
 // httpTarget is the origin TestActorEgressNonStandardPort dials: a plain HTTP
@@ -194,7 +197,8 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 	// resumed Actor idling in the cluster waiting for a destination.
 	target := e2e.DeployServerPod(t, ctx, httpTarget)
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-port", egressFixture(), e2e.EgressAllowAll())
+	fixture := egressFixture()
+	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-port", fixture, e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -215,7 +219,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 	}
 	t.Logf("Actor egress fetch of %s succeeded", url)
 
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(httpTarget.Port))
+	assertEgressGatewayConnect(t, ctx, since, fixture.Namespace, actorName, strconv.Itoa(httpTarget.Port))
 }
 
 // fetchThroughEgressActor asks the egress demo Actor to fetch url and returns
@@ -270,7 +274,7 @@ func postThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.
 // assertEgressGatewayConnect waits for the atenet-egress log to show a CONNECT
 // to port opened by actorName. Envoy logs authenticated peer details in its
 // successful CONNECT access record; AgentGateway logs the terminated tunnel.
-func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, actorName, port string) {
+func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, atespace, actorName, port string) {
 	t.Helper()
 	want := fmt.Sprintf("a CONNECT to port %s by actor %s", port, actorName)
 	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
@@ -278,7 +282,7 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 			switch line.container {
 			case "envoy":
 				authority, ok := accessLogField(line.text, "authority")
-				if ok && strings.HasSuffix(authority, ":"+port) && strings.Contains(line.text, "/actor/"+actorName) {
+				if ok && strings.HasSuffix(authority, ":"+port) && strings.Contains(line.text, "/ateom-for-actor/"+atespace+"/"+actorName) {
 					t.Logf("egress gateway tunneled the request: %s", line.text)
 					return true
 				}

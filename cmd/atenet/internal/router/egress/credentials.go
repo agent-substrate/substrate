@@ -80,7 +80,7 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 	// the same form the CONNECT leg verified and shared as filter state. The
 	// provider authenticates this gateway and trusts its assertion; see
 	// pkg/proto/credproviderpb.
-	actorSpiffeID := resources.ActorSPIFFEID(ref).String()
+	actorSpiffeID := resources.AteomForActorSPIFFEID(ref).String()
 
 	setHeaders := make([]*corev3.HeaderValueOption, 0, len(injections))
 	for _, inj := range injections {
