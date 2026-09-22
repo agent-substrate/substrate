@@ -52,7 +52,6 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_restore_duration",
 	"ate_actor_checkpoint_duration",
 	"atenet_router_route_duration",
-	"ate_scheduler_eligible_workers",
 }
 
 // ScrapeAgentGatewayRouterMetrics reads the AgentGateway router's native

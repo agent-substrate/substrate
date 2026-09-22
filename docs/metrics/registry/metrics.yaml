@@ -474,23 +474,6 @@ groups:
               stability: development
               value: error
               brief: The attempt failed. Only this outcome has an error.type key.
-      - id: ate.scheduling.constraint
-        stability: development
-        brief: The type of constraint in the scheduling request.
-        type:
-          members:
-            - id: none
-              stability: development
-              value: none
-              brief: The request has no constraint.
-            - id: selector
-              stability: development
-              value: selector
-              brief: The request has a label selector for an actor or a template.
-            - id: required_nodes
-              stability: development
-              value: required_nodes
-              brief: The request names specific node VMs.
 
   - id: registry.ate.router
     type: attribute_group
@@ -877,37 +860,6 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: The outcome is error.
-
-  - id: metric.ate.scheduler.eligible_workers
-    type: metric
-    metric_name: ate.scheduler.eligible_workers
-    instrument: histogram
-    unit: "{worker}"
-    stability: development
-    brief: The number of free workers that remain after all the constraint filters, at each scheduling decision.
-    note: >
-      This is an early sign of low capacity. It warns you before the first
-      rejection. The rate of 503 errors tells you only after the users have a
-      fault. If no pool agrees with the constraints, ateapi sends one series
-      with the value 0. Both pool keys are empty in that series. Thus a
-      dashboard shows the "no workers are available" state with the series of
-      the pools. Only this instrument has the empty pair of pool keys.
-    annotations:
-      substrate:
-        emitted_by: [ateapi]
-        golden_signals: [saturation]
-        code_anchor: cmd/ateapi/internal/scheduling/metrics.go
-        buckets: [0, 1, 2, 3, 5, 10, 20, 50, 100, 250]
-        cuj: Resumes fail with a 503 error, but ate.workerpool.workers shows idle workers. Why?
-    attributes:
-      - ref: ate.workerpool.namespace
-        requirement_level: required
-      - ref: ate.workerpool.name
-        requirement_level: required
-      - ref: ate.sandbox.class
-        requirement_level: required
-      - ref: ate.scheduling.constraint
-        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. atelet

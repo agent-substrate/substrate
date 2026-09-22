@@ -159,22 +159,21 @@ func ActorStateValue(state ateapipb.ActorState) string {
 // pool is node state every actor shares. For the same reason it is the only
 // ate.* label on its counter.
 const (
-	ActorOperationNameKey   = attribute.Key("ate.actor.operation.name")
-	WorkerPoolNamespaceKey  = attribute.Key("ate.workerpool.namespace")
-	WorkerPoolNameKey       = attribute.Key("ate.workerpool.name")
-	WorkerStateKey          = attribute.Key("ate.worker.state")
-	SandboxClassKey         = attribute.Key("ate.sandbox.class")
-	SnapshotKindKey         = attribute.Key("ate.snapshot.kind")
-	SnapshotScopeKey        = attribute.Key("ate.snapshot.scope")
-	SnapshotPhaseKey        = attribute.Key("ate.snapshot.phase")
-	ImageCacheOutcomeKey    = attribute.Key("ate.imagecache.outcome")
-	SchedulerOutcomeKey     = attribute.Key("ate.scheduler.outcome")
-	SchedulingConstraintKey = attribute.Key("ate.scheduling.constraint")
-	RouterResumeKey         = attribute.Key("ate.router.resume")
-	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
-	FailureReasonKey        = attribute.Key("ate.failure.reason")
-	FailureDomainKey        = attribute.Key("ate.failure.domain")
-	StatsSourceKey          = attribute.Key("ate.stats.source")
+	ActorOperationNameKey  = attribute.Key("ate.actor.operation.name")
+	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
+	WorkerStateKey         = attribute.Key("ate.worker.state")
+	SandboxClassKey        = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
+	SnapshotScopeKey       = attribute.Key("ate.snapshot.scope")
+	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
+	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
+	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
+	RouterResumeKey        = attribute.Key("ate.router.resume")
+	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
+	FailureReasonKey       = attribute.Key("ate.failure.reason")
+	FailureDomainKey       = attribute.Key("ate.failure.domain")
+	StatsSourceKey         = attribute.Key("ate.stats.source")
 )
 
 // Values for FailureDomainKey. A strict function of the reason, so it costs no
@@ -238,13 +237,6 @@ const (
 	StatsSourceUnspecified = "unspecified"
 	StatsSourceCgroup      = "cgroup"
 	StatsSourceGuestAgent  = "guest-agent"
-)
-
-// Values for SchedulingConstraintKey.
-const (
-	ConstraintNone          = "none"
-	ConstraintRequiredNodes = "required_nodes"
-	ConstraintSelector      = "selector"
 )
 
 // Control-plane failure reasons for ate.actor.crashes metric.

@@ -202,8 +202,7 @@ cardinality_rules:
     brief: >
       A component sets ate.workerpool.namespace and ate.workerpool.name
       together, or it sets no pool key. One key alone does not identify a pool.
-      ate.scheduler.eligible_workers is the one exception. It sends both keys
-      empty to show that no worker is available.
+      No instrument is an exception.
     enforced: false
     could_be_enforced_by: >
       A Weaver Rego policy can make the two keys occur together in this
