@@ -5035,41 +5035,6 @@ func Validate_MintActorCertificateRequest(
 		errs = append(errs, fn(fldPath.Child("certificate_signing_request"), obj.CertificateSigningRequest, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintActorCertificateRequest.Purpose
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.ActorCertificatePurpose,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintActorCertificateRequest) *ateapipb.ActorCertificatePurpose {
-				return &oldObj.Purpose
-			})
-		errs = append(errs, fn(fldPath.Child("purpose"), &obj.Purpose, oldVal, oldObj != nil)...)
-	}
-
 	return errs
 }
 
