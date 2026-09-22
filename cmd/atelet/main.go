@@ -205,6 +205,11 @@ func main() {
 	}
 	imageCache, err := imagecache.New(*imageCacheDir,
 		imagecache.WithAuthenticator(gcpRegistryAuthn),
+		// Docker config credentials ($DOCKER_CONFIG/config.json or
+		// ~/.docker/config.json) for the registries GCP auth does not cover;
+		// pulls stay anonymous when no config is present. See
+		// docs/image-pull-credentials.md.
+		imagecache.WithKeychain(authn.DefaultKeychain),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
 		imagecache.WithActorsDir(ateompath.ActorsDir),
 		imagecache.WithMinAge(*imageCacheMinAge),

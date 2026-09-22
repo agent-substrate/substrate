@@ -25,6 +25,7 @@ func TestOptionsApply(t *testing.T) {
 	auth := authn.FromConfig(authn.AuthConfig{Username: "u"})
 	s, err := New(t.TempDir(),
 		WithAuthenticator(auth),
+		WithKeychain(authn.DefaultKeychain),
 		WithLocalhostRegistryReplacement("kind-registry:5000"),
 		WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}),
 	)
@@ -33,6 +34,9 @@ func TestOptionsApply(t *testing.T) {
 	}
 	if s.authenticator != auth {
 		t.Errorf("WithAuthenticator not applied")
+	}
+	if s.keychain != authn.DefaultKeychain {
+		t.Errorf("WithKeychain not applied")
 	}
 	if s.localhostRegistryReplacement != "kind-registry:5000" {
 		t.Errorf("WithLocalhostRegistryReplacement not applied: %q", s.localhostRegistryReplacement)
