@@ -22,9 +22,11 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os/signal"
 	"syscall"
 	"time"
@@ -49,6 +51,7 @@ const serviceName = "credprovider"
 var (
 	listenAddr   = pflag.String("listen-address", ":50051", "gRPC listen address")
 	metricsAddr  = pflag.String("metrics-address", ":9090", "Prometheus/health HTTP listen address")
+	statusAddr   = pflag.String("status-address", ":4040", "/statusz HTTP listen address; empty disables the page")
 	serverBundle = pflag.String("server-cred-bundle", "", "credential bundle (PEM key+chain) presented for serving TLS (required)")
 	clientCAFile = pflag.String("client-ca-file", "", "CA bundle that caller (injector) client certificates must chain to (required)")
 	// The injector is the only caller allowed to fetch secrets. Its identity
@@ -118,7 +121,8 @@ func run(ctx context.Context) error {
 		grpc.Creds(creds),
 	)
 	reflection.Register(srv)
-	credproviderpb.RegisterCredentialProviderServer(srv, NewServer(client, nsAuth))
+	provider := NewServer(client, nsAuth)
+	credproviderpb.RegisterCredentialProviderServer(srv, provider)
 
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *listenAddr)
 	if err != nil {
@@ -127,6 +131,25 @@ func run(ctx context.Context) error {
 
 	shutdownCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// The /statusz debug page.
+	if *statusAddr != "" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/statusz", newStatuszHandler(provider))
+		statusSrv := &http.Server{Addr: *statusAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			<-shutdownCtx.Done()
+			_ = statusSrv.Close()
+		}()
+		go func() {
+			slog.InfoContext(ctx, "statusz listening", slog.String("address", *statusAddr))
+			// Best-effort: a bind failure is logged, not fatal.
+			if err := statusSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.ErrorContext(ctx, "statusz server exited", slog.Any("err", err))
+			}
+		}()
+	}
+
 	go func() {
 		<-shutdownCtx.Done()
 		slog.Info("shutting down")
