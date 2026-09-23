@@ -75,6 +75,10 @@ const (
 	shadowedContent = "from the middle layer"
 	// deletedName is shipped by the bottom layer and whited out by the top.
 	deletedName = "deleted.txt"
+
+	// postSnapshotName is written after the last snapshot was taken, so a
+	// revert's effect on a volume shows up as whether it still exists.
+	postSnapshotName = "post-snapshot.txt"
 )
 
 const probeName = e2e.ProbeName
@@ -295,15 +299,22 @@ func requireWriteRejected(ctx context.Context, t *testing.T, router *e2e.RouterC
 	}
 }
 
+// requireWrite writes through path and fails if the write is rejected.
+func requireWrite(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) {
+	t.Helper()
+
+	if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+path); got["error"] != "" {
+		t.Fatalf("writing %s: %s", path, got["error"])
+	}
+}
+
 // requireSharedWrite writes through writePath and requires the content at both
 // paths: writePath confirms the write persisted, aliasPath that the two mounts
 // reach the same volume.
 func requireSharedWrite(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, writePath, aliasPath string) {
 	t.Helper()
 
-	if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+writePath); got["error"] != "" {
-		t.Fatalf("writing %s: %s", writePath, got["error"])
-	}
+	requireWrite(ctx, t, router, actorRef, writePath)
 	requireContentAtBoth(ctx, t, router, actorRef, writePath, aliasPath, probeWrittenContent)
 }
 
@@ -399,6 +410,47 @@ func TestCombinedVolumes(t *testing.T) {
 				t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
 			}
 			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt", probeWrittenContent)
+		})
+	})
+
+	// A revert rewinds to the last external snapshot.
+	t.Run("RevertRewindsOnlySnapshottedVolumes", func(t *testing.T) {
+		// Written after the suspend above, so it is in no snapshot the revert
+		// can return the actor to.
+		requireWrite(ctx, t, router, actorRef, scratchPathA+"/"+postSnapshotName)
+		if storageClass != "" {
+			requireWrite(ctx, t, router, actorRef, extPathA+"/"+postSnapshotName)
+		}
+
+		reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef.ToObjectRef()})
+		if err != nil {
+			t.Fatalf("RevertActor: %v", err)
+		}
+		if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			t.Fatalf("state after revert = %v, want SUSPENDED", got)
+		}
+
+		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+
+		// The image volume is immutable and remounted from its digest, so it
+		// is unaffected either way.
+		requireContentAtBoth(resumeCtx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
+
+		// The durable dir is part of the snapshot: the write it held when the
+		// snapshot was taken comes back, and the one made afterwards is gone.
+		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", probeWrittenContent)
+		requireUnreadable(resumeCtx, t, router, actorRef, scratchPathA+"/"+postSnapshotName)
+
+		// An external volume is a disk whose lifetime is the actor's and whose
+		// contents are never part of a snapshot, so a revert does not rewind
+		// it. The actor comes back with its memory and durable dir at the
+		// snapshot but this volume exactly as the discarded execution left it.
+		t.Run("ExternalVolumeNotReverted", func(t *testing.T) {
+			if storageClass == "" {
+				t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
+			}
+			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/"+postSnapshotName, extPathB+"/"+postSnapshotName, probeWrittenContent)
 		})
 	})
 }
