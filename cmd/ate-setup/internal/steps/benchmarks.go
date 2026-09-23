@@ -29,10 +29,7 @@ import (
 // several other scripts (image builds, asset assembly, object-store staging)
 // that are out of scope for this command, so ate-setup shells out to them with
 // a translated argument list rather than reimplementing them.
-const (
-	deployLocustScript      = "benchmarking/deploy_locust.sh"
-	installMicrovmDepScript = "hack/install-microvm-deps.sh"
-)
+const deployLocustScript = "benchmarking/deploy_locust.sh"
 
 // BenchmarkOptions shapes the benchmark WorkerPool.
 type BenchmarkOptions struct {
@@ -74,7 +71,7 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	// `deploy ate-system`, which only installs gvisor-default. The workloads
 	// deploy references it by name and would fail if this were skipped.
 	if opts.SandboxClass == config.SandboxClassMicrovm {
-		if err := e.runScript(ctx, installMicrovmDepScript, "--install"); err != nil {
+		if err := e.DeployMicroVMDeps(ctx); err != nil {
 			return err
 		}
 	}
@@ -118,7 +115,7 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	// gone. The script leaves it in place if another pool still uses it.
 	// `delete all` tries again once every demo is gone.
 	if opts.SandboxClass == config.SandboxClassMicrovm {
-		return e.runScript(ctx, installMicrovmDepScript, "--delete")
+		return e.DeleteMicroVMDeps(ctx)
 	}
 	return nil
 }
