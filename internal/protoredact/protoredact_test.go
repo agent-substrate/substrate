@@ -28,10 +28,9 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// TestForLogRecursesIntoRealMapFields walks real messages whose maps
-// hold messages (atelet sandbox assets) and strings (ateapi selectors). The
-// old walker skipped maps; the new one must descend into map values without
-// panicking and leave non-sensitive content intact.
+// TestForLogRecursesIntoRealMapFields walks real messages whose maps hold
+// messages (atelet sandbox assets) and strings (ateapi selectors): map values
+// are visited without panicking and non-sensitive content is left intact.
 func TestForLogRecursesIntoRealMapFields(t *testing.T) {
 	run := &ateletpb.RunRequest{
 		SandboxAssets: &ateletpb.SandboxAssets{
