@@ -197,11 +197,12 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if snapshotURI == "" {
 		return nil, nil, status.Errorf(codes.FailedPrecondition, "Actor %s holds no external snapshot to tag", actorRef)
 	}
-	// Every way an Actor comes to hold guest state records the template that
-	// state was built under: a boot through finalizeRunning, a create from a
-	// tag through the tag's own UID. A snapshot without one is a broken row,
-	// and tagging it would mint a tag that names no template.
-	if actor.GetStatus().GetCurrentActorTemplateUid() == "" {
+	// Every way an Actor comes to hold an external snapshot records the
+	// template its guest state was built under: a suspend through
+	// ensureSuspendedFinalized, a create from a tag through the tag's own UID.
+	// A snapshot without one is a broken row, and tagging it would mint a tag
+	// that names no template.
+	if actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid() == "" {
 		return nil, nil, status.Errorf(codes.Internal, "Actor %s holds an external snapshot but records no template it was built under", actorRef)
 	}
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
@@ -236,7 +237,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			// and a tag that claimed the new template would hand clones the old template's
 			// memory under the new one's identity, past the data-only downgrade a resume of
 			// the actor itself would take.
-			ActorTemplateUid: actor.GetStatus().GetCurrentActorTemplateUid(),
+			ActorTemplateUid: actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid(),
 			StorageLocation:  location,
 		},
 	}

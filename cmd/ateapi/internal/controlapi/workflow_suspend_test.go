@@ -286,9 +286,8 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status: &ateapipb.ActorStatus{
-			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			InProgressSnapshotUri:   snapshotURI,
-			CurrentActorTemplateUid: "tmpl-uid-1",
+			State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotUri: snapshotURI,
 			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
 				SnapshotName:              "actor-1-pause-snapshot",
 				NodeVmsWithLocalSnapshots: []string{"node1"},
@@ -298,7 +297,10 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	storetest.MustCreateActor(t, ctx, persistence, actor)
 
 	w := &ActorWorkflow{store: persistence}
-	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation}}
+	tmpl := &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl", Uid: "tmpl-uid-1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	}
 	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)

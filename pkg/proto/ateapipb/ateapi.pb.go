@@ -1537,19 +1537,8 @@ type ActorStatus struct {
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
 	InProgressLocalSnapshotName string `protobuf:"bytes,8,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`
-	// The UID of the actor template the Actor's guest state is currently built
-	// on: the one its latest sprint booted with, recorded when the resume (or
-	// first boot) commits RUNNING, or at creation for an Actor seeded from a tag,
-	// since that Actor borrows guest state that was already built. Empty means
-	// the Actor has no guest state yet.
-	// Diverges from the UID of the Actor's actor_template ref when a suspended
-	// Actor is repointed at a replacement template, which forces the next
-	// restore to data-only.
-	//
-	// +k8s:optional
-	CurrentActorTemplateUid string `protobuf:"bytes,11,opt,name=current_actor_template_uid,json=currentActorTemplateUid,proto3" json:"current_actor_template_uid,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *ActorStatus) Reset() {
@@ -1627,13 +1616,6 @@ func (x *ActorStatus) GetActorVolumes() []*ExternalVolume {
 func (x *ActorStatus) GetInProgressLocalSnapshotName() string {
 	if x != nil {
 		return x.InProgressLocalSnapshotName
-	}
-	return ""
-}
-
-func (x *ActorStatus) GetCurrentActorTemplateUid() string {
-	if x != nil {
-		return x.CurrentActorTemplateUid
 	}
 	return ""
 }
@@ -7073,7 +7055,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x19CredentialHeaderInjection\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
-	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\x89\x04\n" +
+	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\xcc\x03\n" +
 	"\vActorStatus\x12(\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x12.ateapi.ActorStateR\x05state\x12E\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x127\n" +
@@ -7081,8 +7063,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x11external_snapshot\x18\x04 \x01(\v2\x18.ateapi.ExternalSnapshotR\x10externalSnapshot\x12I\n" +
 	"\x13local_snapshot_info\x18\x05 \x01(\v2\x19.ateapi.LocalSnapshotInfoR\x11localSnapshotInfo\x12;\n" +
 	"\ractor_volumes\x18\a \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\x12D\n" +
-	"\x1fin_progress_local_snapshot_name\x18\b \x01(\tR\x1binProgressLocalSnapshotName\x12;\n" +
-	"\x1acurrent_actor_template_uid\x18\v \x01(\tR\x17currentActorTemplateUid\"\x8f\x02\n" +
+	"\x1fin_progress_local_snapshot_name\x18\b \x01(\tR\x1binProgressLocalSnapshotName\"\x8f\x02\n" +
 	"\x10WorkerAssignment\x12)\n" +
 	"\x06worker\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +

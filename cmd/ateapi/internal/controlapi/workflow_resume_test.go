@@ -101,33 +101,24 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	}
 }
 
-// TestFinalizeRunning_RecordsSprintTemplate verifies committing RUNNING stamps
-// the template the sprint booted with, overwriting the previous sprint's
-// record, so the next resume can detect a repointed template by UID.
-func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
+// TestFinalizeRunning_CommitsRunning verifies the last step of a resume moves
+// the actor out of RESUMING against a freshly read version.
+func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
-		Status: &ateapipb.ActorStatus{
-			State:                   ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			CurrentActorTemplateUid: "tmpl-uid-1",
-		},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING},
 	})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl-2", Uid: "tmpl-uid-2"},
-	})
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
-	}
-	if uid := got.GetStatus().GetCurrentActorTemplateUid(); uid != "tmpl-uid-2" {
-		t.Errorf("CurrentActorTemplateUid = %q, want %q", uid, "tmpl-uid-2")
 	}
 }
 
@@ -1327,10 +1318,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		// externalSnapshot seeds Status.ExternalSnapshot (the durable snapshot).
 		externalSnapshot *ateapipb.ExternalSnapshot
 		// tmplUID seeds the template UID the snapshot's guest state was built
-		// on (stamped onto localSnapshot, externalSnapshot, and
-		// CurrentActorTemplateUid): "current" stands for the created template's
-		// store-assigned UID (unknown until runtime), "" leaves the field unset,
-		// anything else mismatches (a repointed actor).
+		// on, stamped onto externalSnapshot: "current" stands for the created
+		// template's store-assigned UID (unknown until runtime), "" leaves the
+		// field unset, anything else mismatches (a repointed actor).
 		tmplUID string
 	}
 	// templateSeed is the ActorTemplate configuration a row persists.
@@ -1776,7 +1766,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				if uid == "current" {
 					uid = createdTmpl.GetMetadata().GetUid()
 				}
-				a.Status.CurrentActorTemplateUid = uid
 				if tt.actor.externalSnapshot != nil {
 					ext := proto.CloneOf(tt.actor.externalSnapshot)
 					if ext.ActorTemplateUid == "" {

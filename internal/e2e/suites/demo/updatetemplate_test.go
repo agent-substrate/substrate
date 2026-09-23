@@ -137,9 +137,6 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	if err != nil {
 		t.Fatalf("failed to get suspended Actor: %v", err)
 	}
-	if got, want := suspended.GetStatus().GetCurrentActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
-		t.Errorf("suspended Actor current_actor_template_uid = %q, want template A's %q", got, want)
-	}
 	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("suspended Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
 	}
@@ -232,11 +229,11 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
 
 	// Revert while running under template B: the actor goes back to SUSPENDED
-	// at the external snapshot it still holds, which is template A's. That
-	// leaves the repoint undetectable from status.current_actor_template_uid
-	// alone — the resumes above stamped B there — so the next resume has to
-	// judge by external_snapshot.actor_template_uid (A) and restore data-only
-	// again.
+	// at the external snapshot it still holds, which is template A's. The spec
+	// still points at B and two sprints have already run under it, so nothing
+	// about the actor says it is repointed except the snapshot's own record of
+	// what captured it — the next resume has to judge by
+	// external_snapshot.actor_template_uid (A) and restore data-only again.
 	t.Logf("Reverting Actor %q under template B...", actorID)
 	reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -253,11 +250,13 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	if got := revertedStatus.GetLocalSnapshotInfo(); got != nil {
 		t.Errorf("reverted Actor local_snapshot_info = %v, want cleared", got)
 	}
+	// The two halves of the mismatch the next resume has to spot: the spec
+	// names B, the snapshot it would restore was captured under A.
+	if got := reverted.GetActor().GetActorTemplate().GetName(); got != nameB {
+		t.Errorf("reverted Actor actor_template = %q, want %q", got, nameB)
+	}
 	if got, want := revertedStatus.GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("reverted Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
-	}
-	if got, want := revertedStatus.GetCurrentActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
-		t.Errorf("reverted Actor current_actor_template_uid = %q, want template B's %q", got, want)
 	}
 
 	t.Logf("Resuming Actor %q after the revert...", actorID)
@@ -282,8 +281,9 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 		t.Errorf("[after revert under template B] expected %q (template B reading the rewound file), got response: %s", want, resp)
 	}
 
-	// A second suspend closes the loop: the resume under B stamped B as the
-	// sprint's template, and the suspend preserves it.
+	// A second suspend closes the loop: the new snapshot is captured under B,
+	// so the actor is no longer repointed and the next resume restores at the
+	// snapshot's own scope rather than being forced down to data-only.
 	t.Logf("Suspending Actor %q again...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -296,9 +296,6 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	})
 	if err != nil {
 		t.Fatalf("failed to get re-suspended Actor: %v", err)
-	}
-	if got, want := suspended.GetStatus().GetCurrentActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
-		t.Errorf("re-suspended Actor current_actor_template_uid = %q, want template B's %q", got, want)
 	}
 	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
 		t.Errorf("re-suspended Actor external_snapshot.actor_template_uid = %q, want template B's %q", got, want)

@@ -44,8 +44,11 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	uri := mustActorSnapshotURI(t, template, actor, name+"-snapshot")
 	objects.PutSnapshot(t, uri, objectNames...)
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
-		s.CurrentActorTemplateUid = template.GetMetadata().GetUid()
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+			SnapshotUri:      uri.String(),
+			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			ActorTemplateUid: template.GetMetadata().GetUid(),
+		}
 	})
 	return actor, uri
 }
@@ -196,7 +199,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String()}
 					if tt.builtOnTemplate {
-						s.CurrentActorTemplateUid = template.GetMetadata().GetUid()
+						s.ExternalSnapshot.ActorTemplateUid = template.GetMetadata().GetUid()
 					}
 				})
 			}
