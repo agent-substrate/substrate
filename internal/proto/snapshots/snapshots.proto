@@ -26,6 +26,7 @@ service Snapshots {
   rpc Prepare(PrepareSnapshotRequest) returns (PrepareSnapshotResponse);
   rpc View(ViewSnapshotRequest) returns (ViewSnapshotResponse);
   rpc Mounts(MountsRequest) returns (MountsResponse);
+  rpc Commit(CommitSnapshotRequest) returns (google.protobuf.Empty);
   rpc Remove(RemoveSnapshotRequest) returns (google.protobuf.Empty);
   rpc Stat(StatSnapshotRequest) returns (StatSnapshotResponse);
 }
@@ -57,6 +58,13 @@ message ViewSnapshotRequest {
 
 message ViewSnapshotResponse {
   repeated Mount mounts = 1;
+}
+
+message CommitSnapshotRequest {
+  string snapshotter = 1;
+  string name = 2;
+  string key = 3;
+  map<string, string> labels = 4;
 }
 
 message MountsRequest {

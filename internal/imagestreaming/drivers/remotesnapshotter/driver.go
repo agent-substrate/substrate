@@ -57,7 +57,7 @@ const (
 	ProviderSOCI = "soci"
 
 	// DefaultRiptideSocket is the default UNIX socket path for containerd-gcfs-grpc.
-	DefaultRiptideSocket = "/run/containerd-gcfs-grpc"
+	DefaultRiptideSocket = "/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock"
 
 	// DefaultSOCISocket is the default UNIX socket path for soci-snapshotter.
 	DefaultSOCISocket = "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"
@@ -291,18 +291,60 @@ func (d *Driver) Name() string {
 	return d.name
 }
 
+func resolveSocketPath(p string) string {
+	if p == "" {
+		return p
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		if !strings.HasSuffix(p, ".sock") {
+			if _, err2 := os.Stat(p + ".sock"); err2 == nil {
+				return p + ".sock"
+			}
+			candidate := filepath.Join(p, "containerd-gcfs-grpc.sock")
+			if _, err2 := os.Stat(candidate); err2 == nil {
+				return candidate
+			}
+		}
+		return p
+	}
+	if fi.IsDir() {
+		candidate := filepath.Join(p, "containerd-gcfs-grpc.sock")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		candidate = filepath.Join(p, filepath.Base(p)+".sock")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		if entries, err := os.ReadDir(p); err == nil {
+			for _, e := range entries {
+				if strings.HasSuffix(e.Name(), ".sock") {
+					return filepath.Join(p, e.Name())
+				}
+			}
+		}
+	}
+	return p
+}
+
+func (d *Driver) getSocketPath() string {
+	return resolveSocketPath(d.socket)
+}
+
 // CanStream checks whether the remote snapshotter daemon socket is available.
 func (d *Driver) CanStream(ctx context.Context, req *imagestreaming.StreamRequest) (bool, error) {
 	if d.snapshotsClient != nil {
 		return true, nil
 	}
-	if _, err := os.Stat(d.socket); err != nil {
+	sock := d.getSocketPath()
+	if _, err := os.Stat(sock); err != nil {
 		return false, nil
 	}
 	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-	conn, err := dialer.DialContext(ctx, "unix", d.socket)
+	conn, err := dialer.DialContext(ctx, "unix", sock)
 	if err != nil {
-		slog.Debug("remote snapshotter socket present but unreachable", "provider", d.name, "socket", d.socket, "error", err)
+		slog.Debug("remote snapshotter socket present but unreachable", "provider", d.name, "socket", sock, "error", err)
 		return false, nil
 	}
 	_ = conn.Close()
@@ -368,27 +410,28 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 	var snapshotKeys []string
 	var layerDirs []string
 
+	snapshotter := d.snapshotterName
+	if snapshotter == "" {
+		snapshotter = d.name
+	}
+
 	cleanupOnErr := func(failedKeys ...string) {
 		for _, k := range failedKeys {
 			if k != "" {
-				_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{Key: k})
+				_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{Snapshotter: snapshotter, Key: k})
 			}
 		}
 		for _, key := range snapshotKeys {
-			_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{Key: key})
+			_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{Snapshotter: snapshotter, Key: key})
 		}
 		_ = os.RemoveAll(imageWorkDir)
 	}
 
 	allLayersStr := strings.Join(layerDigests, ",")
 	runID := fmt.Sprintf("%x", time.Now().UnixNano())
-	snapshotter := d.snapshotterName
-	if snapshotter == "" {
-		snapshotter = d.name
-	}
 
 	for i, c := range chainInfos {
-		key := fmt.Sprintf("%s-%s-l%d", imgKey, runID, i)
+		viewKey := fmt.Sprintf("%s-%s-l%d-view", imgKey, runID, i)
 		labels := map[string]string{
 			"containerd.io/snapshot.ref":                 c.ChainID,
 			"containerd.io/snapshot/cri.image-ref":       req.ImageRef,
@@ -401,36 +444,79 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 			labels["containerd.io/snapshot/cri.image-layers"] = allLayersStr
 		}
 
-		resp, err := client.Prepare(d.withNamespace(ctx), &snapshots.PrepareSnapshotRequest{
-			Snapshotter: snapshotter,
-			Key:         key,
-			Parent:      c.ParentChainID,
-			Labels:      labels,
-		})
 		var mounts []*snapshots.Mount
-		if err != nil {
-			st, ok := status.FromError(err)
-			if ok && st.Code() == codes.AlreadyExists {
-				// Snapshot was already prepared/committed; create a read-only view.
-				viewKey := fmt.Sprintf("%s-%s-l%d-view", imgKey, runID, i)
-				viewResp, viewErr := client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
+		// Fast path: Check if layer snapshot is already committed on the node.
+		viewResp, viewErr := client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
+			Snapshotter: snapshotter,
+			Key:         viewKey,
+			Parent:      c.ChainID,
+		})
+		if viewErr == nil {
+			mounts = viewResp.GetMounts()
+			snapshotKeys = append(snapshotKeys, viewKey)
+		} else {
+			// Layer not yet committed. Prepare active snapshot and commit it as c.ChainID.
+			prepKey := fmt.Sprintf("%s-%s-l%d-prep", imgKey, runID, i)
+			prepResp, prepErr := client.Prepare(d.withNamespace(ctx), &snapshots.PrepareSnapshotRequest{
+				Snapshotter: snapshotter,
+				Key:         prepKey,
+				Parent:      c.ParentChainID,
+				Labels:      labels,
+			})
+			if prepErr != nil {
+				st, ok := status.FromError(prepErr)
+				if ok && st.Code() == codes.AlreadyExists {
+					// Another process prepared/committed it concurrently; retry View.
+					viewResp, viewErr = client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
+						Snapshotter: snapshotter,
+						Key:         viewKey,
+						Parent:      c.ChainID,
+					})
+					if viewErr != nil {
+						cleanupOnErr(prepKey, viewKey)
+						return nil, fmt.Errorf("creating view after AlreadyExists for %s: %w", c.ChainID, viewErr)
+					}
+					mounts = viewResp.GetMounts()
+					snapshotKeys = append(snapshotKeys, viewKey)
+				} else {
+					cleanupOnErr(prepKey)
+					return nil, fmt.Errorf("PrepareSnapshot for layer %d (%s): %w", i, c.ChainID, prepErr)
+				}
+			} else {
+				// Commit active snapshot so subsequent layers can reference c.ChainID as parent.
+				_, commitErr := client.Commit(d.withNamespace(ctx), &snapshots.CommitSnapshotRequest{
+					Snapshotter: snapshotter,
+					Name:        c.ChainID,
+					Key:         prepKey,
+					Labels:      labels,
+				})
+				if commitErr != nil {
+					st, ok := status.FromError(commitErr)
+					if ok && st.Code() == codes.AlreadyExists {
+						_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{
+							Snapshotter: snapshotter,
+							Key:         prepKey,
+						})
+					} else {
+						cleanupOnErr(prepKey)
+						return nil, fmt.Errorf("CommitSnapshot for layer %d (%s): %w", i, c.ChainID, commitErr)
+					}
+				}
+				// Create read-only view for the committed layer.
+				viewResp, viewErr = client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
 					Snapshotter: snapshotter,
 					Key:         viewKey,
 					Parent:      c.ChainID,
 				})
-				if viewErr != nil {
-					cleanupOnErr(key, viewKey)
-					return nil, fmt.Errorf("creating view for existing snapshot %s: %w", c.ChainID, viewErr)
+				if viewErr == nil {
+					mounts = viewResp.GetMounts()
+					snapshotKeys = append(snapshotKeys, viewKey)
+				} else {
+					// Fallback to prepare mounts if view fails
+					mounts = prepResp.GetMounts()
+					snapshotKeys = append(snapshotKeys, prepKey)
 				}
-				mounts = viewResp.GetMounts()
-				snapshotKeys = append(snapshotKeys, viewKey)
-			} else {
-				cleanupOnErr(key)
-				return nil, fmt.Errorf("PrepareSnapshot for layer %d (%s): %w", i, c.ChainID, err)
 			}
-		} else {
-			mounts = resp.GetMounts()
-			snapshotKeys = append(snapshotKeys, key)
 		}
 
 		if len(mounts) == 0 {
@@ -544,8 +630,15 @@ func (d *Driver) ReleaseLayers(ctx context.Context, req *imagestreaming.StreamRe
 
 	client, err := d.getClient(ctx)
 	if err == nil && client != nil {
+		snapshotter := d.snapshotterName
+		if snapshotter == "" {
+			snapshotter = d.name
+		}
 		for _, key := range lease.snapshotKeys {
-			_, delErr := client.Remove(d.withNamespace(ctx), &snapshots.RemoveSnapshotRequest{Key: key})
+			_, delErr := client.Remove(d.withNamespace(ctx), &snapshots.RemoveSnapshotRequest{
+				Snapshotter: snapshotter,
+				Key:         key,
+			})
 			if delErr != nil {
 				slog.Debug("RemoveSnapshot cleanup notification", "key", key, "error", delErr)
 			}
@@ -614,7 +707,8 @@ func (d *Driver) getClient(ctx context.Context) (snapshots.SnapshotsClient, erro
 	if d.snapshotsClient != nil {
 		return d.snapshotsClient, nil
 	}
-	target := "unix://" + d.socket
+	sock := d.getSocketPath()
+	target := "unix://" + sock
 	interceptor := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		ctx = d.withNamespace(ctx)
 		return invoker(ctx, method, req, reply, cc, opts...)

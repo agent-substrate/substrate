@@ -328,6 +328,74 @@ func (x *ViewSnapshotResponse) GetMounts() []*Mount {
 	return nil
 }
 
+type CommitSnapshotRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Snapshotter   string                 `protobuf:"bytes,1,opt,name=snapshotter,proto3" json:"snapshotter,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	Labels        map[string]string      `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitSnapshotRequest) Reset() {
+	*x = CommitSnapshotRequest{}
+	mi := &file_snapshots_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitSnapshotRequest) ProtoMessage() {}
+
+func (x *CommitSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_snapshots_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*CommitSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_snapshots_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CommitSnapshotRequest) GetSnapshotter() string {
+	if x != nil {
+		return x.Snapshotter
+	}
+	return ""
+}
+
+func (x *CommitSnapshotRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CommitSnapshotRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *CommitSnapshotRequest) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
 type MountsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Snapshotter   string                 `protobuf:"bytes,1,opt,name=snapshotter,proto3" json:"snapshotter,omitempty"`
@@ -338,7 +406,7 @@ type MountsRequest struct {
 
 func (x *MountsRequest) Reset() {
 	*x = MountsRequest{}
-	mi := &file_snapshots_proto_msgTypes[5]
+	mi := &file_snapshots_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -350,7 +418,7 @@ func (x *MountsRequest) String() string {
 func (*MountsRequest) ProtoMessage() {}
 
 func (x *MountsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_proto_msgTypes[5]
+	mi := &file_snapshots_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -363,7 +431,7 @@ func (x *MountsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MountsRequest.ProtoReflect.Descriptor instead.
 func (*MountsRequest) Descriptor() ([]byte, []int) {
-	return file_snapshots_proto_rawDescGZIP(), []int{5}
+	return file_snapshots_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *MountsRequest) GetSnapshotter() string {
@@ -389,7 +457,7 @@ type MountsResponse struct {
 
 func (x *MountsResponse) Reset() {
 	*x = MountsResponse{}
-	mi := &file_snapshots_proto_msgTypes[6]
+	mi := &file_snapshots_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -401,7 +469,7 @@ func (x *MountsResponse) String() string {
 func (*MountsResponse) ProtoMessage() {}
 
 func (x *MountsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_proto_msgTypes[6]
+	mi := &file_snapshots_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -414,7 +482,7 @@ func (x *MountsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MountsResponse.ProtoReflect.Descriptor instead.
 func (*MountsResponse) Descriptor() ([]byte, []int) {
-	return file_snapshots_proto_rawDescGZIP(), []int{6}
+	return file_snapshots_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *MountsResponse) GetMounts() []*Mount {
@@ -434,7 +502,7 @@ type RemoveSnapshotRequest struct {
 
 func (x *RemoveSnapshotRequest) Reset() {
 	*x = RemoveSnapshotRequest{}
-	mi := &file_snapshots_proto_msgTypes[7]
+	mi := &file_snapshots_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -446,7 +514,7 @@ func (x *RemoveSnapshotRequest) String() string {
 func (*RemoveSnapshotRequest) ProtoMessage() {}
 
 func (x *RemoveSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_proto_msgTypes[7]
+	mi := &file_snapshots_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -459,7 +527,7 @@ func (x *RemoveSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*RemoveSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_snapshots_proto_rawDescGZIP(), []int{7}
+	return file_snapshots_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RemoveSnapshotRequest) GetSnapshotter() string {
@@ -486,7 +554,7 @@ type StatSnapshotRequest struct {
 
 func (x *StatSnapshotRequest) Reset() {
 	*x = StatSnapshotRequest{}
-	mi := &file_snapshots_proto_msgTypes[8]
+	mi := &file_snapshots_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -498,7 +566,7 @@ func (x *StatSnapshotRequest) String() string {
 func (*StatSnapshotRequest) ProtoMessage() {}
 
 func (x *StatSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_proto_msgTypes[8]
+	mi := &file_snapshots_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -511,7 +579,7 @@ func (x *StatSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*StatSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_snapshots_proto_rawDescGZIP(), []int{8}
+	return file_snapshots_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *StatSnapshotRequest) GetSnapshotter() string {
@@ -539,7 +607,7 @@ type Info struct {
 
 func (x *Info) Reset() {
 	*x = Info{}
-	mi := &file_snapshots_proto_msgTypes[9]
+	mi := &file_snapshots_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -551,7 +619,7 @@ func (x *Info) String() string {
 func (*Info) ProtoMessage() {}
 
 func (x *Info) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_proto_msgTypes[9]
+	mi := &file_snapshots_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,7 +632,7 @@ func (x *Info) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Info.ProtoReflect.Descriptor instead.
 func (*Info) Descriptor() ([]byte, []int) {
-	return file_snapshots_proto_rawDescGZIP(), []int{9}
+	return file_snapshots_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Info) GetName() string {
@@ -597,7 +665,7 @@ type StatSnapshotResponse struct {
 
 func (x *StatSnapshotResponse) Reset() {
 	*x = StatSnapshotResponse{}
-	mi := &file_snapshots_proto_msgTypes[10]
+	mi := &file_snapshots_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -609,7 +677,7 @@ func (x *StatSnapshotResponse) String() string {
 func (*StatSnapshotResponse) ProtoMessage() {}
 
 func (x *StatSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_proto_msgTypes[10]
+	mi := &file_snapshots_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -622,7 +690,7 @@ func (x *StatSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*StatSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_snapshots_proto_rawDescGZIP(), []int{10}
+	return file_snapshots_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StatSnapshotResponse) GetInfo() *Info {
@@ -661,7 +729,15 @@ const file_snapshots_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"W\n" +
 	"\x14ViewSnapshotResponse\x12?\n" +
-	"\x06mounts\x18\x01 \x03(\v2'.containerd.services.snapshots.v1.MountR\x06mounts\"C\n" +
+	"\x06mounts\x18\x01 \x03(\v2'.containerd.services.snapshots.v1.MountR\x06mounts\"\xf7\x01\n" +
+	"\x15CommitSnapshotRequest\x12 \n" +
+	"\vsnapshotter\x18\x01 \x01(\tR\vsnapshotter\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\x12[\n" +
+	"\x06labels\x18\x04 \x03(\v2C.containerd.services.snapshots.v1.CommitSnapshotRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
 	"\rMountsRequest\x12 \n" +
 	"\vsnapshotter\x18\x01 \x01(\tR\vsnapshotter\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\"Q\n" +
@@ -681,11 +757,12 @@ const file_snapshots_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"R\n" +
 	"\x14StatSnapshotResponse\x12:\n" +
-	"\x04info\x18\x01 \x01(\v2&.containerd.services.snapshots.v1.InfoR\x04info2\xc1\x04\n" +
+	"\x04info\x18\x01 \x01(\v2&.containerd.services.snapshots.v1.InfoR\x04info2\x9c\x05\n" +
 	"\tSnapshots\x12~\n" +
 	"\aPrepare\x128.containerd.services.snapshots.v1.PrepareSnapshotRequest\x1a9.containerd.services.snapshots.v1.PrepareSnapshotResponse\x12u\n" +
 	"\x04View\x125.containerd.services.snapshots.v1.ViewSnapshotRequest\x1a6.containerd.services.snapshots.v1.ViewSnapshotResponse\x12k\n" +
 	"\x06Mounts\x12/.containerd.services.snapshots.v1.MountsRequest\x1a0.containerd.services.snapshots.v1.MountsResponse\x12Y\n" +
+	"\x06Commit\x127.containerd.services.snapshots.v1.CommitSnapshotRequest\x1a\x16.google.protobuf.Empty\x12Y\n" +
 	"\x06Remove\x127.containerd.services.snapshots.v1.RemoveSnapshotRequest\x1a\x16.google.protobuf.Empty\x12u\n" +
 	"\x04Stat\x125.containerd.services.snapshots.v1.StatSnapshotRequest\x1a6.containerd.services.snapshots.v1.StatSnapshotResponseB?Z=github.com/agent-substrate/substrate/internal/proto/snapshotsb\x06proto3"
 
@@ -701,47 +778,52 @@ func file_snapshots_proto_rawDescGZIP() []byte {
 	return file_snapshots_proto_rawDescData
 }
 
-var file_snapshots_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_snapshots_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_snapshots_proto_goTypes = []any{
 	(*Mount)(nil),                   // 0: containerd.services.snapshots.v1.Mount
 	(*PrepareSnapshotRequest)(nil),  // 1: containerd.services.snapshots.v1.PrepareSnapshotRequest
 	(*PrepareSnapshotResponse)(nil), // 2: containerd.services.snapshots.v1.PrepareSnapshotResponse
 	(*ViewSnapshotRequest)(nil),     // 3: containerd.services.snapshots.v1.ViewSnapshotRequest
 	(*ViewSnapshotResponse)(nil),    // 4: containerd.services.snapshots.v1.ViewSnapshotResponse
-	(*MountsRequest)(nil),           // 5: containerd.services.snapshots.v1.MountsRequest
-	(*MountsResponse)(nil),          // 6: containerd.services.snapshots.v1.MountsResponse
-	(*RemoveSnapshotRequest)(nil),   // 7: containerd.services.snapshots.v1.RemoveSnapshotRequest
-	(*StatSnapshotRequest)(nil),     // 8: containerd.services.snapshots.v1.StatSnapshotRequest
-	(*Info)(nil),                    // 9: containerd.services.snapshots.v1.Info
-	(*StatSnapshotResponse)(nil),    // 10: containerd.services.snapshots.v1.StatSnapshotResponse
-	nil,                             // 11: containerd.services.snapshots.v1.PrepareSnapshotRequest.LabelsEntry
-	nil,                             // 12: containerd.services.snapshots.v1.ViewSnapshotRequest.LabelsEntry
-	nil,                             // 13: containerd.services.snapshots.v1.Info.LabelsEntry
-	(*emptypb.Empty)(nil),           // 14: google.protobuf.Empty
+	(*CommitSnapshotRequest)(nil),   // 5: containerd.services.snapshots.v1.CommitSnapshotRequest
+	(*MountsRequest)(nil),           // 6: containerd.services.snapshots.v1.MountsRequest
+	(*MountsResponse)(nil),          // 7: containerd.services.snapshots.v1.MountsResponse
+	(*RemoveSnapshotRequest)(nil),   // 8: containerd.services.snapshots.v1.RemoveSnapshotRequest
+	(*StatSnapshotRequest)(nil),     // 9: containerd.services.snapshots.v1.StatSnapshotRequest
+	(*Info)(nil),                    // 10: containerd.services.snapshots.v1.Info
+	(*StatSnapshotResponse)(nil),    // 11: containerd.services.snapshots.v1.StatSnapshotResponse
+	nil,                             // 12: containerd.services.snapshots.v1.PrepareSnapshotRequest.LabelsEntry
+	nil,                             // 13: containerd.services.snapshots.v1.ViewSnapshotRequest.LabelsEntry
+	nil,                             // 14: containerd.services.snapshots.v1.CommitSnapshotRequest.LabelsEntry
+	nil,                             // 15: containerd.services.snapshots.v1.Info.LabelsEntry
+	(*emptypb.Empty)(nil),           // 16: google.protobuf.Empty
 }
 var file_snapshots_proto_depIdxs = []int32{
-	11, // 0: containerd.services.snapshots.v1.PrepareSnapshotRequest.labels:type_name -> containerd.services.snapshots.v1.PrepareSnapshotRequest.LabelsEntry
+	12, // 0: containerd.services.snapshots.v1.PrepareSnapshotRequest.labels:type_name -> containerd.services.snapshots.v1.PrepareSnapshotRequest.LabelsEntry
 	0,  // 1: containerd.services.snapshots.v1.PrepareSnapshotResponse.mounts:type_name -> containerd.services.snapshots.v1.Mount
-	12, // 2: containerd.services.snapshots.v1.ViewSnapshotRequest.labels:type_name -> containerd.services.snapshots.v1.ViewSnapshotRequest.LabelsEntry
+	13, // 2: containerd.services.snapshots.v1.ViewSnapshotRequest.labels:type_name -> containerd.services.snapshots.v1.ViewSnapshotRequest.LabelsEntry
 	0,  // 3: containerd.services.snapshots.v1.ViewSnapshotResponse.mounts:type_name -> containerd.services.snapshots.v1.Mount
-	0,  // 4: containerd.services.snapshots.v1.MountsResponse.mounts:type_name -> containerd.services.snapshots.v1.Mount
-	13, // 5: containerd.services.snapshots.v1.Info.labels:type_name -> containerd.services.snapshots.v1.Info.LabelsEntry
-	9,  // 6: containerd.services.snapshots.v1.StatSnapshotResponse.info:type_name -> containerd.services.snapshots.v1.Info
-	1,  // 7: containerd.services.snapshots.v1.Snapshots.Prepare:input_type -> containerd.services.snapshots.v1.PrepareSnapshotRequest
-	3,  // 8: containerd.services.snapshots.v1.Snapshots.View:input_type -> containerd.services.snapshots.v1.ViewSnapshotRequest
-	5,  // 9: containerd.services.snapshots.v1.Snapshots.Mounts:input_type -> containerd.services.snapshots.v1.MountsRequest
-	7,  // 10: containerd.services.snapshots.v1.Snapshots.Remove:input_type -> containerd.services.snapshots.v1.RemoveSnapshotRequest
-	8,  // 11: containerd.services.snapshots.v1.Snapshots.Stat:input_type -> containerd.services.snapshots.v1.StatSnapshotRequest
-	2,  // 12: containerd.services.snapshots.v1.Snapshots.Prepare:output_type -> containerd.services.snapshots.v1.PrepareSnapshotResponse
-	4,  // 13: containerd.services.snapshots.v1.Snapshots.View:output_type -> containerd.services.snapshots.v1.ViewSnapshotResponse
-	6,  // 14: containerd.services.snapshots.v1.Snapshots.Mounts:output_type -> containerd.services.snapshots.v1.MountsResponse
-	14, // 15: containerd.services.snapshots.v1.Snapshots.Remove:output_type -> google.protobuf.Empty
-	10, // 16: containerd.services.snapshots.v1.Snapshots.Stat:output_type -> containerd.services.snapshots.v1.StatSnapshotResponse
-	12, // [12:17] is the sub-list for method output_type
-	7,  // [7:12] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	14, // 4: containerd.services.snapshots.v1.CommitSnapshotRequest.labels:type_name -> containerd.services.snapshots.v1.CommitSnapshotRequest.LabelsEntry
+	0,  // 5: containerd.services.snapshots.v1.MountsResponse.mounts:type_name -> containerd.services.snapshots.v1.Mount
+	15, // 6: containerd.services.snapshots.v1.Info.labels:type_name -> containerd.services.snapshots.v1.Info.LabelsEntry
+	10, // 7: containerd.services.snapshots.v1.StatSnapshotResponse.info:type_name -> containerd.services.snapshots.v1.Info
+	1,  // 8: containerd.services.snapshots.v1.Snapshots.Prepare:input_type -> containerd.services.snapshots.v1.PrepareSnapshotRequest
+	3,  // 9: containerd.services.snapshots.v1.Snapshots.View:input_type -> containerd.services.snapshots.v1.ViewSnapshotRequest
+	6,  // 10: containerd.services.snapshots.v1.Snapshots.Mounts:input_type -> containerd.services.snapshots.v1.MountsRequest
+	5,  // 11: containerd.services.snapshots.v1.Snapshots.Commit:input_type -> containerd.services.snapshots.v1.CommitSnapshotRequest
+	8,  // 12: containerd.services.snapshots.v1.Snapshots.Remove:input_type -> containerd.services.snapshots.v1.RemoveSnapshotRequest
+	9,  // 13: containerd.services.snapshots.v1.Snapshots.Stat:input_type -> containerd.services.snapshots.v1.StatSnapshotRequest
+	2,  // 14: containerd.services.snapshots.v1.Snapshots.Prepare:output_type -> containerd.services.snapshots.v1.PrepareSnapshotResponse
+	4,  // 15: containerd.services.snapshots.v1.Snapshots.View:output_type -> containerd.services.snapshots.v1.ViewSnapshotResponse
+	7,  // 16: containerd.services.snapshots.v1.Snapshots.Mounts:output_type -> containerd.services.snapshots.v1.MountsResponse
+	16, // 17: containerd.services.snapshots.v1.Snapshots.Commit:output_type -> google.protobuf.Empty
+	16, // 18: containerd.services.snapshots.v1.Snapshots.Remove:output_type -> google.protobuf.Empty
+	11, // 19: containerd.services.snapshots.v1.Snapshots.Stat:output_type -> containerd.services.snapshots.v1.StatSnapshotResponse
+	14, // [14:20] is the sub-list for method output_type
+	8,  // [8:14] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_snapshots_proto_init() }
@@ -755,7 +837,7 @@ func file_snapshots_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_snapshots_proto_rawDesc), len(file_snapshots_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

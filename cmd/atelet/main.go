@@ -475,6 +475,7 @@ func initImageStreamer(ctx context.Context, provider, socket string) (imagestrea
 			name string
 			sock string
 		}{
+			{"riptide", "/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock"},
 			{"riptide", "/run/containerd-gcfs-grpc"},
 			{"soci", "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"},
 			{"riptide", "/run/gcfsd/grpc.sock"},

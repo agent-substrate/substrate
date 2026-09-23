@@ -37,6 +37,7 @@ const (
 	Snapshots_Prepare_FullMethodName = "/containerd.services.snapshots.v1.Snapshots/Prepare"
 	Snapshots_View_FullMethodName    = "/containerd.services.snapshots.v1.Snapshots/View"
 	Snapshots_Mounts_FullMethodName  = "/containerd.services.snapshots.v1.Snapshots/Mounts"
+	Snapshots_Commit_FullMethodName  = "/containerd.services.snapshots.v1.Snapshots/Commit"
 	Snapshots_Remove_FullMethodName  = "/containerd.services.snapshots.v1.Snapshots/Remove"
 	Snapshots_Stat_FullMethodName    = "/containerd.services.snapshots.v1.Snapshots/Stat"
 )
@@ -51,6 +52,7 @@ type SnapshotsClient interface {
 	Prepare(ctx context.Context, in *PrepareSnapshotRequest, opts ...grpc.CallOption) (*PrepareSnapshotResponse, error)
 	View(ctx context.Context, in *ViewSnapshotRequest, opts ...grpc.CallOption) (*ViewSnapshotResponse, error)
 	Mounts(ctx context.Context, in *MountsRequest, opts ...grpc.CallOption) (*MountsResponse, error)
+	Commit(ctx context.Context, in *CommitSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Remove(ctx context.Context, in *RemoveSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Stat(ctx context.Context, in *StatSnapshotRequest, opts ...grpc.CallOption) (*StatSnapshotResponse, error)
 }
@@ -93,6 +95,16 @@ func (c *snapshotsClient) Mounts(ctx context.Context, in *MountsRequest, opts ..
 	return out, nil
 }
 
+func (c *snapshotsClient) Commit(ctx context.Context, in *CommitSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, Snapshots_Commit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *snapshotsClient) Remove(ctx context.Context, in *RemoveSnapshotRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -123,6 +135,7 @@ type SnapshotsServer interface {
 	Prepare(context.Context, *PrepareSnapshotRequest) (*PrepareSnapshotResponse, error)
 	View(context.Context, *ViewSnapshotRequest) (*ViewSnapshotResponse, error)
 	Mounts(context.Context, *MountsRequest) (*MountsResponse, error)
+	Commit(context.Context, *CommitSnapshotRequest) (*emptypb.Empty, error)
 	Remove(context.Context, *RemoveSnapshotRequest) (*emptypb.Empty, error)
 	Stat(context.Context, *StatSnapshotRequest) (*StatSnapshotResponse, error)
 	mustEmbedUnimplementedSnapshotsServer()
@@ -143,6 +156,9 @@ func (UnimplementedSnapshotsServer) View(context.Context, *ViewSnapshotRequest) 
 }
 func (UnimplementedSnapshotsServer) Mounts(context.Context, *MountsRequest) (*MountsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Mounts not implemented")
+}
+func (UnimplementedSnapshotsServer) Commit(context.Context, *CommitSnapshotRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method Commit not implemented")
 }
 func (UnimplementedSnapshotsServer) Remove(context.Context, *RemoveSnapshotRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method Remove not implemented")
@@ -225,6 +241,24 @@ func _Snapshots_Mounts_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Snapshots_Commit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotsServer).Commit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Snapshots_Commit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotsServer).Commit(ctx, req.(*CommitSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Snapshots_Remove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RemoveSnapshotRequest)
 	if err := dec(in); err != nil {
@@ -279,6 +313,10 @@ var Snapshots_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Mounts",
 			Handler:    _Snapshots_Mounts_Handler,
+		},
+		{
+			MethodName: "Commit",
+			Handler:    _Snapshots_Commit_Handler,
 		},
 		{
 			MethodName: "Remove",

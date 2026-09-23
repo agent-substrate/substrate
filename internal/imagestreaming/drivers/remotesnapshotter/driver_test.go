@@ -38,28 +38,60 @@ type mockSnapshotsServer struct {
 	mu          sync.Mutex
 	prepareFunc func(context.Context, *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error)
 	viewFunc    func(context.Context, *snapshots.ViewSnapshotRequest) (*snapshots.ViewSnapshotResponse, error)
+	commitFunc  func(context.Context, *snapshots.CommitSnapshotRequest) (*emptypb.Empty, error)
 	removeFunc  func(context.Context, *snapshots.RemoveSnapshotRequest) (*emptypb.Empty, error)
 
-	preparedKeys []string
-	viewedKeys   []string
-	removedKeys  []string
+	preparedKeys  []string
+	committedKeys map[string]bool
+	viewedKeys    []string
+	removedKeys   []string
+	mountsByKey   map[string][]*snapshots.Mount
 }
 
 func (m *mockSnapshotsServer) Prepare(ctx context.Context, req *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.preparedKeys = append(m.preparedKeys, req.GetKey())
+	var resp *snapshots.PrepareSnapshotResponse
+	var err error
 	if m.prepareFunc != nil {
-		return m.prepareFunc(ctx, req)
-	}
-	return &snapshots.PrepareSnapshotResponse{
-		Mounts: []*snapshots.Mount{
-			{
-				Type:   "overlay",
-				Source: "/var/lib/mock/" + req.GetKey(),
+		resp, err = m.prepareFunc(ctx, req)
+	} else {
+		resp = &snapshots.PrepareSnapshotResponse{
+			Mounts: []*snapshots.Mount{
+				{
+					Type:   "overlay",
+					Source: "/var/lib/mock/" + req.GetKey(),
+				},
 			},
-		},
-	}, nil
+		}
+	}
+	if err == nil && resp != nil {
+		if m.mountsByKey == nil {
+			m.mountsByKey = make(map[string][]*snapshots.Mount)
+		}
+		m.mountsByKey[req.GetKey()] = resp.Mounts
+	}
+	return resp, err
+}
+
+func (m *mockSnapshotsServer) Commit(ctx context.Context, req *snapshots.CommitSnapshotRequest) (*emptypb.Empty, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.committedKeys == nil {
+		m.committedKeys = make(map[string]bool)
+	}
+	m.committedKeys[req.GetName()] = true
+	if m.mountsByKey == nil {
+		m.mountsByKey = make(map[string][]*snapshots.Mount)
+	}
+	if mounts, ok := m.mountsByKey[req.GetKey()]; ok {
+		m.mountsByKey[req.GetName()] = mounts
+	}
+	if m.commitFunc != nil {
+		return m.commitFunc(ctx, req)
+	}
+	return &emptypb.Empty{}, nil
 }
 
 func (m *mockSnapshotsServer) View(ctx context.Context, req *snapshots.ViewSnapshotRequest) (*snapshots.ViewSnapshotResponse, error) {
@@ -69,14 +101,12 @@ func (m *mockSnapshotsServer) View(ctx context.Context, req *snapshots.ViewSnaps
 	if m.viewFunc != nil {
 		return m.viewFunc(ctx, req)
 	}
-	return &snapshots.ViewSnapshotResponse{
-		Mounts: []*snapshots.Mount{
-			{
-				Type:   "overlay",
-				Source: "/var/lib/mock/" + req.GetKey(),
-			},
-		},
-	}, nil
+	if m.committedKeys != nil && m.committedKeys[req.GetParent()] {
+		if mounts, ok := m.mountsByKey[req.GetParent()]; ok {
+			return &snapshots.ViewSnapshotResponse{Mounts: mounts}, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "snapshot not found")
 }
 
 func (m *mockSnapshotsServer) Remove(ctx context.Context, req *snapshots.RemoveSnapshotRequest) (*emptypb.Empty, error) {
