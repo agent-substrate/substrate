@@ -61,10 +61,11 @@ Run it and follow the printed next steps:
 KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
 ```
 
-On a cluster that already has the microVM deps (`hack/install-microvm-deps.sh`),
-deploy directly instead:
+To deploy onto an existing cluster instead, install the microVM deps and then
+the demo:
 
 ```bash
+go run ./cmd/ate-setup deploy microvm-deps
 go run ./cmd/ate-setup deploy demo counter-microvm
 ```
 </details>
