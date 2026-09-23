@@ -22,7 +22,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 pub const ATE_POLICY_EGRESS: &[u8] = b"dev.ate.policy.egress";
 
 /// Key of the filter state object holding the SNI passthrough match result.
-pub const ATE_POLICY_EGRESS_PASSTHROUGH: &[u8] = b"dev.sni.passthrough.match";
+pub const ATE_POLICY_EGRESS_PASSTHROUGH: &[u8] = b"dev.ate.sni.passthrough.match";
 
 /// Empty filter configuration for the listener filter.
 pub struct EmptyFilterConfig;
