@@ -3375,6 +3375,9 @@ func Validate_ExternalVolumeTemplate(
 			if e := ValidateCustom_ExternalVolumeTemplate_Capacity(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 32); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,

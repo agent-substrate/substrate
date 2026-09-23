@@ -3270,6 +3270,7 @@ type ExternalVolumeTemplate struct {
 	// form (e.g. "10Gi"). Required.
 	//
 	// +k8s:required
+	// +k8s:maxLength=32 # matches Limits.quantity's bound
 	// +k8s:customValidation # must parse as a resource.Quantity
 	Capacity string `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	// storage_class_name names the cluster-scoped Kubernetes StorageClass to
