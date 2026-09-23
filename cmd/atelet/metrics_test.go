@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -26,7 +25,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -105,7 +103,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		scope:             ateattr.SnapshotScopeDataOnGolden,
 		sandboxClass:      "gvisor",
 	}
-	inst.recordRestore(context.Background(), op, nil,
+	inst.recordRestore(context.Background(), op,
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
 		phase{ateattr.SnapshotPhaseTotal, 3 * time.Second})
 
@@ -153,7 +151,7 @@ func TestCheckpointDurationShape(t *testing.T) {
 		kind:              ateattr.SnapshotKindLocal,
 		scope:             ateattr.SnapshotScopeFull,
 		sandboxClass:      "microvm",
-	}, nil, phase{ateattr.SnapshotPhasePersist, time.Second})
+	}, phase{ateattr.SnapshotPhasePersist, time.Second})
 
 	m := collectHistogram(t, reader, checkpointDurationMetric)
 	if m.Unit != "s" {
@@ -168,17 +166,13 @@ func TestCheckpointDurationShape(t *testing.T) {
 	}
 }
 
-// TestRecordPhasesFailurePath is the failure-path contract: a restore that dies
-// in the download marks ate.failure.reason on that phase and on the total,
-// leaves the phases that already succeeded unlabeled so their latency stays
-// queryable, and does not report phases that never started as instantaneous.
-func TestRecordPhasesFailurePath(t *testing.T) {
+// TestRecordPhasesSkipsZeroPhases pins the absence rule: a phase that never
+// started stays absent instead of landing in the percentiles as instantaneous.
+func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 	inst, reader := newTestInstruments(t)
 
-	downloadErr := fmt.Errorf("%w: while downloading snapshot", ateerrors.ReasonFailedGetExternalObject)
 	inst.recordRestore(context.Background(),
-		snapshotOp{scope: ateattr.SnapshotScopeFull, failedPhase: ateattr.SnapshotPhaseDownload},
-		downloadErr,
+		snapshotOp{scope: ateattr.SnapshotScopeFull},
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
 		phase{ateattr.SnapshotPhaseAteomRestore, 0},
@@ -188,51 +182,8 @@ func TestRecordPhasesFailurePath(t *testing.T) {
 	if _, ok := byPhase[ateattr.SnapshotPhaseAteomRestore]; ok {
 		t.Error("a phase that never started was recorded as a zero observation")
 	}
-
-	wantReason := string(ateerrors.ReasonFailedGetExternalObject)
-	tests := []struct {
-		phase      string
-		wantReason string // empty means ate.failure.reason must be absent
-	}{
-		{phase: ateattr.SnapshotPhaseDownload, wantReason: wantReason},
-		{phase: ateattr.SnapshotPhaseTotal, wantReason: wantReason},
-		{phase: ateattr.SnapshotPhaseManifestFetch, wantReason: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.phase, func(t *testing.T) {
-			set, ok := byPhase[tt.phase]
-			if !ok {
-				t.Fatalf("phase %q missing", tt.phase)
-			}
-			got, present := set.Value(ateattr.FailureReasonKey)
-			if tt.wantReason == "" {
-				if present {
-					t.Errorf("ate.failure.reason = %q on a phase that succeeded, want absent", got.AsString())
-				}
-				return
-			}
-			if !present || got.AsString() != tt.wantReason {
-				t.Errorf("ate.failure.reason = %q (present=%v), want %q", got.AsString(), present, tt.wantReason)
-			}
-		})
-	}
-}
-
-// TestRecordPhasesUnclassifiedFailure covers the infrastructure failures that
-// carry no ateerrors.Reason (a dead object-storage endpoint, say): they must
-// collapse onto UNKNOWN rather than leaking an error message into the label.
-func TestRecordPhasesUnclassifiedFailure(t *testing.T) {
-	inst, reader := newTestInstruments(t)
-
-	inst.recordRestore(context.Background(),
-		snapshotOp{scope: ateattr.SnapshotScopeFull, failedPhase: ateattr.SnapshotPhaseManifestFetch},
-		fmt.Errorf("dial tcp 10.96.192.187:9000: connect: connection refused"),
-		phase{ateattr.SnapshotPhaseManifestFetch, 30 * time.Millisecond},
-		phase{ateattr.SnapshotPhaseTotal, 30 * time.Millisecond})
-
-	set := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))[ateattr.SnapshotPhaseManifestFetch]
-	if v := attrString(t, set, ateattr.FailureReasonKey); v != ateattr.ReasonUnknown {
-		t.Errorf("ate.failure.reason = %q, want %q", v, ateattr.ReasonUnknown)
+	if len(byPhase) != 3 {
+		t.Errorf("recorded %d phases, want 3", len(byPhase))
 	}
 }
 
@@ -263,71 +214,9 @@ func TestSnapshotOpAttrsNormalizesSandboxClass(t *testing.T) {
 	}
 }
 
-// TestGroupFailedPhase covers the concurrent leg of a restore: whichever
-// goroutine fails first cancels the shared context, so the other one also
-// returns an error, and only the one whose error errgroup actually surfaced may
-// claim the phase.
-func TestGroupFailedPhase(t *testing.T) {
-	download := errors.New("download: connection reset")
-	prep := errors.New("prepare bundles: no entrypoint")
-	cancelled := errors.New("context canceled")
-
-	tests := []struct {
-		name        string
-		err         error
-		downloadErr error
-		prepErr     error
-		prepPhase   string
-		want        string
-	}{
-		{
-			name:        "download failed alone",
-			err:         download,
-			downloadErr: download,
-			want:        ateattr.SnapshotPhaseDownload,
-		},
-		{
-			name:      "prep failed alone during the asset fetch",
-			err:       prep,
-			prepErr:   prep,
-			prepPhase: ateattr.SnapshotPhaseSandboxAssets,
-			want:      ateattr.SnapshotPhaseSandboxAssets,
-		},
-		{
-			name:        "prep failed first and the in-flight download was collateral",
-			err:         prep,
-			downloadErr: cancelled,
-			prepErr:     prep,
-			prepPhase:   ateattr.SnapshotPhaseOCIUnpack,
-			want:        ateattr.SnapshotPhaseOCIUnpack,
-		},
-		{
-			name:        "download failed first and prep was collateral",
-			err:         download,
-			downloadErr: download,
-			prepErr:     cancelled,
-			prepPhase:   ateattr.SnapshotPhaseSandboxAssets,
-			want:        ateattr.SnapshotPhaseDownload,
-		},
-		{
-			name: "error from neither leg claims no phase",
-			err:  errors.New("something else entirely"),
-			want: "",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := groupFailedPhase(tt.err, tt.downloadErr, tt.prepErr, tt.prepPhase); got != tt.want {
-				t.Errorf("groupFailedPhase() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestIsCollateral guards the durations the same way TestGroupFailedPhase
-// guards the label: a leg cancelled by the other leg's failure recorded an
-// unlabeled partial duration, which would land in the healthy-path percentiles
-// as a fast success and drag them down on every failed restore.
+// TestIsCollateral guards the durations: a leg cancelled by the other leg's
+// failure recorded a partial duration, which would land in the healthy-path
+// percentiles as a fast success and drag them down on every failed restore.
 func TestIsCollateral(t *testing.T) {
 	owner := errors.New("prepare bundles: no entrypoint")
 	cancelled := errors.New("context canceled")

@@ -24,7 +24,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 
@@ -171,62 +170,8 @@ const (
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
-	FailureReasonKey       = attribute.Key("ate.failure.reason")
-	FailureDomainKey       = attribute.Key("ate.failure.domain")
 	StatsSourceKey         = attribute.Key("ate.stats.source")
 )
-
-// Values for FailureDomainKey. A strict function of the reason, so it costs no
-// series. Emitted rather than derived downstream: a component ahead of ateapi
-// can report a reason this build rejects, which ExtractReason turns into
-// Unknown, and a consumer matching on the reason would file it as infrastructure.
-const (
-	FailureDomainInfrastructure = "infrastructure"
-	FailureDomainWorkload       = "workload"
-	FailureDomainUnknown        = "unknown"
-)
-
-// workloadReasons are the failures the actor's owner fixes rather than the
-// platform operator: a misdeclared ActorTemplate as much as a process that will
-// not start. Membership, not a name prefix, decides the domain.
-//
-// ReasonInvalidSandboxAsset is deliberately absent: it reads a SandboxConfig,
-// which is cluster-scoped, so no actor can cause it or fix it.
-var workloadReasons = []ateerrors.Reason{
-	ateerrors.ReasonInvalidContainerConfig,
-	ateerrors.ReasonInvalidObjectURL,
-	ateerrors.ReasonWorkloadNotReady,
-}
-
-// FailureAttributes returns the reason and its domain together, so no producer
-// can emit half the pair. Same rule as WorkerPoolAttributes.
-func FailureAttributes(reason string) []attribute.KeyValue {
-	return []attribute.KeyValue{
-		FailureReasonKey.String(reason),
-		FailureDomainKey.String(FailureDomain(reason)),
-	}
-}
-
-// FailureLogAttrs is FailureAttributes for a slog record.
-func FailureLogAttrs(reason string) []slog.Attr {
-	return []slog.Attr{
-		slog.String(string(FailureReasonKey), reason),
-		slog.String(string(FailureDomainKey), FailureDomain(reason)),
-	}
-}
-
-// FailureDomain classifies a reason value. An unrecognized reason reports
-// FailureDomainUnknown rather than infrastructure, so a taxonomy gap stays
-// visible instead of inflating one side.
-func FailureDomain(reason string) string {
-	if slices.Contains(workloadReasons, ateerrors.Reason(reason)) {
-		return FailureDomainWorkload
-	}
-	if ateerrors.IsValidReason(reason) && reason != ReasonUnknown {
-		return FailureDomainInfrastructure
-	}
-	return FailureDomainUnknown
-}
 
 // Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
 // not measure the same thing (the cgroup source charges the sandbox runtime's
@@ -237,14 +182,6 @@ const (
 	StatsSourceUnspecified = "unspecified"
 	StatsSourceCgroup      = "cgroup"
 	StatsSourceGuestAgent  = "guest-agent"
-)
-
-// Control-plane failure reasons for ate.actor.crashes metric.
-const (
-	ReasonCorruptedAssignment = string(ateerrors.ReasonCorruptedAssignment)
-	ReasonWorkerReassigned    = string(ateerrors.ReasonWorkerReassigned)
-	ReasonWorkerPodGone       = string(ateerrors.ReasonWorkerPodGone)
-	ReasonUnknown             = string(ateerrors.ReasonUnknown)
 )
 
 // Values for RouterResumeKey.
@@ -383,17 +320,6 @@ const (
 	SnapshotPhaseTotal   = "total"
 )
 
-// FailureReason classifies err onto the bounded ateerrors taxonomy, reading the
-// wrapped Reason or the AIP-193 ErrorInfo detail. An error carrying neither
-// reports ReasonUnknown rather than anything derived from its message, which is
-// what keeps the label bounded.
-func FailureReason(err error) string {
-	if r := ateerrors.ExtractReason(err); r != "" {
-		return r
-	}
-	return ReasonUnknown
-}
-
 // SandboxClassUnknown is the NormalizeSandboxClass fallback.
 const SandboxClassUnknown = "unknown"
 
@@ -507,15 +433,11 @@ func ActorRefLogAttrs(actorRef resources.ActorRef) []slog.Attr {
 // The worker-pool pair is omitted while the actor holds no assignment, so a
 // crash before the actor reaches a worker reports no pool rather than an
 // empty-string one.
-func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reason string) []attribute.KeyValue {
+func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName string) []attribute.KeyValue {
 	if a == nil {
 		return nil
 	}
 
-	// Default values for unknown/unset attributes.
-	if reason == "" {
-		reason = ReasonUnknown
-	}
 	operationName = NormalizeOperationName(operationName)
 
 	ass := a.GetStatus().GetWorkerAssignment()
@@ -525,6 +447,5 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 		SandboxClassAttribute(sandboxClass),
 		ActorOperationNameKey.String(operationName),
 	}
-	attrs = append(attrs, FailureAttributes(reason)...)
 	return append(attrs, WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 }

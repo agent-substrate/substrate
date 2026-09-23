@@ -81,7 +81,7 @@ groups:
       substrate:
         emitted_by: [ateapi]
         code_anchor: cmd/ateapi/internal/controlapi/crash.go
-        cuj: Which actor was lost, and why?
+        cuj: Which actor was lost?
     attributes:
       - ref: ate.atespace
         requirement_level: required
@@ -96,8 +96,4 @@ groups:
       - ref: ate.actor.operation.name
         requirement_level: required
       - ref: ate.actor.state
-        requirement_level: required
-      - ref: ate.failure.reason
-        requirement_level: required
-      - ref: ate.failure.domain
         requirement_level: required

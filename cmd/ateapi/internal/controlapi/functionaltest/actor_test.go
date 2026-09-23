@@ -2070,7 +2070,7 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	// STEP 1: Make Atelet FAIL on Restore!
-	tc.fakeAtelet.FailRestore = fmt.Errorf("mock atelet failure")
+	tc.fakeAtelet.FailRestore = status.Error(codes.Unavailable, "mock atelet failure")
 
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
@@ -2078,8 +2078,9 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ResumeActor to fail due to atelet error")
 	}
-	if status.Code(err) != codes.DataLoss || !strings.Contains(err.Error(), "crashed") {
-		t.Errorf("expected DataLoss/crashed error, got %v", err)
+	// The caller sees atelet's own status, not a synthetic crash status.
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Unavailable, err)
 	}
 
 	// Verify actor state is CRASHED in the store.
@@ -3197,8 +3198,9 @@ func TestSuspendActor_FromPaused_UploadFailureCrashes(t *testing.T) {
 	if err == nil {
 		t.Fatal("SuspendActor succeeded despite failing upload")
 	}
-	if status.Code(err) != codes.DataLoss || !strings.Contains(err.Error(), "crashed") {
-		t.Errorf("expected DataLoss/crashed error, got %v", err)
+	// The caller sees atelet's own status, not a synthetic crash status.
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Unavailable, err)
 	}
 
 	crashed, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{

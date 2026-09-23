@@ -15,18 +15,12 @@
 package ateattr
 
 import (
-	"errors"
-	"fmt"
 	"maps"
 	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
-	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 
@@ -171,8 +165,6 @@ func TestKeySpellings(t *testing.T) {
 		{ImageCacheOutcomeKey, "ate.imagecache.outcome"},
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
 		{ErrorTypeKey, "error.type"},
-		{FailureReasonKey, "ate.failure.reason"},
-		{FailureDomainKey, "ate.failure.domain"},
 		{OTLPRelayKey, "ate.otlp.relay"},
 	}
 	for _, tt := range tests {
@@ -445,8 +437,8 @@ func TestActorMetricAttributes(t *testing.T) {
 		},
 	}
 
-	t.Run("explicit operation and reason", func(t *testing.T) {
-		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
+	t.Run("explicit operation", func(t *testing.T) {
+		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume))
 		want := map[attribute.Key]any{
 			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
@@ -454,15 +446,13 @@ func TestActorMetricAttributes(t *testing.T) {
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationResume,
-			FailureReasonKey:       ReasonCorruptedAssignment,
-			FailureDomainKey:       FailureDomainInfrastructure,
 		}
 
 		assertAttrs(t, got, want)
 	})
 
 	t.Run("default unknown values", func(t *testing.T) {
-		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
+		got := toMap(ActorMetricAttributes(actor, "gvisor", ""))
 		want := map[attribute.Key]any{
 			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
@@ -470,8 +460,6 @@ func TestActorMetricAttributes(t *testing.T) {
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationUnknown,
-			FailureReasonKey:       ReasonUnknown,
-			FailureDomainKey:       FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -480,7 +468,7 @@ func TestActorMetricAttributes(t *testing.T) {
 	// releaseWorker gives an empty class when the worker record is gone.
 	// CreateWorker can also store one. Empty is not a permitted value.
 	t.Run("empty sandbox class is normalized to unknown", func(t *testing.T) {
-		got := toMap(ActorMetricAttributes(actor, "", OperationResume, ReasonCorruptedAssignment))
+		got := toMap(ActorMetricAttributes(actor, "", OperationResume))
 		want := map[attribute.Key]any{
 			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
@@ -488,15 +476,13 @@ func TestActorMetricAttributes(t *testing.T) {
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        SandboxClassUnknown,
 			ActorOperationNameKey:  OperationResume,
-			FailureReasonKey:       ReasonCorruptedAssignment,
-			FailureDomainKey:       FailureDomainInfrastructure,
 		}
 
 		assertAttrs(t, got, want)
 	})
 
 	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
-		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
+		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op"))
 		want := map[attribute.Key]any{
 			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
@@ -504,8 +490,6 @@ func TestActorMetricAttributes(t *testing.T) {
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationUnknown,
-			FailureReasonKey:       ReasonUnknown,
-			FailureDomainKey:       FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -520,7 +504,7 @@ func TestActorMetricAttributes(t *testing.T) {
 				},
 			},
 		}
-		got := toMap(ActorMetricAttributes(noTemplate, "gvisor", OperationResume, ReasonUnknown))
+		got := toMap(ActorMetricAttributes(noTemplate, "gvisor", OperationResume))
 		want := map[attribute.Key]any{
 			TemplateAtespaceKey:    "",
 			TemplateNameKey:        "",
@@ -528,8 +512,6 @@ func TestActorMetricAttributes(t *testing.T) {
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationResume,
-			FailureReasonKey:       ReasonUnknown,
-			FailureDomainKey:       FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -542,14 +524,12 @@ func TestActorMetricAttributes(t *testing.T) {
 		unassigned := &ateapipb.Actor{
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "counter-template"},
 		}
-		got := toMap(ActorMetricAttributes(unassigned, "gvisor", OperationCreate, ReasonUnknown))
+		got := toMap(ActorMetricAttributes(unassigned, "gvisor", OperationCreate))
 		want := map[attribute.Key]any{
 			TemplateAtespaceKey:   "default",
 			TemplateNameKey:       "counter-template",
 			SandboxClassKey:       "gvisor",
 			ActorOperationNameKey: OperationCreate,
-			FailureReasonKey:      ReasonUnknown,
-			FailureDomainKey:      FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -737,73 +717,6 @@ func TestNormalizeSandboxClass(t *testing.T) {
 	}
 }
 
-// statusWithReason builds a status error carrying the reason as an AIP-193
-// ErrorInfo detail, standing in for a peer that stamps the detail on the wire.
-func statusWithReason(t *testing.T, reason string) error {
-	t.Helper()
-	st, err := status.New(codes.DataLoss, "boom").WithDetails(&epb.ErrorInfo{
-		Domain: "substrate.dev",
-		Reason: reason,
-	})
-	if err != nil {
-		t.Fatalf("WithDetails: %v", err)
-	}
-	return st.Err()
-}
-
-// TestFailureReason pins the error-to-label mapping: only the registered
-// ateerrors taxonomy may reach the label, so anything unclassified collapses
-// onto UNKNOWN instead of leaking an unbounded error message.
-func TestFailureReason(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want string
-	}{
-		{
-			name: "wrapped reason",
-			err:  fmt.Errorf("%w: while uploading external snapshot", ateerrors.ReasonFaileSaveSnapshot),
-			want: string(ateerrors.ReasonFaileSaveSnapshot),
-		},
-		{
-			name: "reason nested several wraps deep",
-			err:  fmt.Errorf("restore: %w", fmt.Errorf("%w: bad manifest", ateerrors.ReasonInvalidSandboxAsset)),
-			want: string(ateerrors.ReasonInvalidSandboxAsset),
-		},
-		{
-			name: "gRPC status carrying the reason as an ErrorInfo detail",
-			err:  statusWithReason(t, string(ateerrors.ReasonTerminalFileSystemError)),
-			want: string(ateerrors.ReasonTerminalFileSystemError),
-		},
-		{
-			name: "infrastructure error with no reason attached",
-			err:  errors.New("dial tcp 10.96.192.187:9000: connect: connection refused"),
-			want: ReasonUnknown,
-		},
-		{
-			name: "plain gRPC status with no ErrorInfo",
-			err:  status.Error(codes.Unavailable, "unavailable"),
-			want: ReasonUnknown,
-		},
-		{
-			name: "nil error",
-			err:  nil,
-			want: ReasonUnknown,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := FailureReason(tt.err)
-			if got != tt.want {
-				t.Errorf("FailureReason() = %q, want %q", got, tt.want)
-			}
-			if !ateerrors.IsValidReason(got) {
-				t.Errorf("FailureReason() = %q, which is not a registered reason", got)
-			}
-		})
-	}
-}
-
 func TestNormalizeOperationName(t *testing.T) {
 	tests := []struct {
 		op   string
@@ -821,77 +734,6 @@ func TestNormalizeOperationName(t *testing.T) {
 	for _, tt := range tests {
 		if got := NormalizeOperationName(tt.op); got != tt.want {
 			t.Errorf("NormalizeOperationName(%q) = %q, want %q", tt.op, got, tt.want)
-		}
-	}
-}
-
-func TestFailureDomain(t *testing.T) {
-	tests := []struct {
-		name   string
-		reason string
-		want   string
-	}{
-		{"runtime workload reason", string(ateerrors.ReasonWorkloadNotReady), FailureDomainWorkload},
-		// A misdeclared template is the actor owner's to fix, so it is a
-		// workload fault even though substrate is what detects it.
-		{"template resolves to no runnable process", string(ateerrors.ReasonInvalidContainerConfig), FailureDomainWorkload},
-		{"template storage_location unparseable", string(ateerrors.ReasonInvalidObjectURL), FailureDomainWorkload},
-		// SandboxConfig is cluster-scoped, so no actor owner can cause or fix this.
-		{"bad sandbox asset stays infrastructure", string(ateerrors.ReasonInvalidSandboxAsset), FailureDomainInfrastructure},
-		{"node infrastructure reason", string(ateerrors.ReasonTerminalFileSystemError), FailureDomainInfrastructure},
-		{"control-plane infrastructure reason", string(ateerrors.ReasonWorkerPodGone), FailureDomainInfrastructure},
-		{"unknown asserts no domain", ReasonUnknown, FailureDomainUnknown},
-		{"empty", "", FailureDomainUnknown},
-		{"unregistered reason", "SOMETHING_ELSE", FailureDomainUnknown},
-		{"workload prefix is not what decides", "WORKLOAD_NOT_A_REAL_REASON", FailureDomainUnknown},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := FailureDomain(tt.reason); got != tt.want {
-				t.Errorf("FailureDomain(%q) = %q, want %q", tt.reason, got, tt.want)
-			}
-		})
-	}
-}
-
-// Every registered reason must classify, so adding one to AllReasons without
-// deciding its domain fails here rather than silently reporting unknown.
-func TestFailureDomainCoversAllReasons(t *testing.T) {
-	for _, r := range ateerrors.AllReasons {
-		got := FailureDomain(string(r))
-		if r == ateerrors.ReasonUnknown {
-			if got != FailureDomainUnknown {
-				t.Errorf("FailureDomain(%q) = %q, want %q", r, got, FailureDomainUnknown)
-			}
-			continue
-		}
-		if got == FailureDomainUnknown {
-			t.Errorf("FailureDomain(%q) = %q; add it to workloadReasons or confirm it is infrastructure", r, got)
-		}
-	}
-}
-
-func TestFailureAttributesAlwaysPaired(t *testing.T) {
-	reason := string(ateerrors.ReasonWorkloadNotReady)
-
-	kvs := FailureAttributes(reason)
-	if len(kvs) != 2 {
-		t.Fatalf("FailureAttributes() returned %d attributes, want 2", len(kvs))
-	}
-	if kvs[0].Key != FailureReasonKey || kvs[0].Value.AsString() != reason {
-		t.Errorf("FailureAttributes()[0] = %v, want %s=%s", kvs[0], FailureReasonKey, reason)
-	}
-	if kvs[1].Key != FailureDomainKey || kvs[1].Value.AsString() != FailureDomainWorkload {
-		t.Errorf("FailureAttributes()[1] = %v, want %s=%s", kvs[1], FailureDomainKey, FailureDomainWorkload)
-	}
-
-	attrs := FailureLogAttrs(reason)
-	if len(attrs) != len(kvs) {
-		t.Fatalf("FailureLogAttrs() returned %d attributes, FailureAttributes() returned %d; they must agree", len(attrs), len(kvs))
-	}
-	for i, a := range attrs {
-		if a.Key != string(kvs[i].Key) || a.Value.String() != kvs[i].Value.AsString() {
-			t.Errorf("FailureLogAttrs()[%d] = %s=%s, want %s=%s", i, a.Key, a.Value, kvs[i].Key, kvs[i].Value.AsString())
 		}
 	}
 }

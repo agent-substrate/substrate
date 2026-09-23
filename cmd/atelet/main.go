@@ -38,7 +38,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -607,7 +606,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
 	}
 	defer func() {
-		s.instruments.recordCheckpoint(ctx, op, err,
+		s.instruments.recordCheckpoint(ctx, op,
 			phase{ateattr.SnapshotPhaseSandboxAssets, dAssets},
 			phase{ateattr.SnapshotPhaseAteomCheckpoint, dAteom},
 			phase{ateattr.SnapshotPhasePersist, dPersist},
@@ -628,7 +627,6 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	dAssets = time.Since(tAssets)
 	if err != nil {
-		op.failedPhase = ateattr.SnapshotPhaseSandboxAssets
 		return nil, err
 	}
 
@@ -663,7 +661,6 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	if err != nil {
 		// TODO: Ateom should classify checkpoint failures, and set "should-crash"
 		// in the metadata if the error is not retriable.
-		op.failedPhase = ateattr.SnapshotPhaseAteomCheckpoint
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
@@ -671,7 +668,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
-		return nil, fmt.Errorf("%w: ateom reported no snapshot files for checkpoint", ateerrors.ReasonInvalidCheckpointResult)
+		return nil, fmt.Errorf("ateom reported no snapshot files for checkpoint")
 	}
 	sandboxRec.Atespace = req.GetAtespace()
 	sandboxRec.ActorName = req.GetActorName()
@@ -699,14 +696,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
 		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
-			op.failedPhase = ateattr.SnapshotPhasePersist
-			return nil, fmt.Errorf("%w: while uploading external snapshot: %w", ateerrors.ReasonFaileSaveSnapshot, err)
+			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
 		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
-			op.failedPhase = ateattr.SnapshotPhasePersist
-			return nil, fmt.Errorf("%w: while moving to local snapshot: %w", ateerrors.ReasonFaileSaveSnapshot, err)
+			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
 		}
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
@@ -714,7 +709,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	dPersist = time.Since(tPersist)
 
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
-		return nil, fmt.Errorf("%w: while unmounting external volumes: %w", ateerrors.ReasonTerminalFileSystemError, err)
+		return nil, fmt.Errorf("while unmounting external volumes: %w", err)
 	}
 
 	// Note: we do not crash the actor if resetting the directory fails.
@@ -848,7 +843,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		scope: ateattr.SnapshotScopeValue(req.GetDesiredScope()),
 	}
 	defer func() {
-		s.instruments.recordCheckpoint(ctx, op, err,
+		s.instruments.recordCheckpoint(ctx, op,
 			phase{ateattr.SnapshotPhasePersist, dPersist},
 			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
 	}()
@@ -864,7 +859,6 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 	dPersist = time.Since(tPersist)
 	op.sandboxClass = sandboxClass
 	if err != nil {
-		op.failedPhase = ateattr.SnapshotPhasePersist
 		return nil, err
 	}
 
@@ -899,9 +893,9 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", req.GetDestinationSnapshotUri()))
 			return "", nil
 		}
-		if errors.Is(fetchErr, ateerrors.ReasonFailedGetExternalObject) {
-			return "", fmt.Errorf("%w: local snapshot %q is gone and no uploaded copy exists: %w",
-				ateerrors.ReasonLocalSnapshotGone, req.GetLocalSnapshotName(), fetchErr)
+		if errors.Is(fetchErr, ategcs.ErrObjectNotFound) {
+			return "", fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w",
+				req.GetLocalSnapshotName(), fetchErr)
 		}
 		return "", fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
 	}
@@ -982,14 +976,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		TemplateAtespace: req.GetActorTemplateAtespace(),
 		TemplateName:     req.GetActorTemplateName(),
 	}
-	completed := false
 	defer func() {
-		// A panic unwinds through here with the named err still nil, so without
-		// this the last thing atelet reports before dying is a fast success.
-		outcome := err
-		if outcome == nil && !completed {
-			outcome = errRestoreUnwound
-		}
 		// One slice feeds both signals, so the metric and the log cannot disagree
 		// about how long the restore took.
 		phases := []phase{
@@ -1001,9 +988,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			{ateattr.SnapshotPhaseAteomRestore, dAteom},
 			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
 		}
-		s.instruments.recordRestore(ctx, op, outcome, phases...)
+		s.instruments.recordRestore(ctx, op, phases...)
 		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown",
-			snapshotLogAttrs(attribution, op, restoreDurationMetric, outcome, phases)...)
+			snapshotLogAttrs(attribution, op, restoreDurationMetric, phases)...)
 	}()
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
@@ -1016,7 +1003,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	mountErr := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
 	dMount = time.Since(tMount)
 	if mountErr != nil {
-		op.failedPhase = ateattr.SnapshotPhaseVolumeMount
 		return nil, mountErr
 	}
 
@@ -1031,7 +1017,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	defer func() {
 		if !manifestDone {
 			dManifest = time.Since(tManifest)
-			op.failedPhase = ateattr.SnapshotPhaseManifestFetch
 		}
 	}()
 	var sandboxRec *sandboxAssetsRecord
@@ -1199,7 +1184,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
-		op.failedPhase = groupFailedPhase(err, downloadErr, prepErr, prepFailedPhase)
 		if isCollateral(err, downloadErr) {
 			dDownload = 0
 		}
@@ -1245,7 +1229,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	dAteom = time.Since(tAteom)
 	if err != nil {
 		// TODO: classify the errors returned by Ateom and crash the actor if needed.
-		op.failedPhase = ateattr.SnapshotPhaseAteomRestore
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
 
@@ -1259,7 +1242,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
-	completed = true
 	return &ateletpb.RestoreResponse{}, nil
 }
 

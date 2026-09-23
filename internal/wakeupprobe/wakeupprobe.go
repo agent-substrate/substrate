@@ -31,7 +31,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"golang.org/x/sync/errgroup"
 )
@@ -113,9 +112,8 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.WakeupProbe,
 				containerName, time.Since(start), attempts, lastErr, err)
 		}
 		if time.Now().After(deadline) {
-			// Tagged only here: the cancellation above is ateom draining, not the actor failing.
-			return fmt.Errorf("%w: wakeup probe for %q never returned 200 within %s (%d attempts, last error: %v)",
-				ateerrors.ReasonWorkloadNotReady, containerName, timeout, attempts, lastErr)
+			return fmt.Errorf("wakeup probe for %q never returned 200 within %s (%d attempts, last error: %v)",
+				containerName, timeout, attempts, lastErr)
 		}
 
 		attempts++

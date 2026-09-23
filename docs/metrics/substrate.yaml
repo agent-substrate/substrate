@@ -162,42 +162,13 @@ cardinality_rules:
       reason. Only `weaver registry live-check` can count the values that occur.
   - id: error-type-not-parallel-counters
     brief: >
-      A component reports a failure with error.type or ate.failure.reason on the
-      same instrument. If the key is absent, the operation was correct. There
-      are no separate counters for the failures.
+      A component reports a failure with error.type on the same instrument. If
+      the key is absent, the operation was correct. There are no separate
+      counters for the failures.
     enforced: false
     could_be_enforced_by: >
       A Weaver Rego policy can refuse a metric name that ends with errors_total
       and has a counterpart without the suffix.
-  - id: failure-keys-paired
-    brief: >
-      A component sets ate.failure.reason and ate.failure.domain together, or it
-      sets neither. ateattr.FailureAttributes and ateattr.FailureLogAttrs return
-      the pair, and a producer uses one of them rather than the keys.
-      The domain is a strict function of the reason, so it adds no series. It is
-      a key and not a rule in the consumer because the reasons of a component
-      ahead of the control plane can be unknown to the control plane, which
-      makes them UNKNOWN, and a consumer that matched on the names of the
-      reasons would count each of those as an infrastructure fault.
-    enforced: false
-    could_be_enforced_by: >
-      A Weaver Rego policy can make the two keys occur together in this
-      registry. Only live-check can see a component that sends one key.
-  - id: workload-domain-is-a-report
-    brief: >
-      Some of the reasons in the workload domain are what the actor reported
-      about itself: an exit code, or a probe that never passes. The actor
-      chooses those, thus it decides the value. It can raise the count of the
-      failures of its own template and pool, and it can exit 0 to hide a fault.
-      A dashboard says "reported" for those, and an alert on them has a rate
-      limit; one report for each activation is the bound. The reasons that
-      Substrate measures, such as a template that resolves to no runnable
-      process, carry no such caveat.
-    enforced: false
-    could_be_enforced_by: >
-      Nothing. This is a property of a multi-tenant platform and not of the
-      registry. It is here so that a reader of the panel knows what the number
-      is.
   - id: pool-keys-paired
     brief: >
       A component sets ate.workerpool.namespace and ate.workerpool.name

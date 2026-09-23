@@ -160,7 +160,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment); err != nil {
+		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", status.Errorf(codes.FailedPrecondition, "CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
@@ -198,8 +198,15 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
-	_, err = client.Checkpoint(ctx, req)
-	return wireSnapshotScope, crashActorOnError(ctx, w.store, actorRef, err, ateattr.OperationPause)
+	if _, err = client.Checkpoint(ctx, req); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
+			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationPause); cerr != nil {
+			return wireSnapshotScope, cerr
+		}
+		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+	}
+	return wireSnapshotScope, nil
 }
 
 // ensurePausedFinalized releases the actor's worker (only when it is still
@@ -263,7 +270,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		}
 		// Snapshot crash attributes before pod and pool pointers are cleared below.
 		latestActor.Status.State = newState
-		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
+		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause)
 
 		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 			toUpdate.Status.State = newState
@@ -283,7 +290,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			return nil
 		})
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
-			logActorCrashed(ctx, latestActor, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
+			logActorCrashed(ctx, latestActor, ateattr.OperationPause)
 			recordActorCrash(ctx, crashAttrs)
 		}
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {

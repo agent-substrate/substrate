@@ -29,12 +29,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -503,9 +502,6 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
 		}
-		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
-			t.Errorf("over-cap error not tagged terminal: %v", err)
-		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
 		}
@@ -520,59 +516,41 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
 		}
-		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
-			t.Errorf("hash-mismatch error not tagged terminal: %v", err)
-		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
 		}
 	})
 
-	t.Run("missing object is terminal", func(t *testing.T) {
+	t.Run("missing object keeps the client's sentinel", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
-		// The ategcs clients tag a missing object with ReasonFailedGetExternalObject.
-		notFound := fmt.Errorf("%w: no such object", ateerrors.ReasonFailedGetExternalObject)
+		// The ategcs clients tag a missing object with ErrObjectNotFound.
+		notFound := fmt.Errorf("%w: no such object", ategcs.ErrObjectNotFound)
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
-		if !errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
-			t.Errorf("missing-object error not tagged terminal: %v", err)
-		}
-		if errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
-			t.Errorf("missing-object error wrongly tagged ReasonInvalidSandboxAsset: %v", err)
-		}
-		// The extracted (outermost) Reason labels the resulting crash;
-		// it must be the client tag, not a fetchAsset blanket wrap.
-		if r, ok := errors.AsType[ateerrors.Reason](err); !ok || r != ateerrors.ReasonFailedGetExternalObject {
-			t.Errorf("extracted reason = %v (ok=%v), want ReasonFailedGetExternalObject", r, ok)
+		if !errors.Is(err, ategcs.ErrObjectNotFound) {
+			t.Errorf("missing-object error lost the client's sentinel: %v", err)
 		}
 	})
 
-	t.Run("malformed url is terminal", func(t *testing.T) {
+	t.Run("malformed url is rejected", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open, which
-		// tags the failure with ReasonInvalidObjectURL.
+		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open.
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
-		if !errors.Is(err, ateerrors.ReasonInvalidObjectURL) {
-			t.Errorf("malformed-url error not tagged terminal: %v", err)
+		if err == nil {
+			t.Fatal("fetchAsset accepted a malformed URL")
 		}
 	})
 
-	t.Run("network error stays untagged", func(t *testing.T) {
+	t.Run("network error keeps its context wrap", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted a failing open")
-		}
-		// A transient open failure must carry no Reason at all: a tag here
-		// would mislabel the resulting crash as a terminal asset failure in
-		// the ate.actor.crashes metric instead of UNKNOWN.
-		if r, ok := errors.AsType[ateerrors.Reason](err); ok {
-			t.Errorf("network error wrongly tagged with reason %v: %v", r, err)
 		}
 		if !strings.Contains(err.Error(), "while fetching") {
 			t.Errorf("open failure lost its context wrap: %v", err)
@@ -827,38 +805,6 @@ func TestToAteomEgressGateway(t *testing.T) {
 	}
 }
 
-func TestIsTerminalFileErr(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"not exist", os.ErrNotExist, true},
-		{"permission", os.ErrPermission, true},
-		{"is a directory", syscall.EISDIR, true},
-		{"not a directory", syscall.ENOTDIR, true},
-		{"name too long", syscall.ENAMETOOLONG, true},
-		{"symlink loop", syscall.ELOOP, true},
-		{"read-only filesystem", syscall.EROFS, true},
-		{"no space left on device", syscall.ENOSPC, true},
-		{"disk quota exceeded", syscall.EDQUOT, true},
-		{"wrapped not exist", fmt.Errorf("while reading: %w", os.ErrNotExist), true},
-		{"path error no space", &os.PathError{Op: "write", Path: "/var/lib/atelet/x", Err: syscall.ENOSPC}, true},
-		{"too many open files", syscall.EMFILE, false},
-		{"stale nfs handle", syscall.ESTALE, false},
-		{"try again", syscall.EAGAIN, false},
-		{"io error", syscall.EIO, false},
-		{"nil", nil, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isTerminalFileSystemErr(tt.err); got != tt.want {
-				t.Errorf("isTerminalFileSystemErr(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestGoldenOnlyFiles verifies the DataOnGolden combine rule: the actor's own
 // snapshot files shadow same-named golden files (the durable-dir tar), and the
 // golden snapshot supplies the rest.
@@ -898,34 +844,6 @@ func TestGoldenOnlyFiles(t *testing.T) {
 	}
 }
 
-func TestWrapFileSystemErrAttachesTerminalReason(t *testing.T) {
-	tests := []struct {
-		name         string
-		err          error
-		wantTerminal bool
-	}{
-		{"no space left on device", &os.PathError{Op: "write", Path: "/x", Err: syscall.ENOSPC}, true},
-		{"disk quota exceeded", syscall.EDQUOT, true},
-		{"not exist", os.ErrNotExist, true},
-		{"io error", syscall.EIO, false},
-		{"try again", syscall.EAGAIN, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wrapped := wrapFileSystemErr("while writing asset", tt.err)
-			if got := errors.Is(wrapped, ateerrors.ReasonTerminalFileSystemError); got != tt.wantTerminal {
-				t.Errorf("errors.Is(wrapFileSystemErr(%v), ReasonTerminalFileSystemError) = %v, want %v", tt.err, got, tt.wantTerminal)
-			}
-			if !errors.Is(wrapped, tt.err) {
-				t.Errorf("wrapFileSystemErr(%v) lost the original error: %v", tt.err, wrapped)
-			}
-		})
-	}
-}
-
-// TestRemoveActorDirsReclaimsTheRoot covers what separates removeActorDirs
-// from resetActorDirs: the root goes too, and with it the files directly under
-// it rather than in one of the directories reset knows.
 func TestRemoveActorDirsReclaimsTheRoot(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
@@ -1248,7 +1166,7 @@ func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object str
 	defer r.mu.Unlock()
 	b, ok := r.objects[bucket+"/"+object]
 	if !ok {
-		return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ateerrors.ReasonFailedGetExternalObject, bucket, object)
+		return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ategcs.ErrObjectNotFound, bucket, object)
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
@@ -1506,12 +1424,12 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
-		if got := ateerrors.ExtractReason(err); got != string(ateerrors.ReasonLocalSnapshotGone) {
-			t.Errorf("reason = %q, want %q", got, ateerrors.ReasonLocalSnapshotGone)
+		if !strings.Contains(err.Error(), "gone and no uploaded copy exists") {
+			t.Errorf("error = %v, want it to name the unrecoverable local snapshot", err)
 		}
 	})
 
-	t.Run("upload failure is a plain untagged error", func(t *testing.T) {
+	t.Run("upload failure returns the error", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: errors.New("boom")}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
@@ -1521,11 +1439,6 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
-		}
-		// A transient upload failure must carry no Reason: the resulting crash
-		// counts as UNKNOWN, not as a terminal snapshot failure.
-		if got := ateerrors.ExtractReason(err); got != "" {
-			t.Errorf("reason = %q, want no reason on a transient upload failure", got)
 		}
 	})
 }

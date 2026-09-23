@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -46,7 +45,7 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 	})
 	if err != nil {
 		if objectAbsent(err) {
-			return nil, fmt.Errorf("%w: Failed to get S3 Bucket:%q, Object:%q", ateerrors.ReasonFailedGetExternalObject, bucket, object)
+			return nil, fmt.Errorf("%w: Failed to get S3 Bucket:%q, Object:%q", ErrObjectNotFound, bucket, object)
 		}
 		return nil, err
 	}

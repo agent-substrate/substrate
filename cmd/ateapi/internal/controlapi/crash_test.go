@@ -29,7 +29,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	otellog "go.opentelemetry.io/otel/log"
@@ -37,9 +36,6 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // seedActor stores a running actor with all worker-binding fields populated, so
@@ -276,103 +272,7 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
-
-			tt.check(t, ctx, st, err)
-		})
-	}
-}
-
-func TestCrashActorOnError(t *testing.T) {
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-
-	// A structured error carrying a reason as an ErrorInfo detail (as an old
-	// atelet still stamps it): it labels the crash, but any error crashes the
-	// actor regardless.
-	structuredSt, detailErr := status.New(codes.DataLoss, "boom").WithDetails(&epb.ErrorInfo{
-		Domain: "substrate.dev",
-		Reason: string(ateerrors.ReasonTerminalFileSystemError),
-	})
-	if detailErr != nil {
-		t.Fatalf("WithDetails: %v", detailErr)
-	}
-	structuredErr := structuredSt.Err()
-	plainErr := errors.New("transient")
-
-	tests := []struct {
-		name string
-		seed bool
-		err  error
-		// check inspects the returned error and store state.
-		check func(t *testing.T, ctx context.Context, st store.Interface, err error)
-	}{
-		{
-			name: "nil error returns nil",
-			seed: false,
-			err:  nil,
-			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
-				if err != nil {
-					t.Fatalf("crashActorOnError() = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name: "structured atelet error crashes actor",
-			seed: true,
-			err:  structuredErr,
-			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
-				if err == nil {
-					t.Fatal("crashActorOnError() = nil, want error")
-				}
-				if got := status.Code(err); got != codes.DataLoss {
-					t.Errorf("status code = %v, want %v", got, codes.DataLoss)
-				}
-				assertCrashed(t, ctx, st, actorRef)
-			},
-		},
-		{
-			name: "actor missing returns load error",
-			seed: false,
-			err:  structuredErr,
-			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
-				if err == nil {
-					t.Fatal("crashActorOnError() = nil, want error")
-				}
-				if got := status.Code(err); got == codes.DataLoss {
-					t.Errorf("status code = %v, want it not to be DataLoss", got)
-				}
-				if !errors.Is(err, store.ErrNotFound) {
-					t.Errorf("crashActorOnError() error = %v, want errors.Is(store.ErrNotFound)", err)
-				}
-			},
-		},
-		{
-			name: "plain error also crashes actor",
-			seed: true,
-			err:  plainErr,
-			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
-				if err == nil {
-					t.Fatal("crashActorOnError() = nil, want error")
-				}
-				if got := status.Code(err); got != codes.DataLoss {
-					t.Errorf("status code = %v, want %v", got, codes.DataLoss)
-				}
-				assertCrashed(t, ctx, st, actorRef)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			st, cleanup := storetest.SetupTestStore(t)
-			defer cleanup()
-
-			if tt.seed {
-				seedActor(t, ctx, st, actorRef)
-			}
-
-			err := crashActorOnError(ctx, st, actorRef, tt.err, ateattr.OperationUnknown)
+			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown)
 
 			tt.check(t, ctx, st, err)
 		})
@@ -425,14 +325,14 @@ func TestCrashActor_Metrics(t *testing.T) {
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 
-	assertCrashMetricDatapoint(t, reader, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment, "demo-ns", "counter-template", "pool-1", "gvisor", 1)
+	assertCrashMetricDatapoint(t, reader, ateattr.OperationResume, "demo-ns", "counter-template", "pool-1", "gvisor", 1)
 }
 
-func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass string, wantValue int64) {
+func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass string, wantValue int64) {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -450,14 +350,12 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 			}
 			for _, dp := range sum.DataPoints {
 				op, _ := dp.Attributes.Value(ateattr.ActorOperationNameKey)
-				r, _ := dp.Attributes.Value(ateattr.FailureReasonKey)
 				tNS, _ := dp.Attributes.Value(ateattr.TemplateAtespaceKey)
 				tName, _ := dp.Attributes.Value(ateattr.TemplateNameKey)
 				wp, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
 				sc, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
 
 				if op.AsString() == wantOpName &&
-					r.AsString() == wantReason &&
 					tNS.AsString() == wantTmplNS &&
 					tName.AsString() == wantTmplName &&
 					wp.AsString() == wantWorkerPool &&
@@ -470,8 +368,8 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 			}
 		}
 	}
-	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
-		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
+	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
+		wantOpName, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
 }
 
 // assertNoCrashMetricDatapoint fails if anything counted a crash. It is the
@@ -526,7 +424,7 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	seedWorker(t, ctx, st, actorRef)
 
 	releaseErr := errors.New("state store unavailable")
-	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
+	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown)
 
 	if err == nil {
 		t.Fatal("crashActor() = nil, want error")
@@ -713,7 +611,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 	if len(*records) != 1 {
@@ -733,8 +631,6 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		string(ateattr.TemplateNameKey):       "counter-template",
 		string(ateattr.ActorOperationNameKey): ateattr.OperationResume,
 		string(ateattr.ActorStateKey):         ateattr.ActorStateCrashed,
-		string(ateattr.FailureReasonKey):      ateattr.ReasonWorkerPodGone,
-		string(ateattr.FailureDomainKey):      ateattr.FailureDomainInfrastructure,
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("crash record = %v, want %v", got, want)
@@ -758,7 +654,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	assertCopiesAgree(t, (*records)[0], gotEvents[0], actorevent.Crashed)
 
 	// Re-crashing an already-crashed actor must move neither signal.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume); err != nil {
 		t.Fatalf("second crashActor: %v", err)
 	}
 	if len(*records) != 1 {

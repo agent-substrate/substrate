@@ -106,7 +106,7 @@ groups:
             - id: crashed
               stability: development
               value: crashed
-              brief: The actor is lost. ate.failure.reason says why.
+              brief: The actor is lost.
             - id: deleting
               stability: development
               value: deleting
@@ -344,112 +344,6 @@ groups:
               stability: development
               value: total
               brief: The full operation. Use this value as the denominator. Do not add the phases together.
-
-  - id: registry.ate.failure
-    type: attribute_group
-    brief: >
-      The failure reasons of Substrate. These instruments use this key and not
-      error.type. The handler returns a domain error. The interceptor sets the
-      gRPC status only after the handler returns. Thus error.type shows Unknown
-      for almost each real failure.
-    attributes:
-      - id: ate.failure.reason
-        stability: development
-        brief: The cause of the failure.
-        type:
-          members:
-            - id: terminal_file_system_error
-              stability: development
-              value: TERMINAL_FILE_SYSTEM_ERROR
-              brief: A permanent file system fault on the node. Usually the disks of the node are full.
-            - id: invalid_sandbox_asset
-              stability: development
-              value: INVALID_SANDBOX_ASSET
-              brief: A sandbox asset is absent or bad.
-            - id: invalid_checkpoint_result
-              stability: development
-              value: INVALID_CHECKPOINT_RESULT
-              brief: ateom returned a checkpoint that is not valid.
-            - id: failed_save_snapshot
-              stability: development
-              value: FAILED_SAVE_SNAPSHOT
-              brief: atelet could not write the snapshot.
-            - id: invalid_object_url
-              stability: development
-              value: INVALID_OBJECT_URL
-              brief: The URL of the snapshot object is bad.
-            - id: failed_get_external_object
-              stability: development
-              value: FAILED_GET_EXTERNAL_OBJECT
-              brief: atelet could not read the snapshot from object storage. Usually the storage backend has a fault.
-            - id: invalid_container_config
-              stability: development
-              value: INVALID_CONTAINER_CONFIG
-              brief: The container configuration of the ActorTemplate is not valid.
-            - id: local_snapshot_gone
-              stability: development
-              value: LOCAL_SNAPSHOT_GONE
-              brief: The local snapshot on the node no longer exists.
-            - id: workload_not_ready
-              stability: development
-              value: WORKLOAD_NOT_READY
-              brief: >
-                A container started but never passed its wakeup probe before the
-                deadline of the probe. A slow node confounds this value: a cold
-                image or a throttled CPU also runs the probe out of time. The
-                phases of ate.actor.restore.duration separate the two.
-            - id: corrupted_assignment
-              stability: development
-              value: CORRUPTED_ASSIGNMENT
-              brief: Control plane. The worker assignment of the actor is not correct.
-            - id: worker_reassigned
-              stability: development
-              value: WORKER_REASSIGNED
-              brief: Control plane. A different actor got the worker.
-            - id: worker_pod_gone
-              stability: development
-              value: WORKER_POD_GONE
-              brief: Control plane. The worker pod no longer exists.
-            - id: unknown
-              stability: development
-              value: UNKNOWN
-              brief: >
-                A failure with no reason. Substrate does not make a value from
-                the error message. Thus the list of values stays short. This
-                value asserts no fault domain: read ate.failure.domain, which
-                reports unknown here and not infrastructure.
-
-      - id: ate.failure.domain
-        stability: development
-        brief: >
-          The side of the platform boundary the failure came from. A strict
-          function of ate.failure.reason, thus it adds no series. It exists
-          because an operator triages on the boundary and drills into the
-          reason, and because a consumer must not have to match on the names of
-          the reasons: a component ahead of the control plane can report a
-          reason that the control plane does not know, which becomes UNKNOWN,
-          and a name match would then count it as an infrastructure fault.
-        type:
-          members:
-            - id: infrastructure
-              stability: development
-              value: infrastructure
-              brief: Substrate failed. The node, the store, the object storage, the control plane.
-            - id: workload
-              stability: development
-              value: workload
-              brief: >
-                The owner of the actor fixes this, not the operator of the
-                platform. It covers a bad ActorTemplate as well as a process
-                that does not start. For the reasons that the actor reports
-                about itself, such as an exit or a probe that never passes,
-                this value is a report and not a proof: the actor chooses its
-                own exit. The reasons that Substrate measures, such as a
-                template that resolves to no runnable process, are not.
-            - id: unknown
-              stability: development
-              value: unknown
-              brief: The reason gives no domain. A gap in the taxonomy stays visible here and does not inflate one side.
 
   - id: registry.ate.scheduler
     type: attribute_group
@@ -707,14 +601,14 @@ groups:
     instrument: counter
     unit: "{crash}"
     stability: development
-    brief: The number of actors that went to the ACTOR_STATE_CRASHED state, with the reasons.
+    brief: The number of actors that went to the ACTOR_STATE_CRASHED state.
     note: >
       This counter counts the moves into the CRASHED state of the state machine.
       It does not count the crashes of a process. The CRASHED state is a loss of
       the actor's live execution (recoverable back to SUSPENDED via RevertActor).
       Substrate can also lose the data that it did not write. Some moves into
       this state are not a loss of data. They are careful responses to a control
-      plane problem. The ate.failure.reason key keeps these groups separate.
+      plane problem.
       ate.sandbox.class is unknown when ateapi could not read the class of the
       worker: the worker record is already gone, or its assignment is already
       clear.
@@ -723,13 +617,9 @@ groups:
         emitted_by: [ateapi]
         golden_signals: [errors]
         code_anchor: cmd/ateapi/internal/controlapi/metrics.go
-        cuj: Some actors go to the CRASHED state. How many, and why?
+        cuj: Some actors go to the CRASHED state. How many?
     attributes:
       - ref: ate.actor.operation.name
-        requirement_level: required
-      - ref: ate.failure.reason
-        requirement_level: required
-      - ref: ate.failure.domain
         requirement_level: required
       - ref: ate.template.atespace
         requirement_level: required
@@ -875,10 +765,7 @@ groups:
     note: >
       This instrument shows where the cold start time goes after ateapi hands
       the work to atelet. The phases occur at the same time. They do not add up
-      to the total. Use the total phase as the denominator. If the operation
-      fails, atelet puts ate.failure.reason on the phase that failed and on the
-      total. It puts the key on no other phase. Thus you can still query the
-      phases that were correct.
+      to the total. Use the total phase as the denominator.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -901,12 +788,6 @@ groups:
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: The class is known.
-      - ref: ate.failure.reason
-        requirement_level:
-          conditionally_required: The operation failed. The key occurs only on the phase that failed and on the total.
-      - ref: ate.failure.domain
-        requirement_level:
-          conditionally_required: ate.failure.reason occurs. The two keys always occur together.
 
   - id: metric.ate.actor.checkpoint.duration
     type: metric
@@ -941,12 +822,6 @@ groups:
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: The class is known.
-      - ref: ate.failure.reason
-        requirement_level:
-          conditionally_required: The operation failed. The key occurs only on the phase that failed and on the total.
-      - ref: ate.failure.domain
-        requirement_level:
-          conditionally_required: ate.failure.reason occurs. The two keys always occur together.
 
   - id: metric.atelet.snapshot.size
     type: metric
