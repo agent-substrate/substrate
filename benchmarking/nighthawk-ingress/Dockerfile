@@ -34,9 +34,11 @@ ARG NIGHTHAWK_IMAGE_DIGEST=sha256:7729902afea9d83f593b240690ba7d6e8fff04f6215ada
 FROM python:3.12-slim AS protogen
 ARG NIGHTHAWK_COMMIT
 ARG ENVOY_COMMIT
+# Same grpcio-tools pin as the ateapi client stage below.
+COPY benchmarking/locust/codegen/requirements.txt /tmp/codegen-requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir grpcio-tools==1.81.1
+    && pip install --no-cache-dir -r /tmp/codegen-requirements.txt
 
 # Shallow-fetch each tree at its pin. nighthawk/envoy are pinned to bare
 # commits, which clone --branch can't fetch, hence init+fetch.
@@ -53,7 +55,19 @@ RUN git init /src/envoy \
 COPY benchmarking/nighthawk-ingress/protogen/generate_descriptor.sh /gen.sh
 RUN bash /gen.sh /out/nighthawk.desc
 
-# --- Stage 2: runtime -------------------------------------------------------
+# --- Stage 2: ateapi Python clients ------------------------------------------
+# Generated from the protos rather than checked in; see
+# benchmarking/locust/codegen/generate.sh. Only ateapi: the ingress benchmark
+# never talks to glutton.
+FROM python:3.12-slim AS ateprotos
+WORKDIR /src
+COPY benchmarking/locust/codegen/requirements.txt benchmarking/locust/codegen/
+RUN pip install --no-cache-dir -r benchmarking/locust/codegen/requirements.txt
+COPY benchmarking/locust/codegen/generate.sh benchmarking/locust/codegen/
+COPY pkg/proto pkg/proto
+RUN PYTHON=python3 OUT_DIR=/out benchmarking/locust/codegen/generate.sh pkg/proto/ateapipb/ateapi.proto
+
+# --- Stage 3: runtime -------------------------------------------------------
 # nighthawk-dev has no stable tags; pinned by digest so the pull is
 # immutable. Ships the nighthawk_* binaries in /usr/local/bin on ubuntu.
 FROM envoyproxy/nighthawk-dev@${NIGHTHAWK_IMAGE_DIGEST}
@@ -76,8 +90,7 @@ COPY --from=protogen /out/nighthawk.desc /app/nighthawk.desc
 # imports locust).
 COPY benchmarking/locust/common/__init__.py /app/common/__init__.py
 COPY benchmarking/locust/common/ateapi_channel.py /app/common/ateapi_channel.py
-COPY benchmarking/locust/common/ateapi_pb2.py /app/common/ateapi_pb2.py
-COPY benchmarking/locust/common/ateapi_pb2_grpc.py /app/common/ateapi_pb2_grpc.py
+COPY --from=ateprotos /out/ /app/common/
 
 COPY benchmarking/nighthawk-ingress/runner.py \
      benchmarking/nighthawk-ingress/spec.py \
