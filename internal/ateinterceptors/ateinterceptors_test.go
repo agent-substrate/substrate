@@ -16,6 +16,7 @@ package ateinterceptors
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -325,23 +328,85 @@ func TestMaxDeadlineUnaryInterceptor_ShorterDeadlineIsPreserved(t *testing.T) {
 	}
 }
 
-func TestServerUnaryInterceptorRedactsEnvFromProtoRequestLogs(t *testing.T) {
-	var log bytes.Buffer
-	origLogger := slog.Default()
-	t.Cleanup(func() {
-		slog.SetDefault(origLogger)
-	})
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&log, nil)))
+func TestServerUnaryInterceptorRedactsFieldsMarkedDebugRedact(t *testing.T) {
+	const (
+		envSecret = "sk-secret"
+		jwtSecret = "jwt-secret-token"
+	)
+	// The credential provider returns raw bytes; a JSON log renders them base64.
+	credential := []byte("hunter2")
+	credentialB64 := base64.StdEncoding.EncodeToString(credential)
 
+	tests := []struct {
+		name    string
+		req     any
+		resp    any
+		absent  []string
+		present []string
+	}{
+		{
+			name: "atelet env entry value",
+			req: &ateletpb.RunRequest{
+				Spec: &ateletpb.WorkloadSpec{
+					Containers: []*ateletpb.Container{
+						{Name: "main", Env: []*ateletpb.EnvEntry{{Name: "API_KEY", Value: envSecret}}},
+					},
+				},
+			},
+			resp:    &ateletpb.RunResponse{},
+			absent:  []string{envSecret},
+			present: []string{"main", "API_KEY"},
+		},
+		{
+			name:   "ateapi actor JWT",
+			req:    &ateapipb.MintActorJWTRequest{},
+			resp:   &ateapipb.MintActorJWTResponse{ActorJwt: jwtSecret},
+			absent: []string{jwtSecret},
+		},
+		{
+			name:   "credential provider opaque bytes",
+			req:    &credproviderpb.FetchSecretRequest{},
+			resp:   &credproviderpb.FetchSecretResponse{OpaqueBytes: credential},
+			absent: []string{credentialB64, string(credential)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var log bytes.Buffer
+			origLogger := slog.Default()
+			t.Cleanup(func() {
+				slog.SetDefault(origLogger)
+			})
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&log, nil)))
+
+			_, err := ServerUnaryInterceptor(context.Background(), tt.req, &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+				return tt.resp, nil
+			})
+			if err != nil {
+				t.Fatalf("ServerUnaryInterceptor failed: %v", err)
+			}
+
+			gotLog := log.String()
+			for _, s := range tt.absent {
+				if strings.Contains(gotLog, s) {
+					t.Errorf("log contains redacted data %q: %s", s, gotLog)
+				}
+			}
+			for _, s := range tt.present {
+				if !strings.Contains(gotLog, s) {
+					t.Errorf("log is missing non-sensitive data %q: %s", s, gotLog)
+				}
+			}
+		})
+	}
+}
+
+func TestServerUnaryInterceptorDoesNotMutateProto(t *testing.T) {
 	req := &ateletpb.RunRequest{
 		Spec: &ateletpb.WorkloadSpec{
 			Containers: []*ateletpb.Container{
-				{
-					Name: "main",
-					Env: []*ateletpb.EnvEntry{
-						{Name: "API_KEY", Value: "sk-secret"},
-					},
-				},
+				{Name: "main", Env: []*ateletpb.EnvEntry{{Name: "API_KEY", Value: "sk-secret"}}},
 			},
 		},
 	}
@@ -353,11 +418,7 @@ func TestServerUnaryInterceptorRedactsEnvFromProtoRequestLogs(t *testing.T) {
 		t.Fatalf("ServerUnaryInterceptor failed: %v", err)
 	}
 
-	gotLog := log.String()
-	if strings.Contains(gotLog, "sk-secret") || strings.Contains(gotLog, "API_KEY") {
-		t.Fatalf("log contains env data: %s", gotLog)
-	}
-	if len(req.GetSpec().GetContainers()[0].GetEnv()) != 1 {
-		t.Fatalf("interceptor mutated original request")
+	if got := req.GetSpec().GetContainers()[0].GetEnv()[0].GetValue(); got != "sk-secret" {
+		t.Errorf("interceptor mutated original request: env value = %q, want %q", got, "sk-secret")
 	}
 }

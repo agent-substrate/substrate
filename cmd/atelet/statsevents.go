@@ -26,6 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/agent-substrate/substrate/internal/logredact"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -74,7 +75,7 @@ type statsEventEmitter struct {
 // over the process's synchronized stdout writer (see startStatsPoller).
 func newStatsEventEmitter(w io.Writer, labelsKey func() string) *statsEventEmitter {
 	return &statsEventEmitter{
-		log:       slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))),
+		log:       slog.New(logredact.NewHandler(contextlogging.NewHandler(slog.NewJSONHandler(w, nil)))),
 		labelsKey: labelsKey,
 	}
 }
@@ -110,7 +111,7 @@ func newAsyncWriter(ctx context.Context, w io.Writer, depth int) *asyncWriter {
 	aw := &asyncWriter{
 		w:      w,
 		ch:     make(chan []byte, depth),
-		report: slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))),
+		report: slog.New(logredact.NewHandler(contextlogging.NewHandler(slog.NewJSONHandler(w, nil)))),
 	}
 	go aw.run(ctx)
 	return aw

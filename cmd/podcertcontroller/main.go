@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/servicednssigner"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/logredact"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/types"
@@ -102,7 +103,7 @@ func main() {
 		fmt.Println(version.String())
 		return
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(logredact.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
 	slog.InfoContext(ctx, "podcertcontroller starting", slog.String("version", version.Version))
 
 	var kconfig *rest.Config

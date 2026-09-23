@@ -33,6 +33,7 @@ import (
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/agent-substrate/substrate/internal/logredact"
 	"github.com/myzhan/boomer"
 
 	// Register user classes via init():
@@ -65,7 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(logredact.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
 
 	initialCfg, err := dynconfig.Parse([]byte(*configJSON), dynconfig.Config{
 		MaxWait:         500 * time.Millisecond,

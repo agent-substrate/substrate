@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/logredact"
 	"github.com/agent-substrate/substrate/internal/version"
 	secretservice "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	"google.golang.org/grpc"
@@ -119,5 +120,5 @@ func newLogger(level string) (*slog.Logger, error) {
 	if err := lvl.UnmarshalText([]byte(level)); err != nil {
 		return nil, fmt.Errorf("--log-level %q: %w", level, err)
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})), nil
+	return slog.New(logredact.NewHandler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))), nil
 }

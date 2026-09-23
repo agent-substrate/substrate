@@ -30,6 +30,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/agent-substrate/substrate/internal/logredact"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
@@ -46,7 +47,8 @@ import (
 )
 
 // InitLogger sets the global slog logger to a JSON handler wrapped in
-// contextlogging.NewHandler, writing to os.Stdout. Call once at process start.
+// contextlogging.NewHandler and logredact.NewHandler, writing to os.Stdout.
+// Call once at process start.
 func InitLogger() {
 	InitLoggerWithWriter(os.Stdout)
 }
@@ -55,7 +57,8 @@ func InitLogger() {
 // one synchronized writer between the runtime logger and a separate writer (e.g.
 // ateom's actor-log forwarder) so their lines don't interleave.
 func InitLoggerWithWriter(w io.Writer) {
-	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: &logLevel}))))
+	handler := logredact.NewHandler(contextlogging.NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: &logLevel})))
+	slog.SetDefault(slog.New(handler))
 }
 
 // logLevel is the dynamic minimum level behind the serverboot loggers.
