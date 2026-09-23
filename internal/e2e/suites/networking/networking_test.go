@@ -281,6 +281,9 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 		for _, line := range lines {
 			switch line.container {
 			case "envoy":
+				if strings.Contains(line.text, "/ateom-for-actor/") || strings.Contains(line.text, "/actor/") {
+					t.Logf("Log line mentions SPIFFE ID: %v", line.text)
+				}
 				authority, ok := accessLogField(line.text, "authority")
 				if ok && strings.HasSuffix(authority, ":"+port) && strings.Contains(line.text, "/ateom-for-actor/"+atespace+"/"+actorName) {
 					t.Logf("egress gateway tunneled the request: %s", line.text)
