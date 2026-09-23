@@ -3806,3 +3806,56 @@ func TestRevertActor_NotFound(t *testing.T) {
 		t.Fatalf("RevertActor = %v, want NotFound", err)
 	}
 }
+
+func TestDeleteActor_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-delete-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	tmpl := createTemplate(t, tc, ns)
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
+	ref := actorRef.ToObjectRef()
+	create := func() *ateapipb.Actor {
+		created, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+		}})
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		return created
+	}
+	del := func(opts *ateapipb.DeleteOptions) error {
+		_, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, Options: opts})
+		return err
+	}
+
+	actor := create()
+	uid, version := actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()
+
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Actor "+actorRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Actor "+actorRef.String()+" does not have uid "+foreignUID)
+	got, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("a refused delete removed the actor: %v", err)
+	}
+	if state := got.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("state after the refused deletes = %v, want SUSPENDED", state)
+	}
+
+	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+		t.Fatalf("DeleteActor with the matching version: %v", err)
+	}
+	actor = create()
+	if err := del(&ateapipb.DeleteOptions{Uid: actor.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteActor with the matching uid: %v", err)
+	}
+	actor = create()
+	if err := del(&ateapipb.DeleteOptions{Uid: actor.GetMetadata().GetUid(), Version: actor.GetMetadata().GetVersion()}); err != nil {
+		t.Fatalf("DeleteActor with both guards: %v", err)
+	}
+	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	assertGrpcError(t, err, codes.NotFound, "Actor "+actorRef.String()+" not found")
+}

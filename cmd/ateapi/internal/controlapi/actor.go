@@ -434,7 +434,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState())
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState(), toDeletePreconditions(req.GetOptions()))
 	if err != nil {
 		return nil, err
 	}
@@ -442,8 +442,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	return deleted, nil
 }
 
-func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	return s.store.DeleteActor(ctx, actorRef)
+func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
+	return s.store.DeleteActor(ctx, actorRef, precondition)
 }
 
 func validateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRequest) field.ErrorList {

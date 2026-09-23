@@ -2079,6 +2079,36 @@ func Validate_DeleteActorEgressPolicyRequest(
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.DeleteActorEgressPolicyRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.DeleteOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_DeleteOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.DeleteActorEgressPolicyRequest) *ateapipb.DeleteOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -2162,6 +2192,36 @@ func Validate_DeleteActorRequest(
 		errs = append(errs, fn(fldPath.Child("any_state"), &obj.AnyState, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.DeleteActorRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.DeleteOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_DeleteOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.DeleteActorRequest) *ateapipb.DeleteOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -2215,6 +2275,36 @@ func Validate_DeleteActorTemplateRequest(
 				return oldObj.ActorTemplate
 			})
 		errs = append(errs, fn(fldPath.Child("actor_template"), obj.ActorTemplate, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.DeleteActorTemplateRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.DeleteOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_DeleteOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.DeleteActorTemplateRequest) *ateapipb.DeleteOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2274,6 +2364,36 @@ func Validate_DeleteAtespaceRequest(
 				return oldObj.Atespace
 			})
 		errs = append(errs, fn(fldPath.Child("atespace"), obj.Atespace, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.DeleteAtespaceRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.DeleteOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_DeleteOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.DeleteAtespaceRequest) *ateapipb.DeleteOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2400,6 +2520,36 @@ func Validate_DeleteTagRequest(
 				return oldObj.Tag
 			})
 		errs = append(errs, fn(fldPath.Child("tag"), obj.Tag, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.DeleteTagRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.DeleteOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_DeleteOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.DeleteTagRequest) *ateapipb.DeleteOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
 	}
 
 	return errs

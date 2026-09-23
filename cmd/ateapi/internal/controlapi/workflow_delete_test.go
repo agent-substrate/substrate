@@ -122,7 +122,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", tmplName, tc.seedState)
 
-			deleted, err := w.DeleteActor(ctx, actorRef, tc.anyState)
+			deleted, err := w.DeleteActor(ctx, actorRef, tc.anyState, store.DeletePreconditions{})
 			if tc.wantErr {
 				if got := status.Code(err); got != tc.wantCode {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)
@@ -355,7 +355,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 		s.InProgressSnapshotUri = inFlight.String()
 	})
 
-	if _, err := w.DeleteActor(ctx, actorRef, true); err != nil {
+	if _, err := w.DeleteActor(ctx, actorRef, true, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteActor: %v", err)
 	}
 	if left := objects.Prefix(t, inFlight.OwnerPrefix()); len(left) != 0 {
@@ -456,7 +456,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 				t.Fatalf("state = %v, want CRASHED", got)
 			}
-			if _, err := actorWorkflow.DeleteActor(ctx, actorRef, true); err != nil {
+			if _, err := actorWorkflow.DeleteActor(ctx, actorRef, true, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("DeleteActor: %v", err)
 			}
 			if left := objects.Prefix(t, fresh.OwnerPrefix()); len(left) != 0 {

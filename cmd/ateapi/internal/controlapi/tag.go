@@ -90,9 +90,10 @@ func (s *RPCService) GetTag(ctx context.Context, req *ateapipb.GetTagRequest) (*
 	if errs := validateGetTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tag, err := s.impl.GetTag(ctx, resources.TagRefFromObjectRef(req.GetTag()))
+	tagRef := resources.TagRefFromObjectRef(req.GetTag())
+	tag, err := s.impl.GetTag(ctx, tagRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "Tag not found")
+		return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
@@ -250,12 +251,12 @@ func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagReque
 	if errs := validateDeleteTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()))
+	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
+func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	// TODO: implement this
-	return s.store.DeleteTag(ctx, tagRef)
+	return s.store.DeleteTag(ctx, tagRef, precondition)
 }
 
 func validateDeleteTagRequest(ctx context.Context, req *ateapipb.DeleteTagRequest) field.ErrorList {

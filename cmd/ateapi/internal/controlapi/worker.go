@@ -274,14 +274,11 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorke
 	}
 	// The delete releases the Actor bound to this Worker before removing the
 	// record, so it is a workflow rather than a single store call.
-	return s.workerWorkflow.DeleteWorker(ctx, req.GetWorker().GetName(), store.DeletePreconditions{
-		UID:     req.GetOptions().GetUid(),
-		Version: req.GetOptions().GetVersion(),
-	})
+	return s.workerWorkflow.DeleteWorker(ctx, req.GetWorker().GetName(), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {
-	return s.store.DeleteWorker(ctx, name, pre)
+func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
+	return s.store.DeleteWorker(ctx, name, precondition)
 }
 
 func validateDeleteWorkerRequest(ctx context.Context, req *ateapipb.DeleteWorkerRequest) field.ErrorList {

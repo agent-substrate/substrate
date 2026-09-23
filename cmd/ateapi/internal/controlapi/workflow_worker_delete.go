@@ -36,7 +36,7 @@ import (
 // record in place, and a retry fast-forwards past whatever the previous attempt
 // already did. An absent Worker is NOT_FOUND rather than success; idempotency
 // belongs to the caller, which knows whether that is the state it wanted.
-func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {
+func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
 	worker, err := w.loadWorkerForDelete(ctx, name)
 	if err != nil {
 		return nil, err
@@ -44,10 +44,10 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, pre stor
 
 	// Checked against the Worker the caller observed, before the drain below
 	// moves the version.
-	if err := pre.Check(worker.GetMetadata()); err != nil {
+	if err := precondition.Check(worker.GetMetadata()); err != nil {
 		switch {
 		case errors.Is(err, store.ErrUIDConflict):
-			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, pre.UID)
+			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, precondition.UID)
 		case errors.Is(err, store.ErrVersionConflict):
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
@@ -65,7 +65,7 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, pre stor
 
 	// The drain moved the version, so only the uid guard still means anything:
 	// a Worker replaced by a new incarnation mid-delete is still refused.
-	pre.Version = 0
+	precondition.Version = 0
 
 	// Order matters: the delete is what erases the Actor's pointer at the
 	// Worker, so a failed release has to leave the record in place for the
@@ -74,7 +74,7 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, pre stor
 		return nil, err
 	}
 
-	return w.finalizeDeleted(ctx, name, pre)
+	return w.finalizeDeleted(ctx, name, precondition)
 }
 
 // loadWorkerForDelete fetches the current worker record. Reading before any of
@@ -244,17 +244,17 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 // record. The request's guards are carried down as delete preconditions, so a
 // worker that moved on since the caller read it is reported as a conflict rather
 // than removed.
-func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, name string, pre store.DeletePreconditions) (_ *ateapipb.Worker, err error) {
+func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapipb.Worker, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeDeleted")
 	defer func() { err = done(err) }()
 
-	deleted, err := w.store.DeleteWorker(ctx, name, pre)
+	deleted, err := w.store.DeleteWorker(ctx, name, precondition)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 		case errors.Is(err, store.ErrUIDConflict):
-			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, pre.UID)
+			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, precondition.UID)
 		case errors.Is(err, store.ErrVersionConflict):
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}

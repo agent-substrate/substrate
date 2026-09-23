@@ -271,7 +271,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// Deleting the tag collects the partial copy and frees the name.
-	if _, err := w.DeleteTag(ctx, tagRef); err != nil {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteTag on the pending tag: %v", err)
 	}
 	if got := objects.Snapshot(t, strandedURI); len(got) != 0 {
@@ -326,7 +326,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 				return
 			}
 			pendingURI = mustReservedTagSnapshotURI(t, reserved).String()
-			_, deleteErr = w.DeleteTag(ctx, tagRef)
+			_, deleteErr = w.DeleteTag(ctx, tagRef, store.DeletePreconditions{})
 		})
 		return nil
 	}
@@ -429,7 +429,7 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	// A delete that cannot reach object storage must not drop the row: it is
 	// the only handle left on the snapshot.
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.DeleteTag(ctx, tagRef); !errors.Is(err, errObjectStore) {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
@@ -439,7 +439,7 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	// Simulates a retried deletion. Now, the object deletion succeeds,
 	// so we can remove the row from the DB.
 	objects.OnDelete = nil
-	if _, err := w.DeleteTag(ctx, tagRef); err != nil {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("retried DeleteTag: %v", err)
 	}
 	if got := objects.Snapshot(t, uri); len(got) != 0 {
@@ -472,18 +472,18 @@ func TestDeleteTag_ReleasesPendingSnapshot(t *testing.T) {
 	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 	})
-	if _, err := persistence.DeleteActor(ctx, resources.ActorRefFromActor(actor)); err != nil {
+	if _, err := persistence.DeleteActor(ctx, resources.ActorRefFromActor(actor), store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteActor: %v", err)
 	}
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.DeleteTag(ctx, tagRef); !errors.Is(err, errObjectStore) {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
 		t.Fatalf("GetTag after failed cleanup: %v", err)
 	}
 	objects.OnDelete = nil
-	if _, err := w.DeleteTag(ctx, tagRef); err != nil {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteTag: %v", err)
 	}
 	if got := objects.Snapshot(t, uri); len(got) != 0 {
@@ -504,7 +504,7 @@ func TestDeleteTag_NotFound(t *testing.T) {
 	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
 	w, _ := newFinalizeWorkflow(persistence)
 
-	_, err := w.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: "missing"})
+	_, err := w.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: "missing"}, store.DeletePreconditions{})
 	if code := status.Code(err); code != codes.NotFound {
 		t.Errorf("DeleteTag = %v (code %v), want code NotFound", err, code)
 	}
@@ -517,4 +517,48 @@ func mustReservedTagSnapshotURI(t *testing.T, tag *ateapipb.Tag) resources.Snaps
 		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
 	return uri
+}
+
+func TestDeleteTag_Preconditions(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	uri := mustReservedTagSnapshotURI(t, tag)
+	observed, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag: %v", err)
+	}
+	uid, version := observed.GetMetadata().GetUid(), observed.GetMetadata().GetVersion()
+
+	for name, precondition := range map[string]store.DeletePreconditions{
+		"stale version": {UID: uid, Version: version + 1},
+		"foreign uid":   {UID: "0f0e0d0c-0b0a-4908-8706-050403020100", Version: version},
+	} {
+		if _, err := w.DeleteTag(ctx, tagRef, precondition); status.Code(err) != codes.Aborted {
+			t.Fatalf("DeleteTag with a %s = %v, want code Aborted", name, err)
+		}
+	}
+	if got := objects.Snapshot(t, uri); len(got) == 0 {
+		t.Fatal("a rejected delete collected the tag's external snapshot")
+	}
+	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+		t.Fatalf("GetTag after the rejected deletes: %v", err)
+	}
+
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{UID: uid, Version: version}); err != nil {
+		t.Fatalf("DeleteTag with matching guards: %v", err)
+	}
+	if got := objects.Snapshot(t, uri); len(got) != 0 {
+		t.Errorf("the tag's external snapshot still holds %v, want it collected", got)
+	}
+	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
+	}
 }

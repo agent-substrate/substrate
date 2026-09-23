@@ -508,7 +508,8 @@ Deletion always runs before the database reference is dropped, and a failure fai
 #### `DeleteActor`
 Removes an actor from the registry and cleans up associated resources.
 *   **Request:** `DeleteActorRequest`
-    *   `actor`: `ObjectRef` of the actor to delete. Delete takes no preconditions today, so it is last-writer-wins.
+    *   `actor`: `ObjectRef` of the actor to delete.
+    *   `options`: (Optional) `DeleteOptions`. `uid` and `version` are preconditions checked against the actor as the caller last read it: a mismatch returns `ABORTED`, an omitted guard is skipped. They are checked before the workflow starts, so a guarded delete that fails part-way leaves the actor `ACTOR_STATE_DELETING` at a higher version. Retry it with the `uid` guard alone, or re-read first.
     *   `any_state`: (Optional) If `true`, allows deleting the actor from any state (e.g. `RUNNING`, `PAUSED`), terminating active workloads, detaching volumes, and releasing worker allocations. By default (`false`), only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` (or already `ACTOR_STATE_DELETING`) can be deleted.
 *   **Response:** the deleted `Actor`, as it was immediately before removal.
 *   Deleting an actor also deletes the external snapshot it owns, along with one an interrupted suspend left behind. Snapshots it only borrows from a tag are left alone, and its tags are unaffected — they hold their own copies.

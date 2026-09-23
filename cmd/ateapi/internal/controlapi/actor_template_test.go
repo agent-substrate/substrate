@@ -359,6 +359,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 		// failPrefix makes object storage fail cleanup for this resource kind.
 		failPrefix            string
 		wantActorAfterFailure bool
+		staleGuard            bool
 	}{
 		{name: "golden actor and tag"},
 		{name: "golden actor already deleted", actorDeleted: true},
@@ -367,6 +368,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 		{name: "incomplete golden tag", pendingTag: true},
 		{name: "actor cleanup failure", failPrefix: "/actors/", wantActorAfterFailure: true},
 		{name: "tag cleanup failure", failPrefix: "/tags/"},
+		{name: "stale guard refused before cleanup", staleGuard: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -406,7 +408,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, true); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, true, store.DeletePreconditions{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -421,6 +423,22 @@ func TestDeleteActorTemplate(t *testing.T) {
 						return errObjectStore
 					}
 					return nil
+				}
+			}
+			if tt.staleGuard {
+				current, err := persistence.GetActorTemplate(ctx, templateRef)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stale := store.DeletePreconditions{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
+				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); status.Code(err) != codes.Aborted {
+					t.Fatalf("DeleteActorTemplate with a stale version = %v, want code Aborted", err)
+				}
+				if _, err := persistence.GetActor(ctx, goldenRef); err != nil {
+					t.Fatalf("golden actor after the refused delete: %v", err)
+				}
+				if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+					t.Fatalf("golden tag after the refused delete: %v", err)
 				}
 			}
 			req := &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}

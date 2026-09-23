@@ -458,6 +458,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			StorageLocation:  testStorageLocation,
 			ActorTemplateUid: created.GetMetadata().GetUid(),
 		},
 	})
@@ -883,3 +884,6 @@ func assertSpanStr(t *testing.T, attrs map[attribute.Key]attribute.Value, key at
 		t.Errorf("%s = %q, want %q", key, v.AsString(), want)
 	}
 }
+
+// foreignUID matches no stored object, for guards that must miss.
+const foreignUID = "0f0e0d0c-0b0a-4908-8706-050403020100"
