@@ -92,6 +92,11 @@ of scope for an installer: `benchmarking/deploy_locust.sh` and
 `hack/install-microvm-deps.sh`. They receive `Config.ScriptEnv()`, which
 reconstructs the environment the shell installer would have exported to them.
 
+Both are fronted by commands, so nothing outside this package names a script:
+`deploy`/`delete benchmarks` for the first, `deploy`/`delete microvm-deps` for
+the second. That leaves the choice of whether to keep shelling out an internal
+one.
+
 `ko` is no longer asked to apply anything. The scripts ran `run_ko apply`, which
 made ko shell out to kubectl and forced the awkward `-- --context=` special case
 (only `apply`/`create`/`delete`/`run` accept args after `--`; `resolve` rejects
