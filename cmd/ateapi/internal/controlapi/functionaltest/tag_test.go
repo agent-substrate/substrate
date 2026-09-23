@@ -60,7 +60,6 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 		Status: &ateapipb.TagStatus{
 			Snapshot:        &ateapipb.ExternalSnapshot{ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope()},
 			StorageLocation: testStorageLocation,
-			SourceActorUid:  actor.GetMetadata().GetUid(),
 		},
 	}
 	for _, opt := range opts {

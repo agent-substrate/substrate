@@ -23,6 +23,7 @@ import (
 
 	"github.com/distribution/reference"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volumepath"
@@ -43,7 +44,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	if in != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(in.Metadata)
 		in.Status = nil
-		defaultActorTemplate(in)
+		defaults.Apply(in)
 	}
 
 	// Validate the request, including the object within it.
@@ -210,7 +211,7 @@ func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resou
 	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
 }
 
-// httpGetPathRE constrains readyz paths to RFC 3986 path-segment
+// httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
 // characters only, with well-formed percent-escapes, and no query string
 // or fragment.
 var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
@@ -362,18 +363,18 @@ func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, f
 	return errs
 }
 
-// ValidateCustom_SnapshotsConfig_StorageLocation ensures an
-// ActorTemplate's snapshotsConfig.location is a well-formed
+// ValidateCustom_SnapshotConfig_StorageLocation ensures an
+// ActorTemplate's snapshotConfig.location is a well-formed
 // URI with a bucket, so a bad location fails fast.
-func ValidateCustom_SnapshotsConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
 	}
 	return nil
 }
 
-// ValidateCustom_SnapshotsConfig requires on_commit to be a subset of on_pause.
-func ValidateCustom_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
+// ValidateCustom_SnapshotConfig requires on_commit to be a subset of on_pause.
+func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
 	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}

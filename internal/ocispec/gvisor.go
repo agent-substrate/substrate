@@ -26,7 +26,7 @@ import (
 // name is drawn from, so no actor container can collide with it.
 const PauseContainer = "_pause"
 
-// resolvConf is the host resolver config bound into the sandbox.
+// resolvConf is the sandbox resolver path and default bind source.
 const resolvConf = "/etc/resolv.conf"
 
 // GVisorOptions describes the gVisor-specific context of one actor container.
@@ -35,6 +35,8 @@ type GVisorOptions struct {
 	ContainerName string
 	// DurableVolumes are declared on the sandbox (pause) spec only.
 	DurableVolumes []string
+	// ResolvConf is the bind source for /etc/resolv.conf; empty uses the pod's file.
+	ResolvConf string
 	// Size sizes the container's cgroup leaf. Only gVisor applies it; a micro-VM
 	// container's limits come from its own declared resources (see sizing).
 	Size sizing.SandboxSize
@@ -65,10 +67,14 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 		if i < 0 {
 			i = len(spec.Mounts)
 		}
+		source := o.ResolvConf
+		if source == "" {
+			source = resolvConf
+		}
 		spec.Mounts = slices.Insert(spec.Mounts, i, specs.Mount{
 			Destination: resolvConf,
 			Type:        "bind",
-			Source:      resolvConf,
+			Source:      source,
 			Options:     []string{"ro"},
 		})
 	}

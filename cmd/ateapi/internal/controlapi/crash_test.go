@@ -19,15 +19,22 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	otellog "go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
@@ -578,30 +585,106 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 // crashRecords captures the "Actor crashed" records a crash emits, so a test can
 // assert the identity that ate.actor.crashes is barred from carrying. crashActor
 // logs through the slog default, so this swaps it and the caller cannot be parallel.
-func crashRecords(t *testing.T) *[]map[string]string {
+func crashRecords(t *testing.T) *[]stdoutRecord {
 	t.Helper()
-	return logRecords(t, "Actor crashed")
+	return logRecords(t, actorevent.Crashed.Body)
 }
 
-// logRecords captures the attributes of every record with the given message.
-func logRecords(t *testing.T, msg string) *[]map[string]string {
+// stdoutRecord is one captured record from the stdout copy. It keeps the level
+// and the time, not just the attributes, so a test can hold those against the
+// OTLP copy. The message is whatever logRecords filtered on.
+type stdoutRecord struct {
+	level slog.Level
+	time  time.Time
+	attrs map[string]string
+}
+
+// logRecords captures every record with the given message.
+func logRecords(t *testing.T, msg string) *[]stdoutRecord {
 	t.Helper()
 
-	var records []map[string]string
+	var records []stdoutRecord
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
 		if r.Message != msg {
 			return
 		}
-		fields := map[string]string{}
+		rec := stdoutRecord{level: r.Level, time: r.Time, attrs: map[string]string{}}
 		r.Attrs(func(a slog.Attr) bool {
-			fields[a.Key] = a.Value.String()
+			rec.attrs[a.Key] = a.Value.String()
 			return true
 		})
-		records = append(records, fields)
+		records = append(records, rec)
 	})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return &records
+}
+
+// otlpEvent is one captured record from the OTLP copy of a log record.
+type otlpEvent struct {
+	name      string
+	body      string
+	severity  otellog.Severity
+	timestamp time.Time
+	attrs     map[string]string
+}
+
+var (
+	otlpSinkOnce sync.Once
+	otlpSinkMu   sync.Mutex
+	otlpSink     []otlpEvent
+)
+
+type otlpSinkExporter struct{}
+
+func (otlpSinkExporter) Export(_ context.Context, records []sdklog.Record) error {
+	otlpSinkMu.Lock()
+	defer otlpSinkMu.Unlock()
+	for _, r := range records {
+		e := otlpEvent{
+			name:      r.EventName(),
+			body:      r.Body().String(),
+			severity:  r.Severity(),
+			timestamp: r.Timestamp(),
+			attrs:     map[string]string{},
+		}
+		r.WalkAttributes(func(kv otellog.KeyValue) bool {
+			e.attrs[kv.Key] = kv.Value.String()
+			return true
+		})
+		otlpSink = append(otlpSink, e)
+	}
+	return nil
+}
+
+func (otlpSinkExporter) Shutdown(context.Context) error   { return nil }
+func (otlpSinkExporter) ForceFlush(context.Context) error { return nil }
+
+// otlpEvents captures the events emitted while a test runs, so a test can assert
+// the OTLP copy beside the stdout one. The global logger provider only ever
+// delegates once, so one provider serves the whole binary and each call clears
+// the sink. Like logRecords, this makes the caller non-parallel.
+func otlpEvents(t *testing.T) func() []otlpEvent {
+	t.Helper()
+
+	otlpSinkOnce.Do(func() {
+		global.SetLoggerProvider(sdklog.NewLoggerProvider(
+			sdklog.WithProcessor(sdklog.NewSimpleProcessor(otlpSinkExporter{}))))
+	})
+
+	clear := func() {
+		otlpSinkMu.Lock()
+		defer otlpSinkMu.Unlock()
+		otlpSink = nil
+	}
+	clear()
+	t.Cleanup(clear)
+
+	return func() []otlpEvent {
+		otlpSinkMu.Lock()
+		defer otlpSinkMu.Unlock()
+		return slices.Clone(otlpSink)
+	}
 }
 
 type slogHandlerFunc func(slog.Record)
@@ -614,6 +697,27 @@ func (f slogHandlerFunc) Handle(_ context.Context, r slog.Record) error {
 func (f slogHandlerFunc) WithAttrs([]slog.Attr) slog.Handler { return f }
 func (f slogHandlerFunc) WithGroup(string) slog.Handler      { return f }
 
+// assertCopiesAgree checks the fields that no longer live at a call site. Both
+// copies take their severity and body from ev, so neither can hold its own. A
+// stdout body that drifted fails earlier, when logRecords matches nothing.
+func assertCopiesAgree(t *testing.T, stdout stdoutRecord, otlp otlpEvent, ev actorevent.Event) {
+	t.Helper()
+
+	if stdout.level != ev.Level() {
+		t.Errorf("stdout level = %v, want %v", stdout.level, ev.Level())
+	}
+	if otlp.severity != ev.Severity {
+		t.Errorf("OTLP severity = %v, want %v", otlp.severity, ev.Severity)
+	}
+	if otlp.body != ev.Body {
+		t.Errorf("OTLP body = %q, want %q", otlp.body, ev.Body)
+	}
+	// One time.Now() serves both, so a consumer can join them on it.
+	if !stdout.time.Equal(otlp.timestamp) {
+		t.Errorf("timestamps differ: stdout %v, OTLP %v", stdout.time, otlp.timestamp)
+	}
+}
+
 // The crash record is the only signal carrying actor identity, so it must fire
 // exactly when the counter does. A crash counted but not logged is unattributable;
 // one logged but not counted double-counts on a retry.
@@ -623,6 +727,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Fatalf("RegisterActorCrashes: %v", err)
 	}
 	records := crashRecords(t)
+	events := otlpEvents(t)
 
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
@@ -642,7 +747,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Fatalf("got %d crash records, want 1", len(*records))
 	}
 
-	got := (*records)[0]
+	got := (*records)[0].attrs
 	stored, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
@@ -665,11 +770,28 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Error("crash record carries no ate.actor.uid; it cannot survive a name reuse")
 	}
 
+	// The OTLP copy is the same record under an event name. One call writes both,
+	// so anything either copy holds alone is a bug in actorevent.Log.
+	gotEvents := events()
+	if len(gotEvents) != 1 {
+		t.Fatalf("got %d crash events, want 1: %v", len(gotEvents), gotEvents)
+	}
+	if gotEvents[0].name != actorevent.Crashed.Name {
+		t.Errorf("event name = %q, want %q", gotEvents[0].name, actorevent.Crashed.Name)
+	}
+	if !maps.Equal(gotEvents[0].attrs, got) {
+		t.Errorf("crash event attributes = %v, want the stdout record's %v", gotEvents[0].attrs, got)
+	}
+	assertCopiesAgree(t, (*records)[0], gotEvents[0], actorevent.Crashed)
+
 	// Re-crashing an already-crashed actor must move neither signal.
 	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
 		t.Fatalf("second crashActor: %v", err)
 	}
 	if len(*records) != 1 {
 		t.Errorf("got %d crash records after re-crashing, want 1", len(*records))
+	}
+	if gotEvents := events(); len(gotEvents) != 1 {
+		t.Errorf("got %d crash events after re-crashing, want 1", len(gotEvents))
 	}
 }

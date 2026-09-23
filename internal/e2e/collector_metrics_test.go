@@ -153,3 +153,107 @@ func TestTargetInfoLabel(t *testing.T) {
 		})
 	}
 }
+
+// The count connector's own exposition shape: a _total suffix, the two keys the
+// connector is configured with, and an unrelated series to reject.
+const sampleLifecycleScrape = `# HELP substrate_actor_state_changes_total Actor state change events received, by state.
+# TYPE substrate_actor_state_changes_total counter
+substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="resuming"} 2
+substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="running"} 2
+substrate_actor_state_changes_total{service_name="ateapi",instance="other",ate_actor_state="running"} 3
+substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="crashed"} 1
+# TYPE substrate_spans_total counter
+substrate_spans_total{service_name="ateapi"} 40
+`
+
+func TestLifecycleEventCounts(t *testing.T) {
+	tests := []struct {
+		name   string
+		scrape string
+		want   map[string]float64
+	}{
+		{
+			name:   "every counted state, summed over instances",
+			scrape: sampleLifecycleScrape,
+			want:   map[string]float64{"resuming": 2, "running": 5, "crashed": 1},
+		},
+		{
+			name:   "no events counted",
+			scrape: sampleScrape,
+			want:   map[string]float64{},
+		},
+		{
+			name:   "empty scrape",
+			scrape: "",
+			want:   map[string]float64{},
+		},
+		{
+			name:   "a series with no state label contributes nothing",
+			scrape: "substrate_actor_state_changes_total{service_name=\"ateapi\"} 3\n",
+			want:   map[string]float64{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LifecycleEventCounts(tt.scrape)
+			if len(got) != len(tt.want) {
+				t.Fatalf("LifecycleEventCounts() = %v, want %v", got, tt.want)
+			}
+			for state, want := range tt.want {
+				if got[state] != want {
+					t.Errorf("LifecycleEventCounts()[%q] = %v, want %v", state, got[state], want)
+				}
+			}
+		})
+	}
+}
+
+func TestStatesNotAdvanced(t *testing.T) {
+	tests := []struct {
+		name          string
+		before, after map[string]float64
+		states        []string
+		want          []string
+	}{
+		{
+			name:   "every state advanced",
+			before: map[string]float64{"running": 1, "crashed": 0},
+			after:  map[string]float64{"running": 3, "crashed": 1},
+			states: []string{"running", "crashed"},
+		},
+		{
+			name:   "a stale count from an earlier run is not an advance",
+			before: map[string]float64{"running": 3, "crashed": 1},
+			after:  map[string]float64{"running": 3, "crashed": 1},
+			states: []string{"running", "crashed"},
+			want:   []string{"running", "crashed"},
+		},
+		{
+			name:   "a state that never appeared",
+			before: map[string]float64{},
+			after:  map[string]float64{"running": 2},
+			states: []string{"running", "suspended"},
+			want:   []string{"suspended"},
+		},
+		{
+			name:   "first observation of a state counts as an advance",
+			before: map[string]float64{},
+			after:  map[string]float64{"running": 1},
+			states: []string{"running"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := StatesNotAdvanced(tt.before, tt.after, tt.states)
+			if len(got) != len(tt.want) {
+				t.Fatalf("StatesNotAdvanced() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("StatesNotAdvanced() = %v, want %v", got, tt.want)
+					break
+				}
+			}
+		})
+	}
+}

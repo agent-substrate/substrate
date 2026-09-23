@@ -173,7 +173,7 @@ func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb
 	if atespace == resources.GoldenActorAtespace {
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	}
-	return tmpl.GetSnapshotsConfig().GetOnCommit()
+	return tmpl.GetSnapshotConfig().GetOnCommit()
 }
 
 // pausedContentScope returns the scope a paused actor's local snapshot was
@@ -184,7 +184,7 @@ func pausedContentScope(local *ateapipb.LocalSnapshotInfo, tmpl *ateapipb.ActorT
 	if scope := local.GetContentScope(); scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
 		return scope
 	}
-	return tmpl.GetSnapshotsConfig().GetOnPause()
+	return tmpl.GetSnapshotConfig().GetOnPause()
 }
 
 // isPausedOriginSuspend reports whether the suspend must upload a PAUSED
@@ -306,7 +306,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 // written: under the actor's own prefix, so the objects name their owner.
 func newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor) (resources.SnapshotURI, error) {
 	atespace := actor.GetMetadata().GetAtespace()
-	uri, err := resources.NewActorSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), atespace, actor.GetMetadata().GetUid(), resources.NewSnapshotName())
+	uri, err := resources.NewActorSnapshotURI(actorTemplate.GetSnapshotConfig().GetStorageLocation(), atespace, actor.GetMetadata().GetUid(), resources.NewSnapshotName())
 	if err != nil {
 		return resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", atespace, actor.GetMetadata().GetName(), err)
 	}

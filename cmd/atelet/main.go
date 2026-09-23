@@ -1449,7 +1449,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			[]string{"/pause"},
 			nil,
 			nil,
-			ateompath.AteomNetNSPath(targetAteomUid),
+			ateompath.ActorNetNSPath(actorUID),
 			nil, // pause is sandbox infra; it mounts no volumes.
 			nil,
 			nil, // pause only reaps; it needs no capabilities.
@@ -1477,7 +1477,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				ctr.GetCommand(),
 				ctr.GetArgs(),
 				envs,
-				ateompath.AteomNetNSPath(targetAteomUid),
+				ateompath.ActorNetNSPath(actorUID),
 				spec.GetVolumes(),
 				ctr.GetVolumeMounts(),
 				resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
@@ -1558,7 +1558,7 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) (*ateompb.WorkloadSpec,
 			CsiVolumeMounts:        csiMounts,
 			SystemInfoVolumeMounts: siMounts,
 			ImageVolumeMounts:      imgMounts,
-			Readyz:                 toAteomReadyz(ctr.GetReadyz()),
+			WakeupProbe:            toAteomWakeupProbe(ctr.GetWakeupProbe()),
 		})
 	}
 	return out, nil
@@ -1571,14 +1571,14 @@ func toAteomEgressGateway(gateway *ateletpb.EgressGateway) *ateompb.EgressGatewa
 	return &ateompb.EgressGateway{Address: gateway.GetAddress()}
 }
 
-// toAteomReadyz converts an ateletpb readyz probe into the ateompb wire
+// toAteomWakeupProbe converts an ateletpb wakeup probe into the ateompb wire
 // type. Returns nil when the source is nil so containers without a probe
 // stay unchanged on the wire to ateom.
-func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
+func toAteomWakeupProbe(in *ateletpb.WakeupProbe) *ateompb.WakeupProbe {
 	if in == nil {
 		return nil
 	}
-	out := &ateompb.Readyz{}
+	out := &ateompb.WakeupProbe{}
 	if hg := in.GetHttpGet(); hg != nil {
 		out.HttpGet = &ateompb.HTTPGetAction{
 			Path: hg.GetPath(),

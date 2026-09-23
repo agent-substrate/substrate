@@ -301,13 +301,13 @@ const (
 var testTemplateRef = resources.ActorTemplateRef{Atespace: testAtespace, Name: testTemplateName}
 
 // testTemplate builds a template with an empty status whose single container
-// has a readyz probe, so goldenSnapshotWarmupFor returns 0 and reconcileOne
+// has a wakeup probe, so goldenSnapshotWarmupFor returns 0 and reconcileOne
 // drives the golden actor to a snapshot without waiting for a warmup window.
 func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
 	tmpl := &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testTemplateName, Uid: testTemplateUID, Version: 1},
 		Containers: []*ateapipb.Container{
-			{Name: "main", Image: "img", Readyz: &ateapipb.ContainerReadyz{}},
+			{Name: "main", Image: "img", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
 		},
 		Status: &ateapipb.ActorTemplateStatus{},
 	}
@@ -317,9 +317,9 @@ func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate
 	return tmpl
 }
 
-func withoutReadyz(tmpl *ateapipb.ActorTemplate) {
+func withoutWakeupProbe(tmpl *ateapipb.ActorTemplate) {
 	for _, container := range tmpl.Containers {
-		container.Readyz = nil
+		container.WakeupProbe = nil
 	}
 }
 
@@ -355,15 +355,15 @@ func newTestTemplateReconciler(persistence templateReconcilerStore, control gold
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {
-	readyz := &ateapipb.ContainerReadyz{}
+	probe := &ateapipb.ContainerWakeupProbe{}
 	tests := []struct {
 		name       string
 		containers []*ateapipb.Container
 		want       time.Duration
 	}{
 		{"no containers", nil, goldenSnapshotWarmup},
-		{"all containers have readyz", []*ateapipb.Container{{Readyz: readyz}, {Readyz: readyz}}, 0},
-		{"one container missing readyz", []*ateapipb.Container{{Readyz: readyz}, {}}, goldenSnapshotWarmup},
+		{"all containers have wakeup probe", []*ateapipb.Container{{WakeupProbe: probe}, {WakeupProbe: probe}}, 0},
+		{"one container missing wakeup probe", []*ateapipb.Container{{WakeupProbe: probe}, {}}, goldenSnapshotWarmup},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -411,8 +411,8 @@ func TestReconcileOne(t *testing.T) {
 			wantSuspends: 1,
 		},
 		{
-			name:           "warmup without readyz stops after resume and requeues",
-			template:       testTemplate(withoutReadyz),
+			name:           "warmup without wakeup probe stops after resume and requeues",
+			template:       testTemplate(withoutWakeupProbe),
 			control:        &fakeGoldenControl{snapshot: goldenSnapshot},
 			wantRequeueMin: goldenSnapshotWarmup - time.Second,
 			wantRequeueMax: goldenSnapshotWarmup,
@@ -422,7 +422,7 @@ func TestReconcileOne(t *testing.T) {
 		},
 		{
 			name: "running golden actor waits for a future deadline",
-			template: testTemplate(withoutReadyz,
+			template: testTemplate(withoutWakeupProbe,
 				withSnapshotDeadline(time.Now().Add(time.Hour))),
 			control:        &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 			wantRequeueMin: 59 * time.Minute,
@@ -438,7 +438,7 @@ func TestReconcileOne(t *testing.T) {
 		},
 		{
 			name:           "running golden actor with a lost deadline restarts the warmup",
-			template:       testTemplate(withoutReadyz),
+			template:       testTemplate(withoutWakeupProbe),
 			control:        &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 			wantRequeueMin: goldenSnapshotWarmup - time.Second,
 			wantRequeueMax: goldenSnapshotWarmup,

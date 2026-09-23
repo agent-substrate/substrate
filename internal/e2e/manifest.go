@@ -33,8 +33,8 @@ import (
 //   - inline, substituted wherever they appear (an empty value just disappears);
 //   - block, which must be the entire content of their line. They expand to a
 //     YAML fragment that brings its own indentation, and an empty value takes
-//     the whole line with it — the same trick hack/install-demo-counter.sh
-//     plays with `sed /.../d`. Requiring the placeholder to be the whole line
+//     the whole line with it — the same trick the installer's renderer plays
+//     with its drop list. Requiring the placeholder to be the whole line
 //     is what lets a comment mention one without being deleted.
 func renderManifest(t *testing.T, relPath string, inline, blocks map[string]string) string {
 	t.Helper()
@@ -98,8 +98,8 @@ func yamlListBlock[T any](t *testing.T, key string, items []T, indent int) strin
 //
 // Through the repo's pinned ko (hack/run-tool.sh), because CI does not install
 // ko on PATH and every other deploy in this repo goes through that wrapper. The
-// trailing `-- --context=...` mirrors run_ko in hack/install-ate.sh: ko's apply
-// subcommand forwards args after `--` to kubectl. KO_CONFIG_PATH is required
+// trailing `-- --context=...` is how ko's apply subcommand takes a context: it
+// forwards args after `--` to kubectl. KO_CONFIG_PATH is required
 // because ko resolves .ko.yaml from its working directory, which is the test's
 // package dir rather than the repo root; without it the build silently loses
 // defaultPlatforms and produces images that cannot run on the cluster's nodes.

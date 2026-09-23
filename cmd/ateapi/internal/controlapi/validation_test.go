@@ -1182,6 +1182,13 @@ func TestValidateExternalSnapshot(t *testing.T) {
 			want: field.ErrorList{field.Required(uriPath, "")},
 		},
 		{
+			name: "snapshot_uri too long",
+			obj: valid(func(s *ateapipb.ExternalSnapshot) {
+				s.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
+			}),
+			want: field.ErrorList{field.TooLong(uriPath, nil, 2048).WithOrigin("maxLength")},
+		},
+		{
 			name: "content_scope above the enum",
 			obj:  valid(func(s *ateapipb.ExternalSnapshot) { s.ContentScope = ateapipb.SnapshotContentScope(3) }),
 			want: field.ErrorList{field.Invalid(scopePath, nil, "").WithOrigin("maximum")},
@@ -1261,6 +1268,14 @@ func TestValidateExternalSnapshotUpdate(t *testing.T) {
 			}),
 		},
 		{
+			name:   "snapshot_uri changed to a value that is too long",
+			oldObj: valid(),
+			newObj: valid(func(s *ateapipb.ExternalSnapshot) {
+				s.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
+			}),
+			want: field.ErrorList{field.TooLong(uriPath, nil, 2048).WithOrigin("maxLength")},
+		},
+		{
 			name:   "snapshot_uri repaired",
 			oldObj: badExternalSnapshot(),
 			newObj: badExternalSnapshot(func(s *ateapipb.ExternalSnapshot) { s.SnapshotUri = valid().SnapshotUri }),
@@ -1328,8 +1343,12 @@ func TestValidateNestedExternalSnapshot(t *testing.T) {
 
 func validTag(mutate ...func(*ateapipb.Tag)) *ateapipb.Tag {
 	tag := &ateapipb.Tag{
-		Metadata:    validResourceMetadata(),
-		Status:      &ateapipb.TagStatus{Snapshot: validExternalSnapshot()},
+		Metadata: validResourceMetadata(),
+		Status: &ateapipb.TagStatus{
+			Snapshot:         validExternalSnapshot(),
+			ActorTemplateUid: someActorUID,
+			StorageLocation:  testStorageLocation,
+		},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
 	}
@@ -1344,6 +1363,7 @@ func TestValidateTag(t *testing.T) {
 	metadataPath := field.NewPath("metadata")
 	scopePath := field.NewPath("scope")
 	sourceActorPath := field.NewPath("source_actor")
+	statusPath := field.NewPath("status")
 
 	tests := []struct {
 		name string
@@ -1407,6 +1427,28 @@ func TestValidateTag(t *testing.T) {
 			name: "missing source_actor.atespace",
 			obj:  valid(func(tag *ateapipb.Tag) { tag.SourceActor.Atespace = "" }),
 			want: field.ErrorList{field.Required(sourceActorPath.Child("atespace"), "")},
+		},
+		{
+			name: "missing status.actor_template_uid",
+			obj:  valid(func(tag *ateapipb.Tag) { tag.Status.ActorTemplateUid = "" }),
+			want: field.ErrorList{field.Required(statusPath.Child("actor_template_uid"), "")},
+		},
+		{
+			name: "malformed status.actor_template_uid",
+			obj:  valid(func(tag *ateapipb.Tag) { tag.Status.ActorTemplateUid = "not-a-uuid" }),
+			want: field.ErrorList{field.Invalid(statusPath.Child("actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		},
+		{
+			name: "missing status.storage_location",
+			obj:  valid(func(tag *ateapipb.Tag) { tag.Status.StorageLocation = "" }),
+			want: field.ErrorList{field.Required(statusPath.Child("storage_location"), "")},
+		},
+		{
+			name: "status.storage_location too long",
+			obj: valid(func(tag *ateapipb.Tag) {
+				tag.Status.StorageLocation = "gs://" + strings.Repeat("x", 1020)
+			}),
+			want: field.ErrorList{field.TooLong(statusPath.Child("storage_location"), nil, 1024).WithOrigin("maxLength")},
 		},
 	}
 	for _, tt := range tests {

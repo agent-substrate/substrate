@@ -1,0 +1,1149 @@
+package check
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"sort"
+	"sync"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
+
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	authzGraph "github.com/openfga/language/pkg/go/graph"
+
+	"github.com/openfga/openfga/internal/check/metrics"
+	"github.com/openfga/openfga/internal/concurrency"
+	"github.com/openfga/openfga/internal/iterator"
+	"github.com/openfga/openfga/internal/modelgraph"
+	"github.com/openfga/openfga/internal/planner"
+	"github.com/openfga/openfga/internal/telemetry"
+	"github.com/openfga/openfga/pkg/logger"
+	"github.com/openfga/openfga/pkg/storage"
+	"github.com/openfga/openfga/pkg/storage/cache/keys"
+	"github.com/openfga/openfga/pkg/tuple"
+)
+
+var tracer = otel.Tracer("internal/check")
+
+var ErrValidation = errors.New("object relation does not exist")
+var ErrUsersetInvalidRequest = errors.New("userset request cannot be resolved when exclusion operation is involved")
+var ErrPanicRequest = errors.New("invalid check request")
+var ErrWildcardInvalidRequest = errors.New("wildcard request cannot be resolved when intersection or exclusion is involved")
+
+type Config struct {
+	Model                     *modelgraph.AuthorizationModelGraph
+	Datastore                 storage.RelationshipTupleReader
+	Cache                     storage.InMemoryCache[any]
+	CacheTTL                  time.Duration
+	LastCacheInvalidationTime time.Time
+	Planner                   planner.Manager
+	ConcurrencyLimit          int
+	UpstreamTimeout           time.Duration
+	Logger                    logger.Logger
+	Strategies                map[string]Strategy
+}
+
+type Resolver struct {
+	model                     *modelgraph.AuthorizationModelGraph
+	datastore                 storage.RelationshipTupleReader
+	cache                     storage.InMemoryCache[any]
+	cacheTTL                  time.Duration
+	lastCacheInvalidationTime time.Time
+	planner                   planner.Manager
+	concurrencyLimit          int
+	upstreamTimeout           time.Duration
+	logger                    logger.Logger
+
+	strategies map[string]Strategy
+}
+
+func New(cfg Config) *Resolver {
+	r := &Resolver{
+		model:                     cfg.Model,
+		datastore:                 cfg.Datastore,
+		cache:                     cfg.Cache,
+		cacheTTL:                  cfg.CacheTTL,
+		lastCacheInvalidationTime: cfg.LastCacheInvalidationTime,
+		planner:                   cfg.Planner,
+		concurrencyLimit:          cfg.ConcurrencyLimit,
+		upstreamTimeout:           cfg.UpstreamTimeout,
+		logger:                    cfg.Logger,
+		strategies:                cfg.Strategies,
+	}
+
+	if r.cache == nil {
+		r.cache = storage.NewNoopCache()
+	}
+
+	if r.strategies == nil {
+		r.strategies = map[string]Strategy{
+			DefaultStrategyName:   NewDefault(cfg.Model, r, cfg.ConcurrencyLimit),
+			WeightTwoStrategyName: NewWeight2(cfg.Model, cfg.Datastore),
+			RecursiveStrategyName: NewRecursive(cfg.Model, cfg.Datastore, cfg.ConcurrencyLimit),
+		}
+	}
+
+	return r
+}
+
+func (r *Resolver) ResolveCheck(ctx context.Context, req *Request) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "ResolveCheck", trace.WithAttributes(
+		attribute.String("consistency", req.GetConsistency().String()),
+		attribute.String("store_id", req.GetStoreID()),
+		attribute.String("model_id", req.GetAuthorizationModelID()),
+		attribute.String("object", req.GetTupleKey().GetObject()),
+		attribute.String("relation", req.GetTupleKey().GetRelation()),
+		attribute.String("user", req.GetTupleKey().GetUser()),
+		attribute.String("tuple_key", req.GetTupleString()),
+		attribute.Bool("allowed", false),
+	))
+	defer span.End()
+
+	defer func(ctx context.Context) {
+		if err := ctx.Err(); err != nil {
+			span.RecordError(err)
+		}
+	}(ctx)
+
+	node, ok := r.model.GetNodeByID(tuple.ToObjectRelationString(req.GetObjectType(), req.GetTupleKey().GetRelation()))
+	if !ok {
+		// this should never happen as the request is already validated before
+		span.AddEvent("invalid_node", trace.WithAttributes(
+			attribute.String("node", tuple.ToObjectRelationString(req.GetObjectType(), req.GetTupleKey().GetRelation())),
+		))
+		span.SetStatus(codes.Error, "invalid node")
+		return nil, ErrPanicRequest
+	}
+
+	// GetUserType returns the user type if the request in not an object relation otherwise the usertyperelation
+	_, ok = r.model.GetNodeWeight(node, req.GetUserType())
+	if !ok {
+		// If the user type is not reachable from the object type and relation, we can immediately return false.
+		span.AddEvent("user_type_not_reachable", trace.WithAttributes(
+			attribute.String("node", node.GetUniqueLabel()),
+			attribute.String("user_type", req.GetUserType()),
+		))
+		return &Response{Allowed: false}, nil
+	}
+
+	// Check if the user is a wildcard and if the node does not have a path to the user type wildcard then return false
+	if req.IsTypedWildcard() && !slices.Contains(node.GetWildcards(), req.GetUserType()) {
+		span.AddEvent("user_wildcard_not_reachable", trace.WithAttributes(
+			attribute.String("node", node.GetUniqueLabel()),
+			attribute.String("user_type", req.GetUserType()),
+		))
+		return &Response{Allowed: false}, nil
+	}
+
+	res, err := r.ResolveUnion(ctx, req, node, nil)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
+	if res.GetAllowed() {
+		span.SetAttributes(attribute.Bool("allowed", true))
+	}
+
+	return res, nil
+}
+
+func (r *Resolver) isCached(consistency openfgav1.ConsistencyPreference, key keys.Key) (*Response, bool) {
+	if consistency == openfgav1.ConsistencyPreference_HIGHER_CONSISTENCY {
+		return nil, false
+	}
+	metrics.CacheLookupCounter.Inc()
+	v := r.cache.Get(key)
+	if v == nil {
+		return nil, false
+	}
+	res, ok := v.(*ResponseCacheEntry)
+	if !ok {
+		return nil, false
+	}
+	if !res.LastModified.After(r.lastCacheInvalidationTime) {
+		metrics.CacheInvalidHitCounter.Inc()
+		return nil, false
+	}
+	metrics.CacheHitCounter.Inc()
+	return res.Res, true
+}
+
+const PrefixEdgeCacheKey = "EDGE"
+
+// EdgeCacheKey builds a cache key that uniquely identifies a single edge
+// evaluation within a check resolution. It incorporates the invariant hash
+// so that requests with different contexts or contextual tuples never share
+// cached edge results.
+func EdgeCacheKey(req *Request, edge *authzGraph.WeightedAuthorizationModelEdge) keys.Key {
+	builder := keys.GetBuilder()
+	defer builder.Close()
+
+	builder.EncodeString(PrefixEdgeCacheKey)
+	builder.EncodeString(req.GetStoreID())
+	builder.EncodeString(req.GetAuthorizationModelID())
+	builder.EncodeString(req.GetTupleKey().GetObject())
+	builder.EncodeString(req.GetTupleKey().GetUser())
+	builder.EncodeString(edge.GetRelationDefinition())
+	builder.EncodeUint64(uint64(edge.GetEdgeType()))
+	builder.EncodeString(edge.GetTo().GetUniqueLabel())
+	builder.EncodeString(edge.GetTuplesetRelation())
+	builder.EncodeUint64(req.GetInvariantCacheKey())
+	return builder.Key()
+}
+
+func (r *Resolver) ResolveUnionEdges(ctx context.Context, req *Request, edges []*authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "ResolveUnionEdges", trace.WithAttributes(
+		attribute.String("tuple_key", req.GetTupleString()),
+		attribute.Bool("allowed", false),
+		attribute.Int("edge_count", len(edges)),
+	))
+	defer span.End()
+
+	defer func(ctx context.Context) {
+		if err := ctx.Err(); err != nil {
+			span.RecordError(err)
+		}
+	}(ctx)
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	out := make(chan ResponseMsg, len(edges))
+
+	var pool errgroup.Group
+	pool.SetLimit(r.concurrencyLimit)
+
+	defer func() {
+		cancel()
+		_ = pool.Wait()
+		close(out)
+	}()
+
+	type pair struct {
+		id   keys.Key
+		edge *authzGraph.WeightedAuthorizationModelEdge
+	}
+
+	var expectedMessages int
+	evaluations := make([]pair, 0, len(edges))
+
+	for _, edge := range edges {
+		id := EdgeCacheKey(req, edge)
+
+		expectedMessages++
+
+		if res, ok := r.isCached(req.GetConsistency(), id); ok {
+			span.AddEvent("cache_hit", trace.WithAttributes(
+				attribute.Int64("edge.type", int64(edge.GetEdgeType())),
+				attribute.String("edge.to", edge.GetTo().GetUniqueLabel()),
+				attribute.String("edge.from", edge.GetFrom().GetUniqueLabel()),
+				attribute.String("edge.relation_definition", edge.GetRelationDefinition()),
+				attribute.String("edge.recursive_relation", edge.GetRecursiveRelation()),
+				attribute.String("edge.tupleset_relation", edge.GetTuplesetRelation()),
+				attribute.Bool("allowed", res.GetAllowed()),
+			))
+
+			concurrency.TrySendThroughChannel(ctx, ResponseMsg{ID: id, Res: res}, out)
+
+			if res.GetAllowed() {
+				expectedMessages -= len(evaluations)
+				evaluations = nil
+				break
+			}
+
+			continue
+		}
+
+		evaluations = append(evaluations, pair{id, edge})
+	}
+
+	for _, evaluation := range evaluations {
+		pool.Go(func() error {
+			res, err := r.ResolveEdge(ctx, req, evaluation.edge, visited)
+			if err == nil && ctx.Err() == nil {
+				entry := &ResponseCacheEntry{Res: res, LastModified: time.Now()}
+				r.cache.Set(evaluation.id, entry, r.cacheTTL)
+			}
+
+			if err != nil {
+				span.RecordError(err, trace.WithAttributes(
+					attribute.String("edge.to", evaluation.edge.GetTo().GetUniqueLabel()),
+				))
+			}
+
+			concurrency.TrySendThroughChannel(ctx, ResponseMsg{ID: evaluation.id, Res: res, Err: err}, out)
+			return nil
+		})
+	}
+
+	var err error
+	for range expectedMessages {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case msg := <-out:
+			if msg.Err != nil {
+				err = msg.Err
+				continue
+			}
+
+			if msg.Res.GetAllowed() {
+				// Short-circuit: In a union, if any branch returns true, we can immediately return.
+				span.SetAttributes(attribute.Bool("allowed", true))
+				return msg.Res, nil
+			}
+		}
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	if err != nil {
+		// we only return error in a union when all edges are exhausted and there is at least one edge with error
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
+	return &Response{Allowed: false}, nil
+}
+
+// reduce as a logical union operation (exit the moment we have a single true).
+func (r *Resolver) ResolveUnion(ctx context.Context, req *Request, node *authzGraph.WeightedAuthorizationModelNode, visited *sync.Map) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "ResolveUnion", trace.WithAttributes(
+		attribute.String("tuple_key", req.GetTupleString()),
+		attribute.String("node", node.GetUniqueLabel()),
+	))
+	defer span.End()
+
+	defer func(ctx context.Context) {
+		if err := ctx.Err(); err != nil {
+			span.RecordError(err)
+		}
+	}(ctx)
+
+	emptyCycle := visited == nil
+	if emptyCycle && node.GetNodeType() == authzGraph.SpecificTypeAndRelation && (node.GetRecursiveRelation() == node.GetUniqueLabel() || node.IsPartOfTupleCycle()) {
+		// initialize visited map for first time,
+		visited = &sync.Map{}
+		// add the first object#relation that is being evaluated
+		visited.Store(tuple.ToObjectRelationString(req.GetTupleKey().GetObject(), req.GetTupleKey().GetRelation()), struct{}{})
+	}
+
+	edge, withOptimization := r.model.CanApplyRecursion(node, req.GetUserType(), emptyCycle)
+	if edge != nil {
+		return r.ResolveRecursive(ctx, req, edge, visited, withOptimization)
+	}
+
+	// flatten the node to get all terminal edges to avoid unnecessary goroutines
+	terminalEdges, err := r.model.FlattenNode(node, req.GetUserType(), req.IsTypedWildcard(), "")
+	if err != nil {
+		return nil, errors.Join(ErrPanicRequest, err)
+	}
+
+	return r.ResolveUnionEdges(ctx, req, terminalEdges, visited)
+}
+
+func (r *Resolver) executeStrategy(ctx context.Context, selector planner.Selector, strategy *planner.PlanConfig, fn func() (*Response, error)) (*Response, error) {
+	span := trace.SpanFromContext(ctx)
+	start := time.Now()
+	res, err := fn()
+	duration := time.Since(start)
+	span.SetAttributes(attribute.Int64("strategy_duration_ms", duration.Milliseconds()))
+	if err != nil {
+		// penalize plans that timeout from the upstream context
+		if errors.Is(err, context.DeadlineExceeded) {
+			selector.UpdateStats(strategy, r.upstreamTimeout)
+		}
+		telemetry.TraceError(span, err)
+		return nil, err
+	}
+	selector.UpdateStats(strategy, duration)
+	if res.GetAllowed() {
+		span.SetAttributes(attribute.Bool("allowed", true))
+	}
+	return res, nil
+}
+
+func (r *Resolver) resolveRecursiveUserset(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map, canApplyOptimization bool) (*Response, error) {
+	userObjectType, userRelation := tuple.SplitObjectRelation(edge.GetTo().GetUniqueLabel())
+
+	ctx, span := tracer.Start(ctx, "resolveRecursiveUserset",
+		trace.WithAttributes(
+			attribute.String("tuple_key", req.GetTupleString()),
+			attribute.String("strategy", "default"),
+			attribute.Bool("allowed", false),
+		),
+	)
+	defer span.End()
+
+	allowedTypes := []*openfgav1.RelationReference{{
+		Type:               userObjectType,
+		RelationOrWildcard: &openfgav1.RelationReference_Relation{Relation: userRelation},
+	}}
+	tIter, err := r.datastore.ReadUsersetTuples(ctx, req.GetStoreID(), storage.ReadUsersetTuplesFilter{
+		Object:                      req.GetTupleKey().GetObject(),
+		Relation:                    userRelation, // a user relation in a recursive userset is the same than the defined relation
+		AllowedUserTypeRestrictions: allowedTypes,
+		Conditions:                  edge.GetConditions(),
+	}, storage.ReadUsersetTuplesOptions{Consistency: storage.ConsistencyOptions{Preference: req.GetConsistency()}})
+	if err != nil {
+		return nil, err
+	}
+	defer tIter.Stop()
+
+	iter := r.buildIterator(ctx, req, tIter, edge.GetConditions(), userRelation, edge.GetTo().GetUniqueLabel(), visited, usersetDedupKey)
+	if !canApplyOptimization {
+		res, err := r.strategies[DefaultStrategyName].Userset(ctx, req, edge, iter, visited)
+		if err != nil {
+			telemetry.TraceError(span, err)
+			return nil, err
+		}
+		if res.GetAllowed() {
+			span.SetAttributes(attribute.Bool("allowed", true))
+		}
+		return res, nil
+	}
+	possibleStrategies := map[string]*planner.PlanConfig{
+		DefaultStrategyName:   DefaultRecursivePlan,
+		RecursiveStrategyName: RecursivePlan,
+	}
+
+	planKey := createRecursiveUsersetPlanKey(req, edge.GetTo().GetUniqueLabel())
+	keyPlan := r.planner.GetPlanSelector(planKey)
+	strategy := keyPlan.Select(possibleStrategies)
+
+	span.SetAttributes(
+		attribute.Int64("edge.type", int64(edge.GetEdgeType())),
+		attribute.String("edge.to", edge.GetTo().GetUniqueLabel()),
+		attribute.String("edge.from", edge.GetFrom().GetUniqueLabel()),
+		attribute.String("strategy", strategy.Name),
+		attribute.Int("candidate_strategies", len(possibleStrategies)),
+	)
+
+	return r.executeStrategy(ctx, keyPlan, strategy, func() (*Response, error) {
+		return r.strategies[strategy.Name].Userset(ctx, req, edge, iter, visited)
+	})
+}
+
+func (r *Resolver) resolveRecursiveTTU(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map, canApplyOptimization bool) (*Response, error) {
+	_, tuplesetRelation := tuple.SplitObjectRelation(edge.GetTuplesetRelation())
+	subjectType, computedRelation := tuple.SplitObjectRelation(edge.GetTo().GetUniqueLabel())
+
+	ctx, span := tracer.Start(ctx, "resolveRecursiveTTU",
+		trace.WithAttributes(
+			attribute.String("tuple_key", req.GetTupleString()),
+			attribute.String("tupleset_relation", tuple.ToObjectRelationString(req.GetObjectType(), tuplesetRelation)),
+			attribute.String("computed_relation", computedRelation),
+			attribute.String("strategy", "default"),
+			attribute.Bool("allowed", false),
+		),
+	)
+	defer span.End()
+
+	conditionEdge, err := r.model.GetDirectEdgeFromNodeForUserType(edge.GetTuplesetRelation(), subjectType)
+	if err != nil {
+		return nil, errors.Join(ErrPanicRequest, err)
+	}
+
+	userFilter := subjectType + ":"
+	tIter, err := r.datastore.Read(
+		ctx,
+		req.GetStoreID(),
+		storage.ReadFilter{
+			Object:     req.GetTupleKey().GetObject(),
+			Relation:   tuplesetRelation,
+			User:       userFilter,
+			Conditions: conditionEdge.GetConditions(),
+		},
+		storage.ReadOptions{Consistency: storage.ConsistencyOptions{Preference: req.GetConsistency()}},
+	)
+	if err != nil {
+		telemetry.TraceError(span, err)
+		return nil, err
+	}
+
+	defer tIter.Stop()
+	iter := r.buildIterator(ctx, req, tIter, conditionEdge.GetConditions(), tuplesetRelation, subjectType, visited, ttuDedupKey(tuplesetRelation, computedRelation))
+
+	if !canApplyOptimization {
+		res, err := r.strategies[DefaultStrategyName].TTU(ctx, req, edge, iter, visited)
+		if err != nil {
+			telemetry.TraceError(span, err)
+			return nil, err
+		}
+		if res.GetAllowed() {
+			span.SetAttributes(attribute.Bool("allowed", true))
+		}
+		return res, nil
+	}
+	possibleStrategies := map[string]*planner.PlanConfig{
+		DefaultStrategyName:   DefaultRecursivePlan,
+		RecursiveStrategyName: RecursivePlan,
+	}
+
+	planKey := createRecursiveTTUPlanKey(req, edge.GetRecursiveRelation())
+	keyPlan := r.planner.GetPlanSelector(planKey)
+	strategy := keyPlan.Select(possibleStrategies)
+
+	span.SetAttributes(
+		attribute.Int64("edge.type", int64(edge.GetEdgeType())),
+		attribute.String("edge.to", edge.GetTo().GetUniqueLabel()),
+		attribute.String("edge.from", edge.GetFrom().GetUniqueLabel()),
+		attribute.String("edge.recursive_relation", edge.GetRecursiveRelation()),
+		attribute.String("strategy", strategy.Name),
+		attribute.Int("candidate_strategies", len(possibleStrategies)),
+	)
+
+	return r.executeStrategy(ctx, keyPlan, strategy, func() (*Response, error) {
+		return r.strategies[strategy.Name].TTU(ctx, req, edge, iter, visited)
+	})
+}
+
+// ResolveRecursive unwinds a recursive edge (e.g. `rel from parent`) using a bottom-up strategy:
+// it flattens the edge's non-recursive operands to find terminal/base cases, then expands
+// outward along the recursive relation until the request's object/user pair is reached.
+func (r *Resolver) ResolveRecursive(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map, canApplyOptimization bool) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "ResolveRecursive", trace.WithAttributes(
+		attribute.Int64("edge.type", int64(edge.GetEdgeType())),
+		attribute.String("edge.to", edge.GetTo().GetUniqueLabel()),
+		attribute.String("edge.from", edge.GetFrom().GetUniqueLabel()),
+		attribute.String("tuple_key", req.GetTupleString()),
+		attribute.Bool("allowed", false),
+		attribute.Bool("can_apply_optimization", canApplyOptimization),
+	))
+	defer span.End()
+
+	defer func(ctx context.Context) {
+		if err := ctx.Err(); err != nil {
+			span.RecordError(err)
+		}
+	}(ctx)
+
+	// Only skip edges belonging to the recursive relation we're unwinding here (edge.GetRecursiveRelation());
+	// other, unrelated recursive relations reached along the way must still be flattened normally.
+	nonRecursiveEdges, err := r.model.FlattenNode(edge.GetTo(), req.GetUserType(), req.IsTypedWildcard(), edge.GetRecursiveRelation())
+	if err != nil {
+		return nil, errors.Join(ErrPanicRequest, err)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	out := make(chan ResponseMsg, 2)
+
+	go func() {
+		res, err := r.ResolveUnionEdges(ctx, req, nonRecursiveEdges, visited)
+		concurrency.TrySendThroughChannel(ctx, ResponseMsg{Res: res, Err: err}, out)
+	}()
+
+	go func() {
+		cacheKey := EdgeCacheKey(req, edge)
+
+		if res, ok := r.isCached(req.GetConsistency(), cacheKey); ok {
+			concurrency.TrySendThroughChannel(ctx, ResponseMsg{Res: res}, out)
+			return
+		}
+
+		var err error
+		var res *Response
+
+		switch edge.GetEdgeType() {
+		case authzGraph.DirectEdge:
+			res, err = r.resolveRecursiveUserset(ctx, req, edge, visited, canApplyOptimization)
+		case authzGraph.TTUEdge:
+			res, err = r.resolveRecursiveTTU(ctx, req, edge, visited, canApplyOptimization)
+		default:
+			res, err = nil, ErrPanicRequest
+		}
+
+		if err == nil && ctx.Err() == nil {
+			entry := &ResponseCacheEntry{Res: res, LastModified: time.Now()}
+			r.cache.Set(cacheKey, entry, r.cacheTTL)
+		}
+		concurrency.TrySendThroughChannel(ctx, ResponseMsg{Res: res, Err: err}, out)
+	}()
+
+	for range 2 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case msg := <-out:
+			if msg.Err != nil {
+				err = msg.Err
+				continue
+			}
+
+			if msg.Res.GetAllowed() {
+				span.SetAttributes(attribute.Bool("allowed", true))
+				return msg.Res, nil
+			}
+		}
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	return &Response{Allowed: false}, err
+}
+
+// reduce as a logical intersection operation (exit the moment we have a single false)
+// should panic if a single handler returns nil.
+func (r *Resolver) ResolveIntersection(ctx context.Context, req *Request, node *authzGraph.WeightedAuthorizationModelNode) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "ResolveIntersection", trace.WithAttributes(
+		attribute.String("tuple_key", req.GetTupleString()),
+		attribute.Bool("allowed", false),
+	))
+	defer span.End()
+
+	edges, ok := r.model.GetEdgesFromNode(node)
+	if !ok {
+		return nil, ErrPanicRequest
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	out := make(chan ResponseMsg, len(edges))
+
+	// errors will always be sent to the out channel
+	var pool errgroup.Group
+	pool.SetLimit(r.concurrencyLimit)
+	defer func() {
+		cancel()
+		_ = pool.Wait()
+		close(out)
+	}()
+
+	// in the case wildcard is requested if not all edges have wildcard path for the user type then return FALSE
+	if req.IsTypedWildcard() {
+		for _, edge := range edges {
+			if !slices.Contains(edge.GetWildcards(), req.GetUserType()) {
+				return &Response{Allowed: false}, nil
+			}
+		}
+	}
+
+	scheduledHandlers := 0
+	for _, edge := range edges {
+		_, ok := r.model.GetEdgeWeight(edge, req.GetUserType())
+		if !ok {
+			return nil, ErrPanicRequest
+		}
+		scheduledHandlers++
+		pool.Go(func() error {
+			// intersection is never part of a cycle or recursion
+			res, err := r.ResolveEdge(ctx, req, edge, nil)
+			concurrency.TrySendThroughChannel(ctx, ResponseMsg{Res: res, Err: err}, out)
+			return nil
+		})
+	}
+
+	var err error
+	for i := 0; i < scheduledHandlers; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case msg := <-out:
+			if msg.Err != nil || !msg.Res.GetAllowed() {
+				// NOTE: This is one of the breaking changes from the current check implementation. Delete this after this rollout.
+				// In intersection _every_ branch must return true.
+				return msg.Res, msg.Err
+			}
+		}
+	}
+	span.SetAttributes(attribute.Bool("allowed", true))
+	return &Response{Allowed: true}, err
+}
+
+// reduce as a logical exclusion operation
+// if base is false, short circuit.
+func (r *Resolver) ResolveExclusion(ctx context.Context, req *Request, node *authzGraph.WeightedAuthorizationModelNode) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "ResolveExclusion", trace.WithAttributes(
+		attribute.String("tuple_key", req.GetTupleString()),
+		attribute.Bool("allowed", false),
+	))
+	defer span.End()
+
+	edges, ok := r.model.GetEdgesFromNode(node)
+	if !ok {
+		return nil, ErrPanicRequest
+	}
+	// base edge validation
+	if _, ok := r.model.GetEdgeWeight(edges[0], req.GetUserType()); !ok {
+		return nil, ErrPanicRequest
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	base := make(chan ResponseMsg, 1)
+	var wg sync.WaitGroup
+
+	scheduledHandlers := 1
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// exclusion is never part of a cycle or recursion
+		res, err := r.ResolveEdge(ctx, req, edges[0], nil)
+		concurrency.TrySendThroughChannel(ctx, ResponseMsg{Res: res, Err: err}, base)
+		close(base)
+	}()
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
+	var subtract chan ResponseMsg
+	// excluded edge
+	_, ok = r.model.GetEdgeWeight(edges[1], req.GetUserType())
+	if tuple.IsObjectRelation(req.GetTupleKey().GetUser()) && !ok {
+		// If the user is an object relation and there is no way to the userset in the exclusion part we cannot have an answer,
+		return nil, ErrUsersetInvalidRequest
+	}
+
+	if ok {
+		scheduledHandlers++
+		subtract = make(chan ResponseMsg, 1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// exclusion is never part of a cycle or recursion
+			res, err := r.ResolveEdge(ctx, req, edges[1], nil)
+			concurrency.TrySendThroughChannel(ctx, ResponseMsg{Res: res, Err: err}, subtract)
+			close(subtract)
+		}()
+	}
+
+	// Loop until we have received the necessary results to determine the outcome.
+	resultsReceived := 0
+	for resultsReceived < scheduledHandlers {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case msg, ok := <-base:
+			if !ok {
+				base = nil // Stop selecting this case.
+				continue
+			}
+			resultsReceived++
+
+			if msg.Err != nil {
+				// NOTE: This is one of the breaking changes from the current check implementation. Delete this after this rollout.
+				// If base returns an error, we return it immediately since the result of the exclusion cannot be determined.
+				return nil, msg.Err
+			}
+
+			// Short-circuit: If base is false, the whole expression is false.
+			if !msg.Res.GetAllowed() {
+				return &Response{Allowed: false}, nil
+			}
+
+			// Short-circuit: If base is true and there's no subtract, the whole expression is true.
+			if msg.Res.GetAllowed() && subtract == nil {
+				span.SetAttributes(attribute.Bool("allowed", true))
+				return msg.Res, nil
+			}
+
+		case msg, ok := <-subtract: // subtract can be nil
+			if !ok {
+				subtract = nil // Stop selecting this case.
+				continue
+			}
+			resultsReceived++
+
+			if msg.Err != nil {
+				// NOTE: This is one of the breaking changes from the current check implementation. Delete this after this rollout.
+				// If subtract returns an error, we return it immediately since the result of the exclusion cannot be determined. There will never be a case in which it returns false if it returns an error given there is only one branch.
+				return nil, msg.Err
+			}
+
+			// Short-circuit: If subtract is true, the whole expression is false.
+			if msg.Res.GetAllowed() {
+				return &Response{Allowed: false}, nil
+			}
+		}
+	}
+
+	// The only way to get here is if base was (Allowed: true) and subtract was (Allowed: false).
+	span.SetAttributes(attribute.Bool("allowed", true))
+	return &Response{Allowed: true}, nil
+}
+
+func (r *Resolver) ResolveEdge(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "ResolveEdge", trace.WithAttributes(
+		attribute.String("tuple_key", req.GetTupleString()),
+		attribute.String("edge.to", edge.GetTo().GetUniqueLabel()),
+		attribute.String("edge.from", edge.GetFrom().GetUniqueLabel()),
+	))
+	defer span.End()
+
+	defer func(ctx context.Context) {
+		if err := ctx.Err(); err != nil {
+			span.RecordError(err)
+		}
+	}(ctx)
+
+	var visitedObjects *sync.Map
+	if edge.IsPartOfTupleCycle() || edge.GetRecursiveRelation() != "" {
+		visitedObjects = visited
+	}
+	// computed edges are solved by the relation node caller
+	switch edge.GetEdgeType() {
+	case authzGraph.DirectEdge:
+		switch edge.GetTo().GetNodeType() {
+		case authzGraph.SpecificType:
+			// terminal types are never part of a cycle
+			return r.specificType(ctx, req, edge)
+		case authzGraph.SpecificTypeWildcard:
+			// terminal types are never part of a cycle
+			return r.specificTypeWildcard(ctx, req, edge)
+		case authzGraph.SpecificTypeAndRelation:
+			// check for recursiveRelation
+			return r.specificTypeAndRelation(ctx, req, edge, visitedObjects)
+		default:
+			return nil, ErrPanicRequest
+		}
+	case authzGraph.DirectLogicalEdge, authzGraph.TTULogicalEdge, authzGraph.ComputedEdge:
+		return r.ResolveUnion(ctx, req, edge.GetTo(), visitedObjects)
+	case authzGraph.TTUEdge:
+		return r.ttu(ctx, req, edge, visitedObjects)
+	case authzGraph.RewriteEdge:
+		return r.ResolveRewrite(ctx, req, edge.GetTo(), visitedObjects)
+	default:
+		return nil, ErrPanicRequest
+	}
+}
+
+func (r *Resolver) ResolveRewrite(ctx context.Context, req *Request, node *authzGraph.WeightedAuthorizationModelNode, visited *sync.Map) (*Response, error) {
+	// relation and union have save behavior
+	switch node.GetNodeType() {
+	case authzGraph.SpecificTypeAndRelation:
+		return r.ResolveUnion(ctx, req, node, visited)
+	case authzGraph.OperatorNode:
+		switch node.GetLabel() {
+		case authzGraph.UnionOperator:
+			return r.ResolveUnion(ctx, req, node, visited)
+		case authzGraph.IntersectionOperator:
+			// intersection is never part of a graph cycle
+			return r.ResolveIntersection(ctx, req, node)
+		case authzGraph.ExclusionOperator:
+			// exclusion is never part of a graph cycle
+			// the request cannot have a wildcard if exclusion is involved
+			if req.IsTypedWildcard() {
+				return nil, ErrWildcardInvalidRequest
+			}
+			return r.ResolveExclusion(ctx, req, node)
+		default:
+			return nil, ErrPanicRequest
+		}
+	default:
+		return nil, ErrPanicRequest
+	}
+}
+
+func (r *Resolver) specificType(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "specificType",
+		trace.WithAttributes(
+			attribute.String("tuple_key", req.GetTupleString()),
+			attribute.Bool("allowed", false),
+		),
+	)
+	defer span.End()
+
+	_, relation := tuple.SplitObjectRelation(edge.GetRelationDefinition())
+
+	var t *openfgav1.TupleKey
+
+	if ctxTuples, ok := req.GetContextualTuplesByUserID(req.GetTupleKey().GetUser(), relation, tuple.GetType(req.GetTupleKey().GetObject())); ok {
+		i := sort.Search(len(ctxTuples), func(i int) bool {
+			return ctxTuples[i].GetObject() >= req.GetTupleKey().GetObject()
+		})
+		if i < len(ctxTuples) && ctxTuples[i].GetObject() == req.GetTupleKey().GetObject() {
+			t = ctxTuples[i]
+		}
+	}
+	if t == nil {
+		ut, err := r.datastore.ReadUserTuple(ctx, req.GetStoreID(), storage.ReadUserTupleFilter{
+			Object:   req.GetTupleKey().GetObject(),
+			Relation: relation,
+			User:     req.GetTupleKey().GetUser(),
+		}, storage.ReadUserTupleOptions{Consistency: storage.ConsistencyOptions{Preference: req.GetConsistency()}})
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return &Response{Allowed: false}, nil
+			}
+			telemetry.TraceError(span, err)
+			return nil, err
+		}
+		t = ut.GetKey()
+	}
+
+	allowed, err := evaluateCondition(ctx, r.model, edge.GetConditions(), t, req.GetContext())
+	if err != nil {
+		telemetry.TraceError(span, err)
+		return nil, err
+	}
+	if allowed {
+		span.SetAttributes(attribute.Bool("allowed", true))
+	}
+	return &Response{Allowed: allowed}, nil
+}
+
+func (r *Resolver) specificTypeWildcard(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "specificTypeWildcard",
+		trace.WithAttributes(
+			attribute.String("tuple_key", req.GetTupleString()),
+			attribute.Bool("allowed", false),
+		),
+	)
+	defer span.End()
+
+	_, relation := tuple.SplitObjectRelation(edge.GetRelationDefinition())
+	var iter storage.TupleKeyIterator
+
+	if ctxTuples, ok := req.GetContextualTuplesByObjectID(req.GetTupleKey().GetObject(), relation, req.GetUserType()); ok {
+		for _, ct := range ctxTuples {
+			if tuple.IsTypedWildcard(ct.GetUser()) {
+				iter = storage.NewStaticTupleKeyIterator([]*openfgav1.TupleKey{ct})
+				break
+			}
+		}
+	}
+
+	if iter == nil {
+		// Query via ReadUsersetTuples - caching is now handled by CachedTupleReader wrapper
+		allowedTypes := []*openfgav1.RelationReference{modelgraph.WildcardRelationReference(req.GetUserType())}
+		tIter, err := r.datastore.ReadUsersetTuples(ctx, req.GetStoreID(), storage.ReadUsersetTuplesFilter{
+			Object:                      req.GetTupleKey().GetObject(),
+			Relation:                    relation,
+			AllowedUserTypeRestrictions: allowedTypes,
+			Conditions:                  edge.GetConditions(),
+		}, storage.ReadUsersetTuplesOptions{
+			Consistency: storage.ConsistencyOptions{
+				Preference: req.GetConsistency(),
+			},
+		})
+		if err != nil {
+			telemetry.TraceError(span, err)
+			return nil, err
+		}
+
+		defer tIter.Stop()
+
+		iter = storage.NewTupleKeyIteratorFromTupleIterator(tIter)
+	}
+	t, err := iter.Next(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrIteratorDone) {
+			return &Response{Allowed: false}, nil
+		}
+		telemetry.TraceError(span, err)
+		return nil, err
+	}
+
+	allowed, err := evaluateCondition(ctx, r.model, edge.GetConditions(), t, req.GetContext())
+	if err != nil {
+		telemetry.TraceError(span, err)
+		return nil, err
+	}
+	if allowed {
+		span.SetAttributes(attribute.Bool("allowed", true))
+	}
+	return &Response{Allowed: allowed}, nil
+}
+
+func (r *Resolver) specificTypeAndRelation(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map) (*Response, error) {
+	ctx, span := tracer.Start(ctx, "specificTypeAndRelation",
+		trace.WithAttributes(
+			attribute.String("tuple_key", req.GetTupleString()),
+			attribute.String("strategy", "default"),
+			attribute.Bool("allowed", false),
+		),
+	)
+	defer span.End()
+
+	// if the request is a userset then we need to execute the specific type
+	if edge.GetTo().GetUniqueLabel() == req.GetUserType() {
+		// we break here if there is an error, or the response is allowed, or if the edge is not recursive and it is not part of a tuple cycle
+		// in case it is recursive or it is part of the tuple cycle it needs to continue expanding the graph
+		res, err := r.specificType(ctx, req, edge)
+		if err != nil || res.GetAllowed() || (edge.GetRecursiveRelation() == "" && !edge.IsPartOfTupleCycle()) {
+			return res, err
+		}
+	}
+
+	userObjectType, userRelation := tuple.SplitObjectRelation(edge.GetTo().GetUniqueLabel())
+	_, relation := tuple.SplitObjectRelation(edge.GetRelationDefinition())
+
+	// userset that is represented by the same edge, conditions on the iterator will be defined in this edge
+	allowedTypes := []*openfgav1.RelationReference{{
+		Type:               userObjectType,
+		RelationOrWildcard: &openfgav1.RelationReference_Relation{Relation: userRelation},
+	}}
+	tIter, err := r.datastore.ReadUsersetTuples(ctx, req.GetStoreID(), storage.ReadUsersetTuplesFilter{
+		Object:                      req.GetTupleKey().GetObject(),
+		Relation:                    relation,
+		AllowedUserTypeRestrictions: allowedTypes,
+		Conditions:                  edge.GetConditions(),
+	}, storage.ReadUsersetTuplesOptions{
+		Consistency: storage.ConsistencyOptions{
+			Preference: req.GetConsistency(),
+		},
+	})
+	if err != nil {
+		telemetry.TraceError(span, err)
+		return nil, err
+	}
+	defer tIter.Stop()
+
+	iter := r.buildIterator(ctx, req, tIter, edge.GetConditions(), relation, edge.GetTo().GetUniqueLabel(), visited, usersetDedupKey)
+	// when the request usertype is a userset, then only available strategy at the moment is default strategy
+	if tuple.IsObjectRelation(req.GetTupleKey().GetUser()) {
+		res, err := r.strategies[DefaultStrategyName].Userset(ctx, req, edge, iter, visited)
+		if err != nil {
+			telemetry.TraceError(span, err)
+			return nil, err
+		}
+		if res.GetAllowed() {
+			span.SetAttributes(attribute.Bool("allowed", true))
+		}
+		return res, nil
+	}
+
+	possibleStrategies := map[string]*planner.PlanConfig{
+		DefaultStrategyName: DefaultPlan,
+	}
+
+	if w, _ := edge.GetWeight(req.GetUserType()); w == 2 {
+		possibleStrategies[WeightTwoStrategyName] = weight2Plan
+	}
+
+	usersetKey := createUsersetPlanKey(req, edge.GetTo().GetUniqueLabel())
+	keyPlan := r.planner.GetPlanSelector(usersetKey)
+	strategy := keyPlan.Select(possibleStrategies)
+	span.SetAttributes(
+		attribute.Int64("edge.type", int64(edge.GetEdgeType())),
+		attribute.String("edge.to", edge.GetTo().GetUniqueLabel()),
+		attribute.String("edge.from", edge.GetFrom().GetUniqueLabel()),
+		attribute.String("strategy", strategy.Name),
+		attribute.Int("candidate_strategies", len(possibleStrategies)),
+	)
+	return r.executeStrategy(ctx, keyPlan, strategy, func() (*Response, error) {
+		return r.strategies[strategy.Name].Userset(ctx, req, edge, iter, visited)
+	})
+}
+
+func (r *Resolver) ttu(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map) (*Response, error) {
+	_, tuplesetRelation := tuple.SplitObjectRelation(edge.GetTuplesetRelation())
+	subjectType, computedRelation := tuple.SplitObjectRelation(edge.GetTo().GetUniqueLabel())
+
+	ctx, span := tracer.Start(ctx, "ttu",
+		trace.WithAttributes(
+			attribute.String("tuple_key", req.GetTupleString()),
+			attribute.String("tupleset_relation", tuple.ToObjectRelationString(req.GetObjectType(), tuplesetRelation)),
+			attribute.String("computed_relation", computedRelation),
+			attribute.Bool("allowed", false),
+		),
+	)
+	defer span.End()
+
+	// selecting the edge for the tupleset that points directly to the specific subjectType
+	// the graph is already deduplicated by the conditions and combined in one unique edge for the same tupleset
+	tuplesetEdge, err := r.model.GetDirectEdgeFromNodeForUserType(edge.GetTuplesetRelation(), subjectType)
+	if err != nil {
+		return nil, errors.Join(ErrPanicRequest, err)
+	}
+
+	userFilter := subjectType + ":"
+	tIter, err := r.datastore.Read(
+		ctx,
+		req.GetStoreID(),
+		storage.ReadFilter{
+			Object:     req.GetTupleKey().GetObject(),
+			Relation:   tuplesetRelation,
+			User:       userFilter,
+			Conditions: tuplesetEdge.GetConditions(),
+		},
+		storage.ReadOptions{Consistency: storage.ConsistencyOptions{Preference: req.GetConsistency()}},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	defer tIter.Stop()
+
+	iter := r.buildIterator(ctx, req, tIter, tuplesetEdge.GetConditions(), tuplesetRelation, subjectType, visited, ttuDedupKey(tuplesetRelation, computedRelation))
+
+	if tuple.IsObjectRelation(req.GetTupleKey().GetUser()) {
+		res, err := r.strategies[DefaultStrategyName].TTU(ctx, req, edge, iter, visited)
+		if err != nil {
+			telemetry.TraceError(span, err)
+			return nil, err
+		}
+		if res.GetAllowed() {
+			span.SetAttributes(attribute.Bool("allowed", true))
+		}
+		return res, nil
+	}
+
+	possibleStrategies := map[string]*planner.PlanConfig{
+		DefaultStrategyName: DefaultPlan,
+	}
+
+	if w, _ := edge.GetWeight(req.GetUserType()); w == 2 {
+		possibleStrategies[WeightTwoStrategyName] = weight2Plan
+	}
+
+	planKey := createTTUPlanKey(req, tuplesetRelation, computedRelation)
+	keyPlan := r.planner.GetPlanSelector(planKey)
+	strategy := keyPlan.Select(possibleStrategies)
+
+	span.SetAttributes(
+		attribute.Int64("edge.type", int64(edge.GetEdgeType())),
+		attribute.String("edge.to", edge.GetTo().GetUniqueLabel()),
+		attribute.String("edge.from", edge.GetFrom().GetUniqueLabel()),
+		attribute.String("tupleset_relation", tuplesetRelation),
+		attribute.String("computed_relation", computedRelation),
+		attribute.String("strategy", strategy.Name),
+		attribute.Int("candidate_strategies", len(possibleStrategies)),
+	)
+
+	return r.executeStrategy(ctx, keyPlan, strategy, func() (*Response, error) {
+		return r.strategies[strategy.Name].TTU(ctx, req, edge, iter, visited)
+	})
+}
+
+func (r *Resolver) buildIterator(ctx context.Context, req *Request, iter storage.TupleIterator, conditions []string, relation string, userType string, visited *sync.Map, dedupKey func(key *openfgav1.TupleKey) string) storage.TupleKeyIterator {
+	// Note: Iterator caching is now handled by CachedTupleReader wrapper at the storage layer.
+	// This method only handles contextual tuples merge and condition filtering.
+
+	// STEP 1: Convert TupleIterator to TupleKeyIterator
+	tupleKeyIter := storage.NewTupleKeyIteratorFromTupleIterator(iter)
+
+	// STEP 2: Merge contextual tuples (these are request-specific and not cached)
+	if ctxTuples, ok := req.GetContextualTuplesByObjectID(req.GetTupleKey().GetObject(), relation, userType); ok {
+		tupleKeyIter = iterator.Concat(storage.NewStaticTupleKeyIterator(ctxTuples), tupleKeyIter)
+	}
+
+	// STEP 3: Build filter chain
+	iterFilters := make([]iterator.FilterFunc[*openfgav1.TupleKey], 0, 2)
+	if visited != nil {
+		iterFilters = append(iterFilters, BuildUniqueTupleKeyFilter(visited, dedupKey))
+	}
+
+	// STEP 4: Condition filter - evaluates conditions at retrieval time
+	// This uses the cached tuple's condition context + request context
+	if len(conditions) > 1 || conditions[0] != authzGraph.NoCond {
+		iterFilters = append(iterFilters, BuildConditionTupleKeyFilter(ctx, r.model, conditions, req.GetContext()))
+	}
+
+	if len(iterFilters) > 0 {
+		return iterator.NewFilteredIterator(tupleKeyIter, iterFilters...)
+	}
+
+	return tupleKeyIter
+}

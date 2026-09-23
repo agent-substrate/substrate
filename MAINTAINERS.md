@@ -12,6 +12,7 @@ The current maintainers of the Agent Substrate project are listed below.
 | Haven Xia                 | HavenXia         | Google               |
 | Jeff Luo                  | JeffLuoo         | Google               |
 | Julian Gutierrez Oschmann | juli4n           | Google               |
+| Keith Mattix              | keithmattix      | Solo                 |
 | Krisztian F               | krisztianfekete  | Solo                 |
 | Luiz Oliveira             | laoj2            | Google               |
 | Lior Lieberman            | LiorLieberman    | Google               |

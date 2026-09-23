@@ -34,7 +34,7 @@ containers:
     mountPath: /hostpath-data
   - name: vol-nfs
     mountPath: /nfs-data
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://ate-snapshots/ate-manual-test-multi/

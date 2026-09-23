@@ -342,14 +342,14 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 	}
 }
 
-func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
+func TestWorkloadSpecFromActorTemplatePropagatesWakeupProbe(t *testing.T) {
 	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-readyz"},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-wakeup-probe"},
 		Containers: []*ateapipb.Container{
 			{
 				Name:  "with-probe",
 				Image: "main",
-				Readyz: &ateapipb.ContainerReadyz{
+				WakeupProbe: &ateapipb.ContainerWakeupProbe{
 					HttpGet:        &ateapipb.HTTPGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
@@ -369,7 +369,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 			{
 				Name:  "with-probe",
 				Image: "main",
-				Readyz: &ateletpb.Readyz{
+				WakeupProbe: &ateletpb.WakeupProbe{
 					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},

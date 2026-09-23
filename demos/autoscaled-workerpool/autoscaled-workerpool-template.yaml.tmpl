@@ -28,14 +28,14 @@ containers:
   image: ko://github.com/agent-substrate/substrate/demos/counter
   command:
   - /ko-app/counter
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
   volumeMounts:
   - name: data
     mountPath: /home/counter
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_DATA
   storageLocation: gs://${BUCKET_NAME}/ate-demo-autoscaled-workerpool/

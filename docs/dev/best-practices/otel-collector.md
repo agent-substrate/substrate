@@ -253,8 +253,9 @@ data:
           processors: [memory_limiter, k8s_attributes, batch/metrics]
           exporters: [debug]
         # Logs arrive over the same OTLP receiver on 4317 -- one port serves
-        # all three signals. This pipeline is for workloads instrumented
-        # with the OTel logs SDK; see "A Note on Logs" below.
+        # all three signals. This pipeline carries ateapi's actor lifecycle
+        # events and any workload instrumented with the OTel logs SDK; see
+        # "A Note on Logs" below. Do not add a sampler or a filter to it.
         logs:
           receivers: [otlp]
           processors: [memory_limiter, k8s_attributes, batch/logs]
@@ -432,13 +433,15 @@ for a worked example.
 
 ### A Note on Logs
 
-The collector configs here include a logs pipeline, but **Substrate does not
-currently export logs over OTLP.** `serverboot.InitLogger` writes structured
-JSON to stdout, and `ateom` wraps actor container output with the `ate.*`
-metadata labels described in
-[Actor Observability](../../observability.md) — also on stdout. There is no
-`LoggerProvider` or OTLP log exporter in `internal/serverboot`, alongside
-`InitTracing` and `InitMetrics`.
+**Substrate exports one thing over OTLP: the actor lifecycle events**, from
+ateapi, through `serverboot.InitLogging`. They are off unless
+`OTEL_LOGS_EXPORTER=otlp` is set, which only the kind overlay does today. See
+[the same records over OTLP](../../observability.md#the-same-records-over-otlp).
+
+Everything else is stdout. `serverboot.InitLogger` writes structured JSON there,
+and `ateom` wraps actor container output with the `ate.*` metadata labels
+described in [Actor Observability](../../observability.md). No worker pod
+exports a log record at all: the ateom relay carries traces and metrics only.
 
 Those labels sit in a nested group (`labels`, or `logging.googleapis.com/labels`
 on GKE, where the key promotes the group into `LogEntry.labels`). A filelog
@@ -456,13 +459,17 @@ top-level and lowercase hex, so the filelog receiver's `trace_parser` maps them
 onto the log record's own trace fields with no transformation.
 
 Those logs are collected by whatever agent already reads container stdout on
-your nodes — Cloud Logging's agent on GKE, or your own. The collector is not
-in that path.
+your nodes. The collector is not in that path.
 
-The logs pipeline is therefore there for **your** workloads: actors or
-services instrumented with the OpenTelemetry logs SDK that push OTLP log
-records to the same endpoint. It costs nothing to leave configured, and it
-means an actor that adopts OTLP logging needs no collector change.
+If you do add such an agent, note that ateapi writes the lifecycle records to
+both stdout and OTLP. Reading its stdout as well gives you each record twice:
+either exclude the `ate-system` namespace from the agent, or drop the records
+whose instrumentation scope is
+`github.com/agent-substrate/substrate/internal/actorevent`.
+
+The logs pipeline also serves **your** workloads: actors or services
+instrumented with the OpenTelemetry logs SDK that push OTLP log records to the
+same endpoint. It needs no collector change beyond being configured.
 
 ## Constraints You Cannot Configure Around
 
@@ -470,8 +477,9 @@ These are properties of Substrate's current exporter setup
 (`internal/serverboot/serverboot.go`), not of your collector. Tracked in
 [#563](https://github.com/agent-substrate/substrate/issues/563).
 
-**TLS is not supported.** The exporters are constructed with
-`otlptracegrpc.WithInsecure()`, which overrides scheme inference, so setting
+**TLS is not supported.** All three exporters are constructed with
+`WithInsecure()` — traces, metrics, and logs alike — which overrides scheme
+inference, so setting
 `OTEL_EXPORTER_OTLP_ENDPOINT=https://…` does **not** produce a TLS
 connection — it silently stays plaintext. Keep the collector in-cluster and
 let it own the authenticated hop to your backend.

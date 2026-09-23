@@ -31,14 +31,14 @@ containers:
 - name: egress
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
     # See ../counter/counter-microvm-template.yaml.tmpl: a micro-VM guest needs
-    # more than readyz's 30s default once CI's single kind node is under load.
+    # more than the wakeup probe's 30s default once CI's single kind node is under load.
     timeoutSeconds: 120
-# Sandbox size: without these the guest boots at the kata config's default
+# Sandbox size: without these the guest boots at ateom's default size
 # (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
 # strings in the proto.
 resources:
@@ -52,7 +52,7 @@ sandboxConfig:
   # Installed cluster-wide by hack/install-microvm-deps.sh; naming it
   # explicitly makes a missing or stale install fail loudly.
   configName: microvm
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-microvm/

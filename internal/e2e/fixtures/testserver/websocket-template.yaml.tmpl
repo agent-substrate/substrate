@@ -26,12 +26,12 @@ containers:
 - name: websocket
   image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
   args: ["websocket"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
     timeoutSeconds: 30
 ${TEMPLATE_RESOURCES}
 ${TEMPLATE_SANDBOX_CONFIG}
-snapshotsConfig:
+snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-websocket${FIXTURE_SUFFIX}/

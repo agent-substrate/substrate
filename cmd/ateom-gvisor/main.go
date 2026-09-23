@@ -45,16 +45,16 @@ import (
 	"github.com/agent-substrate/substrate/internal/childreap"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	"github.com/spf13/pflag"
-	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -74,7 +74,8 @@ var (
 	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", ":8443", "Address for actor ingress mTLS CONNECT")
 	workerCredentialBundle      = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
 	podIdentityTrustBundle      = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
-	atunnelClientIdentity       = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelClientIdentity       = pflag.String("atunnel-client-identity", installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace), "SPIFFE identity allowed to call actor ingress HTTPS")
+	ateletIdentity              = pflag.String("atunnel-broker-identity", installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "SPIFFE identity the node-local atelet must present on the credential broker connection. Override when atelet runs outside the default namespace.")
 	atunnelEgressListenAddress  = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	egressGatewayTrustBundle    = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 	readinessListenAddress      = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
@@ -171,9 +172,18 @@ func do(ctx context.Context) error {
 
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podUID)
+	if err := resources.ValidateAteomUID(*podUID); err != nil {
+		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
+	}
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
+	// Clean up the ateom directory during graceful shutdown (#1677).
+	defer func() {
+		if err := os.RemoveAll(ateomDir); err != nil {
+			slog.ErrorContext(ctx, "Failed to remove the ateom directory on shutdown", slog.Any("err", err))
+		}
+	}()
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
@@ -195,26 +205,30 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while opening unix socket: %w", err)
 	}
 
-	// Create a new network namespace that we will pass to gVisor.  gVisor will
-	// read the addresses and routes off of every link in the namespace, then
-	// remove all the addresses and handle injecting packets into the interfaces
-	// using AF_PACKET.
-	interiorNetNS, err := ateomnet.CreateNetNSWithoutSwitching(ateompath.AteomNetNSName(*podUID))
-	if err != nil {
-		return fmt.Errorf("while creating ateom-interior netns: %w", err)
-	}
-
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
 	upstream, err := url.Parse(actorHTTPUpstream)
 	if err != nil {
 		return fmt.Errorf("while parsing atunnel upstream: %w", err)
 	}
-	atunnelIngress, atunnelEgress, atunnelEgressPort, err := runAtunnel(ctx, upstream)
+	// Use the pod's resolvers for cluster DNS access.
+	nameservers, err := atunnel.ResolvConfNameservers("/etc/resolv.conf")
+	if err != nil {
+		return fmt.Errorf("while reading the worker pod resolvers: %w", err)
+	}
+	dnsRelay, err := atunnel.NewDNSRelay(nameservers)
+	if err != nil {
+		return fmt.Errorf("while building the actor DNS relay: %w", err)
+	}
+	slog.InfoContext(ctx, "Actor DNS relay ready", slog.Any("upstreams", nameservers))
+
+	// Construct the service first so atunnel can use its namespace dialer.
+	ateomService := NewService(dnsRelay, actorLogger, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle, *ateletIdentity)
+
+	atunnelIngress, atunnelEgress, atunnelEgressPort, err := runAtunnel(ctx, upstream, ateomService.sandbox.Dialer())
 	if err != nil {
 		return err
 	}
-
-	ateomService := NewService(interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle)
+	ateomService.attachAtunnel(atunnelIngress, atunnelEgress, atunnelEgressPort)
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -250,6 +264,7 @@ func do(ctx context.Context) error {
 			SocketPath:           ateompath.AteomSupportSocket,
 			CredentialBundlePath: *workerCredentialBundle,
 			TrustBundlePath:      *podIdentityTrustBundle,
+			AteletSPIFFEID:       *ateletIdentity,
 		})
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
@@ -259,19 +274,19 @@ func do(ctx context.Context) error {
 	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
 
 	if err := svr.Serve(lis); err != nil {
-		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
-		os.Exit(1)
+		return fmt.Errorf("while serving: %w", err)
 	}
 
 	return nil
 }
 
-func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunnel.Egress, uint16, error) {
+func runAtunnel(ctx context.Context, upstream *url.URL, dial atunnel.DialFunc) (*atunnel.Server, *atunnel.Egress, uint16, error) {
 	atunnelIngress, err := atunnel.NewServer(atunnel.Config{
 		CredentialBundlePath: *workerCredentialBundle,
 		TrustBundlePath:      *podIdentityTrustBundle,
 		AllowedClientID:      *atunnelClientIdentity,
 		Upstream:             upstream,
+		Dial:                 dial,
 	})
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("while configuring atunnel: %w", err)
@@ -301,22 +316,11 @@ func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunn
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("while configuring atunnel egress: %w", err)
 	}
-	egressListener, err := net.Listen("tcp", *atunnelEgressListenAddress)
+	// Bind egress only in sandbox namespaces.
+	atunnelEgressPort, err := atunnel.EgressPort(*atunnelEgressListenAddress)
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("while opening atunnel egress listener: %w", err)
+		return nil, nil, 0, err
 	}
-	egressTCPAddr, ok := egressListener.Addr().(*net.TCPAddr)
-	if !ok || egressTCPAddr.Port < 1 || egressTCPAddr.Port > 65535 {
-		_ = egressListener.Close()
-		return nil, nil, 0, fmt.Errorf("atunnel egress listener has invalid address %q", egressListener.Addr())
-	}
-	atunnelEgressPort := uint16(egressTCPAddr.Port)
-	go func() {
-		if err := atunnelEgress.Serve(ctx, egressListener); err != nil {
-			serverboot.Fatal(ctx, "Failed to serve actor egress", err)
-		}
-	}()
-	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
 	return atunnelIngress, atunnelEgress, atunnelEgressPort, nil
 }
 
@@ -374,10 +378,15 @@ type AteomService struct {
 	// subcommands are probably not safe to call concurrently.
 	lock *cancelableMutex
 
-	interiorNetNS  netns.NsHandle
+	// sandbox is the network of the actor this worker is serving.
+	sandbox ateomnet.SessionHolder
+
 	actorLogger    *actorlog.ActorLogger
 	atunnelIngress *atunnel.Server
 	atunnelEgress  *atunnel.Egress
+
+	// dnsRelay answers the sandbox's DNS from inside its own namespace.
+	dnsRelay *atunnel.DNSRelay
 
 	// atunnelEgressPort is the local atunnel listener used as the target of the
 	// actor network's transparent TCP redirect.
@@ -389,6 +398,10 @@ type AteomService struct {
 	podIdentityTrustBundlePath string
 	// egressGatewayTrustBundlePath verifies the remote gateway's serving cert.
 	egressGatewayTrustBundlePath string
+	// ateletSPIFFEID is the identity the node-local atelet must present on the
+	// credential broker connection. It names atelet's namespace, not this
+	// worker's, so it is configured rather than derived from the downward API.
+	ateletSPIFFEID string
 
 	// activeActor is the actor whose workload this ateom is currently running,
 	// or nil when it is "available". An ateom serves one actor at a time, so a
@@ -440,17 +453,15 @@ type AteomService struct {
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
+func NewService(dnsRelay *atunnel.DNSRelay, actorLogger *actorlog.ActorLogger, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath, ateletSPIFFEID string) *AteomService {
 	return &AteomService{
 		lock:                         newCancelableMutex(),
-		interiorNetNS:                interiorNetNS,
+		dnsRelay:                     dnsRelay,
 		actorLogger:                  actorLogger,
-		atunnelIngress:               atunnelIngress,
-		atunnelEgress:                atunnelEgress,
-		atunnelEgressPort:            atunnelEgressPort,
 		workerCredentialBundlePath:   workerCredentialBundlePath,
 		podIdentityTrustBundlePath:   podIdentityTrustBundlePath,
 		egressGatewayTrustBundlePath: egressGatewayTrustBundlePath,
+		ateletSPIFFEID:               ateletSPIFFEID,
 		cgroupRoot:                   defaultCgroupRoot,
 	}
 }
@@ -666,15 +677,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err != nil {
 		return nil, err
 	}
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
-		InteriorNetNS:      s.interiorNetNS,
-		DumpNetInfo:        true,
-		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
-	}); err != nil {
+	if err := s.prepareSandboxNetwork(ctx, req.GetActorUid()); err != nil {
 		// Cleared here as well as in the deferred cleanup below, because that
 		// defer is not registered until after this check.
 		s.activeActor.Store(nil)
-		return nil, fmt.Errorf("while setting up actor network: %w", err)
+		return nil, err
 	}
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
@@ -700,7 +707,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
-			if err := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); err != nil {
+			if err := s.releaseSandboxNetwork(cleanupCtx); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", err))
 			}
 		}
@@ -741,9 +748,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		}
 	}
 
-	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP); err != nil {
-		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
+	// Block until every wakeup-probe-enabled container reports 200.
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandbox.Dialer())); err != nil {
+		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 	if err := s.activateActorNetworking(req.GetAtespace(), req.GetActorName(), egress); err != nil {
 		return nil, err
@@ -965,14 +972,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err != nil {
 		return nil, err
 	}
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
-		InteriorNetNS:      s.interiorNetNS,
-		DumpNetInfo:        true,
-		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
-	}); err != nil {
+	if err := s.prepareSandboxNetwork(ctx, req.GetActorUid()); err != nil {
 		// Same as the Run path: the defer below is not registered yet.
 		s.activeActor.Store(nil)
-		return nil, fmt.Errorf("while setting up actor network: %w", err)
+		return nil, err
 	}
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
@@ -995,7 +998,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
-			if err := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); err != nil {
+			if err := s.releaseSandboxNetwork(cleanupCtx); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", err))
 			}
 		}
@@ -1070,9 +1073,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}
 
-	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP); err != nil {
-		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
+	// Block until every wakeup-probe-enabled container reports 200.
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandbox.Dialer())); err != nil {
+		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 	if err := s.activateActorNetworking(req.GetAtespace(), req.GetActorName(), egress); err != nil {
 		return nil, err
@@ -1110,6 +1113,7 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, ac
 		ActorAtespace:        actorAtespace,
 		ActorName:            actorName,
 		ActorUID:             actorUID,
+		AteletSPIFFEID:       s.ateletSPIFFEID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)
@@ -1182,7 +1186,7 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 	}
 
-	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
+	if err := s.releaseSandboxNetwork(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up actor network: %w", err))
 	}
 
@@ -1219,16 +1223,6 @@ func (s *AteomService) deactivateActorNetworking(ctx context.Context) error {
 		return fmt.Errorf("while deactivating actor networking: %w", err)
 	}
 	return nil
-}
-
-// egressRedirectPort returns the local atunnel egress listener port when the
-// activation arms tunneled egress, and zero otherwise, which leaves the
-// prerouting redirect uninstalled and actor egress on the masquerade path.
-func (s *AteomService) egressRedirectPort(redirectEgress bool) uint16 {
-	if !redirectEgress {
-		return 0
-	}
-	return s.atunnelEgressPort
 }
 
 // setupCgroupDelegation prepares the worker pod's cgroup so runsc can create a

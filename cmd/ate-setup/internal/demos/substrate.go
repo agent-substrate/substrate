@@ -16,6 +16,7 @@ package demos
 
 import (
 	"context"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -24,6 +25,12 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
+
+// MicroVMGoldenTimeout is the golden-snapshot budget the micro-VM demos set as
+// their [Substrate.GoldenTimeout]: a micro-VM golden is a cloud-hypervisor cold
+// boot plus a checkpoint, on nested KVM in CI, which does not fit in
+// [steps.DemoTimeout].
+const MicroVMGoldenTimeout = 600 * time.Second
 
 // SubstrateTemplate names one protojson ActorTemplate manifest and the
 // resource it creates.
@@ -37,8 +44,8 @@ type SubstrateTemplate struct {
 
 // Substrate covers demos in the substrate-resource shape: one CRD manifest
 // for the namespace and worker pool, plus ActorTemplates created through the
-// ate API. It is the Go counterpart of deploy_substrate_demo /
-// delete_substrate_demo in hack/install-ate.sh.
+// ate API. Most demos are one of these; a demo needing more supplies its own
+// Deploy and Delete.
 type Substrate struct {
 	// DemoName is the registry name, e.g. "demo-parking".
 	DemoName string
@@ -56,6 +63,11 @@ type Substrate struct {
 
 	// Templates are the demo's ActorTemplates, created in order.
 	Templates []SubstrateTemplate
+
+	// GoldenTimeout budgets the wait for each template's golden snapshot.
+	// Zero means [steps.DemoTimeout]. Micro-VM demos need more: their golden
+	// is a cloud-hypervisor cold boot plus a checkpoint, on nested KVM in CI.
+	GoldenTimeout time.Duration
 
 	// RenderValues optionally supplies extra placeholder values at deploy
 	// time, for demos whose manifests need more than ${BUCKET_NAME} (e.g. a
@@ -162,9 +174,13 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 	// ActorTemplate pays one-time costs (downloading runsc, the first gVisor
 	// pod start, image pulls); blocking here means callers run against an
 	// already-warm node instead of racing that cold-start work.
+	golden := d.GoldenTimeout
+	if golden == 0 {
+		golden = steps.DemoTimeout
+	}
 	for _, t := range d.Templates {
 		log.Stepf("Waiting for the %s golden snapshot...", t.Ref)
-		if err := steps.WaitActorTemplateGolden(ctx, client, t.Ref, steps.DemoTimeout); err != nil {
+		if err := steps.WaitActorTemplateGolden(ctx, client, t.Ref, golden); err != nil {
 			return err
 		}
 	}

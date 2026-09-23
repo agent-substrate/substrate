@@ -49,7 +49,7 @@ containers:
   - name: OTEL_RESOURCE_ATTRIBUTES
     value: "service.name=glutton-actor"
   # Hold ResumeActor open until port 80 actually answers.
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
@@ -60,7 +60,7 @@ resources:
   limits:
   - name: memory
     quantity: ${ACTOR_MEMORY}
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton/

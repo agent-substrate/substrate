@@ -47,7 +47,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
 	if _, err := st.CreateActorTemplate(context.Background(), &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://snapshots",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
@@ -73,7 +73,7 @@ func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectst
 func mustActorSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, actor *ateapipb.Actor, name string) resources.SnapshotURI {
 	t.Helper()
 	atespace, uid := actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetUid()
-	uri, err := resources.NewActorSnapshotURI(template.GetSnapshotsConfig().GetStorageLocation(), atespace, uid, name)
+	uri, err := resources.NewActorSnapshotURI(template.GetSnapshotConfig().GetStorageLocation(), atespace, uid, name)
 	if err != nil {
 		t.Fatalf("NewActorSnapshotURI(%s/%s/%s): %v", atespace, uid, name, err)
 	}
@@ -81,7 +81,7 @@ func mustActorSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, actor 
 }
 
 const (
-	// testStorageLocation is the snapshots_config.storage_location the tests
+	// testStorageLocation is the snapshot_config.storage_location the tests
 	// build snapshot URIs under.
 	testStorageLocation = "gs://bucket/root"
 
@@ -106,7 +106,7 @@ func someActorSnapshotURI(t *testing.T, location, atespace, name string) string 
 // tag workflow does.
 func mustTagSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, atespace, name string) resources.SnapshotURI {
 	t.Helper()
-	uri, err := resources.NewTagSnapshotURI(template.GetSnapshotsConfig().GetStorageLocation(), atespace, name)
+	uri, err := resources.NewTagSnapshotURI(template.GetSnapshotConfig().GetStorageLocation(), atespace, name)
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI(%s/%s): %v", atespace, name, err)
 	}

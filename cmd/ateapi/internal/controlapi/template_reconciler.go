@@ -40,7 +40,7 @@ const (
 
 	// goldenSnapshotWarmup is the default wall-clock delay between resuming
 	// the golden actor and taking its snapshot, for templates without a
-	// readiness probe on every container.
+	// wakeup probe on every container.
 	goldenSnapshotWarmup = 20 * time.Second
 )
 
@@ -295,8 +295,8 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			}); err != nil {
 				return 0, err
 			}
-		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING:
-			// Nothing in the golden flow deletes or pauses the actor before
+		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
+			// Nothing in the golden flow deletes, pauses, or reverts the actor before
 			// the snapshot is taken; someone else interfered.
 			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, fmt.Sprintf("golden actor in unexpected state %v", state))
 
@@ -384,7 +384,7 @@ func goldenSnapshotDone(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
 	return snapshotStatus.GetGoldenTag() != nil || snapshotStatus.GetErrorMessage() != ""
 }
 
-// goldenSnapshotWarmupFor returns 0 when every container has a readyz probe
+// goldenSnapshotWarmupFor returns 0 when every container has a wakeup probe
 // (ResumeActor already blocked until the workload reported 200), and the
 // default warmup otherwise.
 func goldenSnapshotWarmupFor(containers []*ateapipb.Container) time.Duration {
@@ -392,7 +392,7 @@ func goldenSnapshotWarmupFor(containers []*ateapipb.Container) time.Duration {
 		return goldenSnapshotWarmup
 	}
 	for _, container := range containers {
-		if container.GetReadyz() == nil {
+		if container.GetWakeupProbe() == nil {
 			return goldenSnapshotWarmup
 		}
 	}

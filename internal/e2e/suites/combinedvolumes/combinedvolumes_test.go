@@ -195,7 +195,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 		// The pool is labeled uniquely to this namespace so the cluster-wide
 		// scheduler cannot hand its workers to another suite's actors.
 		Labels: map[string]string{"combinedvolumes": ns.Name},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
 		},
 		Modify: func(tmpl *ateapipb.ActorTemplate) {

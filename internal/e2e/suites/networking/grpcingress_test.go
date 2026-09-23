@@ -101,7 +101,7 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 			t.Fatalf("h2c GET = %d (body %q), want 200: non-gRPC HTTP/2 must be downgraded for HTTP/1.1-only actors", resp.StatusCode, body)
 		}
 		if !strings.Contains(string(body), "ok") {
-			t.Errorf("h2c GET body = %q, want the actor's readyz payload", body)
+			t.Errorf("h2c GET body = %q, want the actor's health payload", body)
 		}
 	})
 
@@ -311,7 +311,7 @@ func routerAddress(t *testing.T, ctx context.Context) string {
 	if err != nil {
 		t.Fatalf("creating k8s client: %v", err)
 	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, "ate-system", "atenet-router", 80)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, e2e.SystemNamespace(), e2e.ResourceName("atenet-router"), 80)
 	if err != nil {
 		t.Fatalf("port-forwarding to the router: %v", err)
 	}

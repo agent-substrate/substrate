@@ -148,3 +148,76 @@ func rootPool(t *testing.T, path string) *x509.CertPool {
 	}
 	return pool
 }
+
+func TestConnectUsesConfiguredSchema(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "substrate-test"
+	if _, err := pool.Exec(ctx, `
+		DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+		DROP SCHEMA IF EXISTS "substrate-other-test" CASCADE;
+		CREATE SCHEMA "substrate-other-test";
+		CREATE TABLE "substrate-other-test".worker_outbox (
+			created_at timestamptz NOT NULL
+		) PARTITION BY RANGE (created_at);
+		CREATE TABLE "substrate-other-test".worker_outbox_p200001010000
+			PARTITION OF "substrate-other-test".worker_outbox
+			FOR VALUES FROM ('2000-01-01 00:00:00+00') TO ('2000-01-01 00:05:00+00');
+		CREATE TABLE IF NOT EXISTS public.substrate_schema_test_marker (id integer)`); err != nil {
+		t.Fatalf("preparing schema test: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `
+			DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+			DROP SCHEMA IF EXISTS "substrate-other-test" CASCADE;
+			DROP TABLE IF EXISTS public.substrate_schema_test_marker`)
+	})
+
+	dsn, err := containerPG.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("getting PostgreSQL connection string: %v", err)
+	}
+	persistence, err := Connect(ctx, dsn+"&search_path=public", schema)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer persistence.pool.Close()
+	defer persistence.Close()
+
+	if _, err := persistence.CreateAtespace(ctx, newTestAtespace("schema-test")); err != nil {
+		t.Fatalf("creating atespace in configured schema: %v", err)
+	}
+
+	for _, table := range []string{"atespaces", "schema_migrations"} {
+		var exists bool
+		if err := persistence.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = $1 AND table_name = $2
+			)`, schema, table).Scan(&exists); err != nil {
+			t.Fatalf("checking %s.%s: %v", schema, table, err)
+		}
+		if !exists {
+			t.Errorf("expected %s.%s to exist", schema, table)
+		}
+	}
+
+	var markerExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.substrate_schema_test_marker') IS NOT NULL`).Scan(&markerExists); err != nil {
+		t.Fatalf("checking unrelated table: %v", err)
+	}
+	if !markerExists {
+		t.Error("migration removed an unrelated table")
+	}
+
+	if err := persistence.dropExpiredWorkerOutboxPartitions(ctx, persistence.watchPool, time.Now()); err != nil {
+		t.Fatalf("dropping expired partitions in the configured schema: %v", err)
+	}
+	var unrelatedPartitionExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('"substrate-other-test".worker_outbox_p200001010000') IS NOT NULL`).Scan(&unrelatedPartitionExists); err != nil {
+		t.Fatalf("checking unrelated outbox partition: %v", err)
+	}
+	if !unrelatedPartitionExists {
+		t.Error("outbox maintenance removed a partition from another schema")
+	}
+}

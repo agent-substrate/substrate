@@ -48,7 +48,7 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 # manifests/ate-install/kind/rustfs.yaml, which creates the bucket we upload into.
 AWS_CLI_IMAGE="amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73"
 
-ASSETS=(cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml)
+ASSETS=(cloud-hypervisor virtiofsd vmlinux rootfs.img)
 
 run_kubectl() {
   kubectl ${KUBECTL_CONTEXT:+--context="${KUBECTL_CONTEXT}"} -n "${NAMESPACE}" "$@"

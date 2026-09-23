@@ -45,8 +45,8 @@ type SubstrateTemplateOptions struct {
 	// Labels tie the template's workerSelector to the pool, keeping this
 	// pool's workers invisible to other namespaces' actors.
 	Labels map[string]string
-	// SnapshotsConfig for the new template; nil copies the source's.
-	SnapshotsConfig *ateapipb.SnapshotsConfig
+	// SnapshotConfig for the new template; nil copies the source's.
+	SnapshotConfig *ateapipb.SnapshotConfig
 	// Modify, when set, edits the template before it is created.
 	Modify func(*ateapipb.ActorTemplate)
 }
@@ -99,9 +99,9 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		t.Fatalf("failed to create atespace %q: %v", opts.Atespace, err)
 	}
 
-	snapshots := opts.SnapshotsConfig
+	snapshots := opts.SnapshotConfig
 	if snapshots == nil {
-		snapshots = srcTmpl.GetSnapshotsConfig()
+		snapshots = srcTmpl.GetSnapshotConfig()
 	}
 	tmpl := &ateapipb.ActorTemplate{
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},
@@ -109,13 +109,13 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		Containers:     srcTmpl.GetContainers(),
 		// The source's limits size the sandbox. Copying them matters most on
 		// micro-VM, where an ActorTemplate that declares none boots the guest
-		// at the kata config default (2GiB) instead of the demo's 512Mi.
+		// at ateom's default guest size (2GiB) instead of the demo's 512Mi.
 		Resources: srcTmpl.GetResources(),
 		// The source carries the sandbox_class/config_name pair for the
 		// class under test.
-		SandboxConfig:   srcTmpl.GetSandboxConfig(),
-		SnapshotsConfig: snapshots,
-		Volumes:         srcTmpl.GetVolumes(),
+		SandboxConfig:  srcTmpl.GetSandboxConfig(),
+		SnapshotConfig: snapshots,
+		Volumes:        srcTmpl.GetVolumes(),
 	}
 	if opts.Modify != nil {
 		opts.Modify(tmpl)

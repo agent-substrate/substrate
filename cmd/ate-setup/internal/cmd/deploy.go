@@ -38,13 +38,20 @@ it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
 the atelet DaemonSet, then waits for each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
-ATE_API_POSTGRES_CONNECTION_STRING selects an external database. Cloud SQL is
-not supported here — the ATE_API_POSTGRES_CLOUDSQL_* variables are ignored, so
-use hack/install-ate.sh for a Cloud SQL install (see
-cmd/ate-setup/differences.md).
+ATE_API_POSTGRES_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+select an external database.
 
 Shape the install with the global --atenet-dataplane flag.`,
-	Args: cobra.NoArgs,
+	// Flags are parsed by the time cobra validates arguments, and argument
+	// validation is the last thing that happens before the root command loads
+	// the configuration and connects to a cluster. Checking --setup-csi here
+	// keeps an unusable value from costing a credential fetch.
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.NoArgs(cmd, args); err != nil {
+			return err
+		}
+		return deployOpts.Validate()
+	},
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployAteSystem(cmd.Context(), deployOpts)
 	},
@@ -94,12 +101,9 @@ var deployPostgresCmd = &cobra.Command{
 	Long: `Deploy the experimental single-replica PostgreSQL StatefulSet on its own.
 
 "deploy ate-system" already brings PostgreSQL up, unless
-ATE_API_POSTGRES_CONNECTION_STRING selects an external database; this
-subcommand is for bringing the StatefulSet up by itself.
-
-ate-setup has no Cloud SQL support: the ATE_API_POSTGRES_CLOUDSQL_* variables
-are ignored here, so a Cloud SQL install needs hack/install-ate.sh (see
-cmd/ate-setup/differences.md).`,
+ATE_API_POSTGRES_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+select an external database; this subcommand is for bringing the StatefulSet up
+by itself.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployPostgres(cmd.Context())

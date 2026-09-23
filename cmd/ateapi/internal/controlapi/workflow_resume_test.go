@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -1020,7 +1021,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				SnapshotConfig: &ateapipb.SnapshotConfig{
 					OnPause:  tt.onPause,
 					OnResume: &ateapipb.OnResumeConfig{FromData: tt.fromData},
 				},
@@ -1280,10 +1281,10 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	})
 
 	ateletPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-1", UID: "atelet-uid"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: installdefaults.SystemNamespace, Name: "atelet-1", UID: "atelet-uid"},
 		Spec:       corev1.PodSpec{NodeName: "node-1"},
 	}
-	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), "", "")
+	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
 	dialer.ateletConns.Add("atelet-uid", conn)
 
 	lister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
@@ -1728,7 +1729,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
 					OnPause:         tt.tmpl.onPause,
 					OnResume:        &ateapipb.OnResumeConfig{FromData: tt.tmpl.fromData},

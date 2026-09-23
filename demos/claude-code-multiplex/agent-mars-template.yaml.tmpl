@@ -33,7 +33,7 @@ containers:
     value: "45"
   - name: ANTHROPIC_API_KEY
     value: "${ANTHROPIC_API_KEY}"
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/claude-multiplex-demo/

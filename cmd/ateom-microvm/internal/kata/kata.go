@@ -18,9 +18,8 @@
 // ttrpc API (DialAgent / AgentClient) to create the sandbox and run each container
 // on its host-merged rootfs (overlay_linux.go).
 //
-// It also renders the kata configuration.toml (for the agent kernel_params + guest
-// sizing) from runtime-fetched assets (config.go) and sweeps leftover per-sandbox
-// host-side state (CleanupSandboxState).
+// It also owns the guest kernel_params and default guest sizing (config.go) and
+// sweeps leftover per-sandbox host-side state (CleanupSandboxState).
 package kata
 
 import (

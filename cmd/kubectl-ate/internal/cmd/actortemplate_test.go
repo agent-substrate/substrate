@@ -43,7 +43,7 @@ containers:
 - name: counter
   image: ko://github.com/agent-substrate/substrate/demos/counter
   command: ["/ko-app/counter", "--extra-port=9090"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
@@ -56,7 +56,7 @@ resources:
     quantity: "1"
   - name: memory
     quantity: 512Mi
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://ate-snapshots/ate-demo-counter/
@@ -81,7 +81,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			Name:    "counter",
 			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
 			Command: []string{"/ko-app/counter", "--extra-port=9090"},
-			Readyz: &ateapipb.ContainerReadyz{
+			WakeupProbe: &ateapipb.ContainerWakeupProbe{
 				HttpGet: &ateapipb.HTTPGetAction{Path: "/readyz", Port: 80},
 			},
 			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/home/counter"}},
@@ -90,7 +90,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			{Name: "cpu", Quantity: "1"},
 			{Name: "memory", Quantity: "512Mi"},
 		}},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			StorageLocation: "gs://ate-snapshots/ate-demo-counter/",
@@ -114,7 +114,7 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
 	manifest := `metadata:
   atespace: ate-demo-counter
   name: counter
-snapshots_config:
+snapshot_config:
   on_pause: SNAPSHOT_CONTENT_SCOPE_FULL
   storage_location: gs://ate-snapshots/ate-demo-counter/
 sandbox_config:
@@ -125,8 +125,8 @@ sandbox_config:
 	if err != nil {
 		t.Fatalf("actorTemplateFromManifest: %v", err)
 	}
-	if got.GetSnapshotsConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
-		t.Errorf("storage_location = %q", got.GetSnapshotsConfig().GetStorageLocation())
+	if got.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
+		t.Errorf("storage_location = %q", got.GetSnapshotConfig().GetStorageLocation())
 	}
 	if got.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
 		t.Errorf("sandbox_class = %v", got.GetSandboxConfig().GetSandboxClass())
@@ -204,7 +204,7 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 			if got.GetSandboxConfig().GetSandboxClass() != test.class {
 				t.Errorf("sandbox class = %v, want %v", got.GetSandboxConfig().GetSandboxClass(), test.class)
 			}
-			if len(got.GetContainers()) == 0 || got.GetSnapshotsConfig().GetStorageLocation() == "" {
+			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetStorageLocation() == "" {
 				t.Errorf("missing required fields: %v", got)
 			}
 		})

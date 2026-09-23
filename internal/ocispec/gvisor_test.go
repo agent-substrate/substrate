@@ -53,3 +53,34 @@ func TestGVisorCgroupLeafMatchesTheShapedPath(t *testing.T) {
 		t.Errorf("shaped cgroupsPath = %q, want %q", spec.Linux.CgroupsPath, want)
 	}
 }
+
+func TestShapeGVisorBindsTheNamedResolvConf(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		resolvConf string
+		wantSource string
+	}{
+		{name: "default is the worker pod's", wantSource: "/etc/resolv.conf"},
+		{
+			name:       "a sandbox may name its own",
+			resolvConf: "/var/lib/ateom-gvisor/actors/a/resolv.conf",
+			wantSource: "/var/lib/ateom-gvisor/actors/a/resolv.conf",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := &specs.Spec{}
+			ShapeGVisor(spec, GVisorOptions{
+				ActorUID: "a", ContainerName: "app", ResolvConf: tc.resolvConf,
+			})
+			var got string
+			for _, m := range spec.Mounts {
+				if m.Destination == "/etc/resolv.conf" {
+					got = m.Source
+				}
+			}
+			if got != tc.wantSource {
+				t.Errorf("resolv.conf bound from %q, want %q", got, tc.wantSource)
+			}
+		})
+	}
+}

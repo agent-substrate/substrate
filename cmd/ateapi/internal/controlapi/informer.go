@@ -23,12 +23,12 @@ import (
 )
 
 const (
-	ateletNamespace = "ate-system"
-	byNode          = "by-node"
+	byNode = "by-node"
 )
 
-// AteletInformer creates a SharedInformerFactory and SharedIndexInformer for Atelet pods.
-func AteletInformer(kc kubernetes.Interface) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
+// AteletInformer creates a SharedInformerFactory and SharedIndexInformer for
+// Atelet pods in the given namespace.
+func AteletInformer(kc kubernetes.Interface, ateletNamespace string) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
 	factory := informers.NewSharedInformerFactoryWithOptions(kc, 0,
 		informers.WithNamespace(ateletNamespace),
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
