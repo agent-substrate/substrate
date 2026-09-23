@@ -56,7 +56,7 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
       });
 
     let comparison_result = match (&server_name_str, &sni_passthrough_policy_str) {
-      (Some(server_name), Some(policy)) if server_name == policy => "true",
+      (Some(server_name), Some(policy)) if server_name.eq_ignore_ascii_case(policy) => "true",
       _ => "false",
     };
 
@@ -154,6 +154,40 @@ mod tests {
     mock_filter
       .expect_get_requested_server_name()
       .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS)
+      .returning(|_| Some(EnvoyBuffer::new(b"www.google.com")));
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(|key, value| {
+        key == ATE_POLICY_EGRESS_PASSTHROUGH && value == b"true"
+      })
+      .times(1)
+      .returning(|_, _| true);
+
+    let mut filter = config.new_listener_filter(&mut mock_filter);
+
+    let status = filter.on_accept(&mut mock_filter);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_listener_filter_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_on_accept_case_insensitive_matching_sni_and_policy() {
+    let mut mock_config = MockEnvoyListenerFilterConfig::new();
+    let config = new_listener_filter_config_fn::<
+      MockEnvoyListenerFilterConfig,
+      MockEnvoyListenerFilter,
+    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
+    .unwrap();
+
+    let mut mock_filter = MockEnvoyListenerFilter::new();
+    mock_filter
+      .expect_get_requested_server_name()
+      .returning(|| Some(EnvoyBuffer::new(b"WWW.Google.COM")));
     mock_filter
       .expect_get_filter_state_bytes()
       .withf(|key| key == ATE_POLICY_EGRESS)
