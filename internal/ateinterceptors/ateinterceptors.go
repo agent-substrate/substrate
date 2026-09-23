@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // ServerElapsedTrailer carries the server's handler duration in microseconds,
@@ -113,6 +114,14 @@ func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.Una
 	return resp, err
 }
 
+// redactedPlaceholder replaces the value of a string field marked
+// debug_redact in the logged copy of a message. Names and structure are kept
+// so the log still shows which fields were set.
+const redactedPlaceholder = "[REDACTED]"
+
+// sanitizeForLog returns a copy of v safe to log. Proto messages are cloned
+// and every field carrying the debug_redact option is masked; other values are
+// returned unchanged. The original message is never modified.
 func sanitizeForLog(v any) any {
 	msg, ok := v.(proto.Message)
 	if !ok {
@@ -120,30 +129,51 @@ func sanitizeForLog(v any) any {
 	}
 
 	clone := proto.Clone(msg)
-	clearEnvFields(clone.ProtoReflect())
+	redactDebugRedactFields(clone.ProtoReflect())
 	return clone
 }
 
-func clearEnvFields(msg protoreflect.Message) {
+// isDebugRedact reports whether fd carries [debug_redact = true]. The option
+// is set in the .proto files next to the fields it protects; see EnvVar.value,
+// EnvEntry.value, MintActorJWTResponse.actor_jwt and
+// FetchSecretResponse.opaque_bytes.
+func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
+	opts, ok := fd.Options().(*descriptorpb.FieldOptions)
+	return ok && opts.GetDebugRedact()
+}
+
+// redactDebugRedactFields masks, in place, every populated field of msg that
+// carries the debug_redact option, recursing through nested messages, lists
+// and map values. Singular string fields are replaced with
+// redactedPlaceholder; any other kind (bytes, repeated, map, message, ...) is
+// cleared.
+func redactDebugRedactFields(msg protoreflect.Message) {
 	msg.Range(func(fd protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if fd.Name() == "env" {
-			msg.Clear(fd)
-			return true
-		}
-		if fd.IsMap() {
-			return true
-		}
-		if fd.IsList() {
-			list := value.List()
-			for i := 0; i < list.Len(); i++ {
-				if fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind {
-					clearEnvFields(list.Get(i).Message())
-				}
+		if isDebugRedact(fd) {
+			if fd.Kind() == protoreflect.StringKind && !fd.IsList() && !fd.IsMap() {
+				msg.Set(fd, protoreflect.ValueOfString(redactedPlaceholder))
+			} else {
+				msg.Clear(fd)
 			}
 			return true
 		}
-		if fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind {
-			clearEnvFields(value.Message())
+		switch {
+		case fd.IsMap():
+			if fd.MapValue().Kind() == protoreflect.MessageKind {
+				value.Map().Range(func(_ protoreflect.MapKey, mv protoreflect.Value) bool {
+					redactDebugRedactFields(mv.Message())
+					return true
+				})
+			}
+		case fd.IsList():
+			if fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind {
+				list := value.List()
+				for i := 0; i < list.Len(); i++ {
+					redactDebugRedactFields(list.Get(i).Message())
+				}
+			}
+		case fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind:
+			redactDebugRedactFields(value.Message())
 		}
 		return true
 	})
