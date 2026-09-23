@@ -23,7 +23,6 @@ package wakeupprobe
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,7 +34,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc/codes"
 )
 
 // Tuning knobs. Sized for actor cold-start where the HTTP server may take
@@ -73,11 +71,6 @@ func newClient(dial DialFunc) *http.Client {
 // WaitAll blocks until every container with a wakeup probe set reports 200 through dial,
 // or returns the first error. Containers without a probe are skipped (their
 // absence means "no wakeup gate").
-//
-// Every caller is an ateom RPC handler, so a %w-wrapped Reason dies here:
-// errors.As cannot cross a process, and the interceptor would flatten it to a
-// bare codes.Internal, leaving atelet reading UNKNOWN. The ErrorInfo detail is
-// what carries it. Internal and no crash directive both match today's behavior.
 func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP string, dial DialFunc) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ac := range containers {
@@ -89,11 +82,7 @@ func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP strin
 			return Wait(gctx, ac.GetName(), ac.GetWakeupProbe(), actorIP, dial)
 		})
 	}
-	err := g.Wait()
-	if err != nil && errors.Is(err, ateerrors.ReasonWorkloadNotReady) {
-		return ateerrors.NewGRPCError(ctx, codes.Internal, ateerrors.ReasonWorkloadNotReady, nil, err)
-	}
-	return err
+	return g.Wait()
 }
 
 // Wait polls the configured HTTP endpoint through dial until it returns 200,

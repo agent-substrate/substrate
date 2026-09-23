@@ -14,7 +14,7 @@
 
 // Package otlprelay carries ateom's OTLP telemetry to the collector over a unix
 // socket served by atelet, so a worker pod needs no network path of its own to
-// export spans and metrics.
+// export spans, metrics, and log records.
 //
 // Motivation. ateom runs inside the worker pod that hosts the actor, and until
 // now exported OTLP straight to the collector over the pod's network (the
@@ -71,6 +71,7 @@ import (
 	"k8s.io/utils/lru"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
@@ -83,20 +84,23 @@ const (
 	endpointEnv        = "OTEL_EXPORTER_OTLP_ENDPOINT"
 	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+	logsEndpointEnv    = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
 
 	// compressionEnv and its signal-specific overrides configure upstream
 	// gRPC compression (gzip or none).
 	compressionEnv        = "OTEL_EXPORTER_OTLP_COMPRESSION"
 	tracesCompressionEnv  = "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION"
 	metricsCompressionEnv = "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION"
+	logsCompressionEnv    = "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION"
 
 	// headersEnv and its signal-specific overrides carry the headers the
 	// collector expects (an API key, a tenant id). Unlike the endpoint and the
 	// compression, these are per-call metadata rather than per-connection, so
-	// traces and metrics may legitimately differ and are resolved separately.
+	// traces, metrics, and logs may legitimately differ and are resolved separately.
 	headersEnv        = "OTEL_EXPORTER_OTLP_HEADERS"
 	tracesHeadersEnv  = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
 	metricsHeadersEnv = "OTEL_EXPORTER_OTLP_METRICS_HEADERS"
+	logsHeadersEnv    = "OTEL_EXPORTER_OTLP_LOGS_HEADERS"
 
 	// otlpDefaultPort matches atenet's normalizeOtlpCollector.
 	otlpDefaultPort = "4317"
@@ -286,10 +290,10 @@ func upstreamHeaders(signalEnv string) (metadata.MD, error) {
 	return md, nil
 }
 
-// The two OTLP services both declare a method named Export, with different
-// request types, so one type cannot implement both: the embedded Unimplemented
-// structs would give Server an ambiguous promoted Export and satisfy neither
-// interface. Each service gets its own tiny forwarder instead.
+// The OTLP services all declare a method named Export, with different request
+// types, so one type cannot implement more than one: the embedded Unimplemented
+// structs would give Server an ambiguous promoted Export and satisfy none of the
+// interfaces. Each service gets its own tiny forwarder instead.
 
 type traceRelay struct {
 	coltracepb.UnimplementedTraceServiceServer
@@ -297,8 +301,8 @@ type traceRelay struct {
 	// headers atelet presents to the collector; see upstreamContext. Resolved
 	// once at construction: they come from atelet's environment, not the call.
 	headers metadata.MD
-	// gate is shared with metricRelay so a misnamed ateom is reported once, not
-	// once per signal.
+	// gate is shared with metricRelay and logRelay so a misnamed ateom is
+	// reported once, not once per signal.
 	gate *sourceGate
 }
 
@@ -333,6 +337,23 @@ func (m *metricRelay) Export(ctx context.Context, req *colmetricspb.ExportMetric
 		}
 	}
 	return m.upstream.Export(upstreamContext(ctx, m.headers), req)
+}
+
+type logRelay struct {
+	collogspb.UnimplementedLogsServiceServer
+	upstream collogspb.LogsServiceClient
+	headers  metadata.MD
+	gate     *sourceGate
+}
+
+// Export forwards a batch of log records to the collector unchanged.
+func (l *logRelay) Export(ctx context.Context, req *collogspb.ExportLogsServiceRequest) (*collogspb.ExportLogsServiceResponse, error) {
+	for _, rl := range req.GetResourceLogs() {
+		if err := l.gate.check(ctx, rl.GetResource()); err != nil {
+			return nil, err
+		}
+	}
+	return l.upstream.Export(upstreamContext(ctx, l.headers), req)
 }
 
 // validateSocketPath rejects a relative path, which gRPC does not resolve:
@@ -385,6 +406,10 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	logHeaders, err := upstreamHeaders(logsHeadersEnv)
+	if err != nil {
+		return nil, err
+	}
 
 	dialOpts := []grpc.DialOption{
 		// Plaintext by design today; TLS support for the upstream leg will be added
@@ -418,12 +443,18 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 		headers:  metricHeaders,
 		gate:     gate,
 	})
+	collogspb.RegisterLogsServiceServer(s.grpc, &logRelay{
+		upstream: collogspb.NewLogsServiceClient(upstream),
+		headers:  logHeaders,
+		gate:     gate,
+	})
 	// Header names only: the values are credentials.
 	slog.InfoContext(ctx, "OTLP relay forwarding to collector",
 		slog.String("collector", target),
 		slog.String("compression", comp),
 		slog.Any("traceHeaders", headerNames(traceHeaders)),
-		slog.Any("metricHeaders", headerNames(metricHeaders)))
+		slog.Any("metricHeaders", headerNames(metricHeaders)),
+		slog.Any("logHeaders", headerNames(logHeaders)))
 	return s, nil
 }
 
@@ -477,27 +508,9 @@ func headerNames(md metadata.MD) []string {
 // upstreamCompression resolves the compression algorithm (gzip or none) to use
 // for upstream export.
 func upstreamCompression() (string, error) {
-	generic := strings.TrimSpace(os.Getenv(compressionEnv))
-	traces := strings.TrimSpace(os.Getenv(tracesCompressionEnv))
-	metrics := strings.TrimSpace(os.Getenv(metricsCompressionEnv))
-
-	traceComp := generic
-	if traces != "" {
-		traceComp = traces
-	}
-	metricComp := generic
-	if metrics != "" {
-		metricComp = metrics
-	}
-
-	if traceComp != "" && metricComp != "" && traceComp != metricComp {
-		return "", fmt.Errorf("signal-specific compression settings conflict (%q for traces vs %q for metrics); the relay carries both signals over one connection",
-			traceComp, metricComp)
-	}
-
-	resolved := traceComp
-	if resolved == "" {
-		resolved = metricComp
+	resolved, err := resolvePerSignal("compression settings", compressionEnv, tracesCompressionEnv, metricsCompressionEnv, logsCompressionEnv)
+	if err != nil {
+		return "", err
 	}
 	switch resolved {
 	case "", "none":
@@ -512,37 +525,44 @@ func upstreamCompression() (string, error) {
 // upstreamTarget resolves the collector address the relay forwards to, from the
 // standard OTLP endpoint variables, into the bare host:port grpc.NewClient wants.
 //
-// The signal-specific variables must agree: the relay carries traces and metrics
-// over one connection, so it cannot honor two different collectors. Configuring
-// both differently is a misconfiguration rather than something to silently pick
+// The signal-specific variables must agree: the relay carries every signal over
+// one connection, so it cannot honor two different collectors. Configuring
+// them differently is a misconfiguration rather than something to silently pick
 // a winner for.
 func upstreamTarget() (string, error) {
-	generic := strings.TrimSpace(os.Getenv(endpointEnv))
-	traces := strings.TrimSpace(os.Getenv(tracesEndpointEnv))
-	metrics := strings.TrimSpace(os.Getenv(metricsEndpointEnv))
-
-	traceTarget := generic
-	if traces != "" {
-		traceTarget = traces
-	}
-	metricTarget := generic
-	if metrics != "" {
-		metricTarget = metrics
-	}
-
-	if traceTarget != "" && metricTarget != "" && traceTarget != metricTarget {
-		return "", fmt.Errorf("signal-specific endpoints conflict (%q for traces vs %q for metrics); the relay carries both signals over one connection",
-			traceTarget, metricTarget)
-	}
-
-	resolved := traceTarget
-	if resolved == "" {
-		resolved = metricTarget
+	resolved, err := resolvePerSignal("endpoints", endpointEnv, tracesEndpointEnv, metricsEndpointEnv, logsEndpointEnv)
+	if err != nil {
+		return "", err
 	}
 	if resolved == "" {
 		return "", nil
 	}
 	return normalizeEndpoint(resolved)
+}
+
+// resolvePerSignal resolves each signal to its own variable, falling back to
+// the generic one, and requires every resolved value to agree: the relay
+// carries every signal over one connection. The error names the variables the
+// two values came from, since a fallback pulls the generic in under a signal
+// that is not itself set.
+func resolvePerSignal(what, genericEnv string, signalEnvs ...string) (string, error) {
+	generic := strings.TrimSpace(os.Getenv(genericEnv))
+	resolved, resolvedEnv := "", ""
+	for _, env := range signalEnvs {
+		v, src := strings.TrimSpace(os.Getenv(env)), env
+		if v == "" {
+			v, src = generic, genericEnv
+		}
+		if v == "" {
+			continue
+		}
+		if resolved != "" && v != resolved {
+			return "", fmt.Errorf("signal-specific %s conflict: %s=%q vs %s=%q; the relay carries every signal over one connection",
+				what, resolvedEnv, resolved, src, v)
+		}
+		resolved, resolvedEnv = v, src
+	}
+	return resolved, nil
 }
 
 // normalizeEndpoint accepts both a bare "host:port" and the URL form the OTLP

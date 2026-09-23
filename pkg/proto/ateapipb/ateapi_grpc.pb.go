@@ -1535,17 +1535,15 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WorkerService_SetWorkerCapacity_FullMethodName = "/ateapi.WorkerService/SetWorkerCapacity"
+	WorkerService_SetWorkerCapacity_FullMethodName         = "/ateapi.WorkerService/SetWorkerCapacity"
+	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// WorkerService is how a Worker tells the control plane about itself. It is
-// separate from Control because the two have different callers and different
-// authorization: Control is the client-facing API, while these RPCs are served
-// only to an atelet, and only for the Workers on its own node.
+// WorkerService is the RPC service tailored to be called by Atelet.
 type WorkerServiceClient interface {
 	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
 	// to report rather than the control plane's to infer: it is what the ateom
@@ -1555,6 +1553,11 @@ type WorkerServiceClient interface {
 	// atelet calls this with its own client certificate, as it does for
 	// MintCert. Idempotent: re-sending the same capacity is not a write.
 	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
+	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+	// on behalf of a particular actor.
+	//
+	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
+	MintAteomActorCertificate(ctx context.Context, in *MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*MintAteomActorCertificateResponse, error)
 }
 
 type workerServiceClient struct {
@@ -1575,14 +1578,21 @@ func (c *workerServiceClient) SetWorkerCapacity(ctx context.Context, in *SetWork
 	return out, nil
 }
 
+func (c *workerServiceClient) MintAteomActorCertificate(ctx context.Context, in *MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*MintAteomActorCertificateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintAteomActorCertificateResponse)
+	err := c.cc.Invoke(ctx, WorkerService_MintAteomActorCertificate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
 //
-// WorkerService is how a Worker tells the control plane about itself. It is
-// separate from Control because the two have different callers and different
-// authorization: Control is the client-facing API, while these RPCs are served
-// only to an atelet, and only for the Workers on its own node.
+// WorkerService is the RPC service tailored to be called by Atelet.
 type WorkerServiceServer interface {
 	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
 	// to report rather than the control plane's to infer: it is what the ateom
@@ -1592,6 +1602,11 @@ type WorkerServiceServer interface {
 	// atelet calls this with its own client certificate, as it does for
 	// MintCert. Idempotent: re-sending the same capacity is not a write.
 	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
+	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+	// on behalf of a particular actor.
+	//
+	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
+	MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -1604,6 +1619,9 @@ type UnimplementedWorkerServiceServer struct{}
 
 func (UnimplementedWorkerServiceServer) SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetWorkerCapacity not implemented")
+}
+func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintAteomActorCertificate not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -1644,6 +1662,24 @@ func _WorkerService_SetWorkerCapacity_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_MintAteomActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintAteomActorCertificateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).MintAteomActorCertificate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_MintAteomActorCertificate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).MintAteomActorCertificate(ctx, req.(*MintAteomActorCertificateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1654,6 +1690,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerCapacity",
 			Handler:    _WorkerService_SetWorkerCapacity_Handler,
+		},
+		{
+			MethodName: "MintAteomActorCertificate",
+			Handler:    _WorkerService_MintAteomActorCertificate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

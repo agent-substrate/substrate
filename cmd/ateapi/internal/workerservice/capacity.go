@@ -26,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -44,17 +45,24 @@ type Server struct {
 
 	// ateletSPIFFEID is the identity the calling atelet must present.
 	ateletSPIFFEID string
+
+	actorIDCAPool localca.Pool
 }
 
 var _ ateapipb.WorkerServiceServer = (*Server)(nil)
 
-func New(store store.Interface, ateletSPIFFEID string) *Server {
-	return &Server{store: store, ateletSPIFFEID: ateletSPIFFEID}
+func New(store store.Interface, ateletSPIFFEID string, actorIDCAPool localca.Pool) *Server {
+	return &Server{
+		store:          store,
+		ateletSPIFFEID: ateletSPIFFEID,
+		actorIDCAPool:  actorIDCAPool,
+	}
 }
 
 // SetWorkerCapacity records a Worker's reported capacity. As with MintCert,
 // the caller must be an atelet running on the Worker's node.
 func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerCapacityRequest) (*ateapipb.SetWorkerCapacityResponse, error) {
+	// TODO(identity): This check should be handled by OpenFGA.
 	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
 	if err != nil {
 		return nil, err

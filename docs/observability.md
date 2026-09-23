@@ -178,7 +178,7 @@ The counter carries the same reason but no actor identity, so this record is the
 
 #### The same records over OTLP
 
-Both records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. Only ateapi has a LoggerProvider — a worker pod cannot export a log record at all yet, because [the ateom relay](#the-ateom-otlp-relay) carries traces and metrics only.
+Both records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. Only ateapi has a LoggerProvider today; [the ateom relay](#the-ateom-otlp-relay) carries logs, traces, and metrics, so an ateom exports log records the same way once it has one.
 
 Two `event.name` values, which is the OTLP LogRecord's own field rather than an attribute:
 
@@ -410,7 +410,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 
 ### The ateom OTLP relay
 
-ateom is the one component that does not talk to the collector directly. It exports over a unix socket at `/var/lib/ateom-gvisor/atelet-otlp.sock`, which `atelet` serves and forwards to the collector on the node's network ([`internal/otlprelay`](../internal/otlprelay)):
+ateom is the one component that does not talk to the collector directly. It exports logs, traces, and metrics over a unix socket at `/var/lib/ateom-gvisor/atelet-otlp.sock`, which `atelet` serves and forwards to the collector on the node's network ([`internal/otlprelay`](../internal/otlprelay)):
 
 ```
 ateom ──OTLP/gRPC over unix socket──► atelet relay ──OTLP/gRPC──► collector

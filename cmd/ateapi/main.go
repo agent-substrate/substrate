@@ -306,7 +306,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, ateletSPIFFEID))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, ateletSPIFFEID, actorIDCAPool))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{

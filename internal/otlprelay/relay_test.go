@@ -36,9 +36,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -52,8 +54,10 @@ type fakeCollector struct {
 	mu       sync.Mutex
 	traces   []*coltracepb.ExportTraceServiceRequest
 	metrics  []*colmetricspb.ExportMetricsServiceRequest
+	logs     []*collogspb.ExportLogsServiceRequest
 	traceMD  []metadata.MD
 	metricMD []metadata.MD
+	logMD    []metadata.MD
 	got      chan struct{}
 }
 
@@ -86,6 +90,22 @@ func (m *metricsSink) Export(ctx context.Context, req *colmetricspb.ExportMetric
 	return &colmetricspb.ExportMetricsServiceResponse{}, nil
 }
 
+type logsSink struct {
+	collogspb.UnimplementedLogsServiceServer
+	parent *fakeCollector
+}
+
+func (l *logsSink) Export(ctx context.Context, req *collogspb.ExportLogsServiceRequest) (*collogspb.ExportLogsServiceResponse, error) {
+	l.parent.mu.Lock()
+	l.parent.logs = append(l.parent.logs, req)
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		l.parent.logMD = append(l.parent.logMD, md.Copy())
+	}
+	l.parent.mu.Unlock()
+	l.parent.got <- struct{}{}
+	return &collogspb.ExportLogsServiceResponse{}, nil
+}
+
 // startFakeCollector serves the OTLP collector services on a loopback TCP port
 // (the shape the relay forwards to) and returns the sink and its host:port.
 func startFakeCollector(t *testing.T) (*fakeCollector, string) {
@@ -98,6 +118,7 @@ func startFakeCollector(t *testing.T) (*fakeCollector, string) {
 	srv := grpc.NewServer()
 	coltracepb.RegisterTraceServiceServer(srv, sink)
 	colmetricspb.RegisterMetricsServiceServer(srv, &metricsSink{parent: sink})
+	collogspb.RegisterLogsServiceServer(srv, &logsSink{parent: sink})
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return sink, lis.Addr().String()
@@ -244,6 +265,49 @@ func TestRelayForwardsMetrics(t *testing.T) {
 		t.Fatalf("collector got %d metric exports, want 1", len(sink.metrics))
 	}
 	if diff := cmp.Diff(req, sink.metrics[0], protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded request differs from what was sent (-sent +received):\n%s", diff)
+	}
+}
+
+// usageLogs is an ateom log batch.
+func usageLogs() *collogspb.ExportLogsServiceRequest {
+	return &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			Resource: serviceResource("ateom-gvisor"),
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{EventName: "ate.actor.usage_sampled"}},
+			}},
+		}},
+	}
+}
+
+func TestRelayForwardsLogsVerbatim(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	req := usageLogs()
+	if _, err := collogspb.NewLogsServiceClient(conn).Export(context.Background(), req); err != nil {
+		t.Fatalf("Export through the relay: %v", err)
+	}
+
+	select {
+	case <-sink.got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector never received the forwarded log export")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.logs) != 1 {
+		t.Fatalf("collector got %d log exports, want 1", len(sink.logs))
+	}
+	if diff := cmp.Diff(req, sink.logs[0], protocmp.Transform()); diff != "" {
 		t.Errorf("forwarded request differs from what was sent (-sent +received):\n%s", diff)
 	}
 }
@@ -404,13 +468,20 @@ func TestRelayRefusesNonAteomSource(t *testing.T) {
 			if got := status.Code(err); got != codes.PermissionDenied {
 				t.Errorf("metric Export from service.name %q = code %v (%v), want %v", tc.service, got, err, codes.PermissionDenied)
 			}
+
+			_, err = collogspb.NewLogsServiceClient(conn).Export(context.Background(), &collogspb.ExportLogsServiceRequest{
+				ResourceLogs: []*logspb.ResourceLogs{{Resource: serviceResource(tc.service)}},
+			})
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Errorf("log Export from service.name %q = code %v (%v), want %v", tc.service, got, err, codes.PermissionDenied)
+			}
 		})
 	}
 
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.traces) != 0 || len(sink.metrics) != 0 {
-		t.Errorf("collector received %d traces and %d metrics from refused sources, want none to be forwarded", len(sink.traces), len(sink.metrics))
+	if len(sink.traces) != 0 || len(sink.metrics) != 0 || len(sink.logs) != 0 {
+		t.Errorf("collector received %d traces, %d metrics, %d logs from refused sources, want none to be forwarded", len(sink.traces), len(sink.metrics), len(sink.logs))
 	}
 }
 
@@ -436,10 +507,20 @@ func TestRelayRefusesMixedBatch(t *testing.T) {
 		t.Errorf("Export of a mixed batch = code %v (%v), want %v", got, err, codes.PermissionDenied)
 	}
 
+	_, err = collogspb.NewLogsServiceClient(conn).Export(context.Background(), &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{
+			{Resource: serviceResource("ateom-gvisor")},
+			{Resource: serviceResource("actor")},
+		},
+	})
+	if got := status.Code(err); got != codes.PermissionDenied {
+		t.Errorf("log Export of a mixed batch = code %v (%v), want %v", got, err, codes.PermissionDenied)
+	}
+
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.traces) != 0 {
-		t.Errorf("collector received %d exports from a mixed batch, want the batch refused whole", len(sink.traces))
+	if len(sink.traces) != 0 || len(sink.logs) != 0 {
+		t.Errorf("collector received %d traces and %d logs from mixed batches, want the batches refused whole", len(sink.traces), len(sink.logs))
 	}
 }
 
@@ -459,13 +540,25 @@ func TestRelayAcceptsEveryAteomService(t *testing.T) {
 		if _, err := coltracepb.NewTraceServiceClient(conn).Export(context.Background(), &coltracepb.ExportTraceServiceRequest{
 			ResourceSpans: []*tracepb.ResourceSpans{{Resource: serviceResource(service)}},
 		}); err != nil {
-			t.Errorf("Export from allowlisted service %q: %v", service, err)
+			t.Errorf("trace Export from allowlisted service %q: %v", service, err)
 			continue
 		}
 		select {
 		case <-sink.got:
 		case <-time.After(5 * time.Second):
-			t.Errorf("collector never received the export from %q", service)
+			t.Errorf("collector never received the trace export from %q", service)
+		}
+
+		if _, err := collogspb.NewLogsServiceClient(conn).Export(context.Background(), &collogspb.ExportLogsServiceRequest{
+			ResourceLogs: []*logspb.ResourceLogs{{Resource: serviceResource(service)}},
+		}); err != nil {
+			t.Errorf("log Export from allowlisted service %q: %v", service, err)
+			continue
+		}
+		select {
+		case <-sink.got:
+		case <-time.After(5 * time.Second):
+			t.Errorf("collector never received the log export from %q", service)
 		}
 	}
 }
@@ -603,12 +696,23 @@ func TestUpstreamTarget(t *testing.T) {
 		generic string
 		traces  string
 		metrics string
+		logs    string
 		want    string
 		wantErr bool
+		// errHas / errLacks, when set, pin which variable the error names.
+		errHas   string
+		errLacks string
 	}{
 		{name: "unset", want: ""},
 		{name: "generic only", generic: "collector:4317", want: "collector:4317"},
-		{name: "signal specific overrides generic", generic: "generic:4317", traces: "specific:4317", metrics: "specific:4317", want: "specific:4317"},
+		{name: "logs specific agrees", generic: "collector:4317", logs: "collector:4317", want: "collector:4317"},
+		{name: "logs specific conflicts with generic", generic: "generic:4317", logs: "logs-only:4317", wantErr: true},
+		{name: "logs specific conflicts with traces", traces: "a:4317", logs: "b:4317", wantErr: true},
+		{name: "signal specific overrides generic", generic: "generic:4317", traces: "specific:4317", metrics: "specific:4317", logs: "specific:4317", want: "specific:4317"},
+		// Logs left unset falls back to the generic, which then disagrees with
+		// the two overrides: a real two-collector configuration, refused. The
+		// error must name the generic variable, since LOGS_ENDPOINT is unset.
+		{name: "two overrides and an unset signal conflict with generic", generic: "generic:4317", traces: "specific:4317", metrics: "specific:4317", wantErr: true, errHas: endpointEnv, errLacks: logsEndpointEnv},
 		{name: "generic conflicts with different traces specific", generic: "generic:4317", traces: "traces-only:4317", wantErr: true},
 		{name: "generic conflicts with different metrics specific", generic: "generic:4317", metrics: "metrics-only:4317", wantErr: true},
 		{name: "matching generic and signal specific", generic: "collector:4317", traces: "collector:4317", metrics: "collector:4317", want: "collector:4317"},
@@ -621,10 +725,17 @@ func TestUpstreamTarget(t *testing.T) {
 			t.Setenv(endpointEnv, tc.generic)
 			t.Setenv(tracesEndpointEnv, tc.traces)
 			t.Setenv(metricsEndpointEnv, tc.metrics)
+			t.Setenv(logsEndpointEnv, tc.logs)
 			got, err := upstreamTarget()
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("upstreamTarget() = %q, want an error", got)
+				}
+				if tc.errHas != "" && !strings.Contains(err.Error(), tc.errHas) {
+					t.Errorf("error %q does not name %s", err, tc.errHas)
+				}
+				if tc.errLacks != "" && strings.Contains(err.Error(), tc.errLacks) {
+					t.Errorf("error %q names %s, which is not set", err, tc.errLacks)
 				}
 				return
 			}
@@ -644,10 +755,13 @@ func TestUpstreamCompression(t *testing.T) {
 		generic string
 		traces  string
 		metrics string
+		logs    string
 		want    string
 		wantErr bool
 	}{
 		{name: "unset", want: "none"},
+		{name: "logs specific gzip", logs: "gzip", want: "gzip"},
+		{name: "logs conflicts with metrics", metrics: "gzip", logs: "none", wantErr: true},
 		{name: "generic gzip", generic: "gzip", want: "gzip"},
 		{name: "generic none", generic: "none", want: "none"},
 		{name: "traces specific gzip", traces: "gzip", want: "gzip"},
@@ -661,6 +775,7 @@ func TestUpstreamCompression(t *testing.T) {
 			t.Setenv(compressionEnv, tc.generic)
 			t.Setenv(tracesCompressionEnv, tc.traces)
 			t.Setenv(metricsCompressionEnv, tc.metrics)
+			t.Setenv(logsCompressionEnv, tc.logs)
 			got, err := upstreamCompression()
 			if tc.wantErr {
 				if err == nil {
@@ -678,9 +793,8 @@ func TestUpstreamCompression(t *testing.T) {
 	}
 }
 
-// exportBoth sends one empty trace batch and one empty metric batch from
-// service through the relay, and returns the metadata each arrived with.
-func exportBoth(t *testing.T, sink *fakeCollector, sock, service string, ctx context.Context) (traceMD, metricMD metadata.MD) {
+// exportAll sends one empty batch per signal from service through the relay, and returns the metadata each arrived with.
+func exportAll(t *testing.T, sink *fakeCollector, sock, service string, ctx context.Context) (traceMD, metricMD, logMD metadata.MD) {
 	t.Helper()
 	conn, err := Dial(context.Background(), sock)
 	if err != nil {
@@ -698,16 +812,18 @@ func exportBoth(t *testing.T, sink *fakeCollector, sock, service string, ctx con
 	}); err != nil {
 		t.Fatalf("metricClient.Export: %v", err)
 	}
+	if _, err := collogspb.NewLogsServiceClient(conn).Export(ctx, &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{Resource: serviceResource(service)}},
+	}); err != nil {
+		t.Fatalf("logClient.Export: %v", err)
+	}
 
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.traceMD) == 0 {
-		t.Fatal("collector received no metadata for trace export")
+	if len(sink.traceMD) == 0 || len(sink.metricMD) == 0 || len(sink.logMD) == 0 {
+		t.Fatalf("collector received metadata for %d trace, %d metric, %d log exports, want one each", len(sink.traceMD), len(sink.metricMD), len(sink.logMD))
 	}
-	if len(sink.metricMD) == 0 {
-		t.Fatal("collector received no metadata for metrics export")
-	}
-	return sink.traceMD[0], sink.metricMD[0]
+	return sink.traceMD[0], sink.metricMD[0], sink.logMD[0]
 }
 
 // The upstream leg is atelet's connection, so its credentials are atelet's. An
@@ -721,12 +837,12 @@ func TestExportDropsClientMetadata(t *testing.T) {
 		"authorization", "Bearer client-token",
 		"custom-header", "custom-value",
 	)
-	traceMD, metricMD := exportBoth(t, sink, sock, "ateom-gvisor", ctx)
+	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateom-gvisor", ctx)
 
 	for _, tc := range []struct {
 		signal string
 		md     metadata.MD
-	}{{"trace", traceMD}, {"metric", metricMD}} {
+	}{{"trace", traceMD}, {"metric", metricMD}, {"log", logMD}} {
 		for _, key := range []string{"authorization", "custom-header"} {
 			if got := tc.md.Get(key); len(got) != 0 {
 				t.Errorf("%s export reached the collector with the client's %s = %v, want it dropped", tc.signal, key, got)
@@ -742,12 +858,13 @@ func TestExportAttachesAteletHeaders(t *testing.T) {
 	// Set before startRelay: NewServer resolves headers once, at construction.
 	t.Setenv(headersEnv, "authorization=Bearer atelet-token,x-tenant=substrate")
 	t.Setenv(metricsHeadersEnv, "authorization=Bearer metrics-token")
+	t.Setenv(logsHeadersEnv, "authorization=Bearer logs-token")
 	sock := startRelay(t, collector)
 
 	// The client sends its own, which must lose to atelet's rather than
 	// appending a second value the collector might pick either way.
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client-token")
-	traceMD, metricMD := exportBoth(t, sink, sock, "ateom-gvisor", ctx)
+	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateom-gvisor", ctx)
 
 	if got := traceMD.Get("authorization"); len(got) != 1 || got[0] != "Bearer atelet-token" {
 		t.Errorf("trace export authorization = %v, want exactly [Bearer atelet-token]", got)
@@ -762,6 +879,12 @@ func TestExportAttachesAteletHeaders(t *testing.T) {
 	}
 	if got := metricMD.Get("x-tenant"); len(got) != 0 {
 		t.Errorf("metric export x-tenant = %v, want absent: %s replaces %s rather than merging", got, metricsHeadersEnv, headersEnv)
+	}
+	if got := logMD.Get("authorization"); len(got) != 1 || got[0] != "Bearer logs-token" {
+		t.Errorf("log export authorization = %v, want exactly [Bearer logs-token]", got)
+	}
+	if got := logMD.Get("x-tenant"); len(got) != 0 {
+		t.Errorf("log export x-tenant = %v, want absent: %s replaces %s rather than merging", got, logsHeadersEnv, headersEnv)
 	}
 }
 
