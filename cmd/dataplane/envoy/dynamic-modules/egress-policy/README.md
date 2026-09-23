@@ -6,8 +6,8 @@ This directory contains an Envoy Dynamic Module written in Rust implementing a c
 
 - **Extension Point:** Listener filter (`envoy.filters.listener.dynamic_modules`)
 - **Filter Configuration:** Empty (`EmptyFilterConfig`)
-- **Callbacks:** Implements `on_data` returning `Continue`
-- **Output:** Shared library `libenvoy_sni_matcher_policy.so` (`cdylib`)
+- **Callbacks:** Implements `on_accept` evaluating EgressPolicy and returning `Continue`
+- **Output:** Shared library `libenvoy_substrate_egress_policy.so` (`cdylib`)
 
 ## Building
 

@@ -19,10 +19,10 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 };
 
 /// Key of the filter state object holding the Substrate egress policy.
-pub const ATE_POLICY_EGRESS: &[u8] = b"ate.policy.egress";
+pub const ATE_POLICY_EGRESS: &[u8] = b"dev.ate.policy.egress";
 
 /// Key of the filter state object holding the SNI passthrough match result.
-pub const ATE_POLICY_EGRESS_PASSTHROUGH: &[u8] = b"sni.passthrough.match";
+pub const ATE_POLICY_EGRESS_PASSTHROUGH: &[u8] = b"dev.sni.passthrough.match";
 
 /// Empty filter configuration for the listener filter.
 pub struct EmptyFilterConfig;
