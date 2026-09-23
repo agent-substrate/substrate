@@ -17,10 +17,12 @@ package ocispec
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -39,7 +41,9 @@ const (
 
 // MicroVMOptions describes the micro-VM context of one actor container.
 type MicroVMOptions struct {
-	ActorUID    string
+	// ActorDirs are the actor's directories; volume bind sources under them are
+	// staged into the share.
+	ActorDirs   *ateompb.ActorDirs
 	ContainerID string
 }
 
@@ -54,7 +58,7 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 		if m.Type != "bind" {
 			continue
 		}
-		src, err := guestVolumeSource(m.Source, o.ActorUID, o.ContainerID)
+		src, err := guestVolumeSource(m.Source, o.ActorDirs, o.ContainerID)
 		if err != nil {
 			return fmt.Errorf("mount %q: %w", m.Destination, err)
 		}
@@ -108,13 +112,17 @@ func mergeKataResources(from *specs.LinuxResources) *specs.LinuxResources {
 }
 
 // guestVolumeSource maps a volume's host directory to its guest path.
-func guestVolumeSource(hostPath, actorUID, containerID string) (string, error) {
+func guestVolumeSource(hostPath string, actorDirs *ateompb.ActorDirs, containerID string) (string, error) {
 	for _, staged := range []struct{ host, guest string }{
-		{ateompath.DurableDirVolumeMountsDir(actorUID), path.Join(GuestSharedDir, ShareDurable)},
-		{ateompath.VolumesDir(actorUID), path.Join(GuestSharedDir, ShareCSI)},
-		{ateompath.SystemInfoVolumeRootsDir(actorUID), path.Join(GuestSharedDir, ShareSystemInfo)},
-		{ateompath.ImageVolumeMountPath(actorUID, containerID, ""), path.Join(GuestSharedDir, containerID, ShareVolumes)},
+		{actorDirs.GetDurableDirVolumeMountsDir(), path.Join(GuestSharedDir, ShareDurable)},
+		{actorDirs.GetVolumesDir(), path.Join(GuestSharedDir, ShareCSI)},
+		{actorDirs.GetSystemInfoVolumeRootsDir(), path.Join(GuestSharedDir, ShareSystemInfo)},
+		{imagecache.ImageVolumeMountPath(filepath.Join(actorDirs.GetOciBundleDir(), containerID), ""), path.Join(GuestSharedDir, containerID, ShareVolumes)},
 	} {
+		// An unset directory must not turn into a prefix every path matches.
+		if !filepath.IsAbs(staged.host) {
+			continue
+		}
 		if rel, ok := strings.CutPrefix(hostPath, staged.host+"/"); ok {
 			return path.Join(staged.guest, rel), nil
 		}

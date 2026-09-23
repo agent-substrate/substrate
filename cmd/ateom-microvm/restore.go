@@ -30,7 +30,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -79,6 +78,9 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 // Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
 // and the durable-dir volume directories re-created (empty).
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -98,6 +100,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	p := actorBootParams{
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
+		actorDirs:        req.GetActorDirs(),
 		templateAtespace: req.GetActorTemplateAtespace(),
 		templateName:     req.GetActorTemplateName(),
 		containers:       req.GetSpec().GetContainers(),
@@ -105,8 +108,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		egressGateway:    req.GetEgressGateway(),
 		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
-	restoreDir := ateompath.RestoreStateDir(p.actorUID)
-	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
+	restoreDir := p.actorDirs.GetRestoreDir()
+	durableDir := p.actorDirs.GetDurableDirVolumeMountsDir()
 	tStart := time.Now()
 
 	attribution := p.actorAttribution()
@@ -212,7 +215,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(actorUID), restoreDir)
+		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir)
 	}()
 	defer func() {
 		if !untarJoined {
@@ -234,7 +237,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if len(containers) > maxActorContainers {
 		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(actorUID, containers)
+	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
 	if err != nil {
 		return err
 	}
@@ -248,7 +251,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return untarErr
 	}
 	tUpper := time.Now()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, ctrs, containers)
+	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers)
 	if err != nil {
 		return err
 	}
@@ -279,7 +282,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
-			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.Any("err", err))
 			}
 		}

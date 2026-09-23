@@ -58,6 +58,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 var (
@@ -593,6 +594,14 @@ func (s *AteomService) deactivateActorNetworking(ctx context.Context) error {
 	err := errors.Join(s.atunnelIngress.Deactivate(ctx), s.atunnelEgress.Deactivate(ctx))
 	if err != nil {
 		return fmt.Errorf("while deactivating actor networking: %w", err)
+	}
+	return nil
+}
+
+// validateActorDirs rejects a request whose actor directories are unusable.
+func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
+	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }

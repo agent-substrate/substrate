@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -29,12 +29,20 @@ import (
 // parityOptions mounts one volume of every kind.
 const testActorUID = "actor_uid"
 
+var parityActorDirs = &ateompb.ActorDirs{
+	RootDir:                   "/node/actors/a",
+	OciBundleDir:              "/node/actors/a/bundles",
+	DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
+	SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
+	VolumesDir:                "/node/actors/a/volumes",
+}
+
 var parityOptions = Options{
 	Args:                      []string{"/app"},
-	DurableDirVolumeMountsDir: ateompath.DurableDirVolumeMountsDir(testActorUID),
-	VolumesDir:                ateompath.VolumesDir(testActorUID),
-	SystemInfoVolumeRootsDir:  ateompath.SystemInfoVolumeRootsDir(testActorUID),
-	BundlePath:                ateompath.OCIBundlePath(testActorUID, "app"),
+	DurableDirVolumeMountsDir: parityActorDirs.GetDurableDirVolumeMountsDir(),
+	VolumesDir:                parityActorDirs.GetVolumesDir(),
+	SystemInfoVolumeRootsDir:  parityActorDirs.GetSystemInfoVolumeRootsDir(),
+	BundlePath:                parityActorDirs.GetOciBundleDir() + "/app",
 	Volumes: []*ateletpb.Volume{
 		durableVolume("data"),
 		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
@@ -79,7 +87,7 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	}, {
 		runtime: "microvm",
 		shape: func(s *specs.Spec) error {
-			return ShapeMicroVM(s, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"})
+			return ShapeMicroVM(s, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"})
 		},
 	}} {
 		t.Run(tc.runtime, func(t *testing.T) {
@@ -109,7 +117,7 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 // ShapeMicroVM rewrites bind sources to their guest share paths.
 func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 	spec := Build(parityOptions)
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 	for _, tc := range []struct{ dest, wantSource string }{
@@ -132,8 +140,16 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 	spec := Build(Options{Args: []string{"/app"}})
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"}); err == nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")
+	}
+}
+
+// With no actor directories nothing is staged, so every volume bind errors.
+func TestShapeMicroVM_UnsetDirsStageNothing(t *testing.T) {
+	spec := Build(parityOptions)
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: &ateompb.ActorDirs{}, ContainerID: "app"}); err == nil {
+		t.Fatal("ShapeMicroVM() = nil, want an error when no directory is staged")
 	}
 }
 

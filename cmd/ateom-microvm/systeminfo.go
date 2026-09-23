@@ -21,7 +21,7 @@
 // so its contents always describe the actor actually being started, whatever
 // checkpointed state it boots from. The host side is owned by atelet, which
 // creates one directory per volume under
-// ateompath.SystemInfoVolumeRootsDir(actorUID) and wipes/rebuilds them when
+// ActorDirs.system_info_volume_roots_dir and wipes/rebuilds them when
 // the actor's directories are reset.
 //
 // ateom exposes that host directory to the guest under the single kataShared
@@ -51,7 +51,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
@@ -71,8 +70,7 @@ func hasSystemInfoVolumes(containers []*ateompb.Container) bool {
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/system-info,
 // then remounts the bind read-only: atelet is the only writer, and it writes
 // the host source directly, never through the share.
-func (s *AteomService) stageSystemInfoVolumes(ctx context.Context, actorUID string) error {
-	src := ateompath.SystemInfoVolumeRootsDir(actorUID)
+func (s *AteomService) stageSystemInfoVolumes(ctx context.Context, actorUID, src string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking system-info volumes dir %q: %w", src, err)
 	}
