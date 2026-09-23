@@ -181,10 +181,9 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 		}
 		if hosted {
 			if terr := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); terr != nil {
-				// A terminate that comes back with a crash directive lands the
-				// actor in CRASHED, which the user can revert again — that retry
-				// needs no live worker.
-				return maybeCrashActor(ctx, w.store, actorRef, terr, "while terminating the actor's workload", ateattr.OperationRevert)
+				// A failed terminate lands the actor in CRASHED, which the user
+				// can revert again — that retry needs no live worker.
+				return crashActorOnError(ctx, w.store, actorRef, terr, ateattr.OperationRevert)
 			}
 			if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
 				return err

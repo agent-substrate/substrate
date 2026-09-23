@@ -541,7 +541,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
 			t.Errorf("missing-object error wrongly tagged ReasonInvalidSandboxAsset: %v", err)
 		}
-		// The extracted (outermost) Reason drives CrashIfReason's ErrorInfo;
+		// The extracted (outermost) Reason labels the resulting crash;
 		// it must be the client tag, not a fetchAsset blanket wrap.
 		if r, ok := errors.AsType[ateerrors.Reason](err); !ok || r != ateerrors.ReasonFailedGetExternalObject {
 			t.Errorf("extracted reason = %v (ok=%v), want ReasonFailedGetExternalObject", r, ok)
@@ -560,7 +560,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		}
 	})
 
-	t.Run("network error stays untagged (retriable)", func(t *testing.T) {
+	t.Run("network error stays untagged", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
@@ -568,9 +568,9 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted a failing open")
 		}
-		// A transient open failure must carry no Reason at all: any tag here
-		// is claimed by CrashIfReason in Checkpoint/Restore and would mark a
-		// recoverable actor CRASHED instead of letting the control plane retry.
+		// A transient open failure must carry no Reason at all: a tag here
+		// would mislabel the resulting crash as a terminal asset failure in
+		// the ate.actor.crashes metric instead of UNKNOWN.
 		if r, ok := errors.AsType[ateerrors.Reason](err); ok {
 			t.Errorf("network error wrongly tagged with reason %v: %v", r, err)
 		}
@@ -1483,9 +1483,6 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		if got := status.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition for a scope-less manifest", got, err)
 		}
-		if ateerrors.ActorCrashRequested(err) {
-			t.Error("scope-less manifest requests an actor crash; the actor is still resumable")
-		}
 		if len(store.keys()) != 0 {
 			t.Errorf("objects uploaded despite rejection: %v", store.keys())
 		}
@@ -1506,18 +1503,15 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
-		if got := status.Code(err); got != codes.DataLoss {
-			t.Fatalf("status.Code = %v (err %v), want DataLoss", got, err)
-		}
-		if !ateerrors.ActorCrashRequested(err) {
-			t.Error("error does not request an actor crash")
+		if err == nil {
+			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
 		if got := ateerrors.ExtractReason(err); got != string(ateerrors.ReasonLocalSnapshotGone) {
 			t.Errorf("reason = %q, want %q", got, ateerrors.ReasonLocalSnapshotGone)
 		}
 	})
 
-	t.Run("upload failure is a plain retryable error", func(t *testing.T) {
+	t.Run("upload failure is a plain untagged error", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: errors.New("boom")}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
@@ -1528,8 +1522,10 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
-		if ateerrors.ActorCrashRequested(err) {
-			t.Error("upload failure requests an actor crash; must stay retryable")
+		// A transient upload failure must carry no Reason: the resulting crash
+		// counts as UNKNOWN, not as a terminal snapshot failure.
+		if got := ateerrors.ExtractReason(err); got != "" {
+			t.Errorf("reason = %q, want no reason on a transient upload failure", got)
 		}
 	})
 }

@@ -24,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
@@ -98,6 +97,21 @@ func TestStatusErrorInterceptor(t *testing.T) {
 	}
 }
 
+// statusWithErrorInfo builds a status error carrying an AIP-193 ErrorInfo
+// detail, standing in for a structured error built by an upstream service.
+func statusWithErrorInfo(t *testing.T, code codes.Code, reason string, md map[string]string) error {
+	t.Helper()
+	st, err := status.New(code, "boom").WithDetails(&epb.ErrorInfo{
+		Domain:   "substrate.dev",
+		Reason:   reason,
+		Metadata: md,
+	})
+	if err != nil {
+		t.Fatalf("WithDetails: %v", err)
+	}
+	return st.Err()
+}
+
 // errorInfoOf returns the ErrorInfo detail carried by err, or nil if none.
 func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
 	t.Helper()
@@ -114,9 +128,8 @@ func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
 }
 
 // TestInternalServerUnaryInterceptorPreservesDetails verifies the interceptor
-// returns structured errors (from NewGRPCError) intact — preserving the code and
-// the ErrorInfo carrying the Reason — while collapsing plain errors to Internal
-// with no ErrorInfo detail.
+// returns status errors intact — preserving the code and any ErrorInfo detail —
+// and collapses plain errors to Internal with no ErrorInfo.
 func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -127,10 +140,22 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	}{
 		{
 			name:          "structured error keeps code and reason",
-			handlerErr:    ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), errors.New("boom")),
+			handlerErr:    statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil),
 			wantCode:      codes.DataLoss,
-			wantReason:    string(ateerrors.ReasonFaileSaveSnapshot),
+			wantReason:    "FAILED_SAVE_SNAPSHOT",
 			wantErrorInfo: true,
+		},
+		{
+			name:          "wrapped plain error collapses to Internal with no ErrorInfo",
+			handlerErr:    fmt.Errorf("while parsing manifest: %w", errors.New("bad json")),
+			wantCode:      codes.Internal,
+			wantErrorInfo: false,
+		},
+		{
+			name:          "error wrapping a status keeps its code",
+			handlerErr:    fmt.Errorf("while calling downstream: %w", status.Error(codes.Unavailable, "backend down")),
+			wantCode:      codes.Unavailable,
+			wantErrorInfo: false,
 		},
 		{
 			name:          "plain error collapses to Internal with no ErrorInfo",
@@ -179,7 +204,7 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 // must survive the public wire, even when the status is wrapped.
 func TestServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	metadata := map[string]string{"want": "0.2.0", "have": "0.1.0"}
-	structuredErr := ateerrors.NewGRPCError(context.Background(), codes.FailedPrecondition, ateerrors.ReasonInvalidCheckpointResult, metadata, errors.New("refused"))
+	structuredErr := statusWithErrorInfo(t, codes.FailedPrecondition, "INVALID_CHECKPOINT_RESULT", metadata)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("outer error: %w", structuredErr)
@@ -199,7 +224,7 @@ func TestServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	if info == nil {
 		t.Fatal("status is missing the ErrorInfo detail")
 	}
-	if got, want := info.GetReason(), string(ateerrors.ReasonInvalidCheckpointResult); got != want {
+	if got, want := info.GetReason(), "INVALID_CHECKPOINT_RESULT"; got != want {
 		t.Errorf("ErrorInfo.Reason = %q, want %q", got, want)
 	}
 	for k, want := range metadata {

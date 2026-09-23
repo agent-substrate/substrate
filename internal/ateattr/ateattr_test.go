@@ -15,7 +15,6 @@
 package ateattr
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -23,6 +22,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -737,6 +737,20 @@ func TestNormalizeSandboxClass(t *testing.T) {
 	}
 }
 
+// statusWithReason builds a status error carrying the reason as an AIP-193
+// ErrorInfo detail, standing in for a peer that stamps the detail on the wire.
+func statusWithReason(t *testing.T, reason string) error {
+	t.Helper()
+	st, err := status.New(codes.DataLoss, "boom").WithDetails(&epb.ErrorInfo{
+		Domain: "substrate.dev",
+		Reason: reason,
+	})
+	if err != nil {
+		t.Fatalf("WithDetails: %v", err)
+	}
+	return st.Err()
+}
+
 // TestFailureReason pins the error-to-label mapping: only the registered
 // ateerrors taxonomy may reach the label, so anything unclassified collapses
 // onto UNKNOWN instead of leaking an unbounded error message.
@@ -758,7 +772,7 @@ func TestFailureReason(t *testing.T) {
 		},
 		{
 			name: "gRPC status carrying the reason as an ErrorInfo detail",
-			err:  ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, nil, errors.New("no space left on device")),
+			err:  statusWithReason(t, string(ateerrors.ReasonTerminalFileSystemError)),
 			want: string(ateerrors.ReasonTerminalFileSystemError),
 		},
 		{
