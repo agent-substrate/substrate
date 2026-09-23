@@ -49,12 +49,12 @@ containers:
   # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info
     mountPath: /run/ate
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
     # See ../counter/counter-microvm-template.yaml.tmpl: a micro-VM guest needs
-    # more than readyz's 30s default once CI's single kind node is under load.
+    # more than the wakeup probe's 30s default once CI's single kind node is under load.
     timeoutSeconds: 120
 volumes:
 - name: system-info

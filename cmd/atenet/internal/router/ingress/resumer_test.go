@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -149,9 +150,89 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if got := status.Code(err); got != codes.NotFound {
 			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
 		}
-		if outcome != ResumeOutcomeNone {
-			t.Errorf("expected outcome %q on error, got %q", ResumeOutcomeNone, outcome)
+		if outcome != ResumeOutcomeUnknown {
+			t.Errorf("expected outcome %q on a failed resume, got %q", ResumeOutcomeUnknown, outcome)
 		}
+	})
+
+	t.Run("CallerContextCanceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		// The caller selects on its own context and on the flight's completion.
+		// Hold the flight open for the whole call, so only the cancellation can
+		// be ready. A flight that can finish first makes both cases ready, and
+		// the select picks one of them at random.
+		gate := make(chan struct{})
+		defer close(gate)
+
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				<-gate
+				return &ateapipb.ResumeActorResponse{Resumed: true}, nil
+			},
+		}
+
+		resumer := NewActorResumer(mock)
+		_, outcome, err := resumer.ResumeActor(ctx, testActorRef)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+		if outcome != ResumeOutcomeUnknown {
+			t.Errorf("expected outcome %q on a canceled caller, got %q", ResumeOutcomeUnknown, outcome)
+		}
+	})
+
+	// A failed resume tells no caller whether an activation ran — the leader no
+	// more than the joiners — so every caller on the flight reports "unknown".
+	t.Run("SingleflightDeduplication_FailedFlight", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			const concurrentRequests = 10
+			var resumeCalled atomic.Int32
+			gate := make(chan struct{})
+
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+					resumeCalled.Add(1)
+					<-gate
+					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+				},
+			}
+
+			resumer := NewActorResumer(mock)
+
+			var wg sync.WaitGroup
+			outcomes := make([]ResumeOutcome, concurrentRequests)
+			errs := make([]error, concurrentRequests)
+
+			wg.Add(concurrentRequests)
+			for i := 0; i < concurrentRequests; i++ {
+				go func(idx int) {
+					defer wg.Done()
+					_, outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
+				}(i)
+			}
+			// synctest.Wait returns once every caller is parked on the flight,
+			// so the release below cannot beat one of them to it. The flight
+			// leaves the registry when it completes, so a caller that arrived
+			// after that would start its own RPC and fail the count below.
+			synctest.Wait()
+			close(gate)
+			wg.Wait()
+
+			for i := 0; i < concurrentRequests; i++ {
+				if got := status.Code(errs[i]); got != codes.ResourceExhausted {
+					t.Fatalf("request %d expected ResourceExhausted, got %v", i, errs[i])
+				}
+				if outcomes[i] != ResumeOutcomeUnknown {
+					t.Errorf("request %d: expected outcome %q on a failed flight, got %q", i, ResumeOutcomeUnknown, outcomes[i])
+				}
+			}
+
+			if calls := resumeCalled.Load(); calls != 1 {
+				t.Errorf("ResumeActor calls = %d, want 1 for %d concurrent callers", calls, concurrentRequests)
+			}
+		})
 	})
 
 	t.Run("SingleflightDeduplication_Disambiguation", func(t *testing.T) {
@@ -713,8 +794,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
 				t.Fatalf("expected a 503 router-at-capacity denial, got %v", err)
 			}
-			if outcome != ResumeOutcomeNone {
-				t.Errorf("shed caller outcome = %q, want %q", outcome, ResumeOutcomeNone)
+			if outcome != ResumeOutcomeUnknown {
+				t.Errorf("shed caller outcome = %q, want %q", outcome, ResumeOutcomeUnknown)
 			}
 			// The caller was turned away at the transition: exactly one attempt
 			// had run.
@@ -778,8 +859,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
 				t.Fatalf("joiner: expected a 503 router-at-capacity denial, got %v", err)
 			}
-			if outcome != ResumeOutcomeNone {
-				t.Errorf("joiner outcome = %q, want %q", outcome, ResumeOutcomeNone)
+			if outcome != ResumeOutcomeUnknown {
+				t.Errorf("joiner outcome = %q, want %q", outcome, ResumeOutcomeUnknown)
 			}
 
 			close(proceed)

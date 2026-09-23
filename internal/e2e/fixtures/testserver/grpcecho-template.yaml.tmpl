@@ -37,10 +37,10 @@ containers:
   - "grpc"
   - "--listen=:80"
   - "--health-listen=:8080"
-  # readyz is an HTTP GET and nothing else, and a gRPC server answers one with
+  # wakeupProbe is an HTTP GET and nothing else, and a gRPC server answers one with
   # a protocol error -- hence the fixture's second, HTTP-only port. Probing :80
   # here would leave the Actor stuck out of PhaseReady forever.
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 8080

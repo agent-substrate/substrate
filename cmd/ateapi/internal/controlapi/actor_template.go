@@ -211,7 +211,7 @@ func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resou
 	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
 }
 
-// httpGetPathRE constrains readyz paths to RFC 3986 path-segment
+// httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
 // characters only, with well-formed percent-escapes, and no query string
 // or fragment.
 var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)

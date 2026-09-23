@@ -25,7 +25,7 @@ workerSelector:
 containers:
 - name: counter
   image: ko://github.com/agent-substrate/substrate/demos/counter
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

@@ -34,7 +34,7 @@ func TestPrefaultsUnconditionally(t *testing.T) {
 		{"suffixed", VMMInfo{Version: "53.0.0-dirty"}, true},
 
 		// Unknown means eager: a wrong guess toward eager costs memory, a wrong guess
-		// toward OnDemand leaves the guest unable to pass its readiness probe.
+		// toward OnDemand leaves the guest unable to pass its wakeup probe.
 		{"empty", VMMInfo{}, true},
 		{"garbage", VMMInfo{Version: "not-a-version"}, true},
 		{"partial garbage", VMMInfo{Version: "53.x.0"}, true},

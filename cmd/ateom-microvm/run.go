@@ -37,9 +37,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
+	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -299,7 +299,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Retain the attribution before the boot rather than after it, so a sample
 	// taken against a workload that dies mid-boot is still attributable. A cold
 	// boot can take a while and can be retried, and an actor that never reaches
-	// readyz is one whose usage is worth reporting rather than the one case that
+	// wakeup probe is one whose usage is worth reporting rather than the one case that
 	// reports nothing. The defer drops it again if the boot fails outright.
 	// Matches ateom-gvisor's RunWorkload.
 	s.activeActor.Store(&attribution)
@@ -587,9 +587,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}
 	tContainers := time.Now()
 
-	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
-		return fmt.Errorf("while waiting for container readyz: %w", err)
+	// Block until every wakeup-probe-enabled container reports 200.
+	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
+		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
 	// Everything from BootVM onward, split. ateom used to log only the total, which
@@ -598,7 +598,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		slog.Duration("vsock_wait", tVsock.Sub(tBooted)),
 		slog.Duration("agent_dial", tDialed.Sub(tVsock)),
 		slog.Duration("containers", tContainers.Sub(tDialed)),
-		slog.Duration("readyz", time.Since(tContainers)),
+		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
 	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}

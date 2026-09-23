@@ -161,7 +161,7 @@ message WorkloadSpec {
 
 message Container {
   string name = 1;
-  Readyz readyz = 2;
+  WakeupProbe wakeup_probe = 2;
 
   // Field 3 was durable_dir_volumes: the mount paths alone, which only worked
   // while an actor was limited to a single durable-dir volume.
@@ -220,9 +220,9 @@ message ImageVolumeMount {
   string mount_path = 2;
 }
 
-// Readyz describes how to check that a container is ready to serve.
+// WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
-message Readyz {
+message WakeupProbe {
   HTTPGetAction http_get = 1;
   // How long to keep polling before giving up and failing the actor start.
   int32 timeout_seconds = 2;

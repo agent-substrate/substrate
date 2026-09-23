@@ -16,9 +16,17 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // Teardown walks a fixed list of manifests covering every install shape, so a
@@ -51,5 +59,102 @@ func TestDeletePathReportsUnparseableManifest(t *testing.T) {
 
 	if err := (&Client{}).DeletePath(context.Background(), path); err == nil {
 		t.Error("DeletePath() = nil, want an error for an unparseable manifest")
+	}
+}
+
+// stubResource is a dynamicResource whose Apply returns queued results.
+type stubResource struct {
+	results  []error
+	attempts int
+}
+
+func (s *stubResource) Apply(context.Context, string, *unstructured.Unstructured, metav1.ApplyOptions, ...string) (*unstructured.Unstructured, error) {
+	s.attempts++
+	if s.attempts <= len(s.results) {
+		return nil, s.results[s.attempts-1]
+	}
+	return nil, nil
+}
+
+func (s *stubResource) Delete(context.Context, string, metav1.DeleteOptions, ...string) error {
+	return nil
+}
+
+func (s *stubResource) Get(context.Context, string, metav1.GetOptions, ...string) (*unstructured.Unstructured, error) {
+	return nil, nil
+}
+
+func testConfigMap() *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion("v1")
+	obj.SetKind("ConfigMap")
+	obj.SetNamespace("ate-system")
+	obj.SetName("ate-api-server-envvars")
+	return obj
+}
+
+// shortApplyBackoff keeps the retry tests from sleeping through the real one.
+func shortApplyBackoff(t *testing.T) {
+	t.Helper()
+	original := applyBackoff
+	applyBackoff = wait.Backoff{Steps: original.Steps, Duration: time.Millisecond, Factor: 1.0}
+	t.Cleanup(func() { applyBackoff = original })
+}
+
+// The two failures that routinely hit an apply -- a webhook whose pod is still
+// starting, and an object racing the propagation of the CRD or namespace that
+// admits it -- used to end the install on the first response.
+func TestApplyWithRetryRetriesTransientFailures(t *testing.T) {
+	shortApplyBackoff(t)
+
+	ri := &stubResource{results: []error{
+		apierrors.NewInternalError(errors.New("failed calling webhook: connection refused")),
+		apierrors.NewServiceUnavailable("apiserver is starting"),
+		apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "ate-api-server-envvars", errors.New("the object has been modified")),
+	}}
+
+	if err := applyWithRetry(t.Context(), ri, testConfigMap()); err != nil {
+		t.Fatalf("applyWithRetry() error = %v, want the retries to succeed", err)
+	}
+	if want := len(ri.results) + 1; ri.attempts != want {
+		t.Errorf("apply attempted %d times, want %d", ri.attempts, want)
+	}
+}
+
+// Retrying a rejection only delays the report, and the message the operator
+// needs has to survive the retry wrapper.
+func TestApplyWithRetryReportsRejections(t *testing.T) {
+	shortApplyBackoff(t)
+
+	ri := &stubResource{results: []error{
+		apierrors.NewInvalid(schema.GroupKind{Kind: "ConfigMap"}, "ate-api-server-envvars", nil),
+	}}
+
+	err := applyWithRetry(t.Context(), ri, testConfigMap())
+	if !apierrors.IsInvalid(err) {
+		t.Fatalf("applyWithRetry() error = %v, want the Invalid reported unchanged", err)
+	}
+	if ri.attempts != 1 {
+		t.Errorf("apply attempted %d times, want 1", ri.attempts)
+	}
+}
+
+// Retrying past a cancelled context turns ^C into an eight-second wait.
+func TestApplyWithRetryStopsOnCancellation(t *testing.T) {
+	shortApplyBackoff(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	ri := &stubResource{results: []error{
+		apierrors.NewServiceUnavailable("apiserver is starting"),
+		apierrors.NewServiceUnavailable("apiserver is starting"),
+	}}
+
+	if err := applyWithRetry(ctx, ri, testConfigMap()); err == nil {
+		t.Fatal("applyWithRetry() succeeded, want the first error returned")
+	}
+	if ri.attempts != 1 {
+		t.Errorf("apply attempted %d times, want 1", ri.attempts)
 	}
 }

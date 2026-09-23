@@ -20,21 +20,19 @@
 #
 # Produces, under $OUT, the four assets named as the SandboxConfig expects:
 #   cloud-hypervisor  virtiofsd  vmlinux  rootfs.img
-# The DOWNLOADED assets are reproducible, so paste their sha256 sums into the
-# manifest (demos/counter/counter-microvm.yaml.tmpl). That now includes virtiofsd on
-# amd64 (upstream prebuilt); on arm64 virtiofsd is still built from source
-# (non-reproducible bytes), so its sha is NOT pinned there — run-microvm-demo.sh
-# computes it from the staged binary and injects it at deploy.
+# Every asset is downloaded rather than built, so all four have reproducible bytes:
+# paste their sha256 sums into the manifest
+# (manifests/microvm/sandboxconfig-microvm.yaml.tmpl).
 #
 # ateom drives the kata-agent directly (the kata containerd shim is NOT an asset). The
 # actor rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper), so virtiofsd IS an
-# asset; kata-static (4.0.0 included) still bundles virtiofsd v1.13.3, whose old vhost
-# hangs CH's restore handshake, so we take virtiofsd v1.14.0 — the first release with
-# the vhost-0.16 / vhost-user-backend-0.22 snapshot-restore fix (REPLY_ACK). Upstream
-# publishes a prebuilt static binary for x86_64 only; arm64 builds from the release
-# tag, which needs rust (rustup) + libcap-ng-dev libseccomp-dev pkg-config.
+# asset. CH's restore handshake hangs against virtiofsd v1.13.3, which kata bundled up
+# to and including 4.0.0; kata 4.1.0 bundles v1.14.0, the first release carrying the
+# vhost-0.16 / vhost-user-backend-0.22 snapshot-restore fix (REPLY_ACK). So virtiofsd
+# now comes out of kata-static with the kernel and rootfs instead of being sourced
+# separately per arch.
 #
-# Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.0.0), CH_VER (v53.0),
+# Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.1.0), CH_VER (v53.0),
 #      OUT (default ./bin/microvm-assets/$ARCH, under the gitignored bin/).
 #
 # Always re-downloads and overwrites — there is no incremental mode. It clears
@@ -49,11 +47,13 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 
 ARCH="${ARCH:-arm64}"
-KATA_VER="${KATA_VER:-4.0.0}"
+KATA_VER="${KATA_VER:-4.1.0}"
 CH_VER="${CH_VER:-v53.0}"
-# Not env-overridable: the amd64 prebuilt zip URL and its sha below are pinned to
-# this exact release, so bumping it means editing all three together.
-VIRTIOFSD_VER="v1.14.0"
+# Not env-overridable: this is whatever KATA_VER bundles. It is declared rather than
+# read off the binary because --print-stamp has to answer before anything is
+# downloaded, and checked against the extracted binary below so it cannot drift from
+# what kata ships.
+VIRTIOFSD_VER="1.14.0"
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 
 case "$ARCH" in
@@ -66,7 +66,9 @@ esac
 # $OUT and re-written to $OUT/$STAMP_FILE on success; install-microvm-deps.sh compares
 # it against what the current checkout would build, because the filenames stay the
 # same when a pin moves and an asset dir from an older checkout is otherwise
-# indistinguishable from a current one.
+# indistinguishable from a current one. virtiofsd is stamped even though KATA_VER
+# already determines it: its version is what the CH restore handshake turns on, so the
+# dir should say which one it holds.
 STAMP_FILE=".asset-versions"
 asset_stamp() {
   printf 'arch=%s\nkata=%s\ncloud-hypervisor=%s\nvirtiofsd=%s\n' \
@@ -98,48 +100,14 @@ KROOT="kata/opt/kata"
 
 cp "$(readlink -f "${KROOT}/share/kata-containers/vmlinux.container")" "${OUT}/vmlinux"
 cp "$(readlink -f "${KROOT}/share/kata-containers/kata-containers.img")" "${OUT}/rootfs.img"
+# Statically linked, so it runs as-is outside the kata layout it is packaged for.
+cp "${KROOT}/libexec/virtiofsd" "${OUT}/virtiofsd"
+chmod +x "${OUT}/virtiofsd"
 
 echo ">> Downloading cloud-hypervisor ${CH_VER} (${CH_ASSET})..."
 curl -fSL -o "${OUT}/cloud-hypervisor" \
   "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VER}/${CH_ASSET}"
 chmod +x "${OUT}/cloud-hypervisor"
-
-# virtiofsd v1.14.0 (pinned at the top): first release with the vhost-0.16 /
-# vhost-user-backend-0.22 snapshot-restore fix (REPLY_ACK) — the kata-bundled v1.13.3
-# (old vhost) hangs CH's restore handshake, so this stays a separately-sourced asset.
-# Upstream attaches a prebuilt static binary to the release for x86_64 only; other
-# arches build from the release tag.
-# The x86_64-musl binary attached to the v1.14.0 release notes
-# (https://gitlab.com/virtio-fs/virtiofsd/-/releases/v1.14.0). 21523468 is the
-# gitlab.com project id of virtio-fs/virtiofsd: the /-/project/<id>/uploads/ form
-# is the canonical unauthenticated upload URL (the /<path>/-/uploads/ form the
-# release notes link to 403s outside a browser session). The zip sha is pinned
-# because a bad URL yields a login page, which would otherwise only fail later
-# at unzip.
-VIRTIOFSD_ZIP_URL="https://gitlab.com/-/project/21523468/uploads/f505704014ae7a816e515f2a05a93d8b/virtiofsd-v1.14.0.zip"
-VIRTIOFSD_ZIP_SHA256="2e4fe9571f492b00baa34bc4e708e950039c5da05b830b31a8d179cb6ac8978e"
-if [ "$ARCH" = "amd64" ]; then
-  echo ">> Downloading prebuilt virtiofsd ${VIRTIOFSD_VER} (x86_64-musl)..."
-  curl -fSL -o virtiofsd.zip "${VIRTIOFSD_ZIP_URL}"
-  echo "${VIRTIOFSD_ZIP_SHA256}  virtiofsd.zip" | sha256sum -c -
-  unzip -q -o virtiofsd.zip
-  cp "target/x86_64-unknown-linux-musl/release/virtiofsd" "${OUT}/virtiofsd"
-else
-  echo ">> Building virtiofsd ${VIRTIOFSD_VER} (no upstream prebuilt for ${ARCH})..."
-  # Build deps (Debian): apt-get install -y git libcap-ng-dev libseccomp-dev pkg-config; rust via rustup.
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "cargo not found; install rust (rustup) + libcap-ng-dev libseccomp-dev pkg-config" >&2
-    exit 1
-  fi
-  git clone --depth 1 --branch "${VIRTIOFSD_VER}" https://gitlab.com/virtio-fs/virtiofsd.git
-  (
-    cd virtiofsd
-    grep -E '^(vhost|vhost-user-backend) =' Cargo.toml   # expect vhost 0.16 / backend 0.22
-    cargo build --release
-  )
-  cp "virtiofsd/target/release/virtiofsd" "${OUT}/virtiofsd"
-fi
-chmod +x "${OUT}/virtiofsd"
 
 echo
 echo ">> Assets assembled in ${OUT}:"
@@ -147,12 +115,23 @@ cd "${OUT}"
 for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
   [ -f "$f" ] || { echo "MISSING: $f" >&2; exit 1; }
 done
-# Written only once all four are present, and only after the up-front rm, so the stamp
-# exists exactly when this dir was assembled end-to-end by these pins.
+# The stamp names a virtiofsd version, so confirm the tarball carried that one before
+# writing it: a kata-side bump would otherwise stamp a version this dir does not hold.
+# Only checkable where the binary runs, and assembling for another arch (or on macOS)
+# is legitimate, so a binary this host cannot exec is skipped rather than fatal.
+if GOT_VIRTIOFSD="$("${OUT}/virtiofsd" --version 2>/dev/null | head -1 | awk '{print $2}')" \
+   && [ -n "${GOT_VIRTIOFSD}" ]; then
+  if [ "${GOT_VIRTIOFSD}" != "${VIRTIOFSD_VER}" ]; then
+    echo "kata ${KATA_VER} bundles virtiofsd ${GOT_VIRTIOFSD}, not ${VIRTIOFSD_VER}: update VIRTIOFSD_VER" >&2
+    exit 1
+  fi
+  echo "virtiofsd ${GOT_VIRTIOFSD}"
+fi
+# Written only once all four are present and virtiofsd matches, and only after the
+# up-front rm, so the stamp exists exactly when this dir was assembled end-to-end by
+# these pins.
 asset_stamp > "${OUT}/${STAMP_FILE}"
-"${OUT}/virtiofsd" --version 2>/dev/null | head -1 || true
 echo
-echo ">> sha256 (paste the DOWNLOADED assets into counter-microvm.yaml.tmpl; that"
-echo ">> includes virtiofsd on amd64 (prebuilt). The arm64 virtiofsd is built from"
-echo ">> source, so its sha is injected at deploy by run-microvm-demo.sh, not pinned):"
+echo ">> sha256 (paste all four into the per-arch block in"
+echo ">> manifests/microvm/sandboxconfig-microvm.yaml.tmpl):"
 sha256sum cloud-hypervisor virtiofsd vmlinux rootfs.img

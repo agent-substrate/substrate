@@ -24,10 +24,8 @@
 # On --install: assembles the asset set (assemble.sh; skipped if OUT already
 # has them), stages the assets under kata-assets/ to the cluster's object
 # store bucket (rustfs on kind, GCS on GKE), and applies the cluster-wide
-# `microvm` SandboxConfig referencing those assets. The virtiofsd
-# sha256 is computed from the staged binary and injected at apply time (on
-# arm64 the v1.14.0 binary is built from source, so its bytes vary per
-# toolchain and cannot be pinned in the manifest).
+# `microvm` SandboxConfig referencing those assets. Every asset sha256 is
+# pinned in the manifest, so the apply only substitutes the bucket name.
 #
 # ActorTemplates must reference the SandboxConfig explicitly via
 # sandboxConfig.configName: microvm. This avoids a dirty teardown silently
@@ -181,17 +179,10 @@ else
 fi
 
 # --- 3. apply the cluster-wide microvm SandboxConfig -----------------------
-# The arm64 virtiofsd is built from source (release tag in assemble.sh), so
-# its binary bytes are not reproducible across toolchains and its sha can't
-# be a fixed pin in the manifest. Compute it from the freshly-staged binary
-# and inject it, so the deployed SandboxConfig always matches whatever was
-# staged. The downloaded assets (cloud-hypervisor/kernel/rootfs, plus
-# virtiofsd on amd64 where upstream publishes a prebuilt) keep their
-# committed, reproducible per-arch shas.
+# Every asset is downloaded rather than built, so all four carry committed,
+# reproducible per-arch shas and the bucket name is the only substitution left.
 log "Applying microvm SandboxConfig from ${MANIFEST_TEMPLATE}..."
-VIRTIOFSD_SHA256="$(sha256sum "${OUT}/virtiofsd" | awk '{print $1}')"
 sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-    -e "s|\${VIRTIOFSD_SHA256}|${VIRTIOFSD_SHA256}|g" \
     "${MANIFEST_TEMPLATE}" \
   | run_kubectl apply -f -
 

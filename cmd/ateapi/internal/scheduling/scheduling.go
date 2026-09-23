@@ -24,7 +24,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"go.opentelemetry.io/otel/metric"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -77,8 +76,6 @@ type scheduler struct {
 	// intn returns a uniformly distributed random value in [0,n).
 	// Defaults to the global math/rand source
 	intn func(n int) int
-	// Records the number of eligible workers available during scheduling.
-	eligibleWorkers metric.Int64Histogram
 }
 
 // Option configures the Scheduler returned by New.
@@ -106,20 +103,12 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return nil, fmt.Errorf("while listing workers: %w", err)
 	}
 
-	matching := make([]*ateapipb.Worker, 0, len(workers))
 	var candidates []*ateapipb.Worker
 	for _, worker := range workers {
-		if !s.Applies(worker, constraints) {
-			continue
-		}
-		matching = append(matching, worker)
-		if s.HasRoom(worker, constraints) {
+		if s.Applies(worker, constraints) && s.HasRoom(worker, constraints) {
 			candidates = append(candidates, worker)
 		}
 	}
-
-	// Record telemetry on the number of eligible workers per pool/namespace before returning
-	s.recordEligibleWorkers(ctx, matching, constraints)
 
 	if len(candidates) == 0 {
 		return nil, ErrNoCapacity

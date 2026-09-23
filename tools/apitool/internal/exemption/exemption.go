@@ -76,15 +76,28 @@ func Save(path string, exemptions []Exemption) error {
 
 func sortExemptions(exemptions []Exemption) {
 	sort.Slice(exemptions, func(i, j int) bool {
-		a, b := exemptions[i], exemptions[j]
-		if a.Rule != b.Rule {
-			return a.Rule < b.Rule
-		}
-		if a.Subject != b.Subject {
-			return a.Subject < b.Subject
-		}
-		return a.Message < b.Message
+		return less(exemptions[i], exemptions[j])
 	})
+}
+
+func less(a, b Exemption) bool {
+	if a.Rule != b.Rule {
+		return a.Rule < b.Rule
+	}
+	if a.Subject != b.Subject {
+		return a.Subject < b.Subject
+	}
+	return a.Message < b.Message
+}
+
+// CheckSorted reports whether exemptions are in sorted order.
+func CheckSorted(exemptions []Exemption) error {
+	if sort.SliceIsSorted(exemptions, func(i, j int) bool {
+		return less(exemptions[i], exemptions[j])
+	}) {
+		return nil
+	}
+	return errors.New("exemptions are out of order")
 }
 
 // Set tracks a list of exemptions as counts of each distinct Exemption value.

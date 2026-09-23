@@ -37,6 +37,16 @@ import (
 // It matches VERSION_PKG in the Makefile.
 const versionPkg = "github.com/agent-substrate/substrate/internal/version"
 
+// baseImportPaths publishes each image as the last element of its import path,
+// so cmd/atelet becomes $KO_DOCKER_REPO/atelet.
+//
+// ko's default instead appends an md5 of the full import path, which nothing
+// outside ko can predict. images.ImageName is the other half of this: it is
+// how `--image-repo` addresses a published image, and it can only be right if
+// the images were published under this naming. The Makefile passes the same
+// flag, as KO_NAMING.
+const baseImportPaths = "--base-import-paths"
+
 // Runner invokes ko with a fixed repository root and environment.
 type Runner struct {
 	// Root is the repository root; ko runs with this as its working directory.
@@ -84,12 +94,7 @@ func findBinary(root string) (string, error) {
 // path (or from stdinManifest when path is "-") and returns the manifest with
 // image references replaced by digests.
 func (r *Runner) Resolve(ctx context.Context, path string, stdinManifest []byte) ([]byte, error) {
-	args := []string{"resolve", "-f", path}
-	for _, flag := range r.ldflags() {
-		args = append(args, "--ldflags="+flag)
-	}
-
-	cmd := exec.CommandContext(ctx, r.binary, args...)
+	cmd := exec.CommandContext(ctx, r.binary, r.args("resolve", "-f", path)...)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), r.Env...)
 	if path == "-" {
@@ -113,11 +118,7 @@ func (r *Runner) Resolve(ctx context.Context, path string, stdinManifest []byte)
 // references; Build is for the images with no manifest names, such as the ateom
 // worker images a WorkerPool points at through workerImage.
 func (r *Runner) Build(ctx context.Context, importPath string) (string, error) {
-	args := []string{"build", importPath}
-	for _, flag := range r.ldflags() {
-		args = append(args, "--ldflags="+flag)
-	}
-	cmd := exec.CommandContext(ctx, r.binary, args...)
+	cmd := exec.CommandContext(ctx, r.binary, r.args("build", importPath)...)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), r.Env...)
 	var stdout bytes.Buffer
@@ -141,6 +142,17 @@ func (r *Runner) ResolvePath(ctx context.Context, path string) ([]byte, error) {
 // ResolveBytes resolves an in-memory manifest, such as kustomize output.
 func (r *Runner) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	return r.Resolve(ctx, "-", manifest)
+}
+
+// args builds a ko command line: the subcommand and its target, then the flags
+// every invocation carries.
+func (r *Runner) args(subcommand string, target ...string) []string {
+	args := append([]string{subcommand}, target...)
+	args = append(args, baseImportPaths)
+	for _, flag := range r.ldflags() {
+		args = append(args, "--ldflags="+flag)
+	}
+	return args
 }
 
 // ldflags returns the version stamp ko should bake into binaries. The shell

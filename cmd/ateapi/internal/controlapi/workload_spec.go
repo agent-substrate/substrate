@@ -133,7 +133,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 			Image:           ctr.GetImage(),
 			Command:         ctr.GetCommand(),
 			Args:            ctr.GetArgs(),
-			Readyz:          toAteletReadyz(ctr.GetReadyz()),
+			WakeupProbe:     toAteletWakeupProbe(ctr.GetWakeupProbe()),
 			SecurityContext: toAteletSecurityContext(ctr.GetSecurityContext()),
 			Resources:       ctrResources,
 		}
@@ -226,14 +226,14 @@ func toAteletActorMetadataField(in ateapipb.ActorMetadataField) ateletpb.ActorMe
 	}
 }
 
-// toAteletReadyz projects the template readyz field onto the ateletpb wire
+// toAteletWakeupProbe projects the template wakeup probe field onto the ateletpb wire
 // type. Returns nil when the source is nil so containers without a probe
 // stay unchanged on the wire.
-func toAteletReadyz(in *ateapipb.ContainerReadyz) *ateletpb.Readyz {
+func toAteletWakeupProbe(in *ateapipb.ContainerWakeupProbe) *ateletpb.WakeupProbe {
 	if in == nil {
 		return nil
 	}
-	out := &ateletpb.Readyz{TimeoutSeconds: in.GetTimeoutSeconds()}
+	out := &ateletpb.WakeupProbe{TimeoutSeconds: in.GetTimeoutSeconds()}
 	if in.GetHttpGet() != nil {
 		out.HttpGet = &ateletpb.HTTPGetAction{
 			Path: in.GetHttpGet().GetPath(),

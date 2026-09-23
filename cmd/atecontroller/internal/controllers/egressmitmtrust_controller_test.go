@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 )
 
@@ -66,7 +67,7 @@ func secretForPool(t *testing.T, pool *localca.ConcretePool) *corev1.Secret {
 	if err != nil {
 		t.Fatalf("marshal CA pool: %v", err)
 	}
-	ref := EgressMITMCAPoolRef()
+	ref := EgressMITMCAPoolRef(installdefaults.SystemNamespace)
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ref.Namespace, Name: ref.Name},
 		Data:       map[string][]byte{"pool": wire},
@@ -86,8 +87,8 @@ func rootPEM(t *testing.T, pool *localca.ConcretePool) string {
 
 func reconcilePool(t *testing.T, c client.Client) error {
 	t.Helper()
-	r := &EgressMITMTrustReconciler{Client: c}
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: EgressMITMCAPoolRef()})
+	r := &EgressMITMTrustReconciler{Client: c, SystemNamespace: installdefaults.SystemNamespace}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: EgressMITMCAPoolRef(installdefaults.SystemNamespace)})
 	return err
 }
 
@@ -170,7 +171,7 @@ func TestEgressMITMTrustFollowsPoolRotation(t *testing.T) {
 
 	rotated, rotatedPool := caPoolSecret(t, "mitm", "mitm-next")
 	current := &corev1.Secret{}
-	if err := c.Get(context.Background(), EgressMITMCAPoolRef(), current); err != nil {
+	if err := c.Get(context.Background(), EgressMITMCAPoolRef(installdefaults.SystemNamespace), current); err != nil {
 		t.Fatalf("get pool secret: %v", err)
 	}
 	current.Data = rotated.Data
@@ -279,7 +280,7 @@ func TestEgressMITMTrustKeepsLastGoodBundleOnBadPool(t *testing.T) {
 			}
 
 			current := &corev1.Secret{}
-			if err := c.Get(context.Background(), EgressMITMCAPoolRef(), current); err != nil {
+			if err := c.Get(context.Background(), EgressMITMCAPoolRef(installdefaults.SystemNamespace), current); err != nil {
 				t.Fatalf("get pool secret: %v", err)
 			}
 			current.Data = tc.data

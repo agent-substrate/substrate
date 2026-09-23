@@ -644,13 +644,13 @@ func TestRPCBoundariesReject(t *testing.T) {
 	})
 }
 
-func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
+func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{
 			{
 				Name:  "with-probe",
 				Image: "main",
-				Readyz: &ateletpb.Readyz{
+				WakeupProbe: &ateletpb.WakeupProbe{
 					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
@@ -664,7 +664,7 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 		Containers: []*ateompb.Container{
 			{
 				Name: "with-probe",
-				Readyz: &ateompb.Readyz{
+				WakeupProbe: &ateompb.WakeupProbe{
 					HttpGet:        &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},

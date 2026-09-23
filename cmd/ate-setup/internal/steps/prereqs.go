@@ -33,14 +33,14 @@ var trustBundleNames = []string{
 func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	log.Step("ensure_apiserver_prerequisites")
 
-	if err := e.ensureSecret(ctx, NamespaceAteSystem, SecretActorIDJWTPool, e.CreateJWTAuthorityPoolSecret); err != nil {
+	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDJWTPool, e.CreateJWTAuthorityPoolSecret); err != nil {
 		return err
 	}
-	if err := e.ensureSecret(ctx, NamespaceAteSystem, SecretActorIDCAPool, e.CreateActorIDCAPoolSecret); err != nil {
+	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCAPool, e.CreateActorIDCAPoolSecret); err != nil {
 		return err
 	}
 	// Derived from actor-id-ca-pool above, so it must come after it.
-	if err := e.ensureSecret(ctx, NamespaceAteSystem, SecretActorIDCACerts, e.CreateActorIDCACertsSecret); err != nil {
+	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCACerts, e.CreateActorIDCACertsSecret); err != nil {
 		return err
 	}
 	if err := e.ensureSecret(ctx, NamespacePodCert, SecretServiceDNSCA, e.CreatePodCertificateControllerCAs); err != nil {
@@ -52,7 +52,7 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 		return err
 	}
 
-	exists, err := e.Kube.ConfigMapExists(ctx, NamespaceAteSystem, ConfigMapAPIAuthn)
+	exists, err := e.Kube.ConfigMapExists(ctx, e.Namespace(), ConfigMapAPIAuthn)
 	if err != nil {
 		return err
 	}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package readyz
+package wakeupprobe
 
 import (
 	"context"
@@ -37,44 +37,44 @@ import (
 func TestURL(t *testing.T) {
 	tests := []struct {
 		name    string
-		probe   *ateompb.Readyz
+		probe   *ateompb.WakeupProbe
 		actorIP string
 		want    string
 		wantErr bool
 	}{
 		{
 			name:    "missing path",
-			probe:   &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: 8080}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Port: 8080}},
 			actorIP: "169.254.17.2",
 			wantErr: true,
 		},
 		{
 			name:    "explicit path",
-			probe:   &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/health", Port: 9000}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/health", Port: 9000}},
 			actorIP: "169.254.17.2",
 			want:    "http://169.254.17.2:9000/health",
 		},
 		{
 			name:    "path without leading slash is normalized",
-			probe:   &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "ready", Port: 80}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "ready", Port: 80}},
 			actorIP: "10.0.0.1",
 			want:    "http://10.0.0.1:80/ready",
 		},
 		{
 			name:    "missing httpGet",
-			probe:   &ateompb.Readyz{},
+			probe:   &ateompb.WakeupProbe{},
 			actorIP: "1.2.3.4",
 			wantErr: true,
 		},
 		{
 			name:    "port zero",
-			probe:   &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: 0}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Port: 0}},
 			actorIP: "1.2.3.4",
 			wantErr: true,
 		},
 		{
 			name:    "port too large",
-			probe:   &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Port: 70000}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Port: 70000}},
 			actorIP: "1.2.3.4",
 			wantErr: true,
 		},
@@ -103,7 +103,7 @@ func TestWait_ReturnsOnFirst200(t *testing.T) {
 	defer srv.Close()
 
 	ip, port := splitHostPort(t, srv.URL)
-	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
+	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -124,7 +124,7 @@ func TestWait_WaitsForServerToBecomeReady(t *testing.T) {
 	defer srv.Close()
 
 	ip, port := splitHostPort(t, srv.URL)
-	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
+	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	flipAt := time.Now().Add(50 * time.Millisecond)
 	go func() {
@@ -151,7 +151,7 @@ func TestWait_ContextCancellation(t *testing.T) {
 	// Bind a port and immediately close to ensure connect-refused, so the
 	// poll loop is exercised but no server ever returns 200.
 	port := pickFreePort(t)
-	probe := &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
+	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -173,23 +173,23 @@ func TestWait_ContextCancellation(t *testing.T) {
 func TestPollTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
-		probe   *ateompb.Readyz
+		probe   *ateompb.WakeupProbe
 		want    time.Duration
 		wantErr bool
 	}{
 		{
 			name:    "unset is rejected",
-			probe:   &ateompb.Readyz{},
+			probe:   &ateompb.WakeupProbe{},
 			wantErr: true,
 		},
 		{
 			name:  "explicit value is honored",
-			probe: &ateompb.Readyz{TimeoutSeconds: 300},
+			probe: &ateompb.WakeupProbe{TimeoutSeconds: 300},
 			want:  300 * time.Second,
 		},
 		{
 			name:    "negative is rejected",
-			probe:   &ateompb.Readyz{TimeoutSeconds: -1},
+			probe:   &ateompb.WakeupProbe{TimeoutSeconds: -1},
 			wantErr: true,
 		},
 	}
@@ -210,7 +210,7 @@ func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
 	// Nothing ever binds this port, so the poll loop runs until the
 	// probe's own deadline rather than the package default.
 	port := pickFreePort(t)
-	probe := &ateompb.Readyz{
+	probe := &ateompb.WakeupProbe{
 		HttpGet:        &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)},
 		TimeoutSeconds: 1,
 	}
@@ -282,8 +282,8 @@ func pickFreePort(t *testing.T) int {
 func TestWaitAll_ReasonSurvivesTheRPCBoundary(t *testing.T) {
 	port := pickFreePort(t)
 	containers := []*ateompb.Container{{
-		Name:   "main",
-		Readyz: &ateompb.Readyz{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1},
+		Name:        "main",
+		WakeupProbe: &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1},
 	}}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

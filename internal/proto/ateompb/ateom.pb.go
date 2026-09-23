@@ -566,9 +566,9 @@ func (x *WorkloadSpec) GetContainers() []*Container {
 }
 
 type Container struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Name   string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Readyz *Readyz                `protobuf:"bytes,2,opt,name=readyz,proto3" json:"readyz,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	WakeupProbe *WakeupProbe           `protobuf:"bytes,2,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
 	// durable_dir_volume_mounts are the durable-dir volumes this container
 	// mounts, if any.
 	DurableDirVolumeMounts []*DurableDirVolumeMount `protobuf:"bytes,4,rep,name=durable_dir_volume_mounts,json=durableDirVolumeMounts,proto3" json:"durable_dir_volume_mounts,omitempty"`
@@ -621,9 +621,9 @@ func (x *Container) GetName() string {
 	return ""
 }
 
-func (x *Container) GetReadyz() *Readyz {
+func (x *Container) GetWakeupProbe() *WakeupProbe {
 	if x != nil {
-		return x.Readyz
+		return x.WakeupProbe
 	}
 	return nil
 }
@@ -880,9 +880,9 @@ func (x *ImageVolumeMount) GetMountPath() string {
 	return ""
 }
 
-// Readyz describes how to check that a container is ready to serve.
+// WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
-type Readyz struct {
+type WakeupProbe struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// How long to keep polling before giving up and failing the actor start.
@@ -891,20 +891,20 @@ type Readyz struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *Readyz) Reset() {
-	*x = Readyz{}
+func (x *WakeupProbe) Reset() {
+	*x = WakeupProbe{}
 	mi := &file_ateom_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Readyz) String() string {
+func (x *WakeupProbe) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Readyz) ProtoMessage() {}
+func (*WakeupProbe) ProtoMessage() {}
 
-func (x *Readyz) ProtoReflect() protoreflect.Message {
+func (x *WakeupProbe) ProtoReflect() protoreflect.Message {
 	mi := &file_ateom_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -916,19 +916,19 @@ func (x *Readyz) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Readyz.ProtoReflect.Descriptor instead.
-func (*Readyz) Descriptor() ([]byte, []int) {
+// Deprecated: Use WakeupProbe.ProtoReflect.Descriptor instead.
+func (*WakeupProbe) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *Readyz) GetHttpGet() *HTTPGetAction {
+func (x *WakeupProbe) GetHttpGet() *HTTPGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
 	return nil
 }
 
-func (x *Readyz) GetTimeoutSeconds() int32 {
+func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 	if x != nil {
 		return x.TimeoutSeconds
 	}
@@ -1785,10 +1785,10 @@ const file_ateom_proto_rawDesc = "" +
 	"\fWorkloadSpec\x120\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x10.ateom.ContainerR\n" +
-	"containers\"\x9c\x03\n" +
+	"containers\"\xac\x03\n" +
 	"\tContainer\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
-	"\x06readyz\x18\x02 \x01(\v2\r.ateom.ReadyzR\x06readyz\x12W\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x125\n" +
+	"\fwakeup_probe\x18\x02 \x01(\v2\x12.ateom.WakeupProbeR\vwakeupProbe\x12W\n" +
 	"\x19durable_dir_volume_mounts\x18\x04 \x03(\v2\x1c.ateom.DurableDirVolumeMountR\x16durableDirVolumeMounts\x12>\n" +
 	"\x11csi_volume_mounts\x18\x05 \x03(\v2\x12.ateom.VolumeMountR\x0fcsiVolumeMounts\x12W\n" +
 	"\x19system_info_volume_mounts\x18\x06 \x03(\v2\x1c.ateom.SystemInfoVolumeMountR\x16systemInfoVolumeMounts\x12G\n" +
@@ -1812,8 +1812,8 @@ const file_ateom_proto_rawDesc = "" +
 	"\vvolume_name\x18\x01 \x01(\tR\n" +
 	"volumeName\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"b\n" +
-	"\x06Readyz\x12/\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"g\n" +
+	"\vWakeupProbe\x12/\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HTTPGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
@@ -1933,7 +1933,7 @@ var file_ateom_proto_goTypes = []any{
 	(*DurableDirVolumeMount)(nil),          // 10: ateom.DurableDirVolumeMount
 	(*SystemInfoVolumeMount)(nil),          // 11: ateom.SystemInfoVolumeMount
 	(*ImageVolumeMount)(nil),               // 12: ateom.ImageVolumeMount
-	(*Readyz)(nil),                         // 13: ateom.Readyz
+	(*WakeupProbe)(nil),                    // 13: ateom.WakeupProbe
 	(*HTTPGetAction)(nil),                  // 14: ateom.HTTPGetAction
 	(*RunWorkloadResponse)(nil),            // 15: ateom.RunWorkloadResponse
 	(*CheckpointWorkloadRequest)(nil),      // 16: ateom.CheckpointWorkloadRequest
@@ -1955,12 +1955,12 @@ var file_ateom_proto_depIdxs = []int32{
 	25, // 2: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
 	6,  // 3: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	8,  // 4: ateom.WorkloadSpec.containers:type_name -> ateom.Container
-	13, // 5: ateom.Container.readyz:type_name -> ateom.Readyz
+	13, // 5: ateom.Container.wakeup_probe:type_name -> ateom.WakeupProbe
 	10, // 6: ateom.Container.durable_dir_volume_mounts:type_name -> ateom.DurableDirVolumeMount
 	9,  // 7: ateom.Container.csi_volume_mounts:type_name -> ateom.VolumeMount
 	11, // 8: ateom.Container.system_info_volume_mounts:type_name -> ateom.SystemInfoVolumeMount
 	12, // 9: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
-	14, // 10: ateom.Readyz.http_get:type_name -> ateom.HTTPGetAction
+	14, // 10: ateom.WakeupProbe.http_get:type_name -> ateom.HTTPGetAction
 	7,  // 11: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
 	26, // 12: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 13: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope

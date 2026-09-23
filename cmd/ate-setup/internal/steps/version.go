@@ -92,14 +92,14 @@ func (e *Env) SubstituteVersion(manifest []byte) ([]byte, error) {
 
 // RestartAteletDaemonSets pod-restarts every atelet DaemonSet by label.
 func (e *Env) RestartAteletDaemonSets(ctx context.Context) error {
-	list, err := e.Kube.Typed.AppsV1().DaemonSets(NamespaceAteSystem).List(ctx, metav1.ListOptions{
+	list, err := e.Kube.Typed.AppsV1().DaemonSets(e.Namespace()).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=atelet",
 	})
 	if err != nil {
 		return fmt.Errorf("while listing atelet daemonsets: %w", err)
 	}
 	for _, ds := range list.Items {
-		if err := e.Kube.RolloutRestart(ctx, NamespaceAteSystem, ds.Name, time.Now()); err != nil {
+		if err := e.Kube.RolloutRestart(ctx, e.Namespace(), ds.Name, time.Now()); err != nil {
 			return err
 		}
 	}

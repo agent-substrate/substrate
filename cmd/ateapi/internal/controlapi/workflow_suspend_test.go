@@ -21,6 +21,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -206,7 +207,7 @@ func newDanglingDialer() *AteletDialer {
 	empty := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
 		byNode: func(obj any) ([]string, error) { return nil, nil },
 	})
-	return NewAteletDialer(empty, "", "")
+	return NewAteletDialer(empty, installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "")
 }
 
 func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {

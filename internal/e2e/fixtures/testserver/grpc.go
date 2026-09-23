@@ -124,7 +124,7 @@ func newHealthHandler() http.Handler {
 // h2c handler would defeat the point of the egress fixture, where nothing
 // between the actor and here parses HTTP -- so --health-listen puts it on a
 // second port instead, off unless asked for. The ingress Actor needs it because
-// an ActorTemplate's readyz is an HTTP GET and nothing else: a gRPC server
+// an ActorTemplate's wakeupProbe is an HTTP GET and nothing else: a gRPC server
 // answers one with a protocol error, so without it the Actor never boots.
 func newGRPCCmd() *cobra.Command {
 	var listenAddress string
@@ -157,6 +157,6 @@ func newGRPCCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&listenAddress, "listen", ":50051", "Address the gRPC server listens on, cleartext HTTP/2.")
-	cmd.Flags().StringVar(&healthAddress, "health-listen", "", "Address for an HTTP/1.1 /readyz listener. Empty serves no HTTP at all, which is what the egress fixture wants; the ingress Actor sets it because an ActorTemplate readyz is an HTTP GET.")
+	cmd.Flags().StringVar(&healthAddress, "health-listen", "", "Address for an HTTP/1.1 /readyz listener. Empty serves no HTTP at all, which is what the egress fixture wants; the ingress Actor sets it because an ActorTemplate wakeupProbe is an HTTP GET.")
 	return cmd
 }

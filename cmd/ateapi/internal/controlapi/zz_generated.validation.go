@@ -1402,10 +1402,10 @@ func Validate_Container(
 		errs = append(errs, fn(fldPath.Child("env"), obj.Env, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.Container.Readyz
+	{ // field ateapipb.Container.WakeupProbe
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.ContainerReadyz,
+			obj, oldObj *ateapipb.ContainerWakeupProbe,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -1422,14 +1422,14 @@ func Validate_Container(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_ContainerReadyz(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ContainerWakeupProbe(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.Container) *ateapipb.ContainerReadyz {
-				return oldObj.Readyz
+			func(oldObj *ateapipb.Container) *ateapipb.ContainerWakeupProbe {
+				return oldObj.WakeupProbe
 			})
-		errs = append(errs, fn(fldPath.Child("readyz"), obj.Readyz, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("wakeup_probe"), obj.WakeupProbe, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.Container.VolumeMounts
@@ -1545,13 +1545,13 @@ func Validate_Container(
 	return errs
 }
 
-// Validate_ContainerReadyz validates an instance of ContainerReadyz according
+// Validate_ContainerWakeupProbe validates an instance of ContainerWakeupProbe according
 // to declarative validation rules in the API schema.
-func Validate_ContainerReadyz(
+func Validate_ContainerWakeupProbe(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.ContainerReadyz) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.ContainerWakeupProbe) (errs field.ErrorList) {
 
-	{ // field ateapipb.ContainerReadyz.HttpGet
+	{ // field ateapipb.ContainerWakeupProbe.HttpGet
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.HTTPGetAction,
@@ -1576,13 +1576,13 @@ func Validate_ContainerReadyz(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ContainerReadyz) *ateapipb.HTTPGetAction {
+			func(oldObj *ateapipb.ContainerWakeupProbe) *ateapipb.HTTPGetAction {
 				return oldObj.HttpGet
 			})
 		errs = append(errs, fn(fldPath.Child("http_get"), obj.HttpGet, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ContainerReadyz.TimeoutSeconds
+	{ // field ateapipb.ContainerWakeupProbe.TimeoutSeconds
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *int32,
@@ -1611,7 +1611,7 @@ func Validate_ContainerReadyz(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ContainerReadyz) *int32 {
+			func(oldObj *ateapipb.ContainerWakeupProbe) *int32 {
 				return &oldObj.TimeoutSeconds
 			})
 		errs = append(errs, fn(fldPath.Child("timeout_seconds"), &obj.TimeoutSeconds, oldVal, oldObj != nil)...)

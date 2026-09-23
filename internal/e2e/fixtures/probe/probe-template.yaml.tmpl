@@ -36,7 +36,7 @@ containers:
   # readiness signal rather than a guess, and carries a non-default
   # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom
   # instead of only the ateom's built-in default.
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80

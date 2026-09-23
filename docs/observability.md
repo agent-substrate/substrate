@@ -246,7 +246,6 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.failure.domain`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
-| `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
 | `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
@@ -267,10 +266,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
-* `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
-
-For `ate.scheduler.eligible_workers`:
-* `ate.scheduling.constraint` categorizes the scheduling request constraint type: `none` (unconstrained), `selector` (actor or template label selectors specified), or `required_nodes` (pinned to specific node VMs).
+* `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (the resume found the actor already running), `triggered` (this request completed a cold activation), `joined` (this request waited on another request's resume, which activated the actor), or `unknown` (the resume did not complete, so whether an activation ran is unknown). `ate.template.atespace` and `ate.template.name` hold `unknown` when the router has no template to name.
 
 For `ate.imagecache.requests`:
 * `ate.imagecache.outcome` is `hit` when the node holds a complete image record — every layer directory the record names is present — and `miss` when the lookup must pull. A failed lookup is neither: `error` is a failed lookup whatever the cause, and `cancelled` or `timeout` is the caller giving up, as on `ate.router.outcome`. So the hit ratio is `hit / (hit + miss)`, with failures and abandoned lookups out of the denominator.
@@ -278,9 +274,7 @@ For `ate.imagecache.requests`:
 
 `ate.workerpool.namespace` and `ate.workerpool.name` identify a pool together, on every instrument that names one. A WorkerPool is a namespaced resource, so the name on its own merges same-named pools from different namespaces into one series. The pair means that capacity (`ate.workerpool.workers`, `ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`) joins to demand (`ate.scheduler.assignment.duration`, `ate.actor.lifecycle.operation.duration`, `ate.actor.crashes`) by pool.
 
-Two states read differently:
-* **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_free_worker` outcome, names no pool.
-* **Both keys empty** means no pool matched. Only `ate.scheduler.eligible_workers` reports it, as one zero-valued series that keeps "nothing is schedulable" on the same chart as the per-pool series.
+**No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_free_worker` outcome, names no pool. No instrument sends the pair with both keys empty.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
@@ -289,7 +283,7 @@ The three snapshot labels are orthogonal and mean the same thing on every histog
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
 
-On a failure, `ate.failure.reason` marks the phase that died and the `total`, and nothing else, so `ate.actor.restore.duration{ate.snapshot.phase="download", ate.failure.reason!=""}` says how often the download is what breaks and why, while the phases that succeeded stay queryable as successes. The atelet histograms classify with substrate's own reason taxonomy (the same one `ate.actor.crashes` uses) rather than `error.type`, because these handlers return wrapped domain errors and the gRPC status is only assigned after the handler returns, so a status code would read `Unknown` for nearly every real failure. A failure that carries no reason reports `UNKNOWN`. [`ate.failure.domain`](#which-side-failed-atefailuredomain) rides alongside wherever the reason is present, so a restore that failed because the actor never passed its readyz probe is separable from one the node broke.
+On a failure, `ate.failure.reason` marks the phase that died and the `total`, and nothing else, so `ate.actor.restore.duration{ate.snapshot.phase="download", ate.failure.reason!=""}` says how often the download is what breaks and why, while the phases that succeeded stay queryable as successes. The atelet histograms classify with substrate's own reason taxonomy (the same one `ate.actor.crashes` uses) rather than `error.type`, because these handlers return wrapped domain errors and the gRPC status is only assigned after the handler returns, so a status code would read `Unknown` for nearly every real failure. A failure that carries no reason reports `UNKNOWN`. [`ate.failure.domain`](#which-side-failed-atefailuredomain) rides alongside wherever the reason is present, so a restore that failed because the actor never passed its wakeup probe is separable from one the node broke.
 
 The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead — for resource usage, on the [per-actor usage events](#per-actor-usage-events).
 
