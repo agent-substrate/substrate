@@ -44,15 +44,15 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
     let server_name_str = envoy_filter
       .get_requested_server_name()
       .map(|server_name| {
-        let s = String::from_utf8_lossy(server_name.as_slice()).into_owned();
-        s
+        
+        String::from_utf8_lossy(server_name.as_slice()).into_owned()
       });
 
     let sni_passthrough_policy_str = envoy_filter
       .get_filter_state_bytes(ATE_POLICY_EGRESS)
       .map(|sni_passthrough_policy| {
-        let s = String::from_utf8_lossy(sni_passthrough_policy.as_slice()).into_owned();
-        s
+        
+        String::from_utf8_lossy(sni_passthrough_policy.as_slice()).into_owned()
       });
 
     let comparison_result = match (&server_name_str, &sni_passthrough_policy_str) {
