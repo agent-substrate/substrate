@@ -84,17 +84,19 @@ const (
 	endpointEnv        = "OTEL_EXPORTER_OTLP_ENDPOINT"
 	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+	logsEndpointEnv    = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
 
 	// compressionEnv and its signal-specific overrides configure upstream
 	// gRPC compression (gzip or none).
 	compressionEnv        = "OTEL_EXPORTER_OTLP_COMPRESSION"
 	tracesCompressionEnv  = "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION"
 	metricsCompressionEnv = "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION"
+	logsCompressionEnv    = "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION"
 
 	// headersEnv and its signal-specific overrides carry the headers the
 	// collector expects (an API key, a tenant id). Unlike the endpoint and the
 	// compression, these are per-call metadata rather than per-connection, so
-	// traces and metrics may legitimately differ and are resolved separately.
+	// traces, metrics, and logs may legitimately differ and are resolved separately.
 	headersEnv        = "OTEL_EXPORTER_OTLP_HEADERS"
 	tracesHeadersEnv  = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
 	metricsHeadersEnv = "OTEL_EXPORTER_OTLP_METRICS_HEADERS"
@@ -299,8 +301,8 @@ type traceRelay struct {
 	// headers atelet presents to the collector; see upstreamContext. Resolved
 	// once at construction: they come from atelet's environment, not the call.
 	headers metadata.MD
-	// gate is shared with metricRelay so a misnamed ateom is reported once, not
-	// once per signal.
+	// gate is shared with metricRelay and logRelay so a misnamed ateom is
+	// reported once, not once per signal.
 	gate *sourceGate
 }
 
@@ -506,27 +508,9 @@ func headerNames(md metadata.MD) []string {
 // upstreamCompression resolves the compression algorithm (gzip or none) to use
 // for upstream export.
 func upstreamCompression() (string, error) {
-	generic := strings.TrimSpace(os.Getenv(compressionEnv))
-	traces := strings.TrimSpace(os.Getenv(tracesCompressionEnv))
-	metrics := strings.TrimSpace(os.Getenv(metricsCompressionEnv))
-
-	traceComp := generic
-	if traces != "" {
-		traceComp = traces
-	}
-	metricComp := generic
-	if metrics != "" {
-		metricComp = metrics
-	}
-
-	if traceComp != "" && metricComp != "" && traceComp != metricComp {
-		return "", fmt.Errorf("signal-specific compression settings conflict (%q for traces vs %q for metrics); the relay carries both signals over one connection",
-			traceComp, metricComp)
-	}
-
-	resolved := traceComp
-	if resolved == "" {
-		resolved = metricComp
+	resolved, err := resolvePerSignal("compression settings", compressionEnv, tracesCompressionEnv, metricsCompressionEnv, logsCompressionEnv)
+	if err != nil {
+		return "", err
 	}
 	switch resolved {
 	case "", "none":
@@ -541,37 +525,44 @@ func upstreamCompression() (string, error) {
 // upstreamTarget resolves the collector address the relay forwards to, from the
 // standard OTLP endpoint variables, into the bare host:port grpc.NewClient wants.
 //
-// The signal-specific variables must agree: the relay carries traces and metrics
-// over one connection, so it cannot honor two different collectors. Configuring
-// both differently is a misconfiguration rather than something to silently pick
+// The signal-specific variables must agree: the relay carries every signal over
+// one connection, so it cannot honor two different collectors. Configuring
+// them differently is a misconfiguration rather than something to silently pick
 // a winner for.
 func upstreamTarget() (string, error) {
-	generic := strings.TrimSpace(os.Getenv(endpointEnv))
-	traces := strings.TrimSpace(os.Getenv(tracesEndpointEnv))
-	metrics := strings.TrimSpace(os.Getenv(metricsEndpointEnv))
-
-	traceTarget := generic
-	if traces != "" {
-		traceTarget = traces
-	}
-	metricTarget := generic
-	if metrics != "" {
-		metricTarget = metrics
-	}
-
-	if traceTarget != "" && metricTarget != "" && traceTarget != metricTarget {
-		return "", fmt.Errorf("signal-specific endpoints conflict (%q for traces vs %q for metrics); the relay carries both signals over one connection",
-			traceTarget, metricTarget)
-	}
-
-	resolved := traceTarget
-	if resolved == "" {
-		resolved = metricTarget
+	resolved, err := resolvePerSignal("endpoints", endpointEnv, tracesEndpointEnv, metricsEndpointEnv, logsEndpointEnv)
+	if err != nil {
+		return "", err
 	}
 	if resolved == "" {
 		return "", nil
 	}
 	return normalizeEndpoint(resolved)
+}
+
+// resolvePerSignal resolves each signal to its own variable, falling back to
+// the generic one, and requires every resolved value to agree: the relay
+// carries every signal over one connection. The error names the variables the
+// two values came from, since a fallback pulls the generic in under a signal
+// that is not itself set.
+func resolvePerSignal(what, genericEnv string, signalEnvs ...string) (string, error) {
+	generic := strings.TrimSpace(os.Getenv(genericEnv))
+	resolved, resolvedEnv := "", ""
+	for _, env := range signalEnvs {
+		v, src := strings.TrimSpace(os.Getenv(env)), env
+		if v == "" {
+			v, src = generic, genericEnv
+		}
+		if v == "" {
+			continue
+		}
+		if resolved != "" && v != resolved {
+			return "", fmt.Errorf("signal-specific %s conflict: %s=%q vs %s=%q; the relay carries every signal over one connection",
+				what, resolvedEnv, resolved, src, v)
+		}
+		resolved, resolvedEnv = v, src
+	}
+	return resolved, nil
 }
 
 // normalizeEndpoint accepts both a bare "host:port" and the URL form the OTLP
