@@ -190,13 +190,11 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 		t.Errorf("[after template update] expected %q (template B validating the preserved file), got response: %s", want, resp)
 	}
 
-	//
 	// Pause under template B while status.external_snapshot still holds the last
 	// committed snapshot from template A. Resuming from PAUSED restores the
 	// local checkpoint (which was captured under template B, since templates
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
 	// when onPause is FULL.
-	//
 	t.Logf("Pausing Actor %q under template B...", actorID)
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -233,10 +231,56 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	}
 	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
 
-	// TODO: Once RevertActor is available, add a resume -> crash/revert ->
-	// resume sequence here to verify that reverting after running on template B
-	// drops B's local state and resumes from template A's external snapshot
-	// with DATA scope (since ExternalSnapshot.actor_template_uid == A != B).
+	// Revert while running under template B: the actor goes back to SUSPENDED
+	// at the external snapshot it still holds, which is template A's. That
+	// leaves the repoint undetectable from status.current_actor_template_uid
+	// alone — the resumes above stamped B there — so the next resume has to
+	// judge by external_snapshot.actor_template_uid (A) and restore data-only
+	// again.
+	t.Logf("Reverting Actor %q under template B...", actorID)
+	reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	})
+	if err != nil {
+		t.Fatalf("failed to revert Actor under template B: %v", err)
+	}
+	revertedStatus := reverted.GetActor().GetStatus()
+	if got := revertedStatus.GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("reverted Actor state = %v, want SUSPENDED", got)
+	}
+	// Resume prefers a local checkpoint over the external snapshot, so one
+	// surviving here would hide the repoint the next resume has to detect.
+	if got := revertedStatus.GetLocalSnapshotInfo(); got != nil {
+		t.Errorf("reverted Actor local_snapshot_info = %v, want cleared", got)
+	}
+	if got, want := revertedStatus.GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+		t.Errorf("reverted Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
+	}
+	if got, want := revertedStatus.GetCurrentActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
+		t.Errorf("reverted Actor current_actor_template_uid = %q, want template B's %q", got, want)
+	}
+
+	t.Logf("Resuming Actor %q after the revert...", actorID)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor after the revert: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
+	if err != nil {
+		t.Fatalf("failed to call actor after the revert: %v", err)
+	}
+	// The data-only restore cold-boots the guest, so the memory counter starts
+	// over at 1. The durable dir rides the external snapshot at either scope,
+	// so the revert rewound the file counter to the 2 it held under template A
+	// and this call takes it to 3 -- the same value the first resume under B
+	// produced, now reached a second time from the same snapshot.
+	validateCounterResponse(t, resp, "after revert under template B", 1, 3)
+	if want := "file content: 3"; !strings.Contains(resp, want) {
+		t.Errorf("[after revert under template B] expected %q (template B reading the rewound file), got response: %s", want, resp)
+	}
 
 	// A second suspend closes the loop: the resume under B stamped B as the
 	// sprint's template, and the suspend preserves it.
