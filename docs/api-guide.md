@@ -116,10 +116,10 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
@@ -135,7 +135,7 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
    - **gVisor (`ateom-gvisor`)** — applied to the container OCI spec: `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
    - **Micro-VM (`ateom-microvm`)** — `limits.cpu` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memory` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
-3. **Fall back to runtime defaults.** A zero or absent limit leaves that dimension at the runtime default — unlimited for gVisor, the kata config for the micro-VM.
+3. **Fall back to runtime defaults.** A zero or absent limit leaves that dimension at the runtime default: unlimited for gVisor, and 2 GiB / 1 vCPU for the micro-VM.
 
 `requests` are not consulted today (an actor occupies its whole worker). Because the size is baked into snapshots, a **micro-VM FULL-scope restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
 
@@ -244,7 +244,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `command` | `[]string` | Optional. Entrypoint array. If unset, the image's `ENTRYPOINT` is used. If set, it replaces **both** the image's `ENTRYPOINT` and `CMD`. |
 | `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
 | `env` | `[]EnvVar` | Optional. Literal `value` entries. |
-| `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `wakeupProbe` | `ContainerWakeupProbe` | Optional. HTTP wakeup probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
 | `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |
@@ -299,24 +299,25 @@ These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-reso
 
 Each limit is validated on its own at apply, but the sum across the actor's containers is only checked when the actor first runs, against the real guest size. A template whose limits do not fit is accepted by the API server and fails on its first actor.
 
-### Container Readiness Probe (`readyz`)
+### Container Wakeup Probe (`wakeupProbe`)
 
-Each entry in `containers` may declare an optional **HTTP readiness probe** so the platform only treats the actor as "started" once the workload is actually serving traffic. This mirrors the role of `readinessProbe.httpGet` on a Kubernetes Pod container, but the gate is enforced inside ateom (the in-pod sandbox driver) rather than by the kubelet.
+Each entry in `containers` may declare an optional **HTTP wakeup probe** so `ResumeActor` only returns once the workload is actually serving traffic. Unlike a Kubernetes `readinessProbe`, which reruns for the life of the pod to gate traffic to it, this is a one-shot gate on each wakeup: `ResumeActor` blocks until the endpoint returns 200, and the probe does not run again while the actor stays `RUNNING`.
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `readyz.httpGet.path` | `string` | Optional. URL path to GET. Defaults to `/readyz`. Must begin with `/` and contain only RFC 3986 path characters (no query string `?` or fragment `#`). |
-| `readyz.httpGet.port` | `int32` | **Required.** TCP port on the container to probe (`1..65535`). |
+| `wakeupProbe.httpGet.path` | `string` | Optional. URL path to GET. Defaults to `/`. Must begin with `/` and contain only RFC 3986 path characters (no query string `?` or fragment `#`). |
+| `wakeupProbe.httpGet.port` | `int32` | **Required.** TCP port on the container to probe (`1..65535`). |
+| `wakeupProbe.timeoutSeconds` | `int32` | Optional. How long to keep polling before the wakeup fails (`1..3600`). Defaults to `30`. |
 
 How it behaves:
 
-- **Where the probe runs.** ateom (gVisor or microvm) reaches the container at the actor's interior IP (`169.254.17.2` today) — one network hop, no DNS, no router involved.
-- **Block-until-ready semantics.** `RunWorkload` (cold start) and `RestoreWorkload` (resume from snapshot) only return successfully after every container with a `readyz` block returns HTTP 200. A failure surfaces as a Run/Restore error and is retried by the control plane; the overall wait is bounded by an internal 30s deadline.
-- **Aggressive polling.** The poll loop is tuned for single-millisecond detection latency: a keep-alive HTTP client with a ~500µs interval and 250ms per-request timeout. While the workload is still booting, kernel `RST`s return in microseconds, so the loop spends almost no time blocked; once the listener is up, the next attempt completes on veth-local latency.
-- **Golden snapshot warm-up shortcut.** When **every** container in a template declares `readyz`, the actor template controller skips its default ~20s "give the workload time to settle" delay before taking the golden snapshot — `ResumeActor` already blocked until the workload reported 200, so the workload is known to be initialized. Templates that omit `readyz` on any container keep the 20s warm-up as a safety net.
-- **Snapshot/restore interaction.** The TCP listener is part of the checkpointed RAM, so on resume `readyz` typically returns 200 on the first attempt, with no observable latency penalty.
+- **When it runs.** On every `ResumeActor` that actually wakes the actor. A `ResumeActor` on an actor that is already `RUNNING` is a no-op and does not probe.
+- **Block-until-ready semantics.** `ResumeActor` returns successfully only after every container with a `wakeupProbe` has returned HTTP 200. If any container has not done so within `timeoutSeconds` (30s by default), `ResumeActor` fails and the actor moves to `ACTOR_STATE_CRASHED`, as it does for any other error while waking. A crashed actor cannot be resumed directly: `ResumeActor` rejects it with `FAILED_PRECONDITION`. Call `RevertActor` first, which returns it to `ACTOR_STATE_SUSPENDED` with its last snapshot, then resume it again.
+- **Aggressive polling.** The poll loop is tuned for single-millisecond detection latency: a keep-alive HTTP client with a 1ms interval and 250ms per-request timeout. While the workload is still booting, kernel `RST`s return in microseconds, so the loop spends almost no time blocked; once the listener is up, the next attempt completes on veth-local latency.
+- **Golden snapshot warm-up shortcut.** When **every** container in a template declares `wakeupProbe`, the actor template controller skips its default ~20s "give the workload time to settle" delay before taking the golden snapshot — `ResumeActor` already blocked until the workload reported 200, so the workload is known to be initialized. Templates that omit `wakeupProbe` on any container keep the 20s warm-up as a safety net.
+- **Snapshot/restore interaction.** The TCP listener is part of the checkpointed RAM, so on resume `wakeupProbe` typically returns 200 on the first attempt, with no observable latency penalty.
 
-If `readyz` is omitted from a container, the prior "started == ready" behavior is preserved — the platform considers the container ready as soon as `runsc start` / `vm.boot` returns.
+If `wakeupProbe` is omitted from a container, `ResumeActor` returns as soon as the sandbox has started that container, which can be before the workload is listening.
 
 ### Example
 
@@ -331,9 +332,9 @@ metadata:
 containers:
 - name: agent
   image: gcr.io/my-project/my-agent@sha256:7f28ab0e...
-  # Optional: gate Run/Restore on the agent's HTTP readiness endpoint.
-  # See "Container Readiness Probe (readyz)" above.
-  readyz:
+  # Optional: gate ResumeActor on the agent's HTTP wakeup probe endpoint.
+  # See "Container Wakeup Probe (wakeupProbe)" above.
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
@@ -347,13 +348,13 @@ workerSelector:
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
   configName: gvisor-default
-snapshotsConfig:
+snapshotConfig:
   storageLocation: gs://my-bucket/secret-agent
 ```
 
 ### Snapshot Storage Layout
 
-`snapshotsConfig.storageLocation` is a **base prefix**, not the address of any one snapshot. Every external snapshot has exactly one owner: the actor that took it, or the tag that copied it. And the owner is part of the path, so an object's name says who it belongs to:
+`snapshotConfig.storageLocation` is a **base prefix**, not the address of any one snapshot. Every external snapshot has exactly one owner: the actor that took it, or the tag that copied it. And the owner is part of the path, so an object's name says who it belongs to:
 
 ```
 <location>/atespaces/<atespace>/actors/<actor uid>/snapshots/<snapshot name>
@@ -424,7 +425,7 @@ spec:
 
 ### Micro-VM SandboxConfig
 
-A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `kata-shim`, `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, `kata-image`, and `kata-config` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them.
+A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, and `kata-image` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them.
 
 See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 

@@ -173,7 +173,7 @@ func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb
 	if atespace == resources.GoldenActorAtespace {
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	}
-	return tmpl.GetSnapshotsConfig().GetOnCommit()
+	return tmpl.GetSnapshotConfig().GetOnCommit()
 }
 
 // pausedContentScope returns the scope a paused actor's local snapshot was
@@ -184,7 +184,7 @@ func pausedContentScope(local *ateapipb.LocalSnapshotInfo, tmpl *ateapipb.ActorT
 	if scope := local.GetContentScope(); scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
 		return scope
 	}
-	return tmpl.GetSnapshotsConfig().GetOnPause()
+	return tmpl.GetSnapshotConfig().GetOnPause()
 }
 
 // isPausedOriginSuspend reports whether the suspend must upload a PAUSED
@@ -219,16 +219,9 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 		return "", fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
 	}
 
-	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
+	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_snapshot_uri", actor.GetStatus().GetInProgressSnapshotUri())
-			if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateattr.ReasonWorkerPodGone); err != nil {
-				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
-			}
-			return "", fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
-		}
-		return "", fmt.Errorf("while getting atelet conn for worker pod: %w", err)
+		return "", fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
@@ -313,7 +306,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 // written: under the actor's own prefix, so the objects name their owner.
 func newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor) (resources.SnapshotURI, error) {
 	atespace := actor.GetMetadata().GetAtespace()
-	uri, err := resources.NewActorSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), atespace, actor.GetMetadata().GetUid(), resources.NewSnapshotName())
+	uri, err := resources.NewActorSnapshotURI(actorTemplate.GetSnapshotConfig().GetStorageLocation(), atespace, actor.GetMetadata().GetUid(), resources.NewSnapshotName())
 	if err != nil {
 		return resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", atespace, actor.GetMetadata().GetName(), err)
 	}

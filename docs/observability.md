@@ -176,6 +176,25 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
 
 The counter carries the same reason but no actor identity, so this record is the only way to attribute a crash to one agent. The decision-point line that precedes it (`Setting Actor to crashed due to error`) carries only `ate.atespace` and `ate.actor.name`: it is written before the Actor is loaded, so no uid exists yet.
 
+#### The same records over OTLP
+
+Both records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. Only ateapi has a LoggerProvider — a worker pod cannot export a log record at all yet, because [the ateom relay](#the-ateom-otlp-relay) carries traces and metrics only.
+
+Two `event.name` values, which is the OTLP LogRecord's own field rather than an attribute:
+
+| `event.name` | Body | Severity | Attributes |
+|---|---|---|---|
+| `ate.actor.state_changed` | `Actor state changed` | 9 | the five identity keys, `ate.actor.operation.name`, `ate.actor.state` |
+| `ate.actor.crashed` | `Actor crashed` | 17 | the above plus `ate.failure.reason`, `ate.failure.domain` |
+
+A crash is its own name because an event name promises a fixed set of attributes, and it carries two more. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. Both names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
+
+The attributes are the same flat `ate.*` keys as the stdout copy, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout copy's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent`, which is how you select this stream, or exclude it.
+
+**Never sample or filter this stream.** A consumer takes the last event for an actor's uid, so one dropped record reports a stale state with no sign that anything is missing. This is the one stream where a sampling policy is a correctness bug rather than a cost trade.
+
+**Both copies exist on purpose.** No substrate or enterprise collector reads pod stdout today, so nothing is duplicated: the stdout copy is what `kubectl logs` shows and what keeps the component's bootstrap and crash output readable, and the OTLP copy is what a backend queries. If a `filelog` DaemonSet is ever added, drop one of the two — exclude ate-system from its include globs, or drop records whose scope is the one above.
+
 ### Per-Actor Usage Events
 
 atelet emits one usage record per **executing** actor per sampling tick, from the same sweep that feeds the [`ate.actor.stats.*` metrics](#the-metric-registry). The two are the halves of one split: the metrics aggregate to the bounded template/pool label set a TSDB can hold, and everything carrying actor identity travels here, on the log stream, where cardinality is free. An idle fleet is silent by design — a worker with no executing actor emits nothing.
@@ -227,14 +246,13 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.failure.domain`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
-| `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
 | `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`assigned`) and sandbox class to provide fleet capacity and saturation at a glance |
-| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
+| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
 | `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`, plus `ate.failure.reason` and `ate.failure.domain` on failure) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
@@ -248,10 +266,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
-* `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
-
-For `ate.scheduler.eligible_workers`:
-* `ate.scheduling.constraint` categorizes the scheduling request constraint type: `none` (unconstrained), `selector` (actor or template label selectors specified), or `required_nodes` (pinned to specific node VMs).
+* `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (the resume found the actor already running), `triggered` (this request completed a cold activation), `joined` (this request waited on another request's resume, which activated the actor), or `unknown` (the resume did not complete, so whether an activation ran is unknown). `ate.template.atespace` and `ate.template.name` hold `unknown` when the router has no template to name.
 
 For `ate.imagecache.requests`:
 * `ate.imagecache.outcome` is `hit` when the node holds a complete image record — every layer directory the record names is present — and `miss` when the lookup must pull. A failed lookup is neither: `error` is a failed lookup whatever the cause, and `cancelled` or `timeout` is the caller giving up, as on `ate.router.outcome`. So the hit ratio is `hit / (hit + miss)`, with failures and abandoned lookups out of the denominator.
@@ -259,9 +274,7 @@ For `ate.imagecache.requests`:
 
 `ate.workerpool.namespace` and `ate.workerpool.name` identify a pool together, on every instrument that names one. A WorkerPool is a namespaced resource, so the name on its own merges same-named pools from different namespaces into one series. The pair means that capacity (`ate.workerpool.workers`, `ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`) joins to demand (`ate.scheduler.assignment.duration`, `ate.actor.lifecycle.operation.duration`, `ate.actor.crashes`) by pool.
 
-Two states read differently:
-* **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_free_worker` outcome, names no pool.
-* **Both keys empty** means no pool matched. Only `ate.scheduler.eligible_workers` reports it, as one zero-valued series that keeps "nothing is schedulable" on the same chart as the per-pool series.
+**No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_free_worker` outcome, names no pool. No instrument sends the pair with both keys empty.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
@@ -270,15 +283,17 @@ The three snapshot labels are orthogonal and mean the same thing on every histog
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
 
-On a failure, `ate.failure.reason` marks the phase that died and the `total`, and nothing else, so `ate.actor.restore.duration{ate.snapshot.phase="download", ate.failure.reason!=""}` says how often the download is what breaks and why, while the phases that succeeded stay queryable as successes. The atelet histograms classify with substrate's own reason taxonomy (the same one `ate.actor.crashes` uses) rather than `error.type`, because these handlers return wrapped domain errors and the gRPC status is only assigned after the handler returns, so a status code would read `Unknown` for nearly every real failure. A failure that carries no reason reports `UNKNOWN`. [`ate.failure.domain`](#which-side-failed-atefailuredomain) rides alongside wherever the reason is present, so a restore that failed because the actor never passed its readyz probe is separable from one the node broke.
+On a failure, `ate.failure.reason` marks the phase that died and the `total`, and nothing else, so `ate.actor.restore.duration{ate.snapshot.phase="download", ate.failure.reason!=""}` says how often the download is what breaks and why, while the phases that succeeded stay queryable as successes. The atelet histograms classify with substrate's own reason taxonomy (the same one `ate.actor.crashes` uses) rather than `error.type`, because these handlers return wrapped domain errors and the gRPC status is only assigned after the handler returns, so a status code would read `Unknown` for nearly every real failure. A failure that carries no reason reports `UNKNOWN`. [`ate.failure.domain`](#which-side-failed-atefailuredomain) rides alongside wherever the reason is present, so a restore that failed because the actor never passed its wakeup probe is separable from one the node broke.
 
 The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead — for resource usage, on the [per-actor usage events](#per-actor-usage-events).
 
 ### The metric registry
 
-[`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument that the ate system components send, and the permitted values of each label. Use it as the only source of this data.
+[`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument that the ate system components send, every attribute any signal uses, and the permitted values of each. [`events.yaml`](metrics/registry/events.yaml) beside it defines the [log events](#the-same-records-over-otlp). Use them as the only source of this data.
 
-It is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. Weaver reads it, resolves each `ref`, and refuses a group or an attribute that is not correct:
+A few attributes are defined there but barred from metric labels — actor identity above all. The `note` on each says so, and the cardinality rules below are where the bar lives.
+
+It is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. Weaver reads the whole directory, resolves each `ref`, and refuses a group or an attribute that is not correct:
 
 ```sh
 hack/verify/metrics.sh                           # the command that CI uses
@@ -384,6 +399,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 | Path | service → in-cluster `opentelemetry-collector` | service → Google Managed Prometheus (GMP) |
 | Metrics | collector Prometheus exporter on `:8889` | Google Cloud Monitoring |
 | Traces | Jaeger UI | Google Cloud Trace |
+| Logs | pod stdout; ateapi's [actor lifecycle events](#the-same-records-over-otlp) also to the collector's `debug` exporter | pod stdout. No OTLP logs: `OTEL_LOGS_EXPORTER` is unset |
 | Dashboards | Not supported | Google Cloud Monitoring (see [Dashboards](#5-dashboards)) |
 
 > In Kind, `ateapi`, `atelet`, `ate-controller`, and `atenet-router` are pointed at the in-cluster collector, and the controller propagates the endpoint to the ateom worker pods it creates, so all component telemetry lands locally.

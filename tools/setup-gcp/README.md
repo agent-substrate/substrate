@@ -135,9 +135,13 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
-| `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
+
+`NODE_MACHINE_TYPE` was named `GVISOR_NODE_MACHINE_TYPE`. The old name still
+works and warns; rename it in your `.ate-dev-env.sh`.
 
 **Node version labels:** pool labels are the birth default for every node GKE
 creates later (autoscaling, auto-repair, node upgrades), and `setup-gcp` does
@@ -263,13 +267,18 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--cluster-version` | Kubernetes version. | `CLUSTER_VERSION` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
-| `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
 | `--dashboard-dir` | Directory containing dashboard JSON files. | `DASHBOARD_DIR` | `tools/setup-gcp/dashboards` |
 
 *\*Note: Required unless the `BUCKET_NAME` environment variable is set.*
+
+`--enable-nested-virtualization` is on by default and needs a `--machine-type`
+that supports the feature; pass `--enable-nested-virtualization=false` to turn
+it off. It applies only to a cluster this command creates.
 
 ## Examples
 
@@ -289,6 +298,16 @@ go run ./tools/setup-gcp bootstrap
 go run ./tools/setup-gcp bootstrap \
   --cluster-name="custom-cluster" \
   --machine-type="n2-standard-8"
+```
+
+### Bootstrap a cluster whose nodes cannot run micro-VM workers
+
+Nested virtualization is on by default, so turning it off is the case that
+needs a flag:
+
+```bash
+go run ./tools/setup-gcp bootstrap \
+  --enable-nested-virtualization=false
 ```
 
 ### Only create the cluster (using env vars for defaults)

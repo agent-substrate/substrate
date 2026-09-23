@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"google.golang.org/grpc"
@@ -187,6 +188,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		ActorAtespace:        "actor-atespace",
 		ActorName:            "actor-name",
 		ActorUID:             "actor-uid",
+		AteletSPIFFEID:       installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 	})
 	if err != nil {
 		t.Fatalf("Error creating broker certificate source: %v", err)

@@ -303,3 +303,18 @@ func closeWrite(conn net.Conn) {
 		_ = conn.CloseWrite()
 	}
 }
+
+// EgressPort is the port from a listen address, which each sandbox's redirect
+// aims at. The address itself is never bound: egress is served from inside the
+// sandbox namespaces.
+func EgressPort(listenAddress string) (uint16, error) {
+	_, port, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return 0, fmt.Errorf("atunnel: egress listen address %q: %w", listenAddress, err)
+	}
+	p, ok := ParsePort(port)
+	if !ok {
+		return 0, fmt.Errorf("atunnel: egress listen address %q has no usable port", listenAddress)
+	}
+	return uint16(p), nil
+}

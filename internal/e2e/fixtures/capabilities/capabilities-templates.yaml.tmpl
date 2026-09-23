@@ -31,14 +31,14 @@ containers:
 - name: probe
   image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80
     timeoutSeconds: 60
 ${TEMPLATE_RESOURCES}
 ${TEMPLATE_SANDBOX_CONFIG}
-snapshotsConfig:
+snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-default${FIXTURE_SUFFIX}/
 
 ---
@@ -63,12 +63,12 @@ containers:
     capabilities:
       drop: ["ALL"]
       add: ["NET_BIND_SERVICE"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80
     timeoutSeconds: 60
 ${TEMPLATE_RESOURCES}
 ${TEMPLATE_SANDBOX_CONFIG}
-snapshotsConfig:
+snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-exact${FIXTURE_SUFFIX}/

@@ -69,6 +69,9 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := exemption.CheckSorted(exemptions); err != nil {
+		return fmt.Errorf("%s: %w; run `apitool validate --update` to restore canonical order", path, err)
+	}
 	remaining := exemption.NewSet(exemptions)
 
 	fmt.Fprintf(out, "Validating ateapi.proto (%s), %d rule(s), %d exemption(s)...\n\n", api.Services[0].Name, len(lint.All), len(exemptions))

@@ -37,7 +37,7 @@ import (
 )
 
 // Handler builds the request handler for the given wire mode. ModeGRPC serves
-// gRPC alongside the readiness probe on a single listener; ModeHTTP serves the
+// gRPC alongside the wakeup probe on a single listener; ModeHTTP serves the
 // protobuf-over-HTTP route table. An unknown mode comes back as an error so
 // the caller decides how to fail.
 func Handler(mode string, svc *Service) (http.Handler, error) {
@@ -49,7 +49,7 @@ func Handler(mode string, svc *Service) (http.Handler, error) {
 		)
 		gluttonpb.RegisterGluttonServer(srv, svc)
 		reflection.Register(srv)
-		// The readiness probe is an HTTP GET, so gRPC mode serves it next to
+		// The wakeup probe is an HTTP GET, so gRPC mode serves it next to
 		// the gRPC handler on the same listener.
 		handler = splitGRPC(srv, readyzMux())
 	case ModeHTTP:
@@ -64,7 +64,7 @@ func Handler(mode string, svc *Service) (http.Handler, error) {
 }
 
 // NewServer enables unencrypted HTTP/2 so gRPC works on the plaintext
-// listener, alongside HTTP/1.1 for the readyz probe.
+// listener, alongside HTTP/1.1 for the wakeup probe.
 func NewServer(handler http.Handler) *http.Server {
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
@@ -85,7 +85,7 @@ func splitGRPC(grpcSrv, rest http.Handler) http.Handler {
 	})
 }
 
-// readyzMux serves the readiness probe both modes need.
+// readyzMux serves the wakeup probe both modes need.
 func readyzMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc(ReadyzRoute, func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +94,7 @@ func readyzMux() *http.ServeMux {
 	return mux
 }
 
-// newMux builds the HTTP-mode route table on top of the readiness probe.
+// newMux builds the HTTP-mode route table on top of the wakeup probe.
 func newMux(svc *Service) *http.ServeMux {
 	mux := readyzMux()
 	mux.HandleFunc(PingRoute, protoRoute("Ping", svc.Ping))

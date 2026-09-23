@@ -55,14 +55,121 @@ mountOptions:
   - nfsvers=4.1
 `
 
+// csiHostpathControllerService fronts the hostpath driver's socat sidecar,
+// which bridges the TCP endpoint atelet dials to the driver's unix socket. The
+// CSIDriverConfig applied later names this Service in both its
+// controllerEndpoint and its TLS server name.
+const csiHostpathControllerService = `
+apiVersion: v1
+kind: Service
+metadata:
+  name: csi-hostpath-controller
+  namespace: default
+spec:
+  selector:
+    app.kubernetes.io/name: csi-hostpath-socat
+  ports:
+  - port: 50051
+    targetPort: 10000
+    name: grpc
+`
+
+// csiDriverSpec is which drivers a --setup-csi value installs.
+type csiDriverSpec struct {
+	hostpath bool
+	nfs      bool
+}
+
+// installsNothing reports whether the value selects no driver at all.
+func (s csiDriverSpec) installsNothing() bool { return !s.hostpath && !s.nfs }
+
+// csiDrivers is every accepted --setup-csi value. "true", "false" and the empty
+// string are the shell installer's boolean spellings, from before the flag grew
+// driver names, and still work.
+var csiDrivers = map[string]csiDriverSpec{
+	"nfs":      {nfs: true},
+	"hostpath": {hostpath: true},
+	"both":     {hostpath: true, nfs: true},
+	"true":     {hostpath: true, nfs: true},
+	"none":     {},
+	"false":    {},
+	"":         {},
+}
+
+// ValidateCSIDriver reports whether driver names something --setup-csi accepts.
+//
+// This is the half of the check that needs neither configuration nor a cluster,
+// so the commands run it while cobra is still validating arguments: a typo
+// should not cost a credential fetch, let alone an install.
+func ValidateCSIDriver(driver string) error {
+	if _, ok := csiDrivers[driver]; !ok {
+		return fmt.Errorf("unknown CSI driver %q (valid options: nfs, hostpath, both, none)", driver)
+	}
+	return nil
+}
+
+// CheckCSIDriver is ValidateCSIDriver plus the part that needs the resolved
+// configuration: the hostpath driver exists only for Kind.
+//
+// DeployAteSystem calls it before it installs anything, so that
+// `--setup-csi=hostpath` against a cluster that is not Kind is refused up front
+// rather than after a full control-plane install.
+func (e *Env) CheckCSIDriver(driver string) error {
+	if err := ValidateCSIDriver(driver); err != nil {
+		return err
+	}
+	if csiDrivers[driver].hostpath {
+		return e.RequireKind("csi-hostpath")
+	}
+	return nil
+}
+
 // SetupCSI installs the hostpath and NFS CSI drivers used by external volume
-// demos. Kind only: both drivers are patched for the single-node Kind layout
-// and reach into the node container over docker.
+// demos. The hostpath driver is Kind only: it is patched for the single-node
+// Kind layout and reaches into the node container over docker.
 func (e *Env) SetupCSI(ctx context.Context, driver string) error {
 	log.Step("setup_csi")
-	// Both drivers register themselves with a CSIDriverConfig, so the ate CRDs
-	// have to be in place even when CSI setup runs on its own rather than as
-	// part of deploy ate-system.
+
+	// Both halves of the check come before any of the work: leaving a
+	// podcertificate controller behind on the way to reporting a typo, or on
+	// the way to refusing hostpath on a cluster that was never going to support
+	// it, is worse than reporting it straight away.
+	if err := e.CheckCSIDriver(driver); err != nil {
+		return err
+	}
+	// Installing nothing is the default for deploy ate-system, so this is the
+	// common path. Everything below is prerequisites for a driver, and the
+	// caller that had none to install has already done its own bootstrap.
+	spec := csiDrivers[driver]
+	if spec.installsNothing() {
+		log.Infof("Skipping CSI driver setup.")
+		return nil
+	}
+
+	if err := e.ensureCSIPrerequisites(ctx); err != nil {
+		return err
+	}
+	if spec.hostpath {
+		if err := e.setupCSIHostpath(ctx); err != nil {
+			return err
+		}
+	}
+	if spec.nfs {
+		return e.setupCSINFS(ctx)
+	}
+	return nil
+}
+
+// ensureCSIPrerequisites brings up what either driver needs before it can
+// register: the ate CRDs, because each driver registers itself with a
+// CSIDriverConfig, and the podcertificate controller, because the driver
+// controllers are issued serving certificates from it.
+//
+// deploy ate-system has already done all of this by the time it calls SetupCSI.
+// It is repeated because `setup csi` also runs on its own, against a cluster
+// where none of it need be present; every step is an apply or a wait that
+// returns immediately when the work is already done.
+func (e *Env) ensureCSIPrerequisites(ctx context.Context) error {
 	if err := e.EnsureCRDs(ctx); err != nil {
 		return err
 	}
@@ -81,32 +188,7 @@ func (e *Env) SetupCSI(ctx context.Context, driver string) error {
 	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespacePodCert, "podcertificate-controller", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 		return err
 	}
-	if err := e.WaitForPodCertificateTrustBundles(ctx); err != nil {
-		return err
-	}
-
-	switch driver {
-	case "nfs":
-		return e.setupCSINFS(ctx)
-	case "hostpath":
-		if err := e.RequireKind("csi-hostpath"); err != nil {
-			return err
-		}
-		return e.setupCSIHostpath(ctx)
-	case "both", "true":
-		if err := e.RequireKind("csi-hostpath"); err != nil {
-			return err
-		}
-		if err := e.setupCSIHostpath(ctx); err != nil {
-			return err
-		}
-		return e.setupCSINFS(ctx)
-	case "none", "false", "":
-		log.Infof("Skipping CSI driver setup.")
-		return nil
-	default:
-		return fmt.Errorf("unknown CSI driver %q (valid options: nfs, hostpath, both, none)", driver)
-	}
+	return e.WaitForPodCertificateTrustBundles(ctx)
 }
 
 func (e *Env) setupCSIHostpath(ctx context.Context) error {
@@ -147,6 +229,16 @@ func (e *Env) setupCSIHostpath(ctx context.Context) error {
 	}
 	log.Infof("Using Kind node: %s", node)
 	cleanupKindAteomDir(node)
+
+	// Before the driver, not after: atelet talks to the controller over TCP,
+	// the socat sidecar bridges that to the driver's unix socket, and
+	// servicednssigner issues the sidecar's serving certificate from the
+	// Service. A sidecar that starts before the Service exists has no
+	// certificate to be issued against and never becomes ready.
+	log.Infof("Exposing the CSI hostpath controller over a TCP Service...")
+	if err := e.applyInline(ctx, csiHostpathControllerService); err != nil {
+		return err
+	}
 
 	log.Infof("Deploying the CSI hostpath driver...")
 	err = e.Kube.ApplyTolerant(ctx, objs, func(obj *unstructured.Unstructured, _ error) {
@@ -189,26 +281,6 @@ spec:
 	if _, err := e.Kube.Typed.AppsV1().StatefulSets("default").Patch(
 		ctx, "csi-hostpathplugin", types.StrategicMergePatchType, patchJSON, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("while patching the csi-hostpathplugin StatefulSet: %w", err)
-	}
-
-	// atelet talks to the controller over TCP; the socat sidecar bridges that
-	// to the driver's unix socket.
-	log.Infof("Exposing the CSI hostpath controller over a TCP Service...")
-	if err := e.applyInline(ctx, `
-apiVersion: v1
-kind: Service
-metadata:
-  name: csi-hostpath-controller
-  namespace: default
-spec:
-  selector:
-    app.kubernetes.io/name: csi-hostpath-socat
-  ports:
-  - port: 50051
-    targetPort: 10000
-    name: grpc
-`); err != nil {
-		return err
 	}
 
 	log.Infof("Creating the csi-hostpath-sc StorageClass...")

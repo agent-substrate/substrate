@@ -75,6 +75,59 @@ func TestSaveSortsDeterministically(t *testing.T) {
 	}
 }
 
+func TestCheckSorted(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		exemptions []exemption.Exemption
+		wantErr    bool
+	}{
+		{
+			name:       "nil",
+			exemptions: nil,
+			wantErr:    false,
+		},
+		{
+			name: "singleton",
+			exemptions: []exemption.Exemption{
+				{Rule: "documented", Subject: "ateapi.A", Message: "m"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "sorted",
+			exemptions: []exemption.Exemption{
+				{Rule: "documented", Subject: "ateapi.A", Message: "m"},
+				{Rule: "documented", Subject: "ateapi.B", Message: "m"},
+				{Rule: "no-oneofs", Subject: "ateapi.A", Message: "m"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "out of order subject",
+			exemptions: []exemption.Exemption{
+				{Rule: "documented", Subject: "ateapi.TagScope", Message: "m"},
+				{Rule: "documented", Subject: "ateapi.ActorState", Message: "m"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "out of order rule",
+			exemptions: []exemption.Exemption{
+				{Rule: "no-oneofs", Subject: "ateapi.A", Message: "m"},
+				{Rule: "documented", Subject: "ateapi.A", Message: "m"},
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := exemption.CheckSorted(tc.exemptions)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("CheckSorted() = %v, want error: %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestSetConsume(t *testing.T) {
 	set := exemption.NewSet([]exemption.Exemption{
 		{Rule: "documented", Subject: "ateapi.Foo", Message: "message has no doc comment"},

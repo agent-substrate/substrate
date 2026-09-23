@@ -28,6 +28,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -60,6 +61,11 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 	}
 	nodeConfig := &containerpb.NodeConfig{
 		MachineType: cfg.MachineType,
+	}
+	if cfg.EnableNestedVirtualization {
+		nodeConfig.AdvancedMachineFeatures = &containerpb.AdvancedMachineFeatures{
+			EnableNestedVirtualization: proto.Bool(true),
+		}
 	}
 	if cfg.BootDiskSizeGB > 0 {
 		nodeConfig.DiskSizeGb = cfg.BootDiskSizeGB
@@ -100,6 +106,18 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 
 func filestoreCsiDriverEnabled(cluster *containerpb.Cluster) bool {
 	return cluster.GetAddonsConfig().GetGcpFilestoreCsiDriverConfig().GetEnabled()
+}
+
+// nestedVirtualizationEnabled reports whether any node pool exposes /dev/kvm,
+// which micro-VM workers need. Any pool, not every pool: a cluster that keeps
+// its KVM nodes in a second pool added by hand is a normal arrangement.
+func nestedVirtualizationEnabled(cluster *containerpb.Cluster) bool {
+	for _, pool := range cluster.GetNodePools() {
+		if pool.GetConfig().GetAdvancedMachineFeatures().GetEnableNestedVirtualization() {
+			return true
+		}
+	}
+	return false
 }
 
 func createClusterInternal(ctx context.Context, cfg *Config, client *container.ClusterManagerClient, parent string) error {
@@ -278,6 +296,15 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		slog.Info("Cluster Filestore CSI driver match perfectly.", slog.String("cluster", cfg.ClusterName))
 	}
 
+	// Nested virtualization is fixed at node creation, so an existing cluster
+	// cannot be updated into it: the pool has to be recreated. Report the drift
+	// rather than let the flag look applied when it was not.
+	if cfg.EnableNestedVirtualization && !nestedVirtualizationEnabled(cluster) {
+		slog.Warn("Cluster has no node pool with nested virtualization; --enable-nested-virtualization only applies to a cluster this tool creates",
+			slog.String("cluster", cfg.ClusterName),
+			slog.String("remedy", "recreate the cluster, or add a node pool with nested virtualization"))
+	}
+
 	return nil
 }
 
@@ -357,6 +384,7 @@ var clusterCmd = &cobra.Command{
 	Short: "Create GKE cluster",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+		warnDeprecatedMachineTypeEnv(cmd)
 		if err := resolveProjectID(ctx, &cfg); err != nil {
 			return err
 		}
@@ -371,8 +399,9 @@ func init() {
 	clusterCmd.Flags().StringVar(&cfg.ClusterVersion, "version", getEnv("CLUSTER_VERSION", ""), "Kubernetes version [env: CLUSTER_VERSION]")
 	clusterCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
-	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", getEnv("GVISOR_NODE_MACHINE_TYPE", "c3-standard-4"), "Machine type for the gVisor node pool [env: GVISOR_NODE_MACHINE_TYPE]")
+	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", resolveMachineTypeDefault(), "Machine type for the node pool [env: NODE_MACHINE_TYPE]")
 	clusterCmd.Flags().BoolVar(&cfg.EnableDataplaneV2, "enable-dataplane-v2", getEnv("ENABLE_DATAPLANE_V2", true), "Enable Dataplane V2 [env: ENABLE_DATAPLANE_V2]")
+	clusterCmd.Flags().BoolVar(&cfg.EnableNestedVirtualization, "enable-nested-virtualization", getEnv("ENABLE_NESTED_VIRTUALIZATION", true), "Create the node pool with nested virtualization, exposing /dev/kvm for micro-VM workers; needs a machine type that supports it. Turn off with --enable-nested-virtualization=false [env: ENABLE_NESTED_VIRTUALIZATION]")
 	clusterCmd.Flags().Int32Var(&cfg.BootDiskSizeGB, "boot-disk-size", getEnv("BOOT_DISK_SIZE_GB", int32(0)), "Boot disk size in GB for the node pool; 0 = GKE default (100 GB) [env: BOOT_DISK_SIZE_GB]")
 	clusterCmd.Flags().StringVar(&cfg.BootDiskType, "boot-disk-type", getEnv("BOOT_DISK_TYPE", ""), "Boot disk type for the node pool; empty = GKE default [env: BOOT_DISK_TYPE]")
 }

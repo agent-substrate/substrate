@@ -31,10 +31,96 @@ groups:
   # Attribute groups
   # ---------------------------------------------------------------------------
 
+  - id: registry.ate.atespace
+    type: attribute_group
+    brief: >
+      The tenant and isolation boundary. It is shared by every resource type,
+      thus it stays at the top level and does not nest under one of them.
+    attributes:
+      - id: ate.atespace
+        stability: development
+        type: string
+        brief: The atespace of the subject of the signal.
+        note: >
+          Logs and spans only. The cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml forbids it as a metric label: the number
+          of values is not bounded at the target of 1 billion actors.
+        examples: [ate-demo-counter]
+
   - id: registry.ate.actor
     type: attribute_group
     brief: The labels of an actor.
     attributes:
+      - id: ate.actor.name
+        stability: development
+        type: string
+        brief: The name of the actor, which addresses it within its atespace.
+        note: >
+          Logs and spans only, by the cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml. A name is free after a delete, thus a
+          query that spans a delete groups by ate.actor.uid and not by this.
+        examples: [counter-1]
+      - id: ate.actor.uid
+        stability: development
+        type: string
+        brief: The server-assigned unique key of the actor.
+        note: >
+          Logs and spans only, by the cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml. It separates two actors that held the
+          same name at different times.
+        examples: [8f2a1c4e6b0d47f1]
+      - id: ate.actor.state
+        stability: development
+        brief: The state the actor is in now.
+        note: >
+          Logs only. It is bounded, but it is only ever recorded beside actor
+          identity, which no metric may carry. The values mirror
+          ateapipb.ActorState with the ACTOR_STATE_ prefix dropped, so the log
+          vocabulary and the state machine cannot fork.
+        type:
+          members:
+            - id: resuming
+              stability: development
+              value: resuming
+              brief: ateapi is putting the actor on a worker.
+            - id: running
+              stability: development
+              value: running
+              brief: The actor runs on a worker.
+            - id: suspending
+              stability: development
+              value: suspending
+              brief: ateapi is writing the durable snapshot.
+            - id: suspended
+              stability: development
+              value: suspended
+              brief: The actor has a durable snapshot and holds no worker.
+            - id: pausing
+              stability: development
+              value: pausing
+              brief: ateapi is writing the node-local snapshot.
+            - id: paused
+              stability: development
+              value: paused
+              brief: The actor has a node-local snapshot.
+            - id: crashed
+              stability: development
+              value: crashed
+              brief: The actor is lost. ate.failure.reason says why.
+            - id: deleting
+              stability: development
+              value: deleting
+              brief: ateapi is removing the actor.
+            - id: deleted
+              stability: development
+              value: deleted
+              brief: >
+                The actor record is gone. It has no enum counterpart: no stored
+                state can stand for a record that no longer exists.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: The state is not in this list. This is the default value.
       - id: ate.actor.operation.name
         stability: development
         brief: The actor lifecycle operation that ateapi did.
@@ -60,6 +146,10 @@ groups:
               stability: development
               value: delete
               brief: ateapi removed the actor record.
+            - id: revert
+              stability: development
+              value: revert
+              brief: ateapi discarded the actor's execution and returned it to its existing snapshot.
             - id: unknown
               stability: development
               value: unknown
@@ -70,18 +160,28 @@ groups:
     brief: >
       The identity of an ActorTemplate. The values are not limited to a list.
       But an operator makes each template. No value comes from a request. Thus
-      the number of values stays small.
+      the number of values stays small. One metric,
+      atenet.router.route.duration, also reports the literal "unknown" when it
+      has no template to name.
     attributes:
       - id: ate.template.atespace
         stability: development
         type: string
-        brief: The atespace of the ActorTemplate of the actor.
-        examples: [ate-demo-counter]
+        brief: >
+          The atespace of the ActorTemplate of the actor. On
+          atenet.router.route.duration only, the value is "unknown" when the
+          direction has no template, or the request failed before the router
+          resolved one.
+        examples: [ate-demo-counter, unknown]
       - id: ate.template.name
         stability: development
         type: string
-        brief: The name of the ActorTemplate of the actor.
-        examples: [counter]
+        brief: >
+          The name of the ActorTemplate of the actor. On
+          atenet.router.route.duration only, the value is "unknown" when the
+          direction has no template, or the request failed before the router
+          resolved one.
+        examples: [counter, unknown]
 
   - id: registry.ate.workerpool
     type: attribute_group
@@ -294,7 +394,7 @@ groups:
               stability: development
               value: WORKLOAD_NOT_READY
               brief: >
-                A container started but never passed its readyz probe before the
+                A container started but never passed its wakeup probe before the
                 deadline of the probe. A slow node confounds this value: a cold
                 image or a throttled CPU also runs the probe out of time. The
                 phases of ate.actor.restore.duration separate the two.
@@ -374,23 +474,6 @@ groups:
               stability: development
               value: error
               brief: The attempt failed. Only this outcome has an error.type key.
-      - id: ate.scheduling.constraint
-        stability: development
-        brief: The type of constraint in the scheduling request.
-        type:
-          members:
-            - id: none
-              stability: development
-              value: none
-              brief: The request has no constraint.
-            - id: selector
-              stability: development
-              value: selector
-              brief: The request has a label selector for an actor or a template.
-            - id: required_nodes
-              stability: development
-              value: required_nodes
-              brief: The request names specific node VMs.
 
   - id: registry.ate.router
     type: attribute_group
@@ -414,16 +497,26 @@ groups:
               stability: development
               value: triggered
               brief: >
-                This request got the singleflight lock and did the resume. Its
-                time is the activation time. Its rate is the number of resumes
-                each second.
+                This request got the singleflight lock and completed the resume.
+                Its time is the activation time. Its rate is the number of
+                resumes each second.
             - id: joined
               stability: development
               value: joined
               brief: >
-                A resume was already in operation. This request waited for it.
-                This value is separate because it is not a correct sample. One
-                cold start with 50 requests is one slow activation and not 51.
+                A resume was already in operation. This request waited for it,
+                and the resume activated the actor. This value is separate
+                because it is not a correct sample. One cold start with 50
+                requests is one slow activation and not 51.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: >
+                The resume did not complete, thus the router cannot tell whether
+                an activation ran. The resume failed, or the request stopped
+                before the resume gave an answer, or the direction does not
+                resume an actor. Do not read the time in this series as an
+                activation time.
       - id: ate.router.outcome
         stability: development
         brief: The result of the route attempt.
@@ -768,37 +861,6 @@ groups:
         requirement_level:
           conditionally_required: The outcome is error.
 
-  - id: metric.ate.scheduler.eligible_workers
-    type: metric
-    metric_name: ate.scheduler.eligible_workers
-    instrument: histogram
-    unit: "{worker}"
-    stability: development
-    brief: The number of free workers that remain after all the constraint filters, at each scheduling decision.
-    note: >
-      This is an early sign of low capacity. It warns you before the first
-      rejection. The rate of 503 errors tells you only after the users have a
-      fault. If no pool agrees with the constraints, ateapi sends one series
-      with the value 0. Both pool keys are empty in that series. Thus a
-      dashboard shows the "no workers are available" state with the series of
-      the pools. Only this instrument has the empty pair of pool keys.
-    annotations:
-      substrate:
-        emitted_by: [ateapi]
-        golden_signals: [saturation]
-        code_anchor: cmd/ateapi/internal/scheduling/metrics.go
-        buckets: [0, 1, 2, 3, 5, 10, 20, 50, 100, 250]
-        cuj: Resumes fail with a 503 error, but ate.workerpool.workers shows idle workers. Why?
-    attributes:
-      - ref: ate.workerpool.namespace
-        requirement_level: required
-      - ref: ate.workerpool.name
-        requirement_level: required
-      - ref: ate.sandbox.class
-        requirement_level: required
-      - ref: ate.scheduling.constraint
-        requirement_level: required
-
   # ---------------------------------------------------------------------------
   # Metrics. atelet
   # ---------------------------------------------------------------------------
@@ -1101,7 +1163,9 @@ groups:
       This is the measurement at the user boundary. Divide the data by
       ate.router.resume before you read it. The triggered series is the
       activation time. The none series is the usual warm route. A sum across the
-      two series puts milliseconds and tens of seconds in one distribution.
+      two series puts milliseconds and tens of seconds in one distribution. The
+      unknown series holds the resumes that did not complete, thus it is neither
+      an activation time nor a warm route.
     annotations:
       substrate:
         emitted_by: [atenet-router]

@@ -51,7 +51,7 @@ containers:
   # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info
     mountPath: /run/ate
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
@@ -67,7 +67,7 @@ volumes:
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
   configName: gvisor-default
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-mitm/

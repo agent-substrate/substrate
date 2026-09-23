@@ -30,7 +30,7 @@ containers:
 - name: kernelmem
   image: containerstack/alpine-stress:latest
   command: ["sh", "-c", "find /; for i in $(seq 50000); do sleep 10000 & done; sleep 10000"]
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/kernelmem/

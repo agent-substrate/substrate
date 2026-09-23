@@ -74,6 +74,20 @@ data:
               - key: service.name
                 default_value: unknown
 
+        # The actor lifecycle events. The key is ate.actor.state and not the
+        # event name: the connector reads the attributes of the item, and the
+        # event name is a top level field of the record, which would need a
+        # transform in front of this. The state is bounded and is the more
+        # useful of the two anyway.
+        logs:
+          substrate_actor_state_changes:
+            description: Actor state change events received, by state.
+            attributes:
+              - key: service.name
+                default_value: unknown
+              # No default: drops workload logs, which have no such key.
+              - key: ate.actor.state
+
     exporters:
       otlp/jaeger:
         endpoint: jaeger.otel-system.svc.cluster.local:4317
@@ -94,13 +108,26 @@ data:
           processors: [batch]
           exporters: [prometheus, debug]
 
-        # The count pipelines read the same receiver as the two pipelines
-        # above, and they only count. The connector declares MutatesData
-        # false, thus it changes nothing that reaches Jaeger or Prometheus.
+        # Every ate event, plus any workload that sends OTLP logs. debug is the
+        # only exporter: kind has no log store, and the e2e read-back goes
+        # through the count connector below. Never put a sampler or a filter
+        # here. A consumer takes the last event for an actor, thus a dropped
+        # record reports a stale state with no sign that anything is missing.
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+
+        # The count pipelines read the same receiver as the pipelines above,
+        # and they only count. The connector declares MutatesData false, thus
+        # it changes nothing that reaches Jaeger or Prometheus.
         traces/count:
           receivers: [otlp]
           exporters: [count]
         metrics/count:
+          receivers: [otlp]
+          exporters: [count]
+        logs/count:
           receivers: [otlp]
           exporters: [count]
 

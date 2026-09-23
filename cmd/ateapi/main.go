@@ -36,7 +36,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore"
@@ -81,6 +83,7 @@ var (
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
 	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet.")
+	ateletServiceAccount   = pflag.String("atelet-service-account", installdefaults.AteletServiceAccount, "ServiceAccount atelet runs as. It is the service-account segment of the SPIFFE ID expected on atelet's certificate, so it has to match what the deployment actually creates; a deployment that prefixes resource names needs it set.")
 
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
@@ -128,6 +131,18 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
+	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
+		ServiceName: "ateapi",
+		Exporter:    serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize logging", err)
+	}
+	// Nil when the exporter is none.
+	if lp != nil {
+		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
+	}
+
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
 	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
@@ -147,6 +162,20 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown.
 	if closer, ok := persistence.(interface{ Close() }); ok {
 		defer closer.Close()
+	}
+
+	if poolProvider, ok := persistence.(interface {
+		NewPool(context.Context) (*pgxpool.Pool, error)
+	}); ok {
+		authzPool, err := poolProvider.NewPool(shutdownCtx)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)
+		}
+		authzSrv, err := authz.NewServer(shutdownCtx, authzPool)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
+		}
+		defer authzSrv.Close()
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -169,19 +198,28 @@ func main() {
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
-	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
+	// atelet shares ateapi's namespace in every supported deployment topology,
+	// so we read it from Kubernetes' downward API rather than expose a flag.
+	ateletNamespace := installdefaults.NamespaceFromPodEnv()
+	// An empty ServiceAccount would not fail here: path.Join drops the empty
+	// segment, yielding an identity that parses but matches nothing, so every
+	// atelet dial would be rejected with no hint at the cause.
+	if *ateletServiceAccount == "" {
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--atelet-service-account must not be empty"))
+	}
+	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
+	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
+
+	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	workerPodInformerFactory.Start(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	workerPodInformerFactory.WaitForCacheSync(stopCh)
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
 	scInformerFactory.WaitForCacheSync(stopCh)
@@ -204,7 +242,7 @@ func main() {
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
-	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
+	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), ateletSPIFFEID, *ateletClientCredBundle, *podIdentityCACerts)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
@@ -268,7 +306,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, ateletSPIFFEID))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{

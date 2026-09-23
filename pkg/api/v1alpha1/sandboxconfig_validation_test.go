@@ -61,7 +61,7 @@ func gvisorAsset() AssetFile {
 }
 
 // microVMAssets returns a full, valid micro-VM asset set for one architecture:
-// the five assets the policy requires. The overlay rootfs serves the OCI image
+// the four assets the policy requires. The overlay rootfs serves the OCI image
 // over virtio-fs, so virtiofsd is part of the set.
 func microVMAssets() map[string]AssetFile {
 	a := AssetFile{URL: "gs://bucket/asset", SHA256: validSHA256}
@@ -70,7 +70,6 @@ func microVMAssets() map[string]AssetFile {
 		"virtiofsd":        a,
 		"kata-kernel":      a,
 		"kata-image":       a,
-		"kata-config":      a,
 	}
 }
 

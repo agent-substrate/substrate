@@ -25,8 +25,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -398,7 +396,7 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorUID string) e
 	// the two views of "is an actor here" from disagreeing.
 	s.activeActor.Store(nil)
 
-	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
+	if err := s.releaseSandboxNetwork(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up actor network: %w", err))
 	}
 	return errors.Join(errs...)

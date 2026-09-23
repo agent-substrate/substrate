@@ -82,11 +82,11 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 		}),
 	})
 
-	u := &gluttonUser{
+	u := &gluttonUser{actors: []*gluttonActor{{
 		cfg:          cfg,
 		actorName:    "running-actor",
 		actorRunning: true,
-	}
+	}}}
 
 	rt := &taskRuntime{cfg: cfg}
 	rt.users.Store(boomerutil.GoroutineID(), u)
@@ -113,11 +113,11 @@ func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
 		}),
 	})
 
-	u := &gluttonUser{
+	u := &gluttonUser{actors: []*gluttonActor{{
 		cfg:          cfg,
 		actorName:    "stopped-actor",
 		actorRunning: false,
-	}
+	}}}
 
 	rt := &taskRuntime{cfg: cfg}
 	rt.users.Store(boomerutil.GoroutineID(), u)

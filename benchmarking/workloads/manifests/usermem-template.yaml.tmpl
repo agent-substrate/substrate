@@ -29,7 +29,7 @@ containers:
 - name: usermem
   image: containerstack/alpine-stress:latest
   command: ["stress", "--vm", "1", "--vm-bytes", "1G", "--vm-keep", "--vm-hang", "0"]
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/usermem/

@@ -98,6 +98,12 @@ type WorkerPoolSyncer struct {
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
+
+	// Exponential backoff schedule for retrying a failed page of the startup
+	// registered-worker scan. Per-syncer rather than package-level so a test
+	// can shrink it without writing state another test's syncer is reading.
+	listBackoff time.Duration
+	listCap     time.Duration
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
@@ -107,6 +113,8 @@ func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer, workerPo
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
+		listBackoff:        defaultListBackoff,
+		listCap:            defaultListCap,
 	}
 }
 
@@ -398,12 +406,11 @@ func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, key workerKe
 	return err
 }
 
-// storedWorkerListBackoff and storedWorkerListCap are the exponential backoff
-// schedule for retrying a failed page of the startup registered-worker scan.
-// They are vars so tests can shrink them.
-var (
-	storedWorkerListBackoff = 500 * time.Millisecond
-	storedWorkerListCap     = 30 * time.Second
+// The default retry backoff schedule for a failed page of the startup
+// registered-worker scan.
+const (
+	defaultListBackoff = 500 * time.Millisecond
+	defaultListCap     = 30 * time.Second
 )
 
 // enqueueRegisteredWorkers enqueues a key for every worker record in the
@@ -452,7 +459,7 @@ func (s *WorkerPoolSyncer) enqueueRegisteredWorkers(ctx context.Context) {
 // resets it.
 func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageToken string) (*ateapipb.ListWorkersResponse, error) {
 	backoff := wait.Backoff{
-		Duration: storedWorkerListBackoff,
+		Duration: s.listBackoff,
 		Factor:   2.0,
 		Jitter:   0.1,
 		// Steps must be large enough for the ramp (Duration*Factor^n) to reach
@@ -460,7 +467,7 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 		// With Duration=500ms, Factor=2, the ramp hits Cap=30s at step 6
 		// (0.5,1,2,4,8,16,30,30...).
 		Steps: 6,
-		Cap:   storedWorkerListCap,
+		Cap:   s.listCap,
 	}
 	for {
 		page, err := s.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{PageSize: 1000, PageToken: pageToken})

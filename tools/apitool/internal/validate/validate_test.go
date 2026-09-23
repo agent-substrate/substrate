@@ -41,6 +41,9 @@ func TestExemptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	if err := exemption.CheckSorted(want); err != nil {
+		t.Fatalf("%s: %v; run `apitool validate --update` (from tools/apitool) to restore canonical order", path, err)
+	}
 
 	missing, stale := exemption.Diff(current, want)
 	for _, f := range missing {

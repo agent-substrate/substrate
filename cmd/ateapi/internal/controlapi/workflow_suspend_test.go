@@ -21,6 +21,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -36,7 +37,7 @@ func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
 	tmpl := &ateapipb.ActorTemplate{
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://bucket/root/"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root/"},
 	}
 	w := &ActorWorkflow{store: persistence}
 	marked, err := w.ensureMarkedSuspending(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, actor, tmpl)
@@ -159,7 +160,7 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 		})
 
 		tmpl := &ateapipb.ActorTemplate{
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"},
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"},
 		}
 		marked, err := w.ensureMarkedSuspending(ctx, actorRef, actor, tmpl)
 		assertPrerequisiteResult(t, seedState, err, allowed[seedState])
@@ -201,17 +202,15 @@ func newTestPersistence(t *testing.T) store.Interface {
 }
 
 // newDanglingDialer returns a dialer whose informer cache has no pods, so
-// DialForWorker returns ErrWorkerPodNotFound and DialForAteletOnNode returns
-// ErrNoAteletOnNode.
+// DialForAteletOnNode always returns ErrNoAteletOnNode.
 func newDanglingDialer() *AteletDialer {
 	empty := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
-		byNamespaceAndName: func(obj any) ([]string, error) { return nil, nil },
-		byNode:             func(obj any) ([]string, error) { return nil, nil },
+		byNode: func(obj any) ([]string, error) { return nil, nil },
 	})
-	return NewAteletDialer(empty, empty, "", "")
+	return NewAteletDialer(empty, installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "")
 }
 
-func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {
 	neverWritten := someActorSnapshotURI(t, testStorageLocation, "team-a", "never-written")
 
 	tests := []struct {
@@ -240,6 +239,7 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 						WorkerNamespace: "worker-ns",
 						WorkerPool:      "pool",
 						WorkerPod:       "pod-gone",
+						NodeName:        "node-gone",
 					},
 					InProgressSnapshotUri: neverWritten,
 					ExternalSnapshot:      &ateapipb.ExternalSnapshot{SnapshotUri: tt.prevSnapshot},
@@ -249,15 +249,18 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
 			if _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
-				t.Fatal("ensureAteletSuspended: want error for dangling worker, got nil")
+				t.Fatal("ensureAteletSuspended: want error when atelet is unreachable, got nil")
 			}
 
+			// A dial failure is transient from this workflow's point of view: it
+			// must not crash the actor or touch its snapshot state. A worker that
+			// is genuinely gone is handled by the DeleteWorker workflow instead.
 			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
-			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-				t.Errorf("state = %v, want CRASHED", stored.GetStatus().GetState())
+			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+				t.Errorf("state = %v, want unchanged SUSPENDING", stored.GetStatus().GetState())
 			}
 			if got := stored.GetStatus().GetInProgressSnapshotUri(); got != neverWritten {
 				t.Errorf("InProgressSnapshotUri = %q, want preserved for debugging", got)
@@ -294,7 +297,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	storetest.MustCreateActor(t, ctx, persistence, actor)
 
 	w := &ActorWorkflow{store: persistence}
-	tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: testStorageLocation}}
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation}}
 	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
@@ -513,7 +516,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 			})
 
 			w := &ActorWorkflow{store: persistence}
-			tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://bucket/root"}}
+			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root"}}
 			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl); err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
@@ -532,7 +535,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 func TestCommitSnapshotScope(t *testing.T) {
 	tmpl := func(onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
 		return &ateapipb.ActorTemplate{
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{OnCommit: onCommit},
+			SnapshotConfig: &ateapipb.SnapshotConfig{OnCommit: onCommit},
 		}
 	}
 	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
@@ -589,7 +592,7 @@ func TestIsPausedOriginSuspend(t *testing.T) {
 func TestEnsureMarkedSuspending_PausedScopeRejection(t *testing.T) {
 	tmpl := func(onPause, onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
 		return &ateapipb.ActorTemplate{
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{OnPause: onPause, OnCommit: onCommit, StorageLocation: "gs://snapshots"},
+			SnapshotConfig: &ateapipb.SnapshotConfig{OnPause: onPause, OnCommit: onCommit, StorageLocation: "gs://snapshots"},
 		}
 	}
 	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
@@ -681,7 +684,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			},
 		})
 
-		tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"}}
+		tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
 		_, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, tmpl)
 		if !errors.Is(err, ErrNoAteletOnNode) {
 			t.Fatalf("ensurePausedSnapshotUploaded = %v, want ErrNoAteletOnNode", err)

@@ -201,10 +201,10 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	// (the local snapshot takes precedence at restore), or when its durable
 	// snapshot holds Data. Valid Full snapshots restore from their own
 	// content and ignore the policy.
-	if actorTemplate.GetSnapshotsConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
+	if actorTemplate.GetSnapshotConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
 		dataOnly := false
 		if actor.GetStatus().GetLocalSnapshotInfo() != nil {
-			dataOnly = actorTemplate.GetSnapshotsConfig().GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+			dataOnly = actorTemplate.GetSnapshotConfig().GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		} else if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
 			dataOnly = src.Scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		}
@@ -576,6 +576,7 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 		WorkerPod:       w.GetWorkerPod(),
 		WorkerPodUid:    w.GetWorkerPodUid(),
 		WorkerPodIp:     w.GetIp(),
+		NodeName:        w.GetNodeName(),
 	}
 }
 
@@ -657,7 +658,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
-	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
+	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
 		return tele, err
 	}
@@ -706,7 +707,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
 		default:
-			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
+			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 

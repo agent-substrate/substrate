@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
 // installDir is the manifest root, relative to the repository root.
@@ -83,6 +84,9 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 		if injection {
 			return nil, fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
 		}
+		if e.Cfg.ExperimentalUseSDSMint {
+			return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress-mitm")
+		}
 		return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress")
 	}
 
@@ -122,11 +126,11 @@ func (e *Env) patchAtenetEgressInject(raw []byte) ([]byte, error) {
 
 	name := e.Cfg.CredentialProviderName
 	if name == "" {
-		name = "ate-secret://kubernetes.io"
+		name = "ate-secret://k8s.io"
 	}
 	address := e.Cfg.CredentialProviderAddress
 	if address == "" {
-		address = "credprovider.ate-system.svc:50051"
+		address = "k8s-credential-provider.ate-system.svc:50051"
 	}
 	serverName := address
 	if i := strings.LastIndex(address, ":"); i >= 0 {
@@ -311,7 +315,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 		return err
 	}
 
-	running, err := e.Kube.DeploymentExists(ctx, NamespaceAteSystem, "atenet-egress")
+	running, err := e.Kube.DeploymentExists(ctx, e.Namespace(), "atenet-egress")
 	if err != nil {
 		return err
 	}
@@ -321,7 +325,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 	}
 
 	if running && (e.Cfg.AdditionalEgressExtprocService != "" || e.Cfg.ExperimentalEgressCredentialInjection) {
-		if err := e.Kube.RolloutRestartDeployment(ctx, NamespaceAteSystem, "atenet-egress", time.Now()); err != nil {
+		if err := e.Kube.RolloutRestartDeployment(ctx, e.Namespace(), "atenet-egress", time.Now()); err != nil {
 			return err
 		}
 	}
@@ -345,4 +349,69 @@ func (e *Env) otelConfigPath() string {
 // applyOtelConfig applies the environment's ate-otel-config ConfigMap.
 func (e *Env) applyOtelConfig(ctx context.Context) error {
 	return e.Kube.ApplyPath(ctx, e.otelConfigPath())
+}
+
+// otelConfigMap is the ConfigMap every control plane component reads its
+// telemetry settings from through envFrom.
+const otelConfigMap = "ate-otel-config"
+
+// otelEndpointKey is the collector address inside it.
+const otelEndpointKey = "OTEL_EXPORTER_OTLP_ENDPOINT"
+
+// otelOverrideDeployments are the control plane Deployments that read
+// ate-otel-config. ate-controller additionally copies the values onto the
+// ateom worker pods it creates, so one patch reaches the whole system.
+var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router"}
+
+// applyOtelEndpointOverride points all control plane telemetry at a different
+// collector for the duration of a measurement. See
+// benchmarking/telemetry/README.md.
+//
+// Call this AFTER every apply: the ate-system bundle carries its own copy of
+// ate-otel-config, so applying it replaces an earlier patch and the endpoint
+// silently returns to the cluster default.
+//
+// A ConfigMap change starts no rollout, because the pod template stays the
+// same, so the consumers have to be restarted. Only on an actual change: a
+// restart during the bundle's rollout makes the two compete, and the rollout
+// wait can then exceed its timeout. An absent workload is not an error,
+// because a single-component deploy has only that component.
+func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
+	endpoint := e.Cfg.OtlpEndpoint
+	if endpoint == "" {
+		return nil
+	}
+
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), otelConfigMap)
+	if err != nil {
+		return err
+	}
+	if cm != nil && cm.Data[otelEndpointKey] == endpoint {
+		return nil
+	}
+
+	log.Infof("Overriding %s with %s", otelEndpointKey, endpoint)
+	if err := e.Kube.MergePatchConfigMap(ctx, e.Namespace(), otelConfigMap,
+		map[string]string{otelEndpointKey: endpoint}); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for _, name := range otelOverrideDeployments {
+		if err := e.Kube.RolloutRestartDeployment(ctx, e.Namespace(), name, now); err != nil {
+			return err
+		}
+	}
+	// atelet DaemonSet names carry a version suffix; restart whichever
+	// versions are installed.
+	daemonSets, err := e.Kube.DaemonSetNames(ctx, e.Namespace(), "app=atelet")
+	if err != nil {
+		return err
+	}
+	for _, name := range daemonSets {
+		if err := e.Kube.RolloutRestart(ctx, e.Namespace(), name, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -28,8 +28,10 @@ import (
 
 // fakeRuntime stands in for *runsc. It records the signals killContainer
 // delivers and unblocks cmdWait when the container is configured to die on one
-// of them.
+// of them. The embedded interface is nil, so any other command panics.
 type fakeRuntime struct {
+	containerRuntime
+
 	mu      sync.Mutex
 	signals []string
 

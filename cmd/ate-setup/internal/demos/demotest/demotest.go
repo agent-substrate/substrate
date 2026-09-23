@@ -31,6 +31,9 @@ import (
 // configuration, so they can be exercised without a kubeconfig.
 func Env(t *testing.T) *steps.Env {
 	t.Helper()
+	// Pin VERSION so rendering does not depend on whatever tags (e.g.
+	// archive/*) happen to be in the local git checkout.
+	t.Setenv("VERSION", "v0.0.0-test")
 	root, err := config.RepoRoot()
 	if err != nil {
 		t.Fatalf("RepoRoot: %v", err)

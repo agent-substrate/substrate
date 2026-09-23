@@ -36,7 +36,6 @@ import (
 )
 
 const (
-	ateSystemNamespace  = "ate-system"
 	atenetRouterAppName = "atenet-router"
 )
 
@@ -103,8 +102,8 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 		t.Fatalf("expected exactly 1 ingress from peer, got %d", len(ingressRule.From))
 	}
 	fromPeer := ingressRule.From[0]
-	if fromPeer.NamespaceSelector == nil || fromPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != ateSystemNamespace {
-		t.Errorf("expected namespace selector for %s, got %v", ateSystemNamespace, fromPeer.NamespaceSelector)
+	if fromPeer.NamespaceSelector == nil || fromPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != e2e.SystemNamespace() {
+		t.Errorf("expected namespace selector for %s, got %v", e2e.SystemNamespace(), fromPeer.NamespaceSelector)
 	}
 	if fromPeer.PodSelector == nil || fromPeer.PodSelector.MatchLabels["app"] != atenetRouterAppName {
 		t.Errorf("expected pod selector for %s, got %v", atenetRouterAppName, fromPeer.PodSelector)
@@ -273,7 +272,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 // setupDemoCounterTemplate provisions the per-test WorkerPool and substrate
 // ActorTemplate from the substrate counter demo, returning the pool name and
 // the template. The template lives in an atespace named after the test's k8s
-// namespace, so its name needs no per-test suffix. SnapshotsConfig is copied
+// namespace, so its name needs no per-test suffix. SnapshotConfig is copied
 // from the source, as the CRD-era setup did.
 func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapipb.ActorTemplate) {
 	t.Helper()

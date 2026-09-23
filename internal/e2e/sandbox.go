@@ -203,7 +203,7 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 	// classes, so only same-class pools are eligible to run these actors.
 	blocks["${TEMPLATE_SANDBOX_CLASS}"] = "  sandboxClass: microvm"
 	// Only for fixtures that declare no limits of their own. Without them the
-	// guest boots at the kata config's default (2GiB), and several of those do
+	// guest boots at ateom's default size (2GiB), and several of those do
 	// not fit beside the demo pools on CI's single kind node. These size the VM
 	// itself — see internal/sizing.
 	blocks["${TEMPLATE_RESOURCES}"] = "  resources:\n    limits:\n      cpu: \"1\"\n      memory: 512Mi"

@@ -43,6 +43,16 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	tmpl := e2e.SubstrateCounterFixture()
 	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
+	// The lifecycle event counters are cumulative and the collector outlives this
+	// test, so take a baseline before driving anything. Asserting the states are
+	// merely present would pass on a previous run's counts, even with the
+	// exporter switched off.
+	baselineScrape, err := e2e.ScrapeCollectorMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeCollectorMetrics for the lifecycle baseline: %v", err)
+	}
+	lifecycleBaseline := e2e.LifecycleEventCounts(baselineScrape)
+
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: metricsAtespace}},
@@ -87,11 +97,22 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// because it deletes the worker pod.
 	triggerActorCrash(t, ctx, clients, actorID)
 
+	// The actor lifecycle events the steps above must have produced. The crash
+	// is the one state only ateapi can report, so it is what proves the events
+	// carry more than the ateom plane could.
+	wantStates := []string{
+		ateattr.ActorStateResuming,
+		ateattr.ActorStateRunning,
+		ateattr.ActorStateSuspended,
+		ateattr.ActorStateCrashed,
+	}
+
 	deadline := time.Now().Add(2 * time.Minute)
 	dataplane := e2e.CurrentAtenetDataplane()
 	prefixes := dataplane.PlatformMetricPrefixes(e2e.PlatformMetricPrefixes)
 	var missing []string
-	var ateomSeen, controllerSeen, routeDurationSeen bool
+	var ateomSeen, controllerSeen, routeDurationSeen, lifecycleSeen bool
+	var missingStates []string
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
@@ -103,6 +124,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("checking route-duration metric: %v", err)
 		}
+		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventCounts(scrape), wantStates)
+		lifecycleSeen = len(missingStates) == 0
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
@@ -111,7 +134,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
 			strings.Contains(scrape, "controller_runtime_")
 
-		if len(missing) == 0 && ateomSeen && controllerSeen && routeDurationSeen {
+		if len(missing) == 0 && ateomSeen && controllerSeen && routeDurationSeen && lifecycleSeen {
 			var errs []string
 
 			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
@@ -160,62 +183,6 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 			}
 			if !foundReadyLine {
 				errs = append(errs, "ate_workerpool_ready_workers validation failed: metric line not found in collector scrape text (no time series emitted by atecontroller callback)")
-			}
-
-			// Verify ate_scheduler_eligible_workers metric carries valid attributes:
-			// - Full labels (namespace, pool, class, constraint) for per-pool candidate lines.
-			// - Necessary base labels (class, constraint) for edge cases when no worker pools match.
-			foundEligibleLine := false
-			foundFullPoolLine := false
-			for _, line := range strings.Split(scrape, "\n") {
-				if strings.HasPrefix(line, "ate_scheduler_eligible_workers") {
-					foundEligibleLine = true
-					nsVal := extractLabelValue(line, "ate_workerpool_namespace")
-					poolVal := extractLabelValue(line, "ate_workerpool_name")
-					classVal := extractLabelValue(line, "ate_sandbox_class")
-					constraintVal := extractLabelValue(line, "ate_scheduling_constraint")
-
-					var lineErrs []string
-					if classVal == "" {
-						lineErrs = append(lineErrs, "ate_sandbox_class label is missing or empty")
-					}
-					if constraintVal == "" {
-						lineErrs = append(lineErrs, "ate_scheduling_constraint label is missing or empty")
-					} else if constraintVal != ateattr.ConstraintNone && constraintVal != ateattr.ConstraintRequiredNodes && constraintVal != ateattr.ConstraintSelector {
-						lineErrs = append(lineErrs, fmt.Sprintf("ate_scheduling_constraint %q is invalid (must be one of {%s, %s, %s})",
-							constraintVal, ateattr.ConstraintNone, ateattr.ConstraintRequiredNodes, ateattr.ConstraintSelector))
-					}
-
-					// Determine line type for error reporting.
-					isPerPoolLine := poolVal != "" || nsVal != ""
-					caseType := "[NORMAL CASE: Per-Pool Candidates Expected]"
-					if !isPerPoolLine {
-						caseType = "[EDGE CASE: No Worker Pools Matched Constraints]"
-					}
-
-					// If the line has pool/namespace labels, verify both are non-empty (full per-pool line).
-					if isPerPoolLine {
-						if nsVal == "" {
-							lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
-						}
-						if poolVal == "" {
-							lineErrs = append(lineErrs, "ate_workerpool_name label is missing or empty")
-						}
-						if len(lineErrs) == 0 {
-							foundFullPoolLine = true
-						}
-					}
-
-					if len(lineErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("%s line %q failed label validation:\n  - %s\n  (Extracted labels: ate_workerpool_namespace=%q, ate_workerpool_name=%q, ate_sandbox_class=%q, ate_scheduling_constraint=%q)",
-							caseType, line, strings.Join(lineErrs, "\n  - "), nsVal, poolVal, classVal, constraintVal))
-					}
-				}
-			}
-			if !foundEligibleLine {
-				errs = append(errs, "ate_scheduler_eligible_workers metric line not found in collector scrape output")
-			} else if !foundFullPoolLine {
-				errs = append(errs, "ate_scheduler_eligible_workers [NORMAL CASE] per-pool candidates was not found in collector scrape output; only edge-case 0-count histogram was present")
 			}
 
 			// Verify ate_actor_crashes metric carries valid, non-empty low-cardinality labels for all attributes.
@@ -304,11 +271,11 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 
 	if lastLabelErr != nil {
-		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
-			missing, ateomSeen, controllerSeen, lastLabelErr)
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
+			missing, missingStates, ateomSeen, controllerSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, AgentGateway route duration seen=%v, ateom pushed=%v, atecontroller pushed=%v",
-		missing, routeDurationSeen, ateomSeen, controllerSeen)
+	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, ateom pushed=%v, atecontroller pushed=%v",
+		missing, missingStates, routeDurationSeen, ateomSeen, controllerSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

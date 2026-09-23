@@ -26,7 +26,7 @@ containers:
 - name: counter
   image: ko://github.com/agent-substrate/substrate/demos/counter
   command: ["/ko-app/counter"]
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/ate-demo-parking/

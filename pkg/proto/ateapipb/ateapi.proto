@@ -43,6 +43,10 @@ service Control {
   // Resume an actor from its latest snapshot.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
 
+  // Revert an actor to SUSPENDED state.
+  // Only crashed, running or paused actors can be reverted.
+  rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {}
+
   // Delete an actor. Only suspended or crashed actors can be deleted unless
   // any_state is set.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
@@ -148,6 +152,7 @@ message ExternalSnapshot {
   // snapshot_uri addresses the snapshot's prefix in object storage.
   //
   // +k8s:required
+  // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string snapshot_uri = 1;
 
   // content_scope is what the snapshot captured.
@@ -524,6 +529,7 @@ enum ActorState {
   ACTOR_STATE_PAUSED = 6;
   ACTOR_STATE_CRASHED = 7;
   ACTOR_STATE_DELETING = 8;
+  ACTOR_STATE_REVERTING = 9;
   // Keep this in sync with ActorStatus.state's maximum.
 }
 
@@ -532,7 +538,7 @@ message ActorStatus {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=8 # keep this in sync with the ActorState enum
+  // +k8s:maximum=9 # keep this in sync with the ActorState enum
   ActorState state = 1;
 
   // worker_assignment points at the worker currently hosting this Actor.
@@ -546,7 +552,7 @@ message ActorStatus {
   // snapshot the Actor is currently taking.
   //
   // +k8s:optional
-  // +k8s:maxLength=2048
+  // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string in_progress_snapshot_uri = 3;
 
   // external_snapshot is the Actor's current external snapshot.
@@ -640,6 +646,12 @@ message WorkerAssignment {
   // +k8s:required
   // +k8s:customValidation # until `format=k8s-ip` is supported
   string worker_pod_ip = 5;
+
+  // node_name is the Kubernetes node hosting worker_pod.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  string node_name = 7;
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -655,17 +667,19 @@ message TagStatus {
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be
   // seeded from a tag under the same template.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_template_uid = 2;
 
   // storage_location is the base object-storage URI for this tag's snapshot.
   // Set by the server from the source actor's template when the tag is created
   // and immutable thereafter. The full snapshot URI is available in
   // snapshot.snapshot_uri once tag creation completes.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024
   string storage_location = 3;
-
-  // source_actor_uid is the UID of the Actor this tag's snapshot was copied
-  // from.
-  string source_actor_uid = 4;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
@@ -765,7 +779,7 @@ message ActorTemplate {
   repeated Volume volumes = 4;
 
   // +k8s:required
-  SnapshotsConfig snapshots_config = 5;
+  SnapshotConfig snapshot_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
   //
@@ -844,7 +858,7 @@ message SandboxConfig {
 }
 
 // +k8s:customValidation # on_commit must be a subset of on_pause
-message SnapshotsConfig {
+message SnapshotConfig {
   // on_pause defines the scope of the snapshot captured when an actor
   // is paused. Defaults to FULL when unset.
   //
@@ -949,11 +963,12 @@ message Container {
   // +k8s:listMapKey=name
   repeated EnvVar env = 5;
 
-  // readyz is an optional HTTP readiness probe; when set the actor is not
-  // ready until the endpoint returns 200.
+  // wakeup_probe gates each wakeup on this container: ResumeActor returns
+  // only after the probe answers HTTP 200. Without it, ResumeActor returns
+  // as soon as the container has started, which may be before it listens.
   //
   // +k8s:optional
-  ContainerReadyz readyz = 6;
+  ContainerWakeupProbe wakeup_probe = 6;
 
   // Keyed by mount_path: each path hosts exactly one mount, while a volume
   // may be mounted at multiple paths.
@@ -1025,18 +1040,21 @@ message EnvVar {
   //
   // +k8s:optional
   // +k8s:maxLength=32768 # guardrail;
-  string value = 2;
+  string value = 2 [ debug_redact = true ];
 }
 
-// ContainerReadyz configures the readiness signal for a container.
-message ContainerReadyz {
-  // http_get specifies the HTTP request to perform. Required.
+// ContainerWakeupProbe tells the platform when a container is serving. It is
+// polled on every wakeup, whether the actor cold-boots or is restored from a
+// snapshot, and not again while the actor stays running. A probe that does
+// not answer 200 within timeout_seconds crashes the actor.
+message ContainerWakeupProbe {
+  // http_get is the request to poll.
   //
   // +k8s:required
   HTTPGetAction http_get = 1;
 
-  // timeout_seconds bounds how long to poll http_get before failing the
-  // actor start. Defaults to 30 when unset.
+  // timeout_seconds is how long to keep polling before giving up.
+  // Defaults to 30 when unset.
   //
   // +k8s:required
   // +k8s:minimum=1
@@ -1044,17 +1062,19 @@ message ContainerReadyz {
   int32 timeout_seconds = 2;
 }
 
-// HTTPGetAction describes an HTTP GET against the container's interior IP.
+// HTTPGetAction describes the HTTP GET the probe polls.
 message HTTPGetAction {
   // path must be a URL path starting with "/", using only RFC 3986
   // path-segment characters, without query or fragment.
-  // Defaults to "/readyz" when unset.
+  // Defaults to "/" when unset.
   //
   // +k8s:required
   // +k8s:maxLength=1024
   // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
 
+  // port is the container port to connect to.
+  //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=65535
@@ -1392,6 +1412,21 @@ message ResumeActorResponse {
   bool resumed = 2;
 }
 
+// RevertActorRequest identifies the Actor to revert.
+message RevertActorRequest {
+  // actor to revert.
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+}
+
+// RevertActorResponse holds the reverted Actor.
+message RevertActorResponse {
+  // actor as it stands after the revert, SUSPENDED and still holding the
+  // external snapshot it was reverted to.
+  Actor actor = 1;
+}
+
 message DeleteActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
@@ -1510,7 +1545,7 @@ message MintActorJWTResponse {
   // * `ate.dev`: Ate/Substrate Extension - JSON object
   //   * atespace: (string) The atespace the actor belongs to
   //   * actorName: (string) The actor's name, unique within its atespace
-  string actor_jwt = 1;
+  string actor_jwt = 1 [ debug_redact = true ];
 }
 
 // Request message for MintActorCertificate.
@@ -1563,16 +1598,6 @@ message MintActorCertificateResponse {
   // leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.
   repeated bytes actor_certificates = 1;
-}
-
-message GetActorSnapshotRequest {
-  // +k8s:opaqueType
-  ObjectRef actor_snapshot = 1;
-}
-
-message GetActorSnapshotTagRequest {
-  // +k8s:opaqueType
-  ObjectRef actor_snapshot_tag = 1;
 }
 
 message ListTagsRequest {

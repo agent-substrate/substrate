@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
@@ -61,7 +62,7 @@ import (
 const (
 	testAtespace = "test-atespace"
 	testActorID  = "id1"
-	// testStorageLocation is the snapshots_config.storage_location the test
+	// testStorageLocation is the snapshot_config.storage_location the test
 	// templates hand out. No object store is wired up behind it.
 	testStorageLocation = "gs://fake-fake-fake"
 
@@ -131,8 +132,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	}
 
 	// 3. Initialize Informers
-	workerFactory, workerInformer := controlapi.WorkerPodInformer(k8sClient)
-	ateletFactory, ateletInformer := controlapi.AteletInformer(k8sClient)
+	ateletFactory, ateletInformer := controlapi.AteletInformer(k8sClient, installdefaults.SystemNamespace)
 	scFactory := informers.NewSharedInformerFactory(k8sClient, 0)
 	scLister := scFactory.Storage().V1().StorageClasses().Lister()
 
@@ -143,12 +143,10 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	workerFactory.Start(ctx.Done())
 	ateletFactory.Start(ctx.Done())
 	substrateInformerFactory.Start(ctx.Done())
 	scFactory.Start(ctx.Done())
 
-	workerFactory.WaitForCacheSync(ctx.Done())
 	ateletFactory.WaitForCacheSync(ctx.Done())
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
 	scFactory.WaitForCacheSync(ctx.Done())
@@ -162,8 +160,8 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	}
 
 	// Dial the fake atelet over insecure transport instead of per-atelet mTLS,
-	// so DialForWorker's real lookup/dial/cache path is exercised under test.
-	dialer := controlapi.NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer(), "", "",
+	// so DialForAteletOnNode's real lookup/dial/cache path is exercised under test.
+	dialer := controlapi.NewAteletDialer(ateletInformer.GetIndexer(), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
 		controlapi.WithDialCredentials(func(_ string) (credentials.TransportCredentials, error) {
 			return insecure.NewCredentials(), nil
 		}))
@@ -435,7 +433,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				Atespace: testAtespace,
 				Name:     "tmpl1",
 			},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
@@ -461,7 +459,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		Status: &ateapipb.TagStatus{
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			ActorTemplateUid: created.GetMetadata().GetUid(),
-			SourceActorUid:   "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94",
 		},
 	})
 	if err != nil {
@@ -576,7 +573,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				Atespace: testAtespace,
 				Name:     name,
 			},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{

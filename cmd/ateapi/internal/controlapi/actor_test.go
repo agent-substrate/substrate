@@ -324,7 +324,7 @@ func TestValidateActorUpdate(t *testing.T) {
 	}, {
 		"just out of bounds actor.status.state",
 		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = 9 })),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = 10 })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "state"), nil, "").WithOrigin("maximum")},
 	}, {
 		"invalid actor.status.state",
@@ -362,6 +362,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_uid"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ip"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "node_name"), ""),
 		},
 	}, {
 		"invalid actor.status.worker_assignment",
@@ -373,6 +374,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			wa.WorkerPod = "invalid pod"
 			wa.WorkerPodUid = "invalid UUID"
 			wa.WorkerPodIp = "invalid IP"
+			wa.NodeName = "invalid node"
 		}))),
 		field.ErrorList{
 			field.Forbidden(field.NewPath("status", "worker_assignment", "worker", "atespace"), ""),
@@ -382,6 +384,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod"), nil, "").WithOrigin("format=k8s-long-name"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "node_name"), nil, "").WithOrigin("format=k8s-long-name"),
 		},
 	}, {
 		// because we have manual IP format validation, let's be sure
@@ -864,9 +867,9 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 				Image:        "example.com/app:v1",
 				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 			}},
-			Volumes:         tmpl.volumes,
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:   tmpl.sandboxConfig,
+			Volumes:        tmpl.volumes,
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			SandboxConfig:  tmpl.sandboxConfig,
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}
@@ -1275,6 +1278,7 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 			WorkerPod:       "pod",
 			WorkerPodUid:    "12345678-1234-1234-1234-123456789abc",
 			WorkerPodIp:     "1.2.3.4",
+			NodeName:        "node1",
 		}
 		for _, m := range mods {
 			m(s.WorkerAssignment)
@@ -1505,7 +1509,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				t.Fatalf("incorrect initial status: %v", got)
 			}
 			if scenario == "own snapshot" {
-				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotsConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
+				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
 				if err != nil {
 					t.Fatal(err)
 				}

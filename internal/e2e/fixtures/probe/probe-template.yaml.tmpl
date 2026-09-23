@@ -36,7 +36,7 @@ containers:
   # readiness signal rather than a guess, and carries a non-default
   # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom
   # instead of only the ateom's built-in default.
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80
@@ -58,5 +58,5 @@ volumes:
 ${TEMPLATE_TRUST_BUNDLE}
 ${TEMPLATE_RESOURCES}
 ${TEMPLATE_SANDBOX_CONFIG}
-snapshotsConfig:
+snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -1020,7 +1021,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				SnapshotConfig: &ateapipb.SnapshotConfig{
 					OnPause:  tt.onPause,
 					OnResume: &ateapipb.OnResumeConfig{FromData: tt.fromData},
 				},
@@ -1231,13 +1232,14 @@ func wireTestAssignment() *ateapipb.WorkerAssignment {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    "worker-pod-uid",
+		NodeName:        "node-1",
 	}
 }
 
 // newWireCaptureWorkflow builds an ActorWorkflow whose atelet dialer resolves
 // to an in-process capturing fake. The dialer's conn cache is pre-warmed with
-// a bufconn-backed connection keyed by the atelet pod's UID, so DialForWorker
-// returns it without dialing the pod IP.
+// a bufconn-backed connection keyed by the atelet pod's UID, so
+// DialForAteletOnNode returns it without dialing the pod IP.
 func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet) {
 	t.Helper()
 
@@ -1263,15 +1265,11 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 		srv.Stop()
 	})
 
-	workerPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "worker-ns", Name: "pod-1", UID: "worker-pod-uid"},
-		Spec:       corev1.PodSpec{NodeName: "node-1"},
-	}
 	ateletPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-1", UID: "atelet-uid"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: installdefaults.SystemNamespace, Name: "atelet-1", UID: "atelet-uid"},
 		Spec:       corev1.PodSpec{NodeName: "node-1"},
 	}
-	dialer := newDialerForPods(t, workerPod, ateletPod)
+	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
 	dialer.ateletConns.Add("atelet-uid", conn)
 
 	lister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
@@ -1713,7 +1711,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
 					OnPause:         tt.tmpl.onPause,
 					OnResume:        &ateapipb.OnResumeConfig{FromData: tt.tmpl.fromData},

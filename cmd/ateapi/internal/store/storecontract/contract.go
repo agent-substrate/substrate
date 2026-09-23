@@ -1007,7 +1007,6 @@ func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 		Status: &ateapipb.TagStatus{
 			ActorTemplateUid: "template-uid",
 			StorageLocation:  "gs://private",
-			SourceActorUid:   actor.GetMetadata().GetUid(),
 		},
 	}
 }
@@ -1145,10 +1144,6 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 			{
 				name:   "actor template uid",
 				mutate: func(toUpdate *ateapipb.Tag) { toUpdate.Status.ActorTemplateUid = "other-template-uid" },
-			},
-			{
-				name:   "source actor uid",
-				mutate: func(toUpdate *ateapipb.Tag) { toUpdate.Status.SourceActorUid = "other-actor-uid" },
 			},
 		}
 

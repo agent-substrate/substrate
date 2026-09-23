@@ -200,6 +200,8 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		opName = ateattr.OperationSuspend
 	case ateapipb.ActorState_ACTOR_STATE_PAUSING:
 		opName = ateattr.OperationPause
+	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
+		opName = ateattr.OperationRevert
 	}
 
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED

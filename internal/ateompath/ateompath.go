@@ -98,15 +98,19 @@ func AteomSocketPath(podUID string) string {
 	)
 }
 
-func AteomNetNSName(podUID string) string {
-	return "ateom:" + podUID
+// ActorNetNSName names an actor's sandbox network namespace.
+func ActorNetNSName(actorUID string) string {
+	return "ateom-actor:" + actorUID
 }
 
-func AteomNetNSPath(podUID string) string {
-	return filepath.Join(
-		"/run/netns",
-		AteomNetNSName(podUID),
-	)
+// ActorNetNSPath is the mount path of the actor's named namespace.
+func ActorNetNSPath(actorUID string) string {
+	return filepath.Join("/run/netns", ActorNetNSName(actorUID))
+}
+
+// ActorResolvConfPath is the resolver bind source outside the actor's rootfs.
+func ActorResolvConfPath(actorUID string) string {
+	return filepath.Join(ActorPath(actorUID), "resolv.conf")
 }
 
 func ActorPath(actorUID string) string {

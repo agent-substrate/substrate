@@ -173,14 +173,14 @@ containers:
   volumeMounts:
   - name: shared-storage
     mountPath: /mnt/shared
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 8080
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
   configName: gvisor-default
-snapshotsConfig:
+snapshotConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:
 - name: shared-storage
