@@ -150,32 +150,10 @@ func TestConnectionStringSources(t *testing.T) {
 	writeConnectionString(t, runtimePath, "postgres://runtime:runtime-old@postgres:5432/atepg?sslmode=disable")
 	writeConnectionString(t, ddlPath, "postgres://ddl:ddl-old@postgres:5432/atepg?sslmode=disable")
 
-	t.Run("omitted DDL source follows runtime", func(t *testing.T) {
-		runtimeSource, ddlSource, err := connectionStringSources("@file:"+runtimePath, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		runtimeCfg, err := poolConfig(runtimeSource, "", 5*time.Minute)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ddlCfg, err := poolConfig(ddlSource, "", 5*time.Minute)
-		if err != nil {
-			t.Fatal(err)
-		}
-		watchCfg := runtimeCfg.Copy()
-		writeConnectionString(t, runtimePath, "postgres://runtime:runtime-new@postgres:5432/atepg?sslmode=disable")
-		for name, cfg := range map[string]*pgxpool.Config{"runtime": runtimeCfg, "watch": watchCfg, "DDL": ddlCfg} {
-			conn := cfg.ConnConfig.Copy()
-			if err := cfg.BeforeConnect(context.Background(), conn); err != nil {
-				t.Fatalf("%s BeforeConnect: %v", name, err)
-			}
-			if conn.Password != "runtime-new" {
-				t.Errorf("%s password = %q, want rotated runtime password", name, conn.Password)
-			}
-			if cfg.MaxConnLifetime != 5*time.Minute {
-				t.Errorf("%s maximum connection lifetime = %s", name, cfg.MaxConnLifetime)
-			}
+	t.Run("owner source is required", func(t *testing.T) {
+		_, _, err := connectionStringSources("@file:"+runtimePath, "")
+		if err == nil || !strings.Contains(err.Error(), "owner connection string must not be empty") {
+			t.Fatalf("connectionStringSources error = %v", err)
 		}
 	})
 
@@ -422,7 +400,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", "", "", "", schema, 0)
+	persistence, err := Connect(ctx, dsn+"&search_path=public", dsn, "", "", schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -511,7 +489,20 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		pgx.Identifier{ddlRole}.Sanitize())); err != nil {
 		t.Fatalf("creating PostgreSQL test roles: %v", err)
 	}
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`
+		CREATE SCHEMA %s AUTHORIZATION %s;
+		GRANT USAGE ON SCHEMA %s TO %s;
+		ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s
+			GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s`,
+		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize(),
+		pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize())); err != nil {
+		t.Fatalf("creating PostgreSQL test default privileges: %v", err)
+	}
 	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s
+			REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM %s`,
+			pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize()))
 		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`
 			DROP SCHEMA IF EXISTS %s CASCADE;
 			REVOKE ALL ON DATABASE atepg FROM %s;
@@ -544,16 +535,17 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	defer p.Close()
 
 	if _, err := p.CreateAtespace(ctx, newTestAtespace("runtime-write")); err != nil {
-		t.Fatalf("runtime DML failed: %v", err)
+		t.Fatalf("read/write operation failed: %v", err)
 	}
 	if _, err := p.pool.Exec(ctx, `CREATE TABLE forbidden (id integer)`); err == nil {
-		t.Fatal("runtime role created a table")
+		t.Fatal("read/write role created a table")
 	}
-	if _, err := p.pool.Exec(ctx, `UPDATE schema_migrations SET is_applied = false`); err == nil {
-		t.Fatal("runtime role modified the migration ledger")
+	var canUpdateLedger bool
+	if err := p.pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'schema_migrations', 'UPDATE')`).Scan(&canUpdateLedger); err != nil || !canUpdateLedger {
+		t.Fatalf("read/write role lacks default table privileges on migration ledger: %v", err)
 	}
 	if err := p.createWorkerOutboxPartitions(ctx, time.Now().Add(24*time.Hour)); err != nil {
-		t.Fatalf("DDL maintenance failed: %v", err)
+		t.Fatalf("owner maintenance failed: %v", err)
 	}
 
 	writeConnectionString(t, runtimePath, strings.Replace(containerDSN, "://atepg:atepg@", "://"+runtimeLoginB+":"+password+"@", 1))
@@ -564,26 +556,24 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 
 	var sessionUser, currentUser string
 	if err := p.pool.QueryRow(ctx, `SELECT session_user, current_user`).Scan(&sessionUser, &currentUser); err != nil {
-		t.Fatalf("querying rotated runtime identity: %v", err)
+		t.Fatalf("query rotated read/write identity: %v", err)
 	}
 	if sessionUser != runtimeLoginB || currentUser != runtimeRole {
-		t.Fatalf("rotated runtime identity = %q/%q, want %q/%q", sessionUser, currentUser, runtimeLoginB, runtimeRole)
+		t.Fatalf("rotated read/write identity = %q/%q, want %q/%q", sessionUser, currentUser, runtimeLoginB, runtimeRole)
 	}
 
-	// A subsystem that brings its own tables (OpenFGA) creates them as the DDL
-	// role, then reads and writes them through the runtime pool. Connect
-	// granted the runtime role DML before these tables existed.
+	// OpenFGA creates its tables as the owner role. It uses the read/write pool for data.
 	err = p.MigrateAsOwner(ctx, func(ctx context.Context, pool *pgxpool.Pool) error {
 		_, err := pool.Exec(ctx, `
 			CREATE TABLE subsystem_data (id integer);
 			CREATE TABLE subsystem_ledger (version integer)`)
 		return err
-	}, "subsystem_ledger")
+	})
 	if err != nil {
 		t.Fatalf("MigrateAsOwner failed: %v", err)
 	}
 	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_data VALUES (1)`); err != nil {
-		t.Errorf("runtime role cannot write a table MigrateAsOwner created: %v", err)
+		t.Errorf("read/write role cannot write a table MigrateAsOwner created: %v", err)
 	}
 	var owner string
 	if err := admin.QueryRow(ctx, `SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = $1::regclass`,
@@ -591,10 +581,10 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		t.Fatalf("querying subsystem table owner: %v", err)
 	}
 	if owner != ddlRole {
-		t.Errorf("subsystem table owner = %q, want stable DDL role %q", owner, ddlRole)
+		t.Errorf("subsystem table owner = %q, want stable owner role %q", owner, ddlRole)
 	}
-	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_ledger VALUES (1)`); err == nil {
-		t.Error("runtime role modified a subsystem migration ledger")
+	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_ledger VALUES (1)`); err != nil {
+		t.Errorf("read/write role lacks default privileges on subsystem table: %v", err)
 	}
 }
 
@@ -627,13 +617,13 @@ func TestConnectSingleRoleDoesNotRequireSchemaOwnership(t *testing.T) {
 	})
 
 	dsn := strings.Replace(containerDSN, "://atepg:atepg@", "://"+role+":"+password+"@", 1)
-	p, err := Connect(ctx, dsn, "", "", "", schema, 0)
+	p, err := Connect(ctx, dsn, dsn, "", "", schema, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
 	defer p.pool.Close()
 	defer p.Close()
 	if _, err := p.CreateAtespace(ctx, newTestAtespace("single-role-write")); err != nil {
-		t.Fatalf("runtime DML failed: %v", err)
+		t.Fatalf("read/write operation failed: %v", err)
 	}
 }

@@ -42,8 +42,7 @@ const (
 	DefaultStoreName = "substrate"
 
 	// MigrationTableName tracks OpenFGA schema migrations separately from
-	// Substrate's own schema_migrations table. Callers of Migrate name it as a
-	// ledger table so the runtime role gets no access to it.
+	// Substrate's own schema_migrations table.
 	MigrationTableName = "goose_db_version"
 )
 

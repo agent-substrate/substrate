@@ -43,10 +43,10 @@ func loadEnv(t *testing.T) {
 		"ATE_CREDENTIAL_INJECTION_ENABLED",
 		"ATE_CREDENTIAL_PROVIDER_ADDRESS",
 		"ATE_CREDENTIAL_PROVIDER_NAME",
-		"ATE_API_POSTGRES_CONNECTION_STRING",
-		"ATE_API_POSTGRES_DDL_CONNECTION_STRING",
-		"ATE_API_POSTGRES_RUNTIME_ROLE",
-		"ATE_API_POSTGRES_DDL_ROLE",
+		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING",
+		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING",
+		"ATE_API_POSTGRES_READ_WRITE_ROLE",
+		"ATE_API_POSTGRES_OWNER_ROLE",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_EXPERIMENTAL_USE_SDSMINT",
@@ -81,8 +81,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Router != RouterEnvoy {
 		t.Errorf("Router = %q, want %q", cfg.Router, RouterEnvoy)
 	}
-	if cfg.PostgresConnectionString != "" {
-		t.Errorf("PostgresConnectionString = %q, want bundled PostgreSQL", cfg.PostgresConnectionString)
+	if cfg.PostgresReadWriteConnectionString != "" {
+		t.Errorf("PostgresReadWriteConnectionString = %q, want bundled PostgreSQL", cfg.PostgresReadWriteConnectionString)
 	}
 	if cfg.RolloutTimeout != DefaultRolloutTimeout {
 		t.Errorf("RolloutTimeout = %v, want %v", cfg.RolloutTimeout, DefaultRolloutTimeout)
@@ -106,49 +106,60 @@ func TestLoadFlagsBeatEnvironment(t *testing.T) {
 	}
 }
 
-// ATE_API_POSTGRES_CONNECTION_STRING is how a developer points the apiserver at
+// ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING is how a developer points the apiserver at
 // their own database, the same override the shell installer honored.
-func TestLoadPostgresConnectionStringOverride(t *testing.T) {
+func TestLoadPostgresReadWriteConnectionStringOverride(t *testing.T) {
 	loadEnv(t)
 	const dsn = "postgresql://someone@db.example:5432/atepg?sslmode=disable"
-	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", dsn)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", dsn)
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "postgresql://owner@db.example:5432/atepg?sslmode=disable")
 
 	cfg, err := Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresConnectionString != dsn {
-		t.Errorf("PostgresConnectionString = %q, want %q", cfg.PostgresConnectionString, dsn)
+	if cfg.PostgresReadWriteConnectionString != dsn {
+		t.Errorf("PostgresReadWriteConnectionString = %q, want %q", cfg.PostgresReadWriteConnectionString, dsn)
 	}
 }
 
-func TestLoadPostgresDDLConnectionString(t *testing.T) {
+func TestLoadPostgresOwnerConnectionString(t *testing.T) {
 	loadEnv(t)
 	const runtimeDSN = "postgresql://runtime@db.example:5432/atepg?sslmode=disable"
 	const dsn = "postgresql://owner@db.example:5432/atepg?sslmode=disable"
-	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", runtimeDSN)
-	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", dsn)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", runtimeDSN)
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", dsn)
 
 	cfg, err := Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresDDLConnectionString != dsn {
-		t.Errorf("PostgresDDLConnectionString = %q, want %q", cfg.PostgresDDLConnectionString, dsn)
+	if cfg.PostgresOwnerConnectionString != dsn {
+		t.Errorf("PostgresOwnerConnectionString = %q, want %q", cfg.PostgresOwnerConnectionString, dsn)
 	}
 }
 
-func TestLoadRejectsPostgresDDLConnectionStringWithoutRuntime(t *testing.T) {
+func TestLoadRejectsPostgresOwnerConnectionStringWithoutRuntime(t *testing.T) {
 	loadEnv(t)
-	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "postgresql://owner@db.example:5432/atepg")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "postgresql://owner@db.example:5432/atepg")
 
 	_, err := Load(Options{})
-	if err == nil || !strings.Contains(err.Error(), "requires ATE_API_POSTGRES_CONNECTION_STRING") {
+	if err == nil || !strings.Contains(err.Error(), "requires ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING") {
 		t.Fatalf("Load() error = %v, want missing runtime DSN error", err)
 	}
 }
 
-// ATE_API_POSTGRES_SCHEMA defaults to public, as in the shell installer, and
+func TestLoadRejectsPostgresReadWriteConnectionStringWithoutOwner(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "postgresql://readwrite@db.example:5432/atepg")
+
+	_, err := Load(Options{})
+	if err == nil || !strings.Contains(err.Error(), "is required with ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING") {
+		t.Fatalf("Load() error = %v, want missing owner DSN error", err)
+	}
+}
+
+// ATE_API_POSTGRES_SCHEMA defaults to public, and
 // an explicit value wins.
 func TestLoadPostgresSchema(t *testing.T) {
 	loadEnv(t)

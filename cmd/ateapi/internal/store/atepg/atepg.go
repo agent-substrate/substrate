@@ -56,12 +56,11 @@ const (
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the runtime-only WatchWorkers pollers. ownerPool is
+	// watchPool serves the read/write WatchWorkers pollers. ownerPool is
 	// borrowed during startup for schema migrations, then serves outbox
 	// partition maintenance for the life of the process.
 	watchPool             *pgxpool.Pool
 	ownerPool             *pgxpool.Pool
-	runtimeRole           string
 	ownsWatchPool         bool
 	ownsOwnerPool         bool
 	leaseTTL              time.Duration
@@ -116,31 +115,26 @@ var _ store.Interface = (*Persistence)(nil)
 // PostgreSQL connection. Callers can retry this error before startup.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
-// Connect opens runtime and DDL pools, creates schema if necessary, and
-// applies pending schema migrations. An empty ddlDSN uses dsn for both roles;
-// an empty ddlRole likewise uses runtimeRole.
-func Connect(ctx context.Context, dsn, ddlDSN, runtimeRole, ddlRole, schema string, maxConnLifetime time.Duration) (*Persistence, error) {
+// Connect opens read/write and owner pools. It creates the schema and applies migrations.
+func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRole, schema string, maxConnLifetime time.Duration) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
 	if maxConnLifetime < 0 {
 		return nil, fmt.Errorf("PostgreSQL maximum connection lifetime must not be negative")
 	}
-	runtimeSource, ddlSource, err := connectionStringSources(dsn, ddlDSN)
+	readWriteSource, ownerSource, err := connectionStringSources(readWriteDSN, ownerDSN)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := poolConfig(runtimeSource, runtimeRole, maxConnLifetime)
+	cfg, err := poolConfig(readWriteSource, readWriteRole, maxConnLifetime)
 	if err != nil {
 		return nil, err
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	if ddlRole == "" && ddlDSN == "" {
-		ddlRole = runtimeRole
-	}
-	ownerCfg, err := poolConfig(ddlSource, ddlRole, maxConnLifetime)
+	ownerCfg, err := poolConfig(ownerSource, ownerRole, maxConnLifetime)
 	if err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL DDL connection string: %w", err)
+		return nil, fmt.Errorf("parse PostgreSQL owner connection string: %w", err)
 	}
 	ownerCfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
 	ownerCfg.MaxConns = ownerPoolMaxConns
@@ -159,12 +153,12 @@ func Connect(ctx context.Context, dsn, ddlDSN, runtimeRole, ddlRole, schema stri
 	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerCfg)
 	if err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("opening PostgreSQL DDL pool: %w", err)
+		return nil, fmt.Errorf("open PostgreSQL owner pool: %w", err)
 	}
 	if err := ownerPool.Ping(ctx); err != nil {
 		ownerPool.Close()
 		pool.Close()
-		return nil, fmt.Errorf("%w: pinging PostgreSQL DDL connection: %w", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: ping PostgreSQL owner connection: %w", ErrUnavailable, err)
 	}
 	if err := createSchema(ctx, ownerPool, schema); err != nil {
 		ownerPool.Close()
@@ -182,11 +176,7 @@ func Connect(ctx context.Context, dsn, ddlDSN, runtimeRole, ddlRole, schema stri
 		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
 	}
 
-	grantRole := runtimeRole
-	if grantRole == "" {
-		grantRole = cfg.ConnConfig.User
-	}
-	p, err := newPersistence(ctx, pool, watchPool, ownerPool, grantRole)
+	p, err := newPersistence(ctx, pool, watchPool, ownerPool)
 	if err != nil {
 		watchPool.Close()
 		ownerPool.Close()
@@ -200,19 +190,19 @@ func Connect(ctx context.Context, dsn, ddlDSN, runtimeRole, ddlRole, schema stri
 
 type connectionStringSource func() (string, error)
 
-func connectionStringSources(dsn, ddlDSN string) (connectionStringSource, connectionStringSource, error) {
-	runtimeSource, err := newConnectionStringSource(dsn)
+func connectionStringSources(readWriteDSN, ownerDSN string) (connectionStringSource, connectionStringSource, error) {
+	if ownerDSN == "" {
+		return nil, nil, fmt.Errorf("PostgreSQL owner connection string must not be empty")
+	}
+	readWriteSource, err := newConnectionStringSource(readWriteDSN)
 	if err != nil {
 		return nil, nil, err
 	}
-	if ddlDSN == "" {
-		return runtimeSource, runtimeSource, nil
-	}
-	ddlSource, err := newConnectionStringSource(ddlDSN)
+	ownerSource, err := newConnectionStringSource(ownerDSN)
 	if err != nil {
-		return nil, nil, fmt.Errorf("PostgreSQL DDL connection string: %w", err)
+		return nil, nil, fmt.Errorf("PostgreSQL owner connection string: %w", err)
 	}
-	return runtimeSource, ddlSource, nil
+	return readWriteSource, ownerSource, nil
 }
 
 func newConnectionStringSource(value string) (connectionStringSource, error) {
@@ -248,8 +238,14 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "agent-substrate:create-schema:"+schema); err != nil {
 		return fmt.Errorf("locking PostgreSQL schema %q: %w", schema, err)
 	}
-	if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
-		return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&exists); err != nil {
+		return fmt.Errorf("checking PostgreSQL schema %q: %w", schema, err)
+	}
+	if !exists {
+		if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
+			return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing PostgreSQL schema %q: %w", schema, err)
@@ -336,14 +332,11 @@ func sameConnectionIdentity(current, fresh *pgx.ConnConfig) bool {
 // Callers that already hold a pool (e.g. tests using testcontainers) use
 // this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
-	return newPersistence(ctx, pool, pool, pool, pool.Config().ConnConfig.User)
+	return newPersistence(ctx, pool, pool, pool)
 }
 
-func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Pool, runtimeRole string) (*Persistence, error) {
+func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Pool) (*Persistence, error) {
 	if err := applyMigrations(ctx, ownerPool); err != nil {
-		return nil, err
-	}
-	if err := grantRuntimePrivileges(ctx, ownerPool, runtimeRole); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
@@ -351,7 +344,6 @@ func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Poo
 		pool:                  pool,
 		watchPool:             watchPool,
 		ownerPool:             ownerPool,
-		runtimeRole:           runtimeRole,
 		leaseTTL:              defaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
@@ -393,25 +385,17 @@ func (p *Persistence) Close() {
 
 // NewPool opens a dedicated PostgreSQL connection pool configured identically
 // to this persistence instance (including TLS rotation and search_path). The
-// pool connects as the runtime role, which holds DML but no DDL privileges.
+// The pool connects as the read/write role, which cannot change schemas.
 // A subsystem that creates its own tables migrates through MigrateAsOwner first.
 func (p *Persistence) NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 	return pgxpool.NewWithConfig(ctx, p.pool.Config())
 }
 
-// MigrateAsOwner runs migrate on the DDL-role pool, then grants the runtime
-// role DML on the objects migrate created. A subsystem that owns tables in the
-// Substrate schema (OpenFGA) calls this before it serves traffic through a
-// NewPool pool. The runtime role cannot create tables, and the grants Connect
-// issues only cover the tables that exist at that point.
-//
-// ledgerTables name migration bookkeeping tables that stay private to the DDL
-// role, as schema_migrations does for Substrate's own migrations.
-func (p *Persistence) MigrateAsOwner(ctx context.Context, migrate func(context.Context, *pgxpool.Pool) error, ledgerTables ...string) error {
-	if err := migrate(ctx, p.ownerPool); err != nil {
-		return err
-	}
-	return grantRuntimePrivileges(ctx, p.ownerPool, p.runtimeRole, ledgerTables...)
+// MigrateAsOwner runs a subsystem's migrations on the owner pool before it
+// serves traffic through a NewPool pool. Bootstrap or the external database
+// administrator supplies the read/write role's default privileges.
+func (p *Persistence) MigrateAsOwner(ctx context.Context, migrate func(context.Context, *pgxpool.Pool) error) error {
+	return migrate(ctx, p.ownerPool)
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers

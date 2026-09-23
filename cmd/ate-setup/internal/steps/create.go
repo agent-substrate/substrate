@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ const (
 	SecretPodIdentityCA    = "pod-identity-ca-pool"
 	SecretEgressMITMCAPool = "egress-mitm-ca-pool"
 	SecretAPIServerEnvVars = "ate-api-server-secret-envvars"
-	SecretPostgresRoles    = "postgres-role-passwords"
+	SecretPostgresAdmin    = "postgres-admin"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
 	apiServerEnvHashKey    = "ate.dev/env-hash"
@@ -132,19 +133,20 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		return err
 	}
 
-	runtimeDSN, ddlDSN, err := e.postgresConnectionStrings(ctx)
+	readWriteDSN, ownerDSN, err := e.postgresReadWriteConnectionStrings(ctx)
 	if err != nil {
 		return err
 	}
-	log.Infof("POSTGRES_CONNECTION_STRING: configured")
-	log.Infof("POSTGRES_DDL_CONNECTION_STRING: configured")
+	log.Infof("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING: configured")
+	log.Infof("ATE_API_POSTGRES_OWNER_CONNECTION_STRING: configured")
 
 	configVars := map[string]string{
-		"ATE_API_POSTGRES_RUNTIME_ROLE": e.Cfg.PostgresRuntimeRole,
-		"ATE_API_POSTGRES_DDL_ROLE":     e.Cfg.PostgresDDLRole,
-		"ATE_API_POSTGRES_SCHEMA":       e.Cfg.PostgresSchemaName(),
+		"ATE_API_POSTGRES_READ_WRITE_ROLE": e.Cfg.PostgresReadWriteRole,
+		"ATE_API_POSTGRES_OWNER_ROLE":      e.Cfg.PostgresOwnerRole,
+		"ATE_API_POSTGRES_SCHEMA":          e.Cfg.PostgresSchemaName(),
+		"ATE_API_POSTGRES_BOOTSTRAP":       strconv.FormatBool(e.useBundledPostgres()),
 	}
-	secretVars := buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN)
+	secretVars := buildAPIServerSecretEnvVars(readWriteDSN, ownerDSN)
 	if err := e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
 	}
@@ -154,19 +156,20 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	return e.annotateAPIServerEnvHash(ctx, apiServerEnvHash(configVars, secretVars))
 }
 
-func buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN string) map[string]string {
+func buildAPIServerSecretEnvVars(readWriteDSN, ownerDSN string) map[string]string {
 	return map[string]string{
-		"ATE_API_POSTGRES_CONNECTION_STRING":     runtimeDSN,
-		"ATE_API_POSTGRES_DDL_CONNECTION_STRING": ddlDSN,
+		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": readWriteDSN,
+		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      ownerDSN,
 	}
 }
 
 func apiServerEnvHash(configVars, secretVars map[string]string) string {
-	payload := configVars["ATE_API_POSTGRES_RUNTIME_ROLE"] + "\x00" +
-		configVars["ATE_API_POSTGRES_DDL_ROLE"] + "\x00" +
+	payload := configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] + "\x00" +
+		configVars["ATE_API_POSTGRES_OWNER_ROLE"] + "\x00" +
 		configVars["ATE_API_POSTGRES_SCHEMA"] + "\x00" +
-		secretVars["ATE_API_POSTGRES_CONNECTION_STRING"] + "\x00" +
-		secretVars["ATE_API_POSTGRES_DDL_CONNECTION_STRING"]
+		configVars["ATE_API_POSTGRES_BOOTSTRAP"] + "\x00" +
+		secretVars["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] + "\x00" +
+		secretVars["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"]
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
 }
 

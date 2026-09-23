@@ -43,7 +43,7 @@ func TestUseBundledPostgres(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := &Env{Cfg: &config.Config{PostgresConnectionString: tc.connString}}
+			e := &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: tc.connString}}
 			if got := e.useBundledPostgres(); got != tc.want {
 				t.Errorf("useBundledPostgres() = %v, want %v", got, tc.want)
 			}
@@ -51,47 +51,51 @@ func TestUseBundledPostgres(t *testing.T) {
 	}
 }
 
-func TestPostgresConnectionStrings(t *testing.T) {
-	t.Run("external DDL defaults to runtime", func(t *testing.T) {
+func TestPostgresReadWriteConnectionStrings(t *testing.T) {
+	t.Run("external owner connection is required", func(t *testing.T) {
 		const dsn = "postgresql://runtime@db.example/atepg"
-		e := &Env{Cfg: &config.Config{PostgresConnectionString: dsn}}
-		runtimeDSN, ddlDSN, err := e.postgresConnectionStrings(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if runtimeDSN != dsn || ddlDSN != dsn {
-			t.Fatalf("connection strings = %q, %q; want %q twice", runtimeDSN, ddlDSN, dsn)
+		e := &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: dsn}}
+		_, _, err := e.postgresReadWriteConnectionStrings(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "owner connection string is required") {
+			t.Fatalf("postgresReadWriteConnectionStrings error = %v", err)
 		}
 	})
 
 	t.Run("bundled credentials are reused", func(t *testing.T) {
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresRoles, Namespace: NamespaceAteSystem},
+		adminSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem},
 			Data: map[string][]byte{
-				"runtime-password": []byte("runtime-secret"),
-				"ddl-password":     []byte("ddl-secret"),
+				"POSTGRES_USER":     []byte("custom-admin"),
+				"POSTGRES_PASSWORD": []byte("custom-password"),
 			},
 		}
 		e := &Env{
 			Cfg:  &config.Config{},
-			Kube: &kube.Client{Typed: fake.NewSimpleClientset(secret)},
+			Kube: &kube.Client{Typed: fake.NewSimpleClientset(adminSecret)},
 		}
-		runtimeDSN, ddlDSN, err := e.postgresConnectionStrings(context.Background())
+		readWriteDSN, ownerDSN, err := e.postgresReadWriteConnectionStrings(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(runtimeDSN, "ateapi_runtime:runtime-secret") || !strings.Contains(ddlDSN, "ateapi_ddl:ddl-secret") || runtimeDSN == ddlDSN {
-			t.Fatalf("unexpected bundled connection strings: %q, %q", runtimeDSN, ddlDSN)
+		if !strings.Contains(readWriteDSN, "substrate_readwrite_user:substrate-readwrite") || !strings.Contains(ownerDSN, "substrate_admin_user:substrate-admin") || readWriteDSN == ownerDSN {
+			t.Fatalf("unexpected bundled connection strings: %q, %q", readWriteDSN, ownerDSN)
 		}
-		if !strings.Contains(runtimeDSN, "channel_binding=disable") || !strings.Contains(ddlDSN, "channel_binding=disable") {
-			t.Fatalf("bundled connection strings do not disable unsupported channel binding: %q, %q", runtimeDSN, ddlDSN)
+		if !strings.Contains(readWriteDSN, "channel_binding=disable") || !strings.Contains(ownerDSN, "channel_binding=disable") {
+			t.Fatalf("bundled connection strings do not disable unsupported channel binding: %q, %q", readWriteDSN, ownerDSN)
 		}
-		runtimeAgain, ddlAgain, err := e.postgresConnectionStrings(context.Background())
+		readWriteAgain, ownerAgain, err := e.postgresReadWriteConnectionStrings(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if runtimeAgain != runtimeDSN || ddlAgain != ddlDSN {
-			t.Fatal("bundled PostgreSQL credentials changed on the second read")
+		if readWriteAgain != readWriteDSN || ownerAgain != ownerDSN {
+			t.Fatal("bundled PostgreSQL connection strings changed on the second read")
+		}
+		gotAdmin, err := e.Kube.GetSecret(context.Background(), NamespaceAteSystem, SecretPostgresAdmin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(gotAdmin.Data["POSTGRES_USER"]) != "custom-admin" {
+			t.Fatal("existing administrator Secret changed")
 		}
 	})
 }

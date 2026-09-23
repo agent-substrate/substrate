@@ -47,7 +47,7 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 		return err
 	}
 	// Always reconcile the PostgreSQL connection settings, so that a changed
-	// ATE_API_POSTGRES_CONNECTION_STRING reaches an existing install.
+	// ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING reaches an existing install.
 	if err := e.CreateAPIServerEnvVars(ctx); err != nil {
 		return err
 	}

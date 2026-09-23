@@ -21,26 +21,26 @@ import (
 	"time"
 )
 
-func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
-	oldDSN := *postgresConnectionString
+func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
+	oldDSN := *postgresReadWriteConnectionString
 	t.Cleanup(func() {
-		*postgresConnectionString = oldDSN
+		*postgresReadWriteConnectionString = oldDSN
 	})
-	*postgresConnectionString = ""
+	*postgresReadWriteConnectionString = ""
 
 	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--postgres-connection-string is required") {
+	if err == nil || !strings.Contains(err.Error(), "--postgres-read-write-connection-string is required") {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
 	}
 }
 
 func TestConnectStoreRejectsNegativeMaxConnectionLifetime(t *testing.T) {
-	oldDSN, oldLifetime := *postgresConnectionString, *postgresMaxConnLifetime
+	oldDSN, oldLifetime := *postgresReadWriteConnectionString, *postgresMaxConnLifetime
 	t.Cleanup(func() {
-		*postgresConnectionString = oldDSN
+		*postgresReadWriteConnectionString = oldDSN
 		*postgresMaxConnLifetime = oldLifetime
 	})
-	*postgresConnectionString = "postgres://runtime@postgres/atepg"
+	*postgresReadWriteConnectionString = "postgres://runtime@postgres/atepg"
 	*postgresMaxConnLifetime = -time.Second
 
 	_, err := connectStore(context.Background())
@@ -50,32 +50,47 @@ func TestConnectStoreRejectsNegativeMaxConnectionLifetime(t *testing.T) {
 }
 
 func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
-	oldRuntime, oldDDL := *postgresConnectionString, *postgresDDLConnectionString
-	oldRuntimeRole, oldDDLRole := *postgresRuntimeRole, *postgresDDLRole
+	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
+	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
+	oldBootstrap := *postgresBootstrap
 	t.Cleanup(func() {
-		*postgresConnectionString = oldRuntime
-		*postgresDDLConnectionString = oldDDL
-		*postgresRuntimeRole = oldRuntimeRole
-		*postgresDDLRole = oldDDLRole
+		*postgresReadWriteConnectionString = oldRuntime
+		*postgresOwnerConnectionString = oldDDL
+		*postgresReadWriteRole = oldRuntimeRole
+		*postgresOwnerRole = oldDDLRole
+		*postgresBootstrap = oldBootstrap
 	})
-	*postgresConnectionString = "@env"
-	*postgresDDLConnectionString = "@env"
-	*postgresRuntimeRole = "@env"
-	*postgresDDLRole = "@env"
-	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", "runtime-a")
-	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "ddl-a")
-	t.Setenv("ATE_API_POSTGRES_RUNTIME_ROLE", "runtime-role")
-	t.Setenv("ATE_API_POSTGRES_DDL_ROLE", "ddl-role")
+	*postgresReadWriteConnectionString = "@env"
+	*postgresOwnerConnectionString = "@env"
+	*postgresReadWriteRole = "@env"
+	*postgresOwnerRole = "@env"
+	*postgresBootstrap = false
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
+	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
+	t.Setenv("ATE_API_POSTGRES_BOOTSTRAP", "true")
 
-	loadFlagsFromEnv()
-	if *postgresConnectionString != "runtime-a" || *postgresDDLConnectionString != "ddl-a" ||
-		*postgresRuntimeRole != "runtime-role" || *postgresDDLRole != "ddl-role" {
-		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresConnectionString, *postgresDDLConnectionString, *postgresRuntimeRole, *postgresDDLRole)
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", "runtime-b")
-	t.Setenv("ATE_API_POSTGRES_DDL_CONNECTION_STRING", "ddl-b")
-	loadFlagsFromEnv()
-	if *postgresConnectionString != "runtime-a" || *postgresDDLConnectionString != "ddl-a" {
+	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
+		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" || !*postgresBootstrap {
+		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
+	}
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-b")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-b")
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" {
 		t.Fatal("environment-backed connection strings changed after startup resolution")
+	}
+}
+
+func TestLoadFlagsFromEnvRejectsInvalidBootstrap(t *testing.T) {
+	t.Setenv("ATE_API_POSTGRES_BOOTSTRAP", "initialize")
+	if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "must be true or false") {
+		t.Fatalf("loadFlagsFromEnv() error = %v, want boolean validation", err)
 	}
 }

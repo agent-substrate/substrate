@@ -30,10 +30,8 @@ data:
     # health checks, the workload's idempotent database bootstrap, and the
     # tls-reloader sidecar's configuration reloads.
     local all all trust
-    # Only ateapi's two roles may connect over TCP. PostgreSQL requires both a
-    # password and a client certificate signed by the pod-identity CA.
-    hostssl atepg ateapi_runtime all scram-sha-256 clientcert=verify-ca
-    hostssl atepg ateapi_ddl all scram-sha-256 clientcert=verify-ca
+    # PostgreSQL requires a password and a pod-identity client certificate.
+    hostssl atepg all all scram-sha-256 clientcert=verify-ca
   reload-tls.sh: |
     # PostgreSQL opens ssl_cert_file, ssl_key_file and ssl_ca_file at startup
     # and on SIGHUP, and nowhere else. The kubelet replaces the projected pod
@@ -64,7 +62,7 @@ data:
       # Starting empty also means a restart of this container costs one
       # redundant reload rather than a missed one.
       if [ "${current}" != "${reloaded}" ] \
-        && psql -U postgres -d postgres -Atc 'SELECT pg_reload_conf()' >/dev/null 2>&1; then
+        && psql -U "${POSTGRES_USER}" -d postgres -Atc 'SELECT pg_reload_conf()' >/dev/null 2>&1; then
         reloaded="${current}"
         echo "$(date -u +%FT%TZ) reloaded TLS configuration"
       fi
@@ -124,6 +122,12 @@ spec:
         image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
         securityContext:
           runAsUser: 70
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-admin
+              key: POSTGRES_USER
         command:
         - /bin/sh
         - /etc/postgresql/reload-tls.sh
@@ -145,77 +149,21 @@ spec:
       containers:
       - name: postgres
         image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        lifecycle:
-          postStart:
-            exec:
-              command:
-              - /bin/sh
-              - -ec
-              - |
-                until psql -U postgres -d postgres -Atc 'SELECT 1' >/dev/null 2>&1; do
-                  sleep 1
-                done
-                if ! psql -U postgres -d postgres -Atc \
-                  "SELECT 1 FROM pg_database WHERE datname = 'atepg'" | grep -qx 1; then
-                  createdb -U postgres atepg
-                fi
-                psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
-                  -v runtime_password="${ATEAPI_RUNTIME_PASSWORD}" \
-                  -v ddl_password="${ATEAPI_DDL_PASSWORD}" <<'SQL'
-                SET password_encryption = 'scram-sha-256';
-                SELECT 'CREATE ROLE ateapi_runtime LOGIN'
-                  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ateapi_runtime') \gexec
-                SELECT 'CREATE ROLE ateapi_ddl LOGIN'
-                  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ateapi_ddl') \gexec
-                ALTER ROLE ateapi_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD :'runtime_password';
-                ALTER ROLE ateapi_ddl NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD :'ddl_password';
-                REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE atepg FROM PUBLIC;
-                GRANT CONNECT ON DATABASE atepg TO ateapi_runtime, ateapi_ddl;
-                GRANT CREATE ON DATABASE atepg TO ateapi_ddl;
-                SQL
-                psql -v ON_ERROR_STOP=1 -U postgres -d atepg \
-                  -v substrate_schema="${ATEAPI_POSTGRES_SCHEMA}" <<'SQL'
-                SELECT format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', :'substrate_schema')
-                  WHERE EXISTS (SELECT FROM pg_namespace WHERE nspname = :'substrate_schema') \gexec
-                SELECT format('ALTER SCHEMA %I OWNER TO ateapi_ddl', :'substrate_schema')
-                  WHERE EXISTS (SELECT FROM pg_namespace WHERE nspname = :'substrate_schema') \gexec
-                SELECT format('ALTER TABLE %I.%I OWNER TO ateapi_ddl', n.nspname, c.relname)
-                  FROM pg_class c
-                  JOIN pg_namespace n ON n.oid = c.relnamespace
-                  WHERE n.nspname = :'substrate_schema'
-                    AND c.relkind IN ('r', 'p')
-                    AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = 'ateapi_ddl')
-                  \gexec
-                SELECT format('ALTER SEQUENCE %I.%I OWNER TO ateapi_ddl', n.nspname, c.relname)
-                  FROM pg_class c
-                  JOIN pg_namespace n ON n.oid = c.relnamespace
-                  WHERE n.nspname = :'substrate_schema'
-                    AND c.relkind = 'S'
-                    AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = 'ateapi_ddl')
-                  \gexec
-                SQL
         env:
         - name: POSTGRES_DB
           value: atepg
-        - name: POSTGRES_HOST_AUTH_METHOD
-          value: trust
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-admin
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-admin
+              key: POSTGRES_PASSWORD
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata
-        - name: ATEAPI_RUNTIME_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgres-role-passwords
-              key: runtime-password
-        - name: ATEAPI_DDL_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgres-role-passwords
-              key: ddl-password
-        - name: ATEAPI_POSTGRES_SCHEMA
-          valueFrom:
-            configMapKeyRef:
-              name: ate-api-server-envvars
-              key: ATE_API_POSTGRES_SCHEMA
         ports:
         - name: postgres
           containerPort: 5432
@@ -224,17 +172,15 @@ spec:
             command:
             - /bin/sh
             - -ec
-            - psql -U postgres -d atepg -Atc 'SELECT 1' >/dev/null
+            - psql -U "${POSTGRES_USER}" -d atepg -Atc 'SELECT 1' >/dev/null
           initialDelaySeconds: 2
           periodSeconds: 2
         livenessProbe:
           exec:
             command:
-            - pg_isready
-            - -U
-            - postgres
-            - -d
-            - postgres
+            - /bin/sh
+            - -ec
+            - pg_isready -U "${POSTGRES_USER}" -d postgres
           initialDelaySeconds: 10
           periodSeconds: 10
         args:

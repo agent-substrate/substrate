@@ -123,14 +123,14 @@ function usage() {
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
   echo ""
-  echo "PostgreSQL configuration (a runtime DSN or Cloud SQL instance selects an"
+  echo "PostgreSQL configuration (a read/write DSN or Cloud SQL instance selects an"
   echo "external database and skips the bundled instance):"
   echo ""
-  echo "  ATE_API_POSTGRES_CONNECTION_STRING     Runtime/DML DSN for any external PostgreSQL (stored in a Secret;"
+  echo "  ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING  Read/write DSN for an external PostgreSQL database"
   echo "                                         pair with ATE_API_POSTGRES_SERVER_CA_FILE for sslmode=verify-ca)"
-  echo "  ATE_API_POSTGRES_DDL_CONNECTION_STRING DDL/migration DSN (requires a runtime DSN; defaults to it)"
-  echo "  ATE_API_POSTGRES_RUNTIME_ROLE          Stable runtime role for username-changing rotation"
-  echo "  ATE_API_POSTGRES_DDL_ROLE              Stable DDL owner role (defaults to the runtime role with one DSN)"
+  echo "  ATE_API_POSTGRES_OWNER_CONNECTION_STRING      Owner DSN. It requires a read/write DSN and defaults to it."
+  echo "  ATE_API_POSTGRES_READ_WRITE_ROLE               Role assumed for queries (default: substrate_readwrite)"
+  echo "  ATE_API_POSTGRES_OWNER_ROLE                    Role assumed for migrations (default: substrate_owner)"
   echo "  ATE_API_POSTGRES_CLOUDSQL_INSTANCE     Cloud SQL instance connection name (project:region:instance)."
   echo "                                         Deploys the Cloud SQL Auth Proxy sidecar: connector-managed TLS"
   echo "                                         and automatic IAM database auth, no passwords (see tools/setup-gcp/cloud-sql.md)."
@@ -140,8 +140,7 @@ function usage() {
   echo "  ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH     true (default) | false (password-over-proxy escape hatch)"
   echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
-  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public; use a dedicated schema"
-  echo "                                         when configuring separate runtime and DDL roles)"
+  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
   echo ""
   echo "Authentication configuration:"
   echo ""
@@ -279,16 +278,15 @@ default_postgres_connection_string() {
 # external database is configured via an explicit DSN or a Cloud SQL instance
 # (whether provided in the environment or adopted from the cluster).
 use_bundled_postgres() {
-  [[ -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" && -z "$(resolve_cloudsql_instance)" ]]
+  [[ -z "${ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING:-}" && -z "$(resolve_cloudsql_instance)" ]]
 }
 
 ensure_bundled_postgres_credentials() {
-  if run_kubectl get secret -n ate-system postgres-role-passwords >/dev/null 2>&1; then
-    return
+  if ! run_kubectl get secret -n ate-system postgres-admin >/dev/null 2>&1; then
+    run_kubectl create secret generic -n ate-system postgres-admin \
+      --from-literal=POSTGRES_USER=postgres \
+      --from-literal=POSTGRES_PASSWORD=postgres
   fi
-  run_kubectl create secret generic -n ate-system postgres-role-passwords \
-    --from-literal=runtime-password="$(openssl rand -hex 32)" \
-    --from-literal=ddl-password="$(openssl rand -hex 32)"
 }
 
 # --- Versioned dataplane rendering ---
@@ -686,20 +684,21 @@ create_api_server_env_vars() {
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
-  local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
-  local postgres_ddl_connection_string="${ATE_API_POSTGRES_DDL_CONNECTION_STRING:-}"
-  local postgres_runtime_role="${ATE_API_POSTGRES_RUNTIME_ROLE:-}"
-  local postgres_ddl_role="${ATE_API_POSTGRES_DDL_ROLE:-}"
+  local postgres_read_write_connection_string="${ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING:-}"
+  local postgres_owner_connection_string="${ATE_API_POSTGRES_OWNER_CONNECTION_STRING:-}"
+  local postgres_read_write_role="${ATE_API_POSTGRES_READ_WRITE_ROLE:-substrate_readwrite}"
+  local postgres_owner_role="${ATE_API_POSTGRES_OWNER_ROLE:-substrate_owner}"
   local postgres_schema="${ATE_API_POSTGRES_SCHEMA:-public}"
-  if [[ -n "${postgres_ddl_connection_string}" && -z "${postgres_connection_string}" ]]; then
-    echo "Error: ATE_API_POSTGRES_DDL_CONNECTION_STRING requires ATE_API_POSTGRES_CONNECTION_STRING" >&2
+  local postgres_bootstrap=false
+  if [[ -n "${postgres_owner_connection_string}" && -z "${postgres_read_write_connection_string}" ]]; then
+    echo "Error: ATE_API_POSTGRES_OWNER_CONNECTION_STRING requires ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING" >&2
     exit 1
   fi
   # Distinguishes a DSN the operator supplied on this run from one
   # synthesized, defaulted, or adopted back from the Secret: only the former
   # outranks ATE_API_POSTGRES_POOL_MAX_CONNS below.
   local dsn_from_operator=""
-  [[ -n "${postgres_connection_string}" ]] && dsn_from_operator="yes"
+  [[ -n "${postgres_read_write_connection_string}" ]] && dsn_from_operator="yes"
   local cloudsql_instance cloudsql_gsa=""
   local cloudsql_iam_auth="${ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH:-true}"
   local cloudsql_ip_type="${ATE_API_POSTGRES_CLOUDSQL_IP_TYPE:-private}"
@@ -723,17 +722,17 @@ create_api_server_env_vars() {
           cloudsql_ip_type="public"
         fi
       fi
-      if [[ -z "${postgres_connection_string}" ]]; then
-        postgres_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
-          -o jsonpath='{.data.ATE_API_POSTGRES_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
+      if [[ -z "${postgres_read_write_connection_string}" ]]; then
+        postgres_read_write_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
+          -o jsonpath='{.data.ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
       fi
-      if [[ -z "${postgres_ddl_connection_string}" ]]; then
-        postgres_ddl_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
-          -o jsonpath='{.data.ATE_API_POSTGRES_DDL_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
+      if [[ -z "${postgres_owner_connection_string}" ]]; then
+        postgres_owner_connection_string="$(run_kubectl get secret -n ate-system ate-api-server-secret-envvars \
+          -o jsonpath='{.data.ATE_API_POSTGRES_OWNER_CONNECTION_STRING}' 2>/dev/null | base64 --decode || true)"
       fi
     fi
   fi
-  if [[ -z "${postgres_connection_string}" ]]; then
+  if [[ -z "${postgres_read_write_connection_string}" ]]; then
     if [[ -n "${cloudsql_instance}" ]]; then
       # Cloud SQL via the Auth Proxy sidecar: ateapi talks plaintext to the
       # proxy on pod-local loopback; the proxy owns TLS and IAM database
@@ -747,26 +746,22 @@ create_api_server_env_vars() {
       if [[ "${cloudsql_iam_auth}" == "false" ]]; then
         echo "Error: ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false disables automatic IAM database" \
           "authentication, so a passwordless DSN cannot be synthesized; set" \
-          "ATE_API_POSTGRES_CONNECTION_STRING explicitly (host=127.0.0.1 to stay on the proxy)" >&2
+          "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING explicitly (host=127.0.0.1 to stay on the proxy)" >&2
         exit 1
       fi
       if [[ -z "${cloudsql_gsa}" ]]; then
         echo "Error: ATE_API_POSTGRES_CLOUDSQL_INSTANCE requires ATE_API_POSTGRES_CLOUDSQL_GSA" \
-          "(or an explicit ATE_API_POSTGRES_CONNECTION_STRING)" >&2
+          "(or an explicit ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING)" >&2
         exit 1
       fi
-      postgres_connection_string="user=${cloudsql_gsa%.gserviceaccount.com} host=127.0.0.1 port=5432 dbname=atepg sslmode=disable"
+      postgres_read_write_connection_string="user=${cloudsql_gsa%.gserviceaccount.com} host=127.0.0.1 port=5432 dbname=atepg sslmode=disable"
     else
       ensure_bundled_postgres_credentials
-      local runtime_password ddl_password
-      runtime_password="$(run_kubectl get secret -n ate-system postgres-role-passwords \
-        -o jsonpath='{.data.runtime-password}' | base64 --decode)"
-      ddl_password="$(run_kubectl get secret -n ate-system postgres-role-passwords \
-        -o jsonpath='{.data.ddl-password}' | base64 --decode)"
-      postgres_connection_string="$(default_postgres_connection_string ateapi_runtime "${runtime_password}")"
-      if [[ -z "${postgres_ddl_connection_string}" ]]; then
-        postgres_ddl_connection_string="$(default_postgres_connection_string ateapi_ddl "${ddl_password}")"
+      postgres_read_write_connection_string="$(default_postgres_connection_string substrate_readwrite_user substrate-readwrite)"
+      if [[ -z "${postgres_owner_connection_string}" ]]; then
+        postgres_owner_connection_string="$(default_postgres_connection_string substrate_admin_user substrate-admin)"
       fi
+      postgres_bootstrap=true
     fi
   fi
   # Appends pgxpool sizing (pool_max_conns) to the DSN to prevent silent client
@@ -774,30 +769,30 @@ create_api_server_env_vars() {
   # the env var overwrites values in adopted cluster DSNs, ensuring scaling updates 
   # aren't silently ignored on redeploys. Handles both URI and keyword/value formats.
   if [[ -n "${ATE_API_POSTGRES_POOL_MAX_CONNS:-}" ]]; then
-    if [[ "${postgres_connection_string}" == *pool_max_conns=* ]]; then
+    if [[ "${postgres_read_write_connection_string}" == *pool_max_conns=* ]]; then
       if [[ -z "${dsn_from_operator}" ]]; then
-        postgres_connection_string="$(printf '%s' "${postgres_connection_string}" \
+        postgres_read_write_connection_string="$(printf '%s' "${postgres_read_write_connection_string}" \
           | sed -E "s/pool_max_conns=[^ &]*/pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}/")"
       fi
-    elif [[ "${postgres_connection_string}" == *"://"*"?"* ]]; then
-      postgres_connection_string+="&pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
-    elif [[ "${postgres_connection_string}" == *"://"* ]]; then
-      postgres_connection_string+="?pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
+    elif [[ "${postgres_read_write_connection_string}" == *"://"*"?"* ]]; then
+      postgres_read_write_connection_string+="&pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
+    elif [[ "${postgres_read_write_connection_string}" == *"://"* ]]; then
+      postgres_read_write_connection_string+="?pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
     else
-      postgres_connection_string+=" pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
+      postgres_read_write_connection_string+=" pool_max_conns=${ATE_API_POSTGRES_POOL_MAX_CONNS}"
     fi
   fi
 
-  # A separate DDL credential is optional for external databases so existing
+  # A separate owner credential is optional for external databases. Existing
   # installs retain their single-role behavior.
-  if [[ -z "${postgres_ddl_connection_string}" ]]; then
-    postgres_ddl_connection_string="${postgres_connection_string}"
+  if [[ -z "${postgres_owner_connection_string}" ]]; then
+    postgres_owner_connection_string="${postgres_read_write_connection_string}"
   fi
 
   # Redact any password before logging (URI user:pw@host and keyword password=).
-  echo "POSTGRES_CONNECTION_STRING: $(printf '%s' "${postgres_connection_string}" \
+  echo "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING: $(printf '%s' "${postgres_read_write_connection_string}" \
     | sed -E 's#(://[^:/@]*):[^@]*@#\1:***@#; s/(password=)[^ &]*/\1***/g')"
-  echo "POSTGRES_DDL_CONNECTION_STRING: $(printf '%s' "${postgres_ddl_connection_string}" \
+  echo "ATE_API_POSTGRES_OWNER_CONNECTION_STRING: $(printf '%s' "${postgres_owner_connection_string}" \
     | sed -E 's#(://[^:/@]*):[^@]*@#\1:***@#; s/(password=)[^ &]*/\1***/g')"
 
   # Empty unless Cloud SQL is configured; expanded below with the
@@ -831,9 +826,10 @@ create_api_server_env_vars() {
   fi
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     ${cm_args[@]+"${cm_args[@]}"} \
-    --from-literal=ATE_API_POSTGRES_RUNTIME_ROLE="${postgres_runtime_role}" \
-    --from-literal=ATE_API_POSTGRES_DDL_ROLE="${postgres_ddl_role}" \
+    --from-literal=ATE_API_POSTGRES_READ_WRITE_ROLE="${postgres_read_write_role}" \
+    --from-literal=ATE_API_POSTGRES_OWNER_ROLE="${postgres_owner_role}" \
     --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
+    --from-literal=ATE_API_POSTGRES_BOOTSTRAP="${postgres_bootstrap}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
@@ -842,8 +838,8 @@ create_api_server_env_vars() {
   # lists the secretRef after the configMapRef, so this value wins if both
   # define the key.
   run_kubectl create secret generic -n ate-system ate-api-server-secret-envvars \
-    --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
-    --from-literal=ATE_API_POSTGRES_DDL_CONNECTION_STRING="${postgres_ddl_connection_string}" \
+    --from-literal=ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING="${postgres_read_write_connection_string}" \
+    --from-literal=ATE_API_POSTGRES_OWNER_CONNECTION_STRING="${postgres_owner_connection_string}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
@@ -1025,8 +1021,8 @@ deploy_ate_system() {
     # Say so explicitly: a DSN aimed at a database that was never deployed
     # otherwise surfaces only as an ate-api-server rollout timeout minutes
     # later, with nothing pointing at the cause.
-    local external_db="ATE_API_POSTGRES_CONNECTION_STRING"
-    [[ -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" ]] \
+    local external_db="ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"
+    [[ -z "${ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING:-}" ]] \
       && external_db="Cloud SQL instance $(resolve_cloudsql_instance)"
     log_step "Skipping bundled PostgreSQL: external database configured (${external_db})"
   fi

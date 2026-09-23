@@ -395,15 +395,12 @@ func createCloudSQLIAMUser(ctx context.Context, svc *sqladmin.Service, cfg *Conf
 
 func printCloudSQLNextSteps(cfg *Config) {
 	gsa := cloudSQLGSAEmail(cfg)
-	dbUser := cloudSQLDatabaseUser(gsa)
 	fmt.Printf(`
 Cloud SQL is provisioned. Two steps remain:
 
-1. One-time schema privileges (PostgreSQL 15+ removed PUBLIC's CREATE on the
-   public schema; ateapi applies its schema at startup as the IAM user).
-   Connect as the postgres user and run:
-
-     GRANT USAGE, CREATE ON SCHEMA public TO "%s";
+1. Create the PostgreSQL owner and read/write roles, grant the IAM database
+   user membership, and configure schema privileges. Follow section 2 of
+   tools/setup-gcp/cloud-sql.md before deploying ateapi.
 
 2. Deploy ateapi against it:
 
@@ -412,7 +409,7 @@ Cloud SQL is provisioned. Two steps remain:
      ./hack/install-ate.sh --deploy-ate-system
 
 See tools/setup-gcp/cloud-sql.md for details and verification steps.
-`, dbUser, cfg.ProjectID, cfg.Region, cfg.CloudSQLInstance, gsa)
+`, cfg.ProjectID, cfg.Region, cfg.CloudSQLInstance, gsa)
 }
 
 var cloudsqlCmd = &cobra.Command{

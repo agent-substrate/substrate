@@ -16,7 +16,6 @@ package steps
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
@@ -32,56 +31,48 @@ func bundledPostgresDSN(role, password string) string {
 	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", role, password, postgresTLSParams)
 }
 
-func (e *Env) postgresConnectionStrings(ctx context.Context) (string, string, error) {
-	if runtimeDSN := e.Cfg.PostgresConnectionString; runtimeDSN != "" {
-		ddlDSN := e.Cfg.PostgresDDLConnectionString
-		if ddlDSN == "" {
-			ddlDSN = runtimeDSN
+func (e *Env) postgresReadWriteConnectionStrings(ctx context.Context) (string, string, error) {
+	if readWriteDSN := e.Cfg.PostgresReadWriteConnectionString; readWriteDSN != "" {
+		if e.Cfg.PostgresOwnerConnectionString == "" {
+			return "", "", fmt.Errorf("owner connection string is required with an external read/write connection string")
 		}
-		return runtimeDSN, ddlDSN, nil
+		return readWriteDSN, e.Cfg.PostgresOwnerConnectionString, nil
 	}
-	runtimePassword, ddlPassword, err := e.ensureBundledPostgresCredentials(ctx)
-	if err != nil {
+	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
 		return "", "", err
 	}
-	ddlDSN := e.Cfg.PostgresDDLConnectionString
-	if ddlDSN == "" {
-		ddlDSN = bundledPostgresDSN("ateapi_ddl", ddlPassword)
-	}
-	return bundledPostgresDSN("ateapi_runtime", runtimePassword), ddlDSN, nil
+	return bundledPostgresDSN("substrate_readwrite_user", "substrate-readwrite"), bundledPostgresDSN("substrate_admin_user", "substrate-admin"), nil
 }
 
-func (e *Env) ensureBundledPostgresCredentials(ctx context.Context) (string, string, error) {
-	secret, err := e.Kube.GetSecret(ctx, NamespaceAteSystem, SecretPostgresRoles)
+func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
+	adminSecret, err := e.Kube.GetSecret(ctx, NamespaceAteSystem, SecretPostgresAdmin)
 	if err != nil {
-		return "", "", err
+		return err
 	}
-	if secret == nil {
-		data := map[string]string{"runtime-password": rand.Text(), "ddl-password": rand.Text()}
-		if err := e.Kube.ApplySecret(ctx, NamespaceAteSystem, SecretPostgresRoles, data); err != nil {
-			return "", "", err
+	if adminSecret == nil {
+		if err := e.Kube.ApplySecret(ctx, NamespaceAteSystem, SecretPostgresAdmin, map[string]string{
+			"POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres",
+		}); err != nil {
+			return err
 		}
-		return data["runtime-password"], data["ddl-password"], nil
+	} else if len(adminSecret.Data["POSTGRES_USER"]) == 0 || len(adminSecret.Data["POSTGRES_PASSWORD"]) == 0 {
+		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER and POSTGRES_PASSWORD", NamespaceAteSystem, SecretPostgresAdmin)
 	}
-	runtimePassword, ddlPassword := string(secret.Data["runtime-password"]), string(secret.Data["ddl-password"])
-	if runtimePassword == "" || ddlPassword == "" {
-		return "", "", fmt.Errorf("secret %s/%s must contain runtime-password and ddl-password", NamespaceAteSystem, SecretPostgresRoles)
-	}
-	return runtimePassword, ddlPassword, nil
+	return nil
 }
 
 // useBundledPostgres reports whether ateapi uses the in-cluster database
 // (when no external DSN is configured). Gates applying the bundled StatefulSet
 // and waiting on its rollout in DeployAteSystem.
 func (e *Env) useBundledPostgres() bool {
-	return e.Cfg.PostgresConnectionString == ""
+	return e.Cfg.PostgresReadWriteConnectionString == ""
 }
 
 // applyBundledPostgres applies the bundled PostgreSQL StatefulSet, or logs that
 // it was skipped in favor of an external database.
 func (e *Env) applyBundledPostgres(ctx context.Context) error {
 	if !e.useBundledPostgres() {
-		log.Step("Skipping bundled PostgreSQL: external database configured (ATE_API_POSTGRES_CONNECTION_STRING)")
+		log.Step("Skipping bundled PostgreSQL: external database configured (ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING)")
 		return nil
 	}
 	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("postgres", "postgres.yaml"))
@@ -95,13 +86,13 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err
 	}
-	if _, _, err := e.ensureBundledPostgresCredentials(ctx); err != nil {
+	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
 		return err
 	}
 	if err := e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, map[string]string{
-		"ATE_API_POSTGRES_RUNTIME_ROLE": e.Cfg.PostgresRuntimeRole,
-		"ATE_API_POSTGRES_DDL_ROLE":     e.Cfg.PostgresDDLRole,
-		"ATE_API_POSTGRES_SCHEMA":       e.Cfg.PostgresSchemaName(),
+		"ATE_API_POSTGRES_READ_WRITE_ROLE": e.Cfg.PostgresReadWriteRole,
+		"ATE_API_POSTGRES_OWNER_ROLE":      e.Cfg.PostgresOwnerRole,
+		"ATE_API_POSTGRES_SCHEMA":          e.Cfg.PostgresSchemaName(),
 	}); err != nil {
 		return err
 	}

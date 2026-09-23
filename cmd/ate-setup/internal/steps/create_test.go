@@ -35,15 +35,15 @@ func TestBuildAPIServerSecretEnvVars(t *testing.T) {
 
 	got := buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN)
 
-	want := []string{"ATE_API_POSTGRES_CONNECTION_STRING", "ATE_API_POSTGRES_DDL_CONNECTION_STRING"}
+	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Errorf("keys = %v, want %v", keys, want)
 	}
-	if got["ATE_API_POSTGRES_CONNECTION_STRING"] != runtimeDSN {
-		t.Errorf("ATE_API_POSTGRES_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_CONNECTION_STRING"], runtimeDSN)
+	if got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != runtimeDSN {
+		t.Errorf("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"], runtimeDSN)
 	}
-	if got["ATE_API_POSTGRES_DDL_CONNECTION_STRING"] != ddlDSN {
-		t.Errorf("ATE_API_POSTGRES_DDL_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_DDL_CONNECTION_STRING"], ddlDSN)
+	if got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != ddlDSN {
+		t.Errorf("ATE_API_POSTGRES_OWNER_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"], ddlDSN)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestAPIServerEnvHash(t *testing.T) {
 			configVars,
 			buildAPIServerSecretEnvVars("other", "ddl"),
 		},
-		"DDL connection string": {
+		"owner connection string": {
 			configVars,
 			buildAPIServerSecretEnvVars("runtime", "other"),
 		},

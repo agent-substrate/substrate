@@ -45,7 +45,11 @@ const DefaultRolloutTimeout = 60 * time.Second
 
 // DefaultPostgresSchema mirrors the shell installer's default for
 // ATE_API_POSTGRES_SCHEMA, the PostgreSQL schema holding the Substrate tables.
-const DefaultPostgresSchema = "public"
+const (
+	DefaultPostgresSchema        = "public"
+	DefaultPostgresReadWriteRole = "substrate_readwrite"
+	DefaultPostgresOwnerRole     = "substrate_owner"
+)
 
 // devEnvFile is the optional per-developer environment script at the repo root.
 const devEnvFile = ".ate-dev-env.sh"
@@ -91,17 +95,16 @@ type Config struct {
 
 	// Router selects the atenet router dataplane.
 	Router string
-	// PostgresConnectionString is the apiserver's store connection string.
-	// Empty means use the bundled PostgreSQL runtime role.
-	PostgresConnectionString string
-	// PostgresDDLConnectionString is the optional schema-owner connection
-	// string. Empty means use the runtime string for an external database; a
-	// non-empty value requires PostgresConnectionString.
-	PostgresDDLConnectionString string
-	// PostgresRuntimeRole and PostgresDDLRole are stable NOLOGIN roles assumed
+	// PostgresReadWriteConnectionString is the apiserver's store connection string.
+	// Empty uses the bundled PostgreSQL read/write role.
+	PostgresReadWriteConnectionString string
+	// PostgresOwnerConnectionString is the optional schema-owner connection
+	// string. An external database requires both connection strings.
+	PostgresOwnerConnectionString string
+	// PostgresReadWriteRole and PostgresOwnerRole are stable NOLOGIN roles assumed
 	// after authentication when login usernames rotate.
-	PostgresRuntimeRole string
-	PostgresDDLRole     string
+	PostgresReadWriteRole string
+	PostgresOwnerRole     string
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
@@ -233,10 +236,10 @@ func Load(opts Options) (*Config, error) {
 		KODockerRepo:                          env["KO_DOCKER_REPO"],
 		KODefaultPlatforms:                    env["KO_DEFAULTPLATFORMS"],
 		Images:                                loadImageSource(opts, env),
-		PostgresConnectionString:              env["ATE_API_POSTGRES_CONNECTION_STRING"],
-		PostgresDDLConnectionString:           env["ATE_API_POSTGRES_DDL_CONNECTION_STRING"],
-		PostgresRuntimeRole:                   env["ATE_API_POSTGRES_RUNTIME_ROLE"],
-		PostgresDDLRole:                       env["ATE_API_POSTGRES_DDL_ROLE"],
+		PostgresReadWriteConnectionString:     env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"],
+		PostgresOwnerConnectionString:         env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"],
+		PostgresReadWriteRole:                 firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
+		PostgresOwnerRole:                     firstNonEmpty(env["ATE_API_POSTGRES_OWNER_ROLE"], DefaultPostgresOwnerRole),
 		PostgresSchema:                        env["ATE_API_POSTGRES_SCHEMA"],
 		RolloutTimeout:                        rolloutTimeout,
 		rolloutTimeoutSet:                     timeoutStr != "",
@@ -286,8 +289,11 @@ func validate(cfg *Config) error {
 	if err := cfg.Images.Validate(); err != nil {
 		return err
 	}
-	if cfg.PostgresDDLConnectionString != "" && cfg.PostgresConnectionString == "" {
-		return fmt.Errorf("ATE_API_POSTGRES_DDL_CONNECTION_STRING requires ATE_API_POSTGRES_CONNECTION_STRING")
+	if cfg.PostgresOwnerConnectionString != "" && cfg.PostgresReadWriteConnectionString == "" {
+		return fmt.Errorf("ATE_API_POSTGRES_OWNER_CONNECTION_STRING requires ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")
+	}
+	if cfg.PostgresReadWriteConnectionString != "" && cfg.PostgresOwnerConnectionString == "" {
+		return fmt.Errorf("ATE_API_POSTGRES_OWNER_CONNECTION_STRING is required with ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")
 	}
 	switch cfg.Router {
 	case RouterEnvoy, RouterAgentgateway:

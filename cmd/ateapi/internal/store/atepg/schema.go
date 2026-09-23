@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -66,46 +65,6 @@ func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	return errors.Join(migrateToLatest(ctx, provider), provider.Close())
-}
-
-// grantRuntimePrivileges gives the runtime role DML access to schema objects
-// while keeping the migration ledgers private to the DDL role. Substrate's own
-// schema_migrations is always private; ledgerTables names any further ledger,
-// such as the one a subsystem migrating through MigrateAsOwner brings with it.
-func grantRuntimePrivileges(ctx context.Context, pool *pgxpool.Pool, runtimeRole string, ledgerTables ...string) error {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("starting PostgreSQL runtime grant transaction: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // Commit or the returned error decides the outcome.
-
-	var schema, ddlRole string
-	if err := tx.QueryRow(ctx, `SELECT current_schema(), current_user`).Scan(&schema, &ddlRole); err != nil {
-		return fmt.Errorf("get PostgreSQL schema for runtime grants: %w", err)
-	}
-	if ddlRole == runtimeRole {
-		return nil
-	}
-	role := pgx.Identifier{runtimeRole}.Sanitize()
-	schemaName := pgx.Identifier{schema}.Sanitize()
-
-	statements := fmt.Sprintf(`
-		GRANT USAGE ON SCHEMA %[1]s TO %[2]s;
-		GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %[1]s TO %[2]s;
-		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %[1]s TO %[2]s`,
-		schemaName, role)
-	for _, table := range append([]string{migrationTableName}, ledgerTables...) {
-		statements += fmt.Sprintf(";\nREVOKE ALL PRIVILEGES ON TABLE %s FROM %s",
-			pgx.Identifier{schema, table}.Sanitize(), role)
-	}
-
-	if _, err = tx.Exec(ctx, statements); err != nil {
-		return fmt.Errorf("granting PostgreSQL runtime privileges to %q: %w", runtimeRole, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("committing PostgreSQL runtime privileges for %q: %w", runtimeRole, err)
-	}
-	return nil
 }
 
 func openMigrationProvider(ctx context.Context, pool *pgxpool.Pool, migrations fs.FS) (*goose.Provider, error) {

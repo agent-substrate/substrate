@@ -24,6 +24,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -72,13 +74,16 @@ var (
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
-	authenticationConfigFile    = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	postgresConnectionString    = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN, URI, or @file:/absolute/path).")
-	postgresDDLConnectionString = pflag.String("postgres-ddl-connection-string", "", "PostgreSQL DDL and maintenance connection string (libpq DSN, URI, or @file:/absolute/path). Defaults to --postgres-connection-string.")
-	postgresRuntimeRole         = pflag.String("postgres-runtime-role", "", "Stable PostgreSQL role assumed by runtime connections. Required for rotation to a different login user.")
-	postgresDDLRole             = pflag.String("postgres-ddl-role", "", "Stable PostgreSQL role assumed by DDL connections. Defaults to --postgres-runtime-role when the DDL connection is omitted.")
-	postgresSchema              = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
-	postgresMaxConnLifetime     = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
+	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
+	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN, URI, or @file:/absolute/path).")
+	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN, URI, or @file:/absolute/path).")
+	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Stable PostgreSQL role for read/write connections. Required for a rotated login user.")
+	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Stable PostgreSQL role for owner connections.")
+	postgresSchema                    = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	postgresMaxConnLifetime           = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
+	postgresBootstrap                 = pflag.Bool("postgres-bootstrap", false, "Create missing fixed PostgreSQL identities before migrations.")
+	postgresAdminUsernameFile         = pflag.String("postgres-admin-username-file", "", "File that contains the PostgreSQL administrator username.")
+	postgresAdminPasswordFile         = pflag.String("postgres-admin-password-file", "", "File that contains the PostgreSQL administrator password.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
@@ -106,6 +111,14 @@ func main() {
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := loadFlagsFromEnv(); err != nil {
+		serverboot.Fatal(ctx, "Invalid PostgreSQL bootstrap configuration", err)
+	}
+	if *postgresBootstrap {
+		if err := runPostgresBootstrap(ctx); err != nil {
+			serverboot.Fatal(ctx, "Failed to bootstrap PostgreSQL", err)
+		}
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
@@ -145,7 +158,6 @@ func main() {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
 
-	loadFlagsFromEnv()
 	logFlagValues(ctx)
 	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
 	if err != nil {
@@ -168,12 +180,12 @@ func main() {
 
 	if poolProvider, ok := persistence.(interface {
 		NewPool(context.Context) (*pgxpool.Pool, error)
-		MigrateAsOwner(context.Context, func(context.Context, *pgxpool.Pool) error, ...string) error
+		MigrateAsOwner(context.Context, func(context.Context, *pgxpool.Pool) error) error
 	}); ok {
-		// OpenFGA creates its own tables, which the runtime role may not do.
-		// MigrateAsOwner runs the migrations as the DDL role and then grants
-		// the runtime role DML on the tables they created.
-		if err := poolProvider.MigrateAsOwner(shutdownCtx, authz.Migrate, authz.MigrationTableName); err != nil {
+		// OpenFGA creates its own tables, which the read/write role cannot do.
+		// MigrateAsOwner runs the migrations as the owner role. Bootstrap
+		// establishes default read/write privileges for its new tables.
+		if err := poolProvider.MigrateAsOwner(shutdownCtx, authz.Migrate); err != nil {
 			serverboot.Fatal(ctx, "Failed to apply OpenFGA migrations", err)
 		}
 		authzPool, err := poolProvider.NewPool(shutdownCtx)
@@ -350,15 +362,15 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 // against a known environment variable. Lets one set of Kubernetes
 // manifests source per-developer config from a ConfigMap without
 // editing the manifests for each branch.
-func loadFlagsFromEnv() {
+func loadFlagsFromEnv() error {
 	overrides := []struct {
 		flag *string
 		env  string
 	}{
-		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
-		{postgresDDLConnectionString, "ATE_API_POSTGRES_DDL_CONNECTION_STRING"},
-		{postgresRuntimeRole, "ATE_API_POSTGRES_RUNTIME_ROLE"},
-		{postgresDDLRole, "ATE_API_POSTGRES_DDL_ROLE"},
+		{postgresReadWriteConnectionString, "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
+		{postgresOwnerConnectionString, "ATE_API_POSTGRES_OWNER_CONNECTION_STRING"},
+		{postgresReadWriteRole, "ATE_API_POSTGRES_READ_WRITE_ROLE"},
+		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 	}
 	for _, o := range overrides {
@@ -366,6 +378,52 @@ func loadFlagsFromEnv() {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
+	if !pflag.CommandLine.Changed("postgres-bootstrap") {
+		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_BOOTSTRAP"); ok {
+			enabled, err := strconv.ParseBool(raw)
+			if err != nil {
+				return fmt.Errorf("ATE_API_POSTGRES_BOOTSTRAP must be true or false: %w", err)
+			}
+			*postgresBootstrap = enabled
+		}
+	}
+	return nil
+}
+
+func runPostgresBootstrap(ctx context.Context) error {
+	if *postgresOwnerConnectionString == "" || *postgresReadWriteConnectionString == "" {
+		return errors.New("both PostgreSQL owner and read/write connection strings are required for bootstrap")
+	}
+	adminUsername, err := readRequiredFile(*postgresAdminUsernameFile)
+	if err != nil {
+		return fmt.Errorf("reading PostgreSQL administrator username: %w", err)
+	}
+	adminPassword, err := readRequiredFile(*postgresAdminPasswordFile)
+	if err != nil {
+		return fmt.Errorf("reading PostgreSQL administrator password: %w", err)
+	}
+	return atepg.Bootstrap(ctx, atepg.BootstrapConfig{
+		EndpointSource:  *postgresOwnerConnectionString,
+		ReadWriteSource: *postgresReadWriteConnectionString,
+		AdminUsername:   adminUsername,
+		AdminPassword:   adminPassword,
+		Schema:          *postgresSchema,
+	})
+}
+
+func readRequiredFile(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("file path must not be empty")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(contents))
+	if value == "" {
+		return "", errors.New("file is empty")
+	}
+	return value, nil
 }
 
 func logFlagValues(ctx context.Context) {
@@ -373,10 +431,10 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		slog.Bool("postgres-connection-string-set", *postgresConnectionString != ""),
-		slog.Bool("postgres-ddl-connection-string-set", *postgresDDLConnectionString != ""),
-		slog.String("postgres-runtime-role", *postgresRuntimeRole),
-		slog.String("postgres-ddl-role", *postgresDDLRole),
+		slog.Bool("postgres-read-write-connection-string-set", *postgresReadWriteConnectionString != ""),
+		slog.Bool("postgres-owner-connection-string-set", *postgresOwnerConnectionString != ""),
+		slog.String("postgres-read-write-role", *postgresReadWriteRole),
+		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Duration("postgres-max-conn-lifetime", *postgresMaxConnLifetime),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
@@ -420,8 +478,8 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 // connectStore builds the PostgreSQL-backed store.Interface. Startup fails if
 // its configuration is missing or the database can't be reached.
 func connectStore(ctx context.Context) (store.Interface, error) {
-	if *postgresConnectionString == "" {
-		return nil, fmt.Errorf("--postgres-connection-string is required")
+	if *postgresReadWriteConnectionString == "" {
+		return nil, fmt.Errorf("--postgres-read-write-connection-string is required")
 	}
 	if *postgresMaxConnLifetime < 0 {
 		return nil, fmt.Errorf("--postgres-max-conn-lifetime must not be negative")
@@ -441,7 +499,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresDDLConnectionString, *postgresRuntimeRole, *postgresDDLRole, *postgresSchema, *postgresMaxConnLifetime)
+		persistence, err := atepg.Connect(ctx, *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole, *postgresSchema, *postgresMaxConnLifetime)
 		if err == nil {
 			return persistence, nil
 		}

@@ -38,7 +38,7 @@ it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
 the atelet DaemonSet, then waits for each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
-ATE_API_POSTGRES_CONNECTION_STRING selects an external database. Cloud SQL is
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING selects an external database. Cloud SQL is
 not supported here — the ATE_API_POSTGRES_CLOUDSQL_* variables are ignored, so
 use hack/install-ate.sh for a Cloud SQL install (see
 cmd/ate-setup/differences.md).
@@ -94,7 +94,7 @@ var deployPostgresCmd = &cobra.Command{
 	Long: `Deploy the experimental single-replica PostgreSQL StatefulSet on its own.
 
 "deploy ate-system" already brings PostgreSQL up, unless
-ATE_API_POSTGRES_CONNECTION_STRING selects an external database; this
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING selects an external database; this
 subcommand is for bringing the StatefulSet up by itself.
 
 ate-setup has no Cloud SQL support: the ATE_API_POSTGRES_CLOUDSQL_* variables
