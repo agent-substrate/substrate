@@ -25,40 +25,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
-
-// crashActorOnError crashes the actor if the atelet RPC returned any error.
-func crashActorOnError(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, err error, opName string) error {
-	if err == nil {
-		return nil
-	}
-
-	// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. Normalized
-	// here rather than in crashActor alone, so the log and the counter cannot
-	// report a different reason for the same crash.
-	reason := ateattr.FailureReason(err)
-
-	// Only the ref is knowable here; crashActor logs the authoritative record.
-	attrs := ateattr.ActorRefLogAttrs(actorRef)
-	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
-	attrs = append(attrs,
-		slog.String(string(ateattr.ErrorTypeKey), status.Code(err).String()),
-		slog.Any("err", err),
-	)
-	slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error", attrs...)
-
-	if cerr := crashActor(ctx, st, actorRef, opName, reason); cerr != nil {
-		slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("err", cerr))
-		return cerr
-	}
-	return status.Errorf(codes.DataLoss, "actor %s crashed", actorRef)
-}
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
 // assigned to, if any, so the worker can host other actors.
-func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, reason string) error {
+func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName string) error {
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
@@ -66,11 +37,8 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 	opName = ateattr.NormalizeOperationName(opName)
-	if reason == "" {
-		reason = ateattr.ReasonUnknown
-	}
 
-	// Release the worker before moving the actor to the terminal CRASHED state.
+	// Release the worker before moving the actor to CRASHED state.
 	// If the release fails we must not clear the actor's worker assignment or
 	// mark it CRASHED: doing so would strand the still-assigned worker with no
 	// actor referencing it, so nothing would ever retry the release and the
@@ -85,14 +53,16 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 
 	// Snapshot crash attributes before pod and pool pointers are cleared below;
 	// the counter itself is emitted only after the transition commits.
-	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName, reason)
+	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
 
 	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 
-		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept for
-		// debugging; failed workflow steps must never promote either of them to an
-		// ActorSnapshot or to LocalSnapshotInfo.
+		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
+		// later DeleteActor or RevertActor can delete what they name: each is
+		// the only pointer to it, so clearing them here would leak the objects
+		// for good; failed workflow steps must never promote either of them to an
+		// ExternalSnapshot or to LocalSnapshotInfo.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})
@@ -102,7 +72,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 
 	// Increment metric only after a successful UpdateActor, and only if the actor was not already crashed.
 	if !wasAlreadyCrashed {
-		logActorCrashed(ctx, actor, opName, reason)
+		logActorCrashed(ctx, actor, opName)
 		recordActorCrash(ctx, crashAttrs)
 	}
 
@@ -116,11 +86,10 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 // It names ate.actor.state for the same reason ateom's lifecycle records do: a
 // crash is the one transition ateom never observes, so a consumer taking the
 // last state an actor reached has to see this record to reach "crashed" at all.
-func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName, reason string) {
+func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName string) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
 	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)))
 	attrs = append(attrs, slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
-	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
 	actorevent.Log(ctx, actorevent.Crashed, attrs)
 }
 

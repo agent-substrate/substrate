@@ -21,7 +21,6 @@ import (
 	"io"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 )
 
 // GetObject streams the object, fetching it as parallel byte ranges when it spans
@@ -32,7 +31,7 @@ func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.Re
 	head, err := g.client.Bucket(bucket).Object(object).NewRangeReader(ctx, 0, downloadChunkSize)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) || errors.Is(err, storage.ErrBucketNotExist) {
-			return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ateerrors.ReasonFailedGetExternalObject, bucket, object)
+			return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ErrObjectNotFound, bucket, object)
 		}
 		return nil, err
 	}

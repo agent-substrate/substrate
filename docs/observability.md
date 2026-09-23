@@ -137,7 +137,7 @@ atelet's `Restore timing breakdown` is the first of these, and the only unsample
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
 
-The duration keys are the [`ate.actor.restore.duration`](#the-metric-registry) instrument's name with an `ate.snapshot.phase` value appended, and they hold **seconds**, matching that instrument's declared unit. The same rules apply as on the histogram: a phase that never ran is absent rather than zero, phases overlap and do not sum to the total, and `ate.failure.reason` is present only when the restore failed. There is no `ate.snapshot.phase` key on the record — on a datapoint it names the one step timed, and this record carries them all.
+The duration keys are the [`ate.actor.restore.duration`](#the-metric-registry) instrument's name with an `ate.snapshot.phase` value appended, and they hold **seconds**, matching that instrument's declared unit. The same rules apply as on the histogram: a phase that never ran is absent rather than zero, and phases overlap and do not sum to the total. There is no `ate.snapshot.phase` key on the record — on a datapoint it names the one step timed, and this record carries them all.
 
 This is the record to use for a per-actor wake-up distribution. The histogram cannot answer that question at all, because actor identity is barred from metric labels; traces can, but the data plane is head-sampled at 1%.
 
@@ -170,11 +170,10 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
  "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
  "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
  "ate.actor.operation.name":"resume","ate.actor.state":"crashed",
- "ate.failure.reason":"WORKER_POD_GONE","ate.failure.domain":"infrastructure",
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
 
-The counter carries the same reason but no actor identity, so this record is the only way to attribute a crash to one agent. The decision-point line that precedes it (`Setting Actor to crashed due to error`) carries only `ate.atespace` and `ate.actor.name`: it is written before the Actor is loaded, so no uid exists yet.
+The counter carries no actor identity, so this record is the only way to attribute a crash to one agent. The decision-point line that precedes it (`Setting Actor to crashed due to error`) carries only `ate.atespace` and `ate.actor.name`: it is written before the Actor is loaded, so no uid exists yet.
 
 #### The same records over OTLP
 
@@ -185,9 +184,9 @@ Two `event.name` values, which is the OTLP LogRecord's own field rather than an 
 | `event.name` | Body | Severity | Attributes |
 |---|---|---|---|
 | `ate.actor.state_changed` | `Actor state changed` | 9 | the five identity keys, `ate.actor.operation.name`, `ate.actor.state` |
-| `ate.actor.crashed` | `Actor crashed` | 17 | the above plus `ate.failure.reason`, `ate.failure.domain` |
+| `ate.actor.crashed` | `Actor crashed` | 17 | the same keys |
 
-A crash is its own name because an event name promises a fixed set of attributes, and it carries two more. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. Both names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
+A crash is its own name because an event name promises a fixed set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. Both names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
 
 The attributes are the same flat `ate.*` keys as the stdout copy, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout copy's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent`, which is how you select this stream, or exclude it.
 
@@ -225,14 +224,6 @@ labels."ate.actor.uid"="8f2a…" AND jsonPayload.msg="Actor usage sample"
 
 **Do not put actor identity on a log-based metric.** Aggregating these events in the log store is what they are for, but a log-based metric built over them must label only by the bounded set (template, sandbox class, source, pool) — promoting `ate.actor.uid` or `ate.actor.name` into a metric label reintroduces exactly the per-actor cardinality this split keeps out of the TSDB.
 
-### Which side failed: `ate.failure.domain`
-
-`ate.failure.reason` names the cause; `ate.failure.domain` names the side of the platform boundary it came from, as `infrastructure`, `workload`, or `unknown`. It rides on every signal that carries a reason, and the two are always emitted together — producers call `ateattr.FailureAttributes` or `ateattr.FailureLogAttrs` rather than setting either key directly.
-
-The domain is a strict function of the reason, so it costs no series and no consumer needs it to disambiguate a value. It exists because the alternative is every consumer keeping its own map from reason to domain, and that map breaks silently: a component running ahead of the control plane can report a reason this build's `ateerrors.AllReasons` rejects, `ExtractReason` turns it into `UNKNOWN`, and a name-matching consumer would file every one of those as an infrastructure fault. `UNKNOWN` therefore reports `unknown` and not `infrastructure` — a gap in the taxonomy stays visible instead of inflating one side.
-
-One caveat belongs on any panel built from this. A `workload` domain says what the actor **reported**, not what substrate measured: the actor picks its own exit and can hold memory until the kernel kills it, so it can raise the failure count for its own template and pool, or exit cleanly to hide a fault. See `workload-domain-is-a-report` in [`docs/metrics/substrate.yaml`](metrics/substrate.yaml).
-
 ---
 
 ## 2. Metrics
@@ -244,7 +235,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
-| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.failure.domain`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
+| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
 | `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels
@@ -254,7 +245,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`assigned`) and sandbox class to provide fleet capacity and saturation at a glance |
 | `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
 | `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
-| `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`, plus `ate.failure.reason` and `ate.failure.domain` on failure) |
+| `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
 
@@ -282,8 +273,6 @@ The three snapshot labels are orthogonal and mean the same thing on every histog
 * `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `ateom_restore` on restore; `sandbox_assets`, `ateom_checkpoint`, `persist` on checkpoint; `total` on both.
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
-
-On a failure, `ate.failure.reason` marks the phase that died and the `total`, and nothing else, so `ate.actor.restore.duration{ate.snapshot.phase="download", ate.failure.reason!=""}` says how often the download is what breaks and why, while the phases that succeeded stay queryable as successes. The atelet histograms classify with substrate's own reason taxonomy (the same one `ate.actor.crashes` uses) rather than `error.type`, because these handlers return wrapped domain errors and the gRPC status is only assigned after the handler returns, so a status code would read `Unknown` for nearly every real failure. A failure that carries no reason reports `UNKNOWN`. [`ate.failure.domain`](#which-side-failed-atefailuredomain) rides alongside wherever the reason is present, so a restore that failed because the actor never passed its wakeup probe is separable from one the node broke.
 
 The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead — for resource usage, on the [per-actor usage events](#per-actor-usage-events).
 

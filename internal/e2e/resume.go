@@ -36,6 +36,15 @@ const resumeCapacityWait = 90 * time.Second
 // that a normal state in e2e, not a failure. Any other error, or saturation
 // outlasting the wait budget, is returned to the caller. Each retry is
 // logged so a pass that had to wait stays visible in the test output.
+//
+// TODO: Add runtime diagnostic output for unscheduled pods/actors. a Pending
+// pod's PodScheduled condition names resources the scheduler cannot satisfy.
+// Reporting this needs no knowledge of devices a sandbox class requires.
+// Deferred because selecting the pods requires a standard label such as the
+// ate.dev/worker-pool label, which currently exists as two unexported
+// constants under cmd/*/internal with different names, plus literals in three
+// binaries. This label should be unified under internal/ first, rather than
+// adding another copy here.
 func ResumeActorAwaitCapacity(t *testing.T, ctx context.Context, clients *Clients, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
 	t.Helper()
 	deadline := time.Now().Add(resumeCapacityWait)

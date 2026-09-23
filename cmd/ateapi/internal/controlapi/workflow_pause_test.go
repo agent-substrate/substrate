@@ -95,9 +95,6 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if got := (*records)[0].attrs[string(ateattr.ActorUIDKey)]; got == "" {
 		t.Error("crash record carries no ate.actor.uid")
 	}
-	if got := (*records)[0].attrs[string(ateattr.FailureDomainKey)]; got != ateattr.FailureDomainInfrastructure {
-		t.Errorf("ate.failure.domain = %q, want %q", got, ateattr.FailureDomainInfrastructure)
-	}
 }
 
 // TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization

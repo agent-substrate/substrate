@@ -128,17 +128,23 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAte
 		return nil, toGRPCStatusError(errs)
 	}
 
-	return s.impl.DeleteAtespace(ctx, req.Atespace.Name)
+	return s.impl.DeleteAtespace(ctx, req.Atespace.Name, toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
-	deleted, err := s.store.DeleteAtespace(ctx, name)
+func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Atespace, error) {
+	deleted, err := s.store.DeleteAtespace(ctx, name, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s is not empty", name)
+		}
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "Atespace %s does not have uid %s", name, precondition.UID)
+		}
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting atespace from DB: %w", err)
 	}

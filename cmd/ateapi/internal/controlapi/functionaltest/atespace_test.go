@@ -247,3 +247,47 @@ func TestValidation_Atespace(t *testing.T) {
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
 	})
 }
+
+func TestDeleteAtespace_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-delete-atespace-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	ref := &ateapipb.ObjectRef{Name: "team-a"}
+	create := func() *ateapipb.Atespace {
+		created, err := tc.client.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: ref.GetName()}}})
+		if err != nil {
+			t.Fatalf("CreateAtespace failed: %v", err)
+		}
+		return created
+	}
+	del := func(opts *ateapipb.DeleteOptions) error {
+		_, err := tc.client.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: ref, Options: opts})
+		return err
+	}
+
+	atespace := create()
+	uid, version := atespace.GetMetadata().GetUid(), atespace.GetMetadata().GetVersion()
+
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
+	if _, err := tc.client.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: ref}); err != nil {
+		t.Fatalf("a refused delete removed the atespace: %v", err)
+	}
+
+	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+		t.Fatalf("DeleteAtespace with the matching version: %v", err)
+	}
+	atespace = create()
+	if err := del(&ateapipb.DeleteOptions{Uid: atespace.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteAtespace with the matching uid: %v", err)
+	}
+	atespace = create()
+	if err := del(&ateapipb.DeleteOptions{Uid: atespace.GetMetadata().GetUid(), Version: atespace.GetMetadata().GetVersion()}); err != nil {
+		t.Fatalf("DeleteAtespace with both guards: %v", err)
+	}
+	_, err := tc.client.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: ref})
+	assertGrpcError(t, err, codes.NotFound, "Atespace team-a not found")
+}

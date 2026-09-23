@@ -304,3 +304,52 @@ func TestUpdateTag_NotFound(t *testing.T) {
 	})
 	assertGrpcError(t, err, codes.NotFound, "Tag test-atespace/does-not-exist not found")
 }
+
+func TestDeleteTag_NotFound(t *testing.T) {
+	ns := namespaceForTest("ns-delete-tag-missing")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	tagRef := resources.TagRef{Atespace: testAtespace, Name: "missing"}
+	_, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()})
+	assertGrpcError(t, err, codes.NotFound, "Tag "+tagRef.String()+" not found")
+}
+
+func TestDeleteTag_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-delete-tag-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	createTemplate(t, tc, ns)
+	tagRef := resources.TagRef{Atespace: testAtespace, Name: "v1"}
+	ref := tagRef.ToObjectRef()
+	del := func(opts *ateapipb.DeleteOptions) error {
+		_, err := tc.client.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: ref, Options: opts})
+		return err
+	}
+
+	tag := seedTag(t, tc, "actor-1", tagRef.Name)
+	uid, version := tag.GetMetadata().GetUid(), tag.GetMetadata().GetVersion()
+
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Tag "+tagRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Tag "+tagRef.String()+" does not have uid "+foreignUID)
+	if _, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: ref}); err != nil {
+		t.Fatalf("a refused delete removed the tag: %v", err)
+	}
+
+	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+		t.Fatalf("DeleteTag with the matching version: %v", err)
+	}
+	tag = seedTag(t, tc, "actor-2", tagRef.Name)
+	if err := del(&ateapipb.DeleteOptions{Uid: tag.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteTag with the matching uid: %v", err)
+	}
+	tag = seedTag(t, tc, "actor-3", tagRef.Name)
+	if err := del(&ateapipb.DeleteOptions{Uid: tag.GetMetadata().GetUid(), Version: tag.GetMetadata().GetVersion()}); err != nil {
+		t.Fatalf("DeleteTag with both guards: %v", err)
+	}
+	_, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: ref})
+	assertGrpcError(t, err, codes.NotFound, "Tag "+tagRef.String()+" not found")
+}

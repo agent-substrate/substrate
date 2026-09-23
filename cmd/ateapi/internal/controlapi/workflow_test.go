@@ -221,7 +221,7 @@ func TestActorDeletedRecord(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence}
-	if _, err := w.finalizeDeleted(ctx, actorRef); err != nil {
+	if _, err := w.finalizeDeleted(ctx, actor); err != nil {
 		t.Fatalf("finalizeDeleted: %v", err)
 	}
 

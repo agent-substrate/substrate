@@ -16,12 +16,13 @@ package functionaltest
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"testing"
-	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
@@ -244,4 +245,42 @@ func TestListActorTemplates_InvalidPageToken(t *testing.T) {
 	_, err := tc.client.ListActorTemplates(context.Background(),
 		&ateapipb.ListActorTemplatesRequest{PageToken: "%%%"})
 	assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
+}
+
+func TestDeleteActorTemplate_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-delete-template-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	tmpl := createTemplateWithSelector(t, tc, "tmpl1", nil)
+	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
+	ref := templateRef.ToObjectRef()
+	del := func(opts *ateapipb.DeleteOptions) error {
+		_, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref, Options: opts})
+		return err
+	}
+
+	uid, version := tmpl.GetMetadata().GetUid(), tmpl.GetMetadata().GetVersion()
+
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
+	if _, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref}); err != nil {
+		t.Fatalf("a refused delete removed the template: %v", err)
+	}
+
+	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+		t.Fatalf("DeleteActorTemplate with the matching version: %v", err)
+	}
+	tmpl = createTemplateWithSelector(t, tc, "tmpl1", nil)
+	if err := del(&ateapipb.DeleteOptions{Uid: tmpl.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteActorTemplate with the matching uid: %v", err)
+	}
+	tmpl = createTemplateWithSelector(t, tc, "tmpl1", nil)
+	if err := del(&ateapipb.DeleteOptions{Uid: tmpl.GetMetadata().GetUid(), Version: tmpl.GetMetadata().GetVersion()}); err != nil {
+		t.Fatalf("DeleteActorTemplate with both guards: %v", err)
+	}
+	_, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+templateRef.String()+" not found")
 }

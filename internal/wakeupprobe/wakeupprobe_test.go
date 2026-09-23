@@ -16,17 +16,16 @@ package wakeupprobe
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
@@ -159,11 +158,6 @@ func TestWait_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Wait returned nil, expected cancellation error")
 	}
-	// A cancelled probe is ateom draining, not the actor failing. Tagging it
-	// would attribute a node drain to the workload.
-	if errors.Is(err, ateerrors.ReasonWorkloadNotReady) {
-		t.Errorf("Wait tagged a cancellation with %v: %v", ateerrors.ReasonWorkloadNotReady, err)
-	}
 }
 
 func TestPollTimeout(t *testing.T) {
@@ -218,8 +212,8 @@ func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Wait returned nil, expected a timeout error")
 	}
-	if !errors.Is(err, ateerrors.ReasonWorkloadNotReady) {
-		t.Errorf("Wait error = %v, want it to carry %v", err, ateerrors.ReasonWorkloadNotReady)
+	if !strings.Contains(err.Error(), "never returned 200") {
+		t.Errorf("Wait error = %v, want a probe-timeout error", err)
 	}
 	elapsed := time.Since(start)
 	if elapsed < time.Second {

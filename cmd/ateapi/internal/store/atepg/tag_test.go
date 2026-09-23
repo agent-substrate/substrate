@@ -54,7 +54,7 @@ func TestUpdateTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 	var recreated *ateapipb.Tag
 	_, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}, store.PreconditionFrom(original), func(toUpdate *ateapipb.Tag) error {
 		mutations++
-		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}); err != nil {
+		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}, store.DeletePreconditions{}); err != nil {
 			return fmt.Errorf("deleting original tag: %w", err)
 		}
 		recreated = createTestTag(t, s, "team-a", "tag-a")

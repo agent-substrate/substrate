@@ -47,7 +47,8 @@ service Control {
   // Only crashed, running or paused actors can be reverted.
   rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {}
 
-  // Delete an actor. Only suspended actors can be deleted.
+  // Delete an actor. Only suspended or crashed actors can be deleted unless
+  // any_state is set.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
 
   // Get the egress policy resource nested under an Actor.
@@ -1285,6 +1286,11 @@ message DeleteAtespaceRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
 }
 
 message CreateActorTemplateRequest {
@@ -1339,6 +1345,11 @@ message DeleteActorTemplateRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
 }
 
 message GetActorRequest {
@@ -1429,6 +1440,11 @@ message DeleteActorRequest {
   //
   // +k8s:optional
   bool any_state = 2;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 3;
 }
 
 // GetActorEgressPolicyRequest identifies an Actor's egress policy.
@@ -1481,6 +1497,11 @@ message DeleteActorEgressPolicyRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
 }
 
 message GetTagRequest {
@@ -1663,24 +1684,25 @@ message DeleteTagRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef tag = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
 }
 
-// DeleteOptions carries per-delete controls. Today it holds optional
-// preconditions that guard against acting on a resource that is not in the
-// state the caller expects. Future delete-specific controls (e.g. dry-run)
-// should be added here.
-//
-// Intended to be reused across every Delete<Type>Request; only
-// DeleteWorkerRequest carries it so far.
+// DeleteOptions are the optional guards a Delete request may carry.
 message DeleteOptions {
-  // If non-zero, delete only if the server's current version matches.
+  // Delete only if the resource is still at this version, that is, unchanged
+  // since the caller read it. Zero skips the check.
   //
   // +k8s:optional
   // +k8s:minimum=1
   int64 version = 1;
 
-  // If non-empty, delete only if the server's current uid matches. Guards
-  // against name reuse across lifecycles.
+  // Delete only if the resource still has this uid, that is, it is the one
+  // the caller read and not a later one created under the same name. Empty
+  // skips the check.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid

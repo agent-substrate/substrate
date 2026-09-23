@@ -105,7 +105,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // Note that this destroys the external snapshot: an Actor created from the tag
 // and never suspended is still borrowing it and becomes unrecoverable. Do not
 // delete a tag while clones of it exist.
-func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
+func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
 	ctx, lease, err := acquireTagLease(ctx, w.store, tagRef)
@@ -118,10 +118,18 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef) 
 	if err != nil {
 		return nil, err
 	}
+	// Checked before the snapshot is collected: a stale caller must not
+	// reach that step.
+	if err := precondition.Check(tag.GetMetadata()); err != nil {
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
+		}
+		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
 		return nil, err
 	}
-	return w.finalizeTagDeleted(ctx, tagRef)
+	return w.finalizeTagDeleted(ctx, tagRef, precondition)
 }
 
 // loadTagForDelete fetches the row the delete works from. The row records where
@@ -164,14 +172,20 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 }
 
 // finalizeTagDeleted drops the row, once nothing it names is left behind.
-func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources.TagRef) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapipb.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTagDeleted")
 	defer func() { err = done(err) }()
 
-	tag, err := w.store.DeleteTag(ctx, tagRef)
+	tag, err := w.store.DeleteTag(ctx, tagRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
+		}
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
+		}
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
 	}

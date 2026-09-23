@@ -31,7 +31,7 @@ import (
 )
 
 // DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, anyState bool) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, anyState bool, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
 	ctx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
 		return nil, err
@@ -41,6 +41,13 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	actor, err := w.loadActorForDelete(ctx, actorRef)
 	if err != nil {
 		return nil, err
+	}
+
+	if err := precondition.Check(actor.GetMetadata()); err != nil {
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "Actor %s does not have uid %s", actorRef, precondition.UID)
+		}
+		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 	}
 
 	if actor, err = w.ensureMarkedDeleting(ctx, actorRef, actor, anyState); err != nil {
@@ -95,7 +102,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
-	return w.finalizeDeleted(ctx, actorRef)
+	return w.finalizeDeleted(ctx, actor)
 }
 
 // loadActorForDelete fetches the current actor record.
@@ -417,22 +424,20 @@ func actorSnapshotStoragePrefix(actor *ateapipb.Actor) (resources.StoragePrefix,
 }
 
 // finalizeDeleted removes the actor from the store and returns the deleted
-// record. The store enforces that only a DELETING actor can be removed.
-func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+// record.
+func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapipb.Actor) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeDeleted")
 	defer func() { err = done(err) }()
 
-	deleted, err := w.store.DeleteActor(ctx, actorRef)
+	actorRef := resources.ActorRefFromActor(actor)
+	precondition := store.DeletePreconditions{UID: actor.GetMetadata().GetUid(), Version: actor.GetMetadata().GetVersion()}
+	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
-			current, getErr := w.store.GetActor(ctx, actorRef)
-			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, current.GetStatus().GetState())
-			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state", actorRef)
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "Actor %s does not have uid %s", actorRef, precondition.UID)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

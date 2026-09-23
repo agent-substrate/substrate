@@ -857,7 +857,7 @@ func TestUpdateTag_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: tagName}); err != nil {
+			if _, err := persistence.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: tagName}, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("Racing writer: DeleteTag: %v", err)
 			}
 			recreatedTag = storetest.MustCreateTag(t, ctx, persistence, newTestTag(t, tagName, actorTwo))

@@ -132,9 +132,10 @@ Once installed:
 
 ## Development
 
-### Rebuilding gRPC Python clients
+### Generating gRPC Python clients
 
-`hack/update/codegen.sh` regenerates them along with the rest of the generated
-code; it manages its own virtual environment under `locust/codegen/venv`.
-`hack/verify/codegen.sh` fails if the checked-in clients have drifted from the
-protos.
+The clients are not checked in. The locust and nighthawk-ingress images
+generate them at build time, and `hack/verify/python-protos.sh` compiles them
+on every PR, so a proto change needs no extra step. For local use, such as
+editor completion, run `benchmarking/locust/codegen/generate.sh`. It manages
+its own virtual environment under `locust/codegen/venv`.

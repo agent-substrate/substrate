@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -191,7 +190,6 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 				if strings.HasPrefix(line, "ate_actor_crashes") {
 					foundCrashLine = true
 					opVal := extractLabelValue(line, "ate_actor_operation_name")
-					reasonVal := extractLabelValue(line, "ate_failure_reason")
 					tmplAtespaceVal := extractLabelValue(line, "ate_template_atespace")
 					tmplNameVal := extractLabelValue(line, "ate_template_name")
 					workerPoolNSVal := extractLabelValue(line, "ate_workerpool_namespace")
@@ -203,22 +201,6 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 						crashErrs = append(crashErrs, "ate_actor_operation_name label is missing or empty")
 					} else if ateattr.NormalizeOperationName(opVal) != opVal {
 						crashErrs = append(crashErrs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, pause, delete, unknown})", opVal))
-					}
-
-					if reasonVal == "" {
-						crashErrs = append(crashErrs, "ate_failure_reason label is missing or empty")
-					} else if !ateerrors.IsValidReason(reasonVal) {
-						crashErrs = append(crashErrs, fmt.Sprintf("ate_failure_reason %q is invalid (must be a registered ateerrors reason enum like CORRUPTED_ASSIGNMENT, WORKER_POD_GONE, WORKER_REASSIGNED, UNKNOWN)", reasonVal))
-					}
-
-					// The pair travels together, and the domain must agree with the
-					// reason: a consumer splitting infrastructure from workload faults
-					// reads the domain and never matches on the names of the reasons.
-					domainVal := extractLabelValue(line, "ate_failure_domain")
-					if domainVal == "" {
-						crashErrs = append(crashErrs, "ate_failure_domain label is missing or empty")
-					} else if want := ateattr.FailureDomain(reasonVal); domainVal != want {
-						crashErrs = append(crashErrs, fmt.Sprintf("ate_failure_domain %q disagrees with ate_failure_reason %q, which classifies as %q", domainVal, reasonVal, want))
 					}
 
 					if tmplAtespaceVal == "" {
@@ -241,8 +223,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					}
 
 					if len(crashErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplAtespace=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q)",
-							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplAtespaceVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal))
+						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, tmplAtespace=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q)",
+							line, strings.Join(crashErrs, "\n  - "), opVal, tmplAtespaceVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal))
 					}
 				}
 			}

@@ -15,16 +15,11 @@
 package main
 
 import (
-	"errors"
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
-
-// errRestoreUnwound stands in for a restore that left through a panic, where the
-// named error is still nil. Carries no reason, so it reports as UNKNOWN.
-var errRestoreUnwound = errors.New("restore did not run to completion")
 
 // snapshotLogAttrs renders what recordPhases measures as a per-actor record. The
 // histograms cannot be one: actor identity is barred from metric labels
@@ -35,7 +30,7 @@ var errRestoreUnwound = errors.New("restore did not run to completion")
 // the values are seconds and not the nanoseconds slog.Duration writes: that
 // instrument declares unit s. Identity stays out of snapshotOp so no edit here
 // can route it into a datapoint.
-func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey string, err error, phases []phase) []slog.Attr {
+func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey string, phases []phase) []slog.Attr {
 	attrs := ateattr.ActorLogAttrs(a)
 
 	// Borrow the metric's dimensions rather than rebuild them: op.attrs already
@@ -53,12 +48,8 @@ func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey s
 		attrs = append(attrs, slog.String(string(kv.Key), kv.Value.String()))
 	}
 
-	// Absence means success, as on the instruments. There is no ate.snapshot.phase:
-	// on a datapoint it names the one step timed, and this record carries them all.
-	if err != nil {
-		attrs = append(attrs, ateattr.FailureLogAttrs(ateattr.FailureReason(err))...)
-	}
-
+	// There is no ate.snapshot.phase key: on a datapoint it names the one step
+	// timed, and this record carries them all.
 	for _, p := range phases {
 		if p.d == 0 {
 			continue

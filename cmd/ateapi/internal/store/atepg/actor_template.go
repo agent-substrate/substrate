@@ -208,14 +208,19 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	return store.ListResponse[*ateapipb.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
 		DELETE FROM actor_templates AS t
 		WHERE t.atespace = $1 AND t.name = $2
-		RETURNING t.proto`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
+		  AND ($3::text = '' OR t.uid = $3::text)
+		  AND ($4::bigint = 0 OR t.version = $4::bigint)
+		RETURNING t.proto`, templateRef.Atespace, templateRef.Name, precondition.UID, precondition.Version).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
+		var uid string
+		var version int64
+		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&uid, &version)
+		return nil, mapDeleteError(err, uid, version, precondition)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deleting actor template %s: %w", templateRef, err)

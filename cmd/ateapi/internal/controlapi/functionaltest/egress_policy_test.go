@@ -124,7 +124,7 @@ func TestCreateActorEgressPolicy_Errors(t *testing.T) {
 func TestGetActorEgressPolicy_NotFound(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-get-egress-policy-missing")
 	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
-	assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")
+	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }
 
 func TestUpdateActorEgressPolicy(t *testing.T) {
@@ -210,7 +210,7 @@ func TestDeleteActor_CascadesEgressPolicy(t *testing.T) {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
 	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
-	assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")
+	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }
 
 func TestValidation_ActorEgressPolicy(t *testing.T) {
@@ -225,4 +225,38 @@ func TestValidation_ActorEgressPolicy(t *testing.T) {
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	_, err = tc.client.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
+}
+
+func TestDeleteActorEgressPolicy_Preconditions(t *testing.T) {
+	tc, actor := setupEgressPolicyActor(t, "ns-delete-egress-policy-preconditions")
+	ctx := context.Background()
+	del := func(opts *ateapipb.DeleteOptions) error {
+		_, err := tc.client.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: opts})
+		return err
+	}
+
+	policy := createEgressPolicy(t, tc, actor)
+	uid, version := policy.GetMetadata().GetUid(), policy.GetMetadata().GetVersion()
+
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "EgressPolicy UID conflict")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "EgressPolicy UID conflict")
+	if _, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor}); err != nil {
+		t.Fatalf("a refused delete removed the policy: %v", err)
+	}
+
+	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+		t.Fatalf("DeleteActorEgressPolicy with the matching version: %v", err)
+	}
+	policy = createEgressPolicy(t, tc, actor)
+	if err := del(&ateapipb.DeleteOptions{Uid: policy.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteActorEgressPolicy with the matching uid: %v", err)
+	}
+	policy = createEgressPolicy(t, tc, actor)
+	if err := del(&ateapipb.DeleteOptions{Uid: policy.GetMetadata().GetUid(), Version: policy.GetMetadata().GetVersion()}); err != nil {
+		t.Fatalf("DeleteActorEgressPolicy with both guards: %v", err)
+	}
+	_, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
+	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }

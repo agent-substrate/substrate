@@ -1117,7 +1117,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("racing writer: mark deleting: %v", err)
 			}
-			if _, err := persistence.DeleteActor(ctx, actorRef); err != nil {
+			if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("racing writer: DeleteActor: %v", err)
 			}
 			recreated, err = persistence.CreateActor(ctx, &ateapipb.Actor{

@@ -96,9 +96,7 @@ var (
 		Severity: log.SeverityError,
 		Keys: append(append([]string{}, identityKeys...),
 			string(ateattr.ActorOperationNameKey),
-			string(ateattr.ActorStateKey),
-			string(ateattr.FailureReasonKey),
-			string(ateattr.FailureDomainKey)),
+			string(ateattr.ActorStateKey)),
 	}
 )
 

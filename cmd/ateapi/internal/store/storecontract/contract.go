@@ -49,6 +49,9 @@ const testAtespace = "test-atespace"
 // need URIs of the right shape, not ones an actual actor wrote.
 const testSnapshotOwnerUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
 
+// foreignUID matches no stored object, for guards that must miss.
+const foreignUID = "0f0e0d0c-0b0a-4908-8706-050403020100"
+
 // testActorSnapshotURI returns the URI of a snapshot under an Actor's own
 // prefix, and testTagSnapshotURI the URI of the one snapshot a tag owns.
 func testActorSnapshotURI(location, atespace, name string) string {
@@ -266,12 +269,70 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		if err != nil || updated.GetMetadata().GetAtespace() != testAtespace || updated.GetMetadata().GetName() != "default" || updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
 			t.Fatalf("UpdateEgressPolicy = %v, %v; want version 2", updated, err)
 		}
-		deleted, err := s.DeleteEgressPolicy(ctx, actorRef)
+		deleted, err := s.DeleteEgressPolicy(ctx, actorRef, store.DeletePreconditions{})
 		if err != nil || !proto.Equal(deleted, updated) {
 			t.Fatalf("DeleteEgressPolicy = %v, %v; want %v", deleted, err, updated)
 		}
 		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("GetEgressPolicy after delete error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("EgressPolicy_DeletePreconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+		if _, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, actorRef.Name)); err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		create := func() *ateapipb.EgressPolicy {
+			created, err := s.CreateEgressPolicy(ctx, actorRef, &ateapipb.EgressPolicy{})
+			if err != nil {
+				t.Fatalf("CreateEgressPolicy failed: %v", err)
+			}
+			return created
+		}
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteEgressPolicy(ctx, actorRef, precondition)
+			return err
+		}
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing policy = %v, want ErrNotFound", err)
+		}
+
+		policy := create()
+		uid, version := policy.GetMetadata().GetUid(), policy.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale version alone = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid alone = %v, want ErrUIDConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetEgressPolicy(ctx, actorRef); err != nil {
+			t.Fatalf("a refused delete removed the policy: %v", err)
+		}
+
+		if err := del(store.DeletePreconditions{Version: version}); err != nil {
+			t.Fatalf("matching version alone = %v, want nil", err)
+		}
+		policy = create()
+		if err := del(store.DeletePreconditions{UID: policy.GetMetadata().GetUid()}); err != nil {
+			t.Fatalf("matching uid alone = %v, want nil", err)
+		}
+		policy = create()
+		if err := del(store.DeletePreconditions{UID: policy.GetMetadata().GetUid(), Version: policy.GetMetadata().GetVersion()}); err != nil {
+			t.Fatalf("matching uid and version = %v, want nil", err)
+		}
+		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get after the delete = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -294,7 +355,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.DeleteActor(ctx, actorRef); err != nil {
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
@@ -566,7 +627,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}); err != nil {
 			t.Fatalf("marking actor deleting failed: %v", err)
 		}
-		if _, err := s.DeleteActor(ctx, actorRef); err != nil {
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
 			t.Fatalf("DeleteActor failed: %v", err)
 		}
 		recreated, err := s.CreateActor(ctx, newActor())
@@ -677,55 +738,38 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 	})
 
+	// The store does not gate the delete on state; the workflow does, and pins
+	// the row delete to the uid and version it last saw.
 	t.Run("DeleteActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			state   ateapipb.ActorState
-			wantErr error
-		}{
-			{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
-			{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
-			{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING},
-			{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
-			{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
+		for _, state := range []ateapipb.ActorState{
+			ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			ateapipb.ActorState_ACTOR_STATE_DELETING,
+			ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			ateapipb.ActorState_ACTOR_STATE_PAUSED,
+		} {
+			t.Run(state.String(), func(t *testing.T) {
 				s := setup(t)
 				ctx := context.Background()
 				mustCreateAtespace(t, s, testAtespace)
 
-				actor := &ateapipb.Actor{
-					Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+				actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+				if _, err := s.CreateActor(ctx, &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: testAtespace},
 					ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
-					Status:        &ateapipb.ActorStatus{State: tt.state},
-				}
-				if _, err := s.CreateActor(ctx, actor); err != nil {
+					Status:        &ateapipb.ActorStatus{State: state},
+				}); err != nil {
 					t.Fatalf("CreateActor failed: %v", err)
 				}
 
-				deleted, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
-				if tt.wantErr != nil {
-					if !errors.Is(err, tt.wantErr) {
-						t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
-					}
-					got, getErr := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
-					if getErr != nil {
-						t.Fatalf("GetActor after rejected delete failed: %v", getErr)
-					}
-					if got.GetStatus().GetState() != tt.state {
-						t.Errorf("actor state after rejected delete = %v, want %v", got.GetStatus().GetState(), tt.state)
-					}
-					return
-				}
+				deleted, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
 				if err != nil {
 					t.Fatalf("DeleteActor failed: %v", err)
 				}
-				if got := deleted.GetMetadata().GetName(); got != "session-1" {
-					t.Errorf("deleted actor name = %q, want session-1", got)
+				if got := deleted.GetMetadata().GetName(); got != actorRef.Name {
+					t.Errorf("deleted actor name = %q, want %q", got, actorRef.Name)
 				}
-				if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"}); !errors.Is(err, store.ErrNotFound) {
+				if _, err := s.GetActor(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
 					t.Errorf("expected ErrNotFound after delete, got %v", err)
 				}
 			})
@@ -736,8 +780,63 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		s := setup(t)
 		ctx := context.Background()
 
-		if _, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}, store.DeletePreconditions{}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("expected ErrNotFound deleting non-existent actor, got %v", err)
+		}
+	})
+
+	t.Run("DeleteActor_Preconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+		create := func() *ateapipb.Actor {
+			created, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, actorRef.Name))
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			return created
+		}
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteActor(ctx, actorRef, precondition)
+			return err
+		}
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing actor = %v, want ErrNotFound", err)
+		}
+
+		actor := create()
+		uid, version := actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale version alone = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid alone = %v, want ErrUIDConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetActor(ctx, actorRef); err != nil {
+			t.Fatalf("a refused delete removed the actor: %v", err)
+		}
+
+		if err := del(store.DeletePreconditions{Version: version}); err != nil {
+			t.Fatalf("matching version alone = %v, want nil", err)
+		}
+		actor = create()
+		if err := del(store.DeletePreconditions{UID: actor.GetMetadata().GetUid()}); err != nil {
+			t.Fatalf("matching uid alone = %v, want nil", err)
+		}
+		actor = create()
+		if err := del(store.DeletePreconditions{UID: actor.GetMetadata().GetUid(), Version: actor.GetMetadata().GetVersion()}); err != nil {
+			t.Fatalf("matching uid and version = %v, want nil", err)
+		}
+		if _, err := s.GetActor(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get after the delete = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -920,8 +1019,63 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 			t.Errorf("stored template mismatch (-created +got):\n%s", diff)
 		}
 
-		if _, err := s.DeleteActorTemplate(ctx, templateRef); err != nil {
+		if _, err := s.DeleteActorTemplate(ctx, templateRef, store.DeletePreconditions{}); err != nil {
 			t.Fatalf("DeleteActorTemplate failed: %v", err)
+		}
+	})
+
+	t.Run("DeleteActorTemplate_Preconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		ref := resources.ActorTemplateRef{Atespace: testAtespace, Name: "tmpl-a"}
+		create := func() *ateapipb.ActorTemplate {
+			created, err := s.CreateActorTemplate(ctx, newTestActorTemplate(testAtespace, ref.Name))
+			if err != nil {
+				t.Fatalf("CreateActorTemplate failed: %v", err)
+			}
+			return created
+		}
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteActorTemplate(ctx, ref, precondition)
+			return err
+		}
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing template = %v, want ErrNotFound", err)
+		}
+
+		template := create()
+		uid, version := template.GetMetadata().GetUid(), template.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale version alone = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid alone = %v, want ErrUIDConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetActorTemplate(ctx, ref); err != nil {
+			t.Fatalf("a refused delete removed the template: %v", err)
+		}
+
+		if err := del(store.DeletePreconditions{Version: version}); err != nil {
+			t.Fatalf("matching version alone = %v, want nil", err)
+		}
+		template = create()
+		if err := del(store.DeletePreconditions{UID: template.GetMetadata().GetUid()}); err != nil {
+			t.Fatalf("matching uid alone = %v, want nil", err)
+		}
+		template = create()
+		if err := del(store.DeletePreconditions{UID: template.GetMetadata().GetUid(), Version: template.GetMetadata().GetVersion()}); err != nil {
+			t.Fatalf("matching uid and version = %v, want nil", err)
+		}
+		if _, err := s.GetActorTemplate(ctx, ref); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get after the delete = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -974,7 +1128,7 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 		if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
 			t.Fatalf("CreateActorTemplate failed: %v", err)
 		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace with template = %v, want ErrFailedPrecondition", err)
 		}
 	})
@@ -1090,16 +1244,75 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}); !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("stale UpdateTag = %v, want ErrVersionConflict", err)
 		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace with tag = %v, want ErrFailedPrecondition", err)
 		}
 
-		deleted, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"})
+		deleted, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"}, store.DeletePreconditions{})
 		if err != nil || !proto.Equal(deleted, updated) {
 			t.Errorf("DeleteTag = (%v, %v), want updated tag", deleted, err)
 		}
 		if _, err := s.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("deleted GetTag = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("DeleteTag_Preconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actor, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, "actor-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		tagRef := resources.TagRef{Atespace: testAtespace, Name: "production"}
+		create := func() *ateapipb.Tag {
+			created, err := s.CreateTag(ctx, newTestInProgressTag(tagRef.Name, actor))
+			if err != nil {
+				t.Fatalf("CreateTag failed: %v", err)
+			}
+			return created
+		}
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteTag(ctx, tagRef, precondition)
+			return err
+		}
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing tag = %v, want ErrNotFound", err)
+		}
+
+		tag := create()
+		uid, version := tag.GetMetadata().GetUid(), tag.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale version alone = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid alone = %v, want ErrUIDConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetTag(ctx, tagRef); err != nil {
+			t.Fatalf("a refused delete removed the tag: %v", err)
+		}
+
+		if err := del(store.DeletePreconditions{Version: version}); err != nil {
+			t.Fatalf("matching version alone = %v, want nil", err)
+		}
+		tag = create()
+		if err := del(store.DeletePreconditions{UID: tag.GetMetadata().GetUid()}); err != nil {
+			t.Fatalf("matching uid alone = %v, want nil", err)
+		}
+		tag = create()
+		if err := del(store.DeletePreconditions{UID: tag.GetMetadata().GetUid(), Version: tag.GetMetadata().GetVersion()}); err != nil {
+			t.Fatalf("matching uid and version = %v, want nil", err)
+		}
+		if _, err := s.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get after the delete = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -1437,8 +1650,8 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 
 		// A well-formed precondition, so it is the missing worker rather than the
 		// guard that decides the error.
-		pre := store.Precondition{UID: otherTestWorkerName, Version: 1}
-		_, err := s.UpdateWorker(ctx, testWorkerName, pre, func(*ateapipb.Worker) error {
+		precondition := store.Precondition{UID: otherTestWorkerName, Version: 1}
+		_, err := s.UpdateWorker(ctx, testWorkerName, precondition, func(*ateapipb.Worker) error {
 			t.Error("mutate ran for a worker that does not exist")
 			return nil
 		})
@@ -1697,25 +1910,53 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 	t.Run("DeleteWorker_Preconditions", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
-
-		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
-		if err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
+		create := func() *ateapipb.Worker {
+			created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+			if err != nil {
+				t.Fatalf("CreateWorker failed: %v", err)
+			}
+			return created
 		}
-		uid, version := created.GetMetadata().GetUid(), created.GetMetadata().GetVersion()
-
-		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
-			t.Errorf("expected ErrVersionConflict for a stale version, got %v", err)
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteWorker(ctx, testWorkerName, precondition)
+			return err
 		}
-		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{UID: otherTestWorkerName}); !errors.Is(err, store.ErrUIDConflict) {
-			t.Errorf("expected ErrUIDConflict for a foreign uid, got %v", err)
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing worker = %v, want ErrNotFound", err)
+		}
+
+		worker := create()
+		uid, version := worker.GetMetadata().GetUid(), worker.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale version alone = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid alone = %v, want ErrUIDConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
 		}
 		if _, err := s.GetWorker(ctx, testWorkerName); err != nil {
-			t.Fatalf("a rejected delete removed the worker anyway: %v", err)
+			t.Fatalf("a refused delete removed the worker: %v", err)
 		}
 
-		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{UID: uid, Version: version}); err != nil {
-			t.Errorf("DeleteWorker with matching preconditions failed: %v", err)
+		if err := del(store.DeletePreconditions{Version: version}); err != nil {
+			t.Fatalf("matching version alone = %v, want nil", err)
+		}
+		worker = create()
+		if err := del(store.DeletePreconditions{UID: worker.GetMetadata().GetUid()}); err != nil {
+			t.Fatalf("matching uid alone = %v, want nil", err)
+		}
+		worker = create()
+		if err := del(store.DeletePreconditions{UID: worker.GetMetadata().GetUid(), Version: worker.GetMetadata().GetVersion()}); err != nil {
+			t.Fatalf("matching uid and version = %v, want nil", err)
+		}
+		if _, err := s.GetWorker(ctx, testWorkerName); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get after the delete = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -2628,7 +2869,7 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 			t.Fatalf("CreateAtespace failed: %v", err)
 		}
-		deleted, err := s.DeleteAtespace(ctx, "team-a")
+		deleted, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{})
 		if err != nil {
 			t.Fatalf("DeleteAtespace failed: %v", err)
 		}
@@ -2644,8 +2885,76 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		s := setup(t)
 		ctx := context.Background()
 
-		if _, err := s.DeleteAtespace(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.DeleteAtespace(ctx, "nope", store.DeletePreconditions{}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("DeleteAtespace_Preconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		create := func() *ateapipb.Atespace {
+			created, err := s.CreateAtespace(ctx, newTestAtespace("team-a"))
+			if err != nil {
+				t.Fatalf("CreateAtespace failed: %v", err)
+			}
+			return created
+		}
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteAtespace(ctx, "team-a", precondition)
+			return err
+		}
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing atespace = %v, want ErrNotFound", err)
+		}
+
+		atespace := create()
+		uid, version := atespace.GetMetadata().GetUid(), atespace.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale version alone = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid alone = %v, want ErrUIDConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetAtespace(ctx, "team-a"); err != nil {
+			t.Fatalf("a refused delete removed the atespace: %v", err)
+		}
+
+		// Matching guards do not override the emptiness rule.
+		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+		if _, err := s.CreateActor(ctx, newTestSuspendedActor(actorRef.Atespace, actorRef.Name)); err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("matching guards on a non-empty atespace = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.GetAtespace(ctx, "team-a"); err != nil {
+			t.Fatalf("a refused delete removed the atespace: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
+		}
+
+		if err := del(store.DeletePreconditions{Version: version}); err != nil {
+			t.Fatalf("matching version alone = %v, want nil", err)
+		}
+		atespace = create()
+		if err := del(store.DeletePreconditions{UID: atespace.GetMetadata().GetUid()}); err != nil {
+			t.Fatalf("matching uid alone = %v, want nil", err)
+		}
+		atespace = create()
+		if err := del(store.DeletePreconditions{UID: atespace.GetMetadata().GetUid(), Version: atespace.GetMetadata().GetVersion()}); err != nil {
+			t.Fatalf("matching uid and version = %v, want nil", err)
+		}
+		if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get after the delete = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -2659,7 +2968,7 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING}}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace on non-empty = %v, want ErrFailedPrecondition", err)
 		}
 		if _, err := s.GetAtespace(ctx, "team-a"); err != nil {
@@ -2677,13 +2986,13 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING}}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Fatalf("expected rejection while non-empty, got %v", err)
 		}
-		if _, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}); err != nil {
+		if _, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.DeletePreconditions{}); err != nil {
 			t.Fatalf("DeleteActor failed: %v", err)
 		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
 			t.Errorf("DeleteAtespace after actor removed = %v, want nil", err)
 		}
 	})
@@ -2702,13 +3011,13 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 
-		if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
 			t.Errorf("DeleteAtespace(team-a, empty) = %v, want nil (must not be blocked by team-b's actor)", err)
 		}
 		if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("after delete, GetAtespace(team-a) = %v, want ErrNotFound", err)
 		}
-		if _, err := s.DeleteAtespace(ctx, "team-b"); !errors.Is(err, store.ErrFailedPrecondition) {
+		if _, err := s.DeleteAtespace(ctx, "team-b", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace(team-b, non-empty) = %v, want ErrFailedPrecondition", err)
 		}
 	})
@@ -2835,7 +3144,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "UpdateActor", created, updated)
 
-		deleted, err := s.DeleteActor(ctx, ref)
+		deleted, err := s.DeleteActor(ctx, ref, store.DeletePreconditions{})
 		if err != nil {
 			t.Fatalf("DeleteActor failed: %v", err)
 		}
@@ -2878,7 +3187,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "UpdateEgressPolicy", created, updated)
 
-		deleted, err := s.DeleteEgressPolicy(ctx, ref)
+		deleted, err := s.DeleteEgressPolicy(ctx, ref, store.DeletePreconditions{})
 		if err != nil {
 			t.Fatalf("DeleteEgressPolicy failed: %v", err)
 		}
@@ -2924,7 +3233,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "UpdateTag", created, updated)
 
-		deleted, err := s.DeleteTag(ctx, tagRef)
+		deleted, err := s.DeleteTag(ctx, tagRef, store.DeletePreconditions{})
 		if err != nil {
 			t.Fatalf("DeleteTag failed: %v", err)
 		}
@@ -2953,7 +3262,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "ListAtespaces", created, list.Items[0])
 
-		deleted, err := s.DeleteAtespace(ctx, testAtespace)
+		deleted, err := s.DeleteAtespace(ctx, testAtespace, store.DeletePreconditions{})
 		if err != nil {
 			t.Fatalf("DeleteAtespace failed: %v", err)
 		}
@@ -2994,7 +3303,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "UpdateActorTemplate", created, updated)
 
-		deleted, err := s.DeleteActorTemplate(ctx, ref)
+		deleted, err := s.DeleteActorTemplate(ctx, ref, store.DeletePreconditions{})
 		if err != nil {
 			t.Fatalf("DeleteActorTemplate failed: %v", err)
 		}
