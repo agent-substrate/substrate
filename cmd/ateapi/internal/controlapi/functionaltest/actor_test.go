@@ -16,6 +16,8 @@ package functionaltest
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +26,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -4821,7 +4824,7 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	_, err = tc.client.MintActorJWT(t.Context(), &ateapipb.MintActorJWTRequest{
+	mintResp, err := tc.client.MintActorJWT(t.Context(), &ateapipb.MintActorJWTRequest{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
@@ -4831,6 +4834,38 @@ func TestMintActorJWT_Success(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Error while calling MintActorJWT: %v", err)
+	}
+
+	segments := strings.Split(mintResp.GetActorJwt(), ".")
+	if len(segments) != 3 {
+		t.Fatalf("actor JWT has %d segments, want 3", len(segments))
+	}
+	var header struct {
+		Type string `json:"typ"`
+	}
+	decodeJWTSegment(t, segments[0], &header)
+	if header.Type != "JWT" {
+		t.Errorf("header typ = %q, want %q", header.Type, "JWT")
+	}
+	var claims actoridjwt.WireClaims
+	decodeJWTSegment(t, segments[1], &claims)
+	if claims.Issuer != testActorJWTIssuer {
+		t.Errorf("iss = %q, want %q", claims.Issuer, testActorJWTIssuer)
+	}
+	if want := "atespaces:" + testAtespace + ":actors:id1"; claims.Subject != want {
+		t.Errorf("sub = %q, want %q", claims.Subject, want)
+	}
+}
+
+// decodeJWTSegment base64url-decodes one JWT segment and unmarshals its JSON into v.
+func decodeJWTSegment(t *testing.T, segment string, v any) {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(segment)
+	if err != nil {
+		t.Fatalf("decoding JWT segment: %v", err)
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		t.Fatalf("unmarshaling JWT segment: %v", err)
 	}
 }
 
