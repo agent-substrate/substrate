@@ -54,7 +54,7 @@ func TestWebsocketIngressPing(t *testing.T) {
 
 	fixture := deployWebsocketFixture(t, ctx)
 
-	actorName, _ := createAndResumeSubstrateActor(t, ctx, "websocket", fixture)
+	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "websocket", fixture)
 
 	rc := mustRouterClient(t, ctx)
 	defer rc.Close()
