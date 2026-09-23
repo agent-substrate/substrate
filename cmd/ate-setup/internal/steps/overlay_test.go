@@ -410,3 +410,13 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		}
 	})
 }
+
+func TestPatchEnvoyDataplaneImage(t *testing.T) {
+	e := &Env{}
+	raw := []byte("containers:\n- name: envoy\n  image: ${ENVOY_DATAPLANE_IMAGE}\n")
+	want := "containers:\n- name: envoy\n  image: gcr.io/example/envoy-dataplane@sha256:abc123\n"
+	got := string(e.patchEnvoyDataplaneImage(raw, "gcr.io/example/envoy-dataplane@sha256:abc123"))
+	if got != want {
+		t.Errorf("patchEnvoyDataplaneImage() = %q, want %q", got, want)
+	}
+}

@@ -607,7 +607,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: envoy
-        image: localhost:5001/envoy-dataplane:latest
+        image: ${ENVOY_DATAPLANE_IMAGE}
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

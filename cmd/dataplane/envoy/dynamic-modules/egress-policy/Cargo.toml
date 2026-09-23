@@ -13,13 +13,15 @@
 # limitations under the License.
 
 [package]
-name = "envoy-substrate-egress-policy"
+name = "substrate-envoy-egress-policy"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "envoy_substrate_egress_policy"
 crate-type = ["cdylib"]
 
 [dependencies]
-envoy-proxy-dynamic-modules-rust-sdk = { git = "https://github.com/envoyproxy/envoy", tag = "v1.39.1" }
+# Pin to v1.39.1 commit SHA
+# When changing the SDK version, the version of Envoy in the cmd/dataplane/envoy/Dockerfile SHOULD match.
+envoy-proxy-dynamic-modules-rust-sdk = { git = "https://github.com/envoyproxy/envoy", rev = "b579d07d3ad7ee11d32b105e91a5a39ad24718d7" }

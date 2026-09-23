@@ -15,9 +15,12 @@
 package steps
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -25,8 +28,14 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// installDir is the manifest root, relative to the repository root.
-const installDir = "manifests/ate-install"
+const (
+	// installDir is the manifest root, relative to the repository root.
+	installDir = "manifests/ate-install"
+	// Envoy dataplane image name
+	envoyDataplaneImage = "envoy-dataplane"
+	// Envoy dataplane Dockerfile path
+	envoyDataplaneDockefile = "cmd/dataplane/envoy"
+)
 
 // SystemOverlay picks the manifest source for a full control plane install.
 //
@@ -72,6 +81,56 @@ func (e *Env) atenetEgressManifestPath() string {
 	return e.Cfg.Manifest("atenet-egress.yaml")
 }
 
+// buildWorkload builds the workload image, pushes it to KO_DOCKER_REPO, and
+// returns the digest-pinned reference.
+//
+// The image is tagged with the build time only to give buildx a stable name to
+// push to; the manifest always references the digest, so a stale tag can never
+// be resolved by accident.
+func (e *Env) buildEnvoyImage(ctx context.Context) (string, error) {
+	repo := strings.TrimSuffix(e.Cfg.KODockerRepo, "/") + "/" + envoyDataplaneImage
+	stageTag := fmt.Sprintf("%s:build-%d", repo, time.Now().Unix())
+
+	build := exec.CommandContext(ctx, "docker", "buildx", "build",
+		"--platform=linux/amd64",
+		"--push",
+		"-t", stageTag,
+		e.Cfg.Path(envoyDataplaneDockefile),
+	)
+	build.Dir = e.Cfg.Root
+	// The shell version sent build output to stderr so it could capture the
+	// image reference on stdout; keeping that split makes the two behave the
+	// same under CI log capture.
+	build.Stdout = os.Stderr
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		return "", fmt.Errorf("while building the %s workload image: %w", envoyDataplaneImage, err)
+	}
+
+	inspect := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect",
+		stageTag, "--format", "{{json .}}")
+	inspect.Dir = e.Cfg.Root
+	inspect.Stderr = os.Stderr
+	var out bytes.Buffer
+	inspect.Stdout = &out
+	if err := inspect.Run(); err != nil {
+		return "", fmt.Errorf("while inspecting %s: %w", stageTag, err)
+	}
+
+	var inspected struct {
+		Manifest struct {
+			Digest string `json:"digest"`
+		} `json:"manifest"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &inspected); err != nil {
+		return "", fmt.Errorf("while parsing the image manifest of %s: %w", stageTag, err)
+	}
+	if inspected.Manifest.Digest == "" {
+		return "", fmt.Errorf("failed to resolve the workload image digest from %s", stageTag)
+	}
+	return repo + "@" + inspected.Manifest.Digest, nil
+}
+
 // renderAtenetEgressManifest produces the atenet egress manifest.
 func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 	general := e.Cfg.AdditionalEgressExtprocService != ""
@@ -90,14 +149,14 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 		return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress")
 	}
 
-	if !general && !injection {
-		return e.ResolveManifest(ctx, e.atenetEgressManifestPath())
+	imageReference, err := e.buildEnvoyImage(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// The general additional-ext_proc filter and egress credential injection are
 	// independent splices with their own markers, so compose them.
 	var raw []byte
-	var err error
 	if general {
 		raw, err = e.patchAtenetEgressManifest()
 	} else {
@@ -112,7 +171,14 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 			return nil, err
 		}
 	}
+	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
 	return e.ResolveManifestBytes(ctx, raw)
+}
+
+// patchEnvoyDataplaneImage replaces the ${ENVOY_DATAPLANE_IMAGE} placeholder in
+// the manifest with imageRef.
+func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
+	return bytes.ReplaceAll(raw, []byte("${ENVOY_DATAPLANE_IMAGE}"), []byte(imageRef))
 }
 
 // patchAtenetEgressInject splices the credential-provider flags into the egress
