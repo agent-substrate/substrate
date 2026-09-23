@@ -22,13 +22,11 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/principal"
+	"github.com/agent-substrate/substrate/internal/protoredact"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // ServerElapsedTrailer carries the server's handler duration in microseconds,
@@ -52,8 +50,8 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
-		slog.Any("req", sanitizeForLog(req)),
-		slog.Any("resp", sanitizeForLog(resp)),
+		slog.Any("req", protoredact.ForLog(req)),
+		slog.Any("resp", protoredact.ForLog(resp)),
 		slog.Any("err", err),
 		slog.String("elapsed-time", elapsed.String()),
 		slog.Any("principal", pInfo),
@@ -92,8 +90,8 @@ func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.Una
 
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
-		slog.Any("req", sanitizeForLog(req)),
-		slog.Any("resp", sanitizeForLog(resp)),
+		slog.Any("req", protoredact.ForLog(req)),
+		slog.Any("resp", protoredact.ForLog(resp)),
 		slog.Any("err", err),
 		slog.String("elapsed-time", time.Since(startTime).String()),
 	)
@@ -112,69 +110,4 @@ func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.Una
 	}
 
 	return resp, err
-}
-
-// redactedPlaceholder replaces the value of a string field marked
-// debug_redact in the logged copy of a message. Names and structure are kept
-// so the log still shows which fields were set.
-const redactedPlaceholder = "[REDACTED]"
-
-// sanitizeForLog returns a copy of v safe to log. Proto messages are cloned
-// and every field carrying the debug_redact option is masked; other values are
-// returned unchanged. The original message is never modified.
-func sanitizeForLog(v any) any {
-	msg, ok := v.(proto.Message)
-	if !ok {
-		return v
-	}
-
-	clone := proto.Clone(msg)
-	redactDebugRedactFields(clone.ProtoReflect())
-	return clone
-}
-
-// isDebugRedact reports whether fd carries [debug_redact = true]. The option
-// is set in the .proto files next to the fields it protects; see EnvVar.value,
-// EnvEntry.value, MintActorJWTResponse.actor_jwt and
-// FetchSecretResponse.opaque_bytes.
-func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
-	opts, ok := fd.Options().(*descriptorpb.FieldOptions)
-	return ok && opts.GetDebugRedact()
-}
-
-// redactDebugRedactFields masks, in place, every populated field of msg that
-// carries the debug_redact option, recursing through nested messages, lists
-// and map values. Singular string fields are replaced with
-// redactedPlaceholder; any other kind (bytes, repeated, map, message, ...) is
-// cleared.
-func redactDebugRedactFields(msg protoreflect.Message) {
-	msg.Range(func(fd protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if isDebugRedact(fd) {
-			if fd.Kind() == protoreflect.StringKind && !fd.IsList() && !fd.IsMap() {
-				msg.Set(fd, protoreflect.ValueOfString(redactedPlaceholder))
-			} else {
-				msg.Clear(fd)
-			}
-			return true
-		}
-		switch {
-		case fd.IsMap():
-			if fd.MapValue().Kind() == protoreflect.MessageKind {
-				value.Map().Range(func(_ protoreflect.MapKey, mv protoreflect.Value) bool {
-					redactDebugRedactFields(mv.Message())
-					return true
-				})
-			}
-		case fd.IsList():
-			if fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind {
-				list := value.List()
-				for i := 0; i < list.Len(); i++ {
-					redactDebugRedactFields(list.Get(i).Message())
-				}
-			}
-		case fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind:
-			redactDebugRedactFields(value.Message())
-		}
-		return true
-	})
 }
