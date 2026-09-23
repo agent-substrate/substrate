@@ -23,6 +23,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/apimachinery/pkg/api/operation"
 )
 
 // fakeTemplateStore is an in-memory templateReconcilerStore.
@@ -666,6 +668,89 @@ func TestCheckpoint_TerminalStateErrors(t *testing.T) {
 				t.Error("take_golden_snapshot_at set, want store unchanged")
 			}
 		})
+	}
+}
+
+func TestTruncateUTF8(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		n    int
+		want string
+	}{
+		{
+			name: "shorter than the bound",
+			s:    "abc",
+			n:    4,
+			want: "abc",
+		},
+		{
+			name: "exactly the bound",
+			s:    "abcd",
+			n:    4,
+			want: "abcd",
+		},
+		{
+			name: "ASCII over the bound",
+			s:    "abcdef",
+			n:    4,
+			want: "abcd",
+		},
+		{
+			// "é" is 2 bytes, so the cut at 4 would land inside it.
+			name: "backs off a split rune",
+			s:    "abcéf",
+			n:    4,
+			want: "abc",
+		},
+		{
+			name: "cut on a rune boundary keeps the rune",
+			s:    "abéf",
+			n:    4,
+			want: "abé",
+		},
+		{
+			name: "zero bound",
+			s:    "abc",
+			n:    0,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := truncateUTF8(tt.s, tt.n); got != tt.want {
+				t.Errorf("truncateUTF8(%q, %d) = %q, want %q", tt.s, tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFail_TruncatesErrorMessage pins that an oversized failure detail is
+// stored cut to error_message's maxLength, as valid UTF-8 that still passes
+// validation.
+func TestFail_TruncatesErrorMessage(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTemplateStore(testTemplate())
+	r := newTestTemplateReconciler(st, &fakeGoldenControl{})
+
+	if err := r.fail(ctx, testTemplate(), reasonGoldenActorInvalid, strings.Repeat("é", maxGoldenErrorMessageLen)); err != nil {
+		t.Fatalf("fail() error = %v", err)
+	}
+
+	golden := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus()
+	msg := golden.GetErrorMessage()
+	if len(msg) > maxGoldenErrorMessageLen {
+		t.Errorf("error_message is %d bytes, want at most %d", len(msg), maxGoldenErrorMessageLen)
+	}
+	if !strings.HasPrefix(msg, reasonGoldenActorInvalid+": ") {
+		t.Errorf("error_message = %.40q..., want the %q reason prefix", msg, reasonGoldenActorInvalid)
+	}
+	if !utf8.ValidString(msg) {
+		t.Error("error_message is not valid UTF-8")
+	}
+	op := operation.Operation{Type: operation.Update}
+	if errs := Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapipb.GoldenSnapshotStatus{}); len(errs) != 0 {
+		t.Errorf("stored status fails validation: %v", errs)
 	}
 }
 

@@ -824,8 +824,15 @@ message GoldenSnapshotStatus {
 
   // take_golden_snapshot_at is when the golden-actor warmup ends and the
   // golden snapshot may be taken.
+  //
+  // +k8s:optional
   google.protobuf.Timestamp take_golden_snapshot_at = 2;
 
+  // error_message is set when the golden snapshot build fails and will not be
+  // retried, formatted as "<Reason>: <detail>". A nonempty value is terminal.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096
   string error_message = 3;
 }
 

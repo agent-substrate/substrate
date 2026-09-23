@@ -216,11 +216,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GoldenSnapshotStatus.error_message",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Limits",
     "message": "message has no doc comment"
   },
