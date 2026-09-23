@@ -43,6 +43,13 @@ func ForLog(v any) any {
 
 // Clone returns a deep copy of m with every debug_redact field masked. m is
 // not modified.
+//
+// TODO: memoize, per message descriptor, whether the type can reach a
+// debug_redact field at all. Most of our RPC messages cannot (Actor,
+// ListActorsResponse, Worker, ...), and for those the clone and the walk are
+// pure overhead: they could be returned as-is after a cache lookup. The same
+// answer lets Redact skip sub-messages whose type has no redacted fields
+// instead of traversing them. Benchmarks for both are linked from #1743.
 func Clone(m proto.Message) proto.Message {
 	clone := proto.Clone(m)
 	Redact(clone.ProtoReflect())
