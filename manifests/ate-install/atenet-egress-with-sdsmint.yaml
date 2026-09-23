@@ -1111,6 +1111,7 @@ spec:
           readOnly: true
       containers:
       - name: envoy
+        # ENVOY_DATAPLANE_IMAGE is substituted for the image URI in renderAtenetEgressManifest
         image: ${ENVOY_DATAPLANE_IMAGE}
         securityContext:
           allowPrivilegeEscalation: false

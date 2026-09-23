@@ -21,18 +21,13 @@
 package claudemultiplex
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
-	"time"
 
 	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -106,7 +101,7 @@ func (d *demo) Delete(ctx context.Context, e *steps.Env) error {
 // renderValues builds the workload image and returns the placeholder values
 // the agent templates need.
 func (d *demo) renderValues(ctx context.Context, e *steps.Env) (map[string]string, error) {
-	image, err := d.buildWorkload(ctx, e)
+	image, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, imageName, e.Cfg.Path(workload))
 	if err != nil {
 		return nil, err
 	}
@@ -114,54 +109,4 @@ func (d *demo) renderValues(ctx context.Context, e *steps.Env) (map[string]strin
 		"ANTHROPIC_API_KEY": e.Cfg.AnthropicAPIKey,
 		"WORKLOAD_IMAGE":    image,
 	}, nil
-}
-
-// buildWorkload builds the workload image, pushes it to KO_DOCKER_REPO, and
-// returns the digest-pinned reference.
-//
-// The image is tagged with the build time only to give buildx a stable name to
-// push to; the manifest always references the digest, so a stale tag can never
-// be resolved by accident.
-func (d *demo) buildWorkload(ctx context.Context, e *steps.Env) (string, error) {
-	repo := strings.TrimSuffix(e.Cfg.KODockerRepo, "/") + "/" + imageName
-	stageTag := fmt.Sprintf("%s:build-%d", repo, time.Now().Unix())
-
-	build := exec.CommandContext(ctx, "docker", "buildx", "build",
-		"--platform=linux/amd64",
-		"--push",
-		"-t", stageTag,
-		e.Cfg.Path(workload),
-	)
-	build.Dir = e.Cfg.Root
-	// The shell version sent build output to stderr so it could capture the
-	// image reference on stdout; keeping that split makes the two behave the
-	// same under CI log capture.
-	build.Stdout = os.Stderr
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		return "", fmt.Errorf("while building the %s workload image: %w", d.Name(), err)
-	}
-
-	inspect := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect",
-		stageTag, "--format", "{{json .}}")
-	inspect.Dir = e.Cfg.Root
-	inspect.Stderr = os.Stderr
-	var out bytes.Buffer
-	inspect.Stdout = &out
-	if err := inspect.Run(); err != nil {
-		return "", fmt.Errorf("while inspecting %s: %w", stageTag, err)
-	}
-
-	var inspected struct {
-		Manifest struct {
-			Digest string `json:"digest"`
-		} `json:"manifest"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &inspected); err != nil {
-		return "", fmt.Errorf("while parsing the image manifest of %s: %w", stageTag, err)
-	}
-	if inspected.Manifest.Digest == "" {
-		return "", fmt.Errorf("failed to resolve the workload image digest from %s", stageTag)
-	}
-	return repo + "@" + inspected.Manifest.Digest, nil
 }
