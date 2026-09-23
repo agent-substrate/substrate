@@ -115,8 +115,8 @@ type Config struct {
 	// Router selects the atenet router dataplane.
 	Router string
 	// The read/write and owner connections can use different login identities.
-	// An empty owner connection uses the read/write connection for Cloud SQL or
-	// another external database. Both empty selects bundled PostgreSQL.
+	// With one configured connection, both pools use it. Both empty selects
+	// bundled PostgreSQL.
 	PostgresReadWriteConnectionString string
 	PostgresOwnerConnectionString     string
 	PostgresReadWriteRole             string
@@ -305,6 +305,8 @@ func Load(opts Options) (*Config, error) {
 	cloudsqlInstance, cloudsqlInstanceSet := env["ATE_API_POSTGRES_CLOUDSQL_INSTANCE"]
 
 	kubeconfig, kubeconfigEnv := loadKubeconfig(opts.Kubeconfig, env["KUBECONFIG"])
+	ownerConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"], env["ATE_API_POSTGRES_CONNECTION_STRING"])
+	readWriteConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"], ownerConnectionString)
 
 	cfg := &Config{
 		Root:                              root,
@@ -320,8 +322,8 @@ func Load(opts Options) (*Config, error) {
 		KODockerRepo:                      env["KO_DOCKER_REPO"],
 		KODefaultPlatforms:                env["KO_DEFAULTPLATFORMS"],
 		Images:                            loadImageSource(opts, env),
-		PostgresReadWriteConnectionString: firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"], env["ATE_API_POSTGRES_CONNECTION_STRING"]),
-		PostgresOwnerConnectionString:     env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"],
+		PostgresReadWriteConnectionString: readWriteConnectionString,
+		PostgresOwnerConnectionString:     ownerConnectionString,
 		PostgresReadWriteRole:             firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
 		PostgresOwnerRole:                 firstNonEmpty(env["ATE_API_POSTGRES_OWNER_ROLE"], DefaultPostgresOwnerRole),
 		PostgresSchema:                    env["ATE_API_POSTGRES_SCHEMA"],
@@ -401,9 +403,6 @@ func applyKindDefaults(cfg *Config) {
 func validate(cfg *Config) error {
 	if err := cfg.Images.Validate(); err != nil {
 		return err
-	}
-	if cfg.PostgresOwnerConnectionString != "" && cfg.PostgresReadWriteConnectionString == "" {
-		return fmt.Errorf("ATE_API_POSTGRES_OWNER_CONNECTION_STRING requires ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")
 	}
 	switch cfg.Router {
 	case RouterEnvoy, RouterAgentgateway:

@@ -130,7 +130,8 @@ func TestLoadFlagsBeatEnvironment(t *testing.T) {
 	}
 }
 
-// The old connection variable remains an alias for existing setup scripts.
+// The old connection remains the owner connection when a separate read/write
+// login is added, and serves both pools until then.
 func TestLoadPostgresConnectionStringOverride(t *testing.T) {
 	loadEnv(t)
 	const dsn = "postgresql://someone@db.example:5432/atepg?sslmode=disable"
@@ -140,8 +141,17 @@ func TestLoadPostgresConnectionStringOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresReadWriteConnectionString != dsn {
-		t.Errorf("PostgresReadWriteConnectionString = %q, want %q", cfg.PostgresReadWriteConnectionString, dsn)
+	if cfg.PostgresReadWriteConnectionString != dsn || cfg.PostgresOwnerConnectionString != dsn {
+		t.Errorf("PostgreSQL connections = %q, %q, want %q for both", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
+	}
+
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "readwrite-dsn")
+	cfg, err = Load(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != dsn {
+		t.Errorf("separate PostgreSQL connections = %q, %q, want readwrite-dsn and %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
 	}
 }
 
@@ -160,11 +170,15 @@ func TestLoadPostgresIdentityOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsPostgresOwnerWithoutReadWrite(t *testing.T) {
+func TestLoadPostgresOwnerWithoutReadWrite(t *testing.T) {
 	loadEnv(t)
 	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
-	if _, err := Load(Options{}); err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_OWNER_CONNECTION_STRING requires") {
-		t.Fatalf("Load() error = %v, want owner-only connection rejected", err)
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostgresReadWriteConnectionString != "owner-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" {
+		t.Errorf("owner-only PostgreSQL connections = %q, %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString)
 	}
 }
 

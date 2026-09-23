@@ -155,13 +155,16 @@ Optional environment variables:
   `public` and `psc` require an instance configured accordingly out-of-band.
 - `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH` — set `false` to fall back to password
   authentication through the proxy (still encrypted and identity-verified);
-  you must then provide `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING` with the
-  password yourself (the install script rejects `false` without an explicit
-  connection string — a synthesized passwordless DSN cannot log in once the
+  you must then provide an explicit application connection string with the
+  password yourself (the install script rejects `false` without one because
+  a synthesized passwordless DSN cannot log in once the
   proxy stops injecting IAM tokens).
 - `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` — a separate schema-owner DSN for
-  migrations and outbox partition maintenance. Setting it requires an explicit
-  `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`. Otherwise, it defaults to the read/write DSN.
+  migrations and outbox partition maintenance. If no read/write DSN is set,
+  the read/write pool uses this DSN too. Otherwise, the owner DSN defaults to
+  `ATE_API_POSTGRES_CONNECTION_STRING`, then the read/write DSN.
+  The legacy variable alone still supplies both pools; adding a separate
+  read/write DSN leaves the legacy connection as the owner connection.
   With separate logins, grant each login membership in its corresponding
   role. Provision the schema and default object grants as in section 2;
   ateapi does not grant them when bootstrap is disabled. Use a schema
