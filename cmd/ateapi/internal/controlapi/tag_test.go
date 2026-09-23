@@ -272,6 +272,7 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 				SnapshotUri: uri.String(),
 				Fidelity:    actor.GetStatus().GetExternalSnapshot().GetFidelity(),
 			},
+			State: ateapipb.TagState_TAG_STATE_READY,
 		},
 	}
 }
@@ -284,6 +285,7 @@ func newPendingTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapi
 	tag := newTestTag(t, name, actor)
 	tag.Status.StorageLocation = testStorageLocation
 	tag.Status.Snapshot = nil
+	tag.Status.State = ateapipb.TagState_TAG_STATE_CREATING
 	return tag
 }
 

@@ -1420,7 +1420,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					Metadata:    &ateapipb.ResourceMetadata{Atespace: "ns", Name: "golden"},
 					SourceActor: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
 					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-					Status:      &ateapipb.TagStatus{ActorTemplateUid: createdTmpl.GetMetadata().GetUid(), Snapshot: tt.tmpl.golden},
+					Status:      &ateapipb.TagStatus{State: ateapipb.TagState_TAG_STATE_READY, ActorTemplateUid: createdTmpl.GetMetadata().GetUid(), Snapshot: tt.tmpl.golden},
 				}); err != nil {
 					t.Fatalf("create golden tag: %v", err)
 				}

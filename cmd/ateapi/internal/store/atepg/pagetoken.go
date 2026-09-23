@@ -35,7 +35,6 @@ const (
 	kindActor         resourceKind = "actor"
 	kindActorTemplate resourceKind = "actor-template"
 	kindTag           resourceKind = "tag"
-	kindTagBorrow     resourceKind = "tag-borrow"
 	kindWorker        resourceKind = "worker"
 	kindWorkerAssign  resourceKind = "worker-assignment"
 )

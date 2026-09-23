@@ -14,8 +14,10 @@
 
 -- +goose Up
 
+CREATE INDEX tags_uid_idx ON tags (atespace, uid);
+
 -- One row per Actor that borrows a Tag's external snapshot. Updated
--- on every actor write.
+-- on every actor write. A Tag cannot be removed while it is borrowed.
 CREATE TABLE tag_borrows (
     actor_uid  text PRIMARY KEY,
     tag_uid    text NOT NULL

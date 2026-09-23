@@ -38,6 +38,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -407,19 +408,22 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	// same-location-slash spells sameLocation differently but resolves to the
 	// same prefix. corrupt has no bucket, which template validation rejects, so
 	// only a write straight to the store can leave it behind.
+	templates := map[string]*ateapipb.ActorTemplate{}
 	for name, location := range map[string]string{
 		"same-location":       sameLocation,
 		"same-location-slash": sameLocation + "/",
 		"different-location":  differentLocation,
 		"corrupt":             "gs:///snapshots",
 	} {
-		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		created, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: location},
 			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}
+		templates[name] = created
 	}
 
 	snapshotOwnedByActor := func(t *testing.T, actor *ateapipb.Actor) string {
@@ -430,16 +434,9 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		}
 		return uri.String()
 	}
-	snapshotOwnedByTag := func(t *testing.T, _ *ateapipb.Actor) string {
+	snapshotOwnedByTag := func(t *testing.T, actor *ateapipb.Actor) string {
 		t.Helper()
-		uri, err := resources.NewTagSnapshotURI(sameLocation, testAtespace, "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60")
-		if err != nil {
-			t.Fatalf("NewTagSnapshotURI: %v", err)
-		}
-		return uri.String()
-	}
-	unparseableSnapshot := func(*testing.T, *ateapipb.Actor) string {
-		return sameLocation + "/not-a-snapshot"
+		return mustSeedReadyTag(t, ctx, persistence, templates["same-location"], testAtespace, actor.GetMetadata().GetName()).String()
 	}
 
 	tests := []struct {
@@ -482,13 +479,6 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			snapshot:  snapshotOwnedByActor,
 			repointTo: "different-location",
 			wantCode:  codes.FailedPrecondition,
-		},
-		{
-			name:      "unparseable snapshot",
-			template:  "same-location",
-			snapshot:  unparseableSnapshot,
-			repointTo: "different-location",
-			wantCode:  codes.Internal,
 		},
 		{
 			name:      "invalid storage location on the new template",
@@ -800,7 +790,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 }
 
 func TestCreateActor_GoldenTagDefault(t *testing.T) {
-	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope"} {
+	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "deleting", "wrong template", "data scope"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
@@ -813,6 +803,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				SourceActor: ref,
 				Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
+					State:            ateapipb.TagState_TAG_STATE_READY,
 					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/ate-golden/tags/" + someActorUID, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 				},
@@ -823,6 +814,10 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				wantCode = codes.FailedPrecondition
 			case "pending":
 				tag.Status.Snapshot = nil
+				tag.Status.State = ateapipb.TagState_TAG_STATE_CREATING
+				wantCode = codes.FailedPrecondition
+			case "deleting":
+				tag.Status.State = ateapipb.TagState_TAG_STATE_DELETING
 				wantCode = codes.FailedPrecondition
 			case "wrong template":
 				tag.Status.ActorTemplateUid = "other"
@@ -831,10 +826,30 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				tag.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				wantCode = codes.FailedPrecondition
 			}
-			if scenario != "missing" {
-				if _, err := persistence.CreateTag(ctx, tag); err != nil {
+			// storeTag places the tag's snapshot under the UID the store assigns
+			// it, which is what makes an Actor seeded from it that tag's borrower.
+			storeTag := func(tag *ateapipb.Tag) {
+				t.Helper()
+				snapshot := tag.Status.Snapshot
+				toCreate := proto.CloneOf(tag)
+				toCreate.Status.Snapshot = nil
+				created, err := persistence.CreateTag(ctx, toCreate)
+				if err != nil {
 					t.Fatal(err)
 				}
+				if snapshot == nil {
+					return
+				}
+				snapshot.SnapshotUri = "gs://bucket/atespaces/ate-golden/tags/" + created.GetMetadata().GetUid()
+				if _, err := persistence.UpdateTag(ctx, resources.TagRefFromTag(created), store.PreconditionFrom(created), func(toUpdate *ateapipb.Tag) error {
+					toUpdate.Status.Snapshot = snapshot
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario != "missing" {
+				storeTag(tag)
 			}
 			if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapipb.ActorTemplate) error {
 				db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenTag: ref}}
@@ -845,10 +860,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor"}, ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
 			if scenario == "explicit tag" {
 				tag.Metadata.Name = "explicit"
-				tag.Status.Snapshot.SnapshotUri = "gs://bucket/atespaces/ate-golden/tags/explicit"
-				if _, err := persistence.CreateTag(ctx, tag); err != nil {
-					t.Fatal(err)
-				}
+				storeTag(tag)
 				actor.SourceTag = &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
 			svc := &ServiceImpl{store: persistence}
