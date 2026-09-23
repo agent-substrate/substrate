@@ -1596,16 +1596,6 @@ message MintActorCertificateResponse {
   repeated bytes actor_certificates = 1;
 }
 
-message GetActorSnapshotRequest {
-  // +k8s:opaqueType
-  ObjectRef actor_snapshot = 1;
-}
-
-message GetActorSnapshotTagRequest {
-  // +k8s:opaqueType
-  ObjectRef actor_snapshot_tag = 1;
-}
-
 message ListTagsRequest {
   // The atespace to list tags from. Empty lists across all atespaces.
   //
