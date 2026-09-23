@@ -26,6 +26,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
 // CleanupSandboxState removes leftover host-side state for a sandbox id (the
@@ -111,15 +113,30 @@ func CleanupSandboxState(ctx context.Context, id string) {
 			continue
 		}
 		cmdline, rerr := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
-		if rerr != nil || !strings.Contains(string(cmdline), id) {
+		if rerr != nil {
 			continue
 		}
-		argv0 := strings.SplitN(string(cmdline), "\x00", 2)[0]
-		if strings.Contains(argv0, "cloud-hypervisor") || strings.Contains(argv0, "virtiofsd") {
+		exe, _ := os.Readlink(filepath.Join("/proc", e.Name(), "exe"))
+		if isSandboxProcess(id, string(cmdline), exe) {
 			if err := unix.Kill(pid, unix.SIGKILL); err != nil {
 				slog.WarnContext(ctx, "Failed to kill orphaned sandbox process",
-					slog.Int("pid", pid), slog.String("argv0", argv0), slog.Any("err", err))
+					slog.Int("pid", pid), slog.String("exe", exe), slog.Any("err", err))
 			}
 		}
 	}
+}
+
+// isSandboxProcess reports whether a process is a VMM or virtiofsd serving the
+// sandbox id. Both carry id in their socket paths. atelet stages their binaries
+// under content-addressed names, so the executable's location identifies them
+// rather than its name.
+func isSandboxProcess(id, cmdline, exe string) bool {
+	if !strings.Contains(cmdline, id) {
+		return false
+	}
+	if strings.HasPrefix(exe, ateompath.StaticFilesDir+"/") {
+		return true
+	}
+	argv0 := strings.SplitN(cmdline, "\x00", 2)[0]
+	return strings.Contains(argv0, "cloud-hypervisor") || strings.Contains(argv0, "virtiofsd")
 }
