@@ -252,6 +252,8 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 
 `command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty — the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args` — `Run`/`Restore` fails.
 
+The process runs as the image's `USER`, as it does under Docker and Kubernetes: numeric `uid[:gid]` only, at most 2147483647; no group means gid 0; `root` is 0; an image without `USER` runs as root. An image whose `USER` names any other user or group fails `Run`/`Restore`, because Substrate does not read the image's passwd file. There is no `runAsUser` field to override the image.
+
 ### Container Capabilities (`securityContext.capabilities`)
 
 Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, `KILL` and `NET_BIND_SERVICE`. `securityContext.capabilities` adjusts that set, mirroring `securityContext.capabilities` on a Kubernetes Pod container.

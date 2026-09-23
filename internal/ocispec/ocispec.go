@@ -34,8 +34,8 @@ const specFile = "config.json"
 // hostname is the UTS hostname for actor containers.
 const hostname = "actor"
 
-// Options describes one actor container. Args, Env and Capabilities arrive
-// already resolved.
+// Options describes one actor container. Args, Env, Capabilities, and the
+// process identity (UID/GID) arrive already resolved.
 type Options struct {
 	Args []string
 	Env  []string
@@ -55,6 +55,14 @@ type Options struct {
 	// BundlePath is this container's bundle, where its image volumes are
 	// composed.
 	BundlePath string
+
+	// UID and GID are the process identity the container starts as, resolved
+	// from the image's own Config.User (see resolveUser in cmd/atelet/oci.go).
+	// Zero for both is a valid, explicit choice (root), not just an unset
+	// zero value: an image with no USER directive runs as root, matching
+	// every other container runtime's default.
+	UID uint32
+	GID uint32
 }
 
 const (
@@ -92,8 +100,8 @@ func Build(o Options) *specs.Spec {
 	spec := &specs.Spec{
 		Process: &specs.Process{
 			User: specs.User{
-				UID: 0,
-				GID: 0,
+				UID: o.UID,
+				GID: o.GID,
 			},
 			Args: o.Args,
 			Env:  o.Env,
