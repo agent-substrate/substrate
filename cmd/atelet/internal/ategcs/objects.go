@@ -118,6 +118,18 @@ func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL
 	return nil
 }
 
+// SendFileToGCSWithZstd compresses and uploads an already-open file. The
+// caller retains ownership of localFile.
+func SendFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFile *os.File) error {
+	ctx, span := tracer.Start(ctx, "sendFileToGCSWithZstd")
+	defer span.End()
+
+	if err := sendZstd(ctx, client, gsURL, localFile); err != nil {
+		return fmt.Errorf("in sendZstd: %w", err)
+	}
+	return nil
+}
+
 // sparseFilePutter marks a backend that can upload a sparse FILE directly, splitting
 // compression and upload by file range instead of piping one compressed stream into a
 // part splitter. Reports errSparseTooSmall when the file is not worth splitting, in
@@ -323,6 +335,21 @@ func FetchLocalFileFromGCSWithZstd(ctx context.Context, client ObjectStorage, gs
 		return fmt.Errorf("while fetching %q from GCS: %w", gsURL, err)
 	}
 
+	return nil
+}
+
+// FetchFileFromGCSWithZstd downloads and decompresses into an already-open
+// file. The caller retains ownership of localFile.
+func FetchFileFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFile *os.File) error {
+	ctx, span := tracer.Start(ctx, "fetchFileFromGCSWithZstd")
+	defer span.End()
+
+	if err := localFile.Chmod(0o600); err != nil {
+		return fmt.Errorf("in localFile.Chmod(0o600): %w", err)
+	}
+	if err := fetchFromGCSWithZstd(ctx, client, gsURL, localFile); err != nil {
+		return fmt.Errorf("while fetching %q from GCS: %w", gsURL, err)
+	}
 	return nil
 }
 
