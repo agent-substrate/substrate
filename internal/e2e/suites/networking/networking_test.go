@@ -276,19 +276,32 @@ func postThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.
 // successful CONNECT access record; AgentGateway logs the terminated tunnel.
 func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, atespace, actorName, port string) {
 	t.Helper()
-	want := fmt.Sprintf("a CONNECT to port %s by actor %s", port, actorName)
+	want := fmt.Sprintf("a CONNECT to port %s by actor %s/%s", port, atespace, actorName)
 	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
 		for _, line := range lines {
 			switch line.container {
 			case "envoy":
-				if strings.Contains(line.text, "/ateom-for-actor/") || strings.Contains(line.text, "/actor/") {
-					t.Logf("Log line mentions SPIFFE ID: %v", line.text)
+				if !strings.Contains(line.text, actorName) {
+					t.Logf("Log line does not contain %s, discarding", actorName)
+					continue
 				}
+				t.Logf("Considering log line: %s", line.text)
 				authority, ok := accessLogField(line.text, "authority")
-				if ok && strings.HasSuffix(authority, ":"+port) && strings.Contains(line.text, "/ateom-for-actor/"+atespace+"/"+actorName) {
-					t.Logf("egress gateway tunneled the request: %s", line.text)
-					return true
+				if !ok {
+					t.Logf("Log line does not have an authority field, discarding")
+					continue
 				}
+				if !strings.HasSuffix(authority, ":"+port) {
+					t.Logf("Authority does not contain %s, discarding", ":"+port)
+					continue
+				}
+				spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
+				if !strings.Contains(line.text, spiffeSlug) {
+					t.Logf("Log line does not contain %q, discarding", spiffeSlug)
+					continue
+				}
+				t.Logf("Log line matches")
+				return true
 			case "agentgateway":
 				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
 					strings.Contains(line.text, "target=") &&
