@@ -124,8 +124,9 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 	actor, _ := seedTagSource(t, ctx, persistence, objects, builtOn, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
 
-	// Repoint the suspended actor, the way UpdateActor does. Its recorded
-	// built-on UID stays at tmpl-a: only a resume moves that.
+	// Repoint the suspended actor, the way UpdateActor does. The snapshot on
+	// disk still came from tmpl-a, and the UID recorded alongside it only
+	// moves when a later suspend commits a new snapshot.
 	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.ActorTemplate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-b"}
 		return nil
