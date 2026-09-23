@@ -158,6 +158,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
 		}
+		if errors.Is(err, store.ErrTagNotReady) {
+			return nil, status.Error(codes.FailedPrecondition, "source Tag is being deleted or no longer exists")
+		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
@@ -188,8 +191,11 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	default:
 		return nil, status.Error(codes.FailedPrecondition, "source Tag has an invalid scope")
 	}
-	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+	switch tag.GetStatus().GetState() {
+	case ateapipb.TagState_TAG_STATE_READY:
+	case ateapipb.TagState_TAG_STATE_DELETING:
+		return nil, status.Error(codes.FailedPrecondition, "source Tag is being deleted")
+	default:
 		return nil, status.Error(codes.FailedPrecondition, "source Tag is still being created or failed creation")
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.

@@ -79,6 +79,7 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 	snapshot.SnapshotUri = uri.String()
 	tag, err = tc.persistence.UpdateTag(ctx, resources.TagRefFromTag(tag), store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = snapshot
+		toUpdate.Status.State = ateapipb.TagState_TAG_STATE_READY
 		return nil
 	})
 	if err != nil {
@@ -209,6 +210,11 @@ func runAndSuspendActorForTest(t *testing.T, tc *testContext, workerName, name s
 // wire: a tag cannot be deleted while an actor cloned from it is still running
 // on the tag's snapshot, and can be once that clone has suspended into one of
 // its own and resumed off that one.
+//
+//  1. Tag actor-a's snapshot and create clone-1 from the tag.
+//  2. DeleteTag fails, leaving the tag and its snapshot in place.
+//  3. Run and suspend clone-1, then resume it off its own snapshot.
+//  4. DeleteTag succeeds and leaves clone-1's own snapshot in place.
 func TestDeleteTag_RefusedWhileCloneBorrowsSnapshot(t *testing.T) {
 	ns := namespaceForTest("ns-delete-tag-borrowed")
 	tc := setupTest(t, ns)
@@ -284,6 +290,16 @@ func TestDeleteTag_RefusedWhileCloneBorrowsSnapshot(t *testing.T) {
 	}
 }
 
+// TestDeleteTag_RefusedWhileGoldenCloneBorrowsSnapshot is the same loop for an
+// actor created with no source tag, which starts out on the template's golden
+// snapshot.
+//
+//  1. Create actor-a, which inherits the golden tag's snapshot.
+//  2. DeleteTag(golden) and DeleteActorTemplate both fail, leaving the
+//     template, the golden tag, and its snapshot in place.
+//  3. Run and suspend actor-a, then resume it off its own snapshot.
+//  4. DeleteActorTemplate succeeds, collecting the golden tag and its snapshot
+//     and leaving actor-a's own snapshot in place.
 func TestDeleteTag_RefusedWhileGoldenCloneBorrowsSnapshot(t *testing.T) {
 	ns := namespaceForTest("ns-delete-golden-tag-borrowed")
 	tc := setupTest(t, ns)

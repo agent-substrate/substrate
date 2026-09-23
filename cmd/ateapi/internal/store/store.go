@@ -62,14 +62,24 @@ var (
 	// ErrImmutableField indicates an update's mutation changed a field that is
 	// immutable for the lifetime of the stored object.
 	ErrImmutableField = errors.New("persistence: immutable field")
+
+	// ErrTagNotReady indicates an Actor write would borrow the external snapshot
+	// of a Tag that is missing or not READY.
+	ErrTagNotReady = errors.New("persistence: tag not ready")
+
+	// ErrTagBorrowed indicates a Tag cannot move to DELETING, or be removed,
+	// because an Actor is still borrowing its external snapshot.
+	ErrTagBorrowed = errors.New("persistence: tag borrowed")
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
-	// mutated. Returns ErrAlreadyExists if key is taken, or
-	// ErrFailedPrecondition if the actor's atespace does not exist.
+	// mutated. Returns ErrAlreadyExists if key is taken,
+	// ErrFailedPrecondition if the actor's atespace does not exist, or
+	// ErrTagNotReady if the actor's external snapshot is owned by a Tag that is
+	// missing or not READY.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
@@ -95,9 +105,10 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, or the mutate's error verbatim otherwise. Immutable fields
-	// are not checked here; the service layer enforces them via declarative
-	// validation before the write.
+	// exhausted, ErrTagNotReady if the mutated actor newly borrows the external
+	// snapshot of a Tag that is missing or not READY, or the mutate's error
+	// verbatim otherwise. Immutable fields are not checked here; the service
+	// layer enforces them via declarative validation before the write.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
@@ -149,19 +160,18 @@ type Interface interface {
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
 	// exhausted, ErrImmutableField if the mutated tag changed a field that is
-	// immutable for its lifetime, or the mutate's error verbatim otherwise.
+	// immutable for its lifetime or moved status.state out of DELETING,
+	// ErrTagBorrowed if it moved status.state to DELETING while an Actor still
+	// borrows the tag's snapshot, or the mutate's error verbatim otherwise.
 	//
 	// status.snapshot is immutable once set
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing, or
 	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
-	// tag the caller observed.
+	// tag the caller observed, or ErrTagBorrowed if an Actor still borrows the
+	// tag's snapshot.
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapipb.Tag, error)
-
-	// ListTagBorrowers returns a page of the UIDs of the Actors recorded as
-	// borrowing the external snapshot of the Tag with tagUID, ordered by UID.
-	ListTagBorrowers(ctx context.Context, tagUID string, opts ListOptions) (ListResponse[string], error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns

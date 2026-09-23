@@ -369,7 +369,7 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 
 			previous := mustActorSnapshotURI(t, template, actor, "old")
 			if tt.tagOwnedSnapshot {
-				previous = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+				previous = mustSeedReadyTag(t, ctx, persistence, template, "team-a", "v1")
 			}
 			fresh := mustActorSnapshotURI(t, template, actor, snapshotName)
 			objects.PutSnapshot(t, previous, "manifest.json")

@@ -259,10 +259,6 @@ func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	return s.store.DeleteTag(ctx, tagRef, precondition)
 }
 
-func (s *ServiceImpl) ListTagBorrowers(ctx context.Context, tagUID string, opts store.ListOptions) (store.ListResponse[string], error) {
-	return s.store.ListTagBorrowers(ctx, tagUID, opts)
-}
-
 func validateDeleteTagRequest(ctx context.Context, req *ateapipb.DeleteTagRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
 	return Validate_DeleteTagRequest(ctx, op, nil, req, nil)

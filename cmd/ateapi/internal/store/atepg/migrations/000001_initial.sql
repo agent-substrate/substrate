@@ -63,6 +63,8 @@ CREATE TABLE tags (
         FOREIGN KEY (atespace) REFERENCES atespaces(name) ON DELETE RESTRICT
 );
 
+CREATE INDEX tags_uid_idx ON tags (atespace, uid);
+
 -- Workers are global-scoped and named by their Kubernetes pod UID, so name
 -- alone is the primary key.
 CREATE TABLE workers (
@@ -87,7 +89,7 @@ CREATE INDEX worker_assignments_worker_idx
     ON worker_assignments (worker_name);
 
 -- One row per Actor that borrows a Tag's external snapshot. Updated
--- on every actor write.
+-- on every actor write. A Tag cannot be removed while it is borrowed.
 CREATE TABLE tag_borrows (
     actor_uid  text PRIMARY KEY,
     tag_uid    text NOT NULL

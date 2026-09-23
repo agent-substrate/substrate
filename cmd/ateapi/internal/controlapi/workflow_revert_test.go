@@ -277,7 +277,7 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			// so its snapshots can only be placed now.
 			current := mustActorSnapshotURI(t, template, actor, "current")
 			if tt.tagOwnedSnapshot {
-				current = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+				current = mustSeedReadyTag(t, ctx, persistence, template, "team-a", "v1")
 			}
 			objects.PutSnapshot(t, current, "manifest.json")
 			inFlight := mustActorSnapshotURI(t, template, actor, inFlightSnapshotName)
