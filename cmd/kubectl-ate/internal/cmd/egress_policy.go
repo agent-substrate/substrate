@@ -36,6 +36,8 @@ import (
 var egressPolicyFlags struct {
 	atespace string
 	filename string
+	uid      string
+	version  int64
 }
 
 var getEgressPolicyCmd = &cobra.Command{
@@ -357,11 +359,13 @@ type egressPolicyDeleter interface {
 type deleteEgressPolicyRunner struct {
 	deleter egressPolicyDeleter
 	actor   *ateapipb.ObjectRef
+	// options carries the uid/version guards; nil is an unguarded delete.
+	options *ateapipb.DeleteOptions
 	stdout  io.Writer
 }
 
 func (r *deleteEgressPolicyRunner) Run(ctx context.Context) error {
-	_, err := r.deleter.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: r.actor})
+	_, err := r.deleter.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: r.actor, Options: r.options})
 	if status.Code(err) == codes.NotFound {
 		// The server answers NotFound for a missing actor too, so read the actor
 		// to tell the two apart.
@@ -394,6 +398,9 @@ func runDeleteEgressPolicy(cmd *cobra.Command, args []string) error {
 		actor:   &ateapipb.ObjectRef{Atespace: egressPolicyFlags.atespace, Name: args[0]},
 		stdout:  cmd.OutOrStdout(),
 	}
+	if cmd.Flags().Changed("uid") || cmd.Flags().Changed("version") {
+		runner.options = &ateapipb.DeleteOptions{Uid: egressPolicyFlags.uid, Version: egressPolicyFlags.version}
+	}
 	return runner.Run(ctx)
 }
 
@@ -416,5 +423,7 @@ func init() {
 
 	deleteEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
 	_ = deleteEgressPolicyCmd.MarkFlagRequired("atespace")
+	deleteEgressPolicyCmd.Flags().StringVar(&egressPolicyFlags.uid, "uid", "", "Delete only if the policy's metadata.uid matches; from get -o yaml")
+	deleteEgressPolicyCmd.Flags().Int64Var(&egressPolicyFlags.version, "version", 0, "Delete only if the policy's metadata.version matches; from get -o yaml")
 	deleteCmd.AddCommand(deleteEgressPolicyCmd)
 }

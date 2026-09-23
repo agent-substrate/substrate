@@ -897,43 +897,88 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1},
 		Rules:    []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}},
 	}
-	wantReq := &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor}
+	unguarded := &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor}
 	wantActorReq := &ateapipb.GetActorRequest{Actor: actor}
 	policyNotFound := status.Error(codes.NotFound, "EgressPolicy not found")
+	const uid = "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+	confirmed := "egress policy for actor \"c1\" in atespace \"team-a\" deleted\n"
 
 	tests := []struct {
 		name         string
 		deleter      *fakeEgressPolicyDeleter
+		options      *ateapipb.DeleteOptions
+		wantReq      *ateapipb.DeleteActorEgressPolicyRequest
 		wantActorReq *ateapipb.GetActorRequest
 		wantOut      string
 		wantErr      string
 	}{
 		{
-			name:    "sends actor ref and prints confirmation",
+			name:    "no flags leave options nil",
 			deleter: &fakeEgressPolicyDeleter{policy: deleted},
-			wantOut: "egress policy for actor \"c1\" in atespace \"team-a\" deleted\n",
+			wantReq: unguarded,
+			wantOut: confirmed,
+		},
+		{
+			name:    "uid and version populate options",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			options: &ateapipb.DeleteOptions{Uid: uid, Version: 3},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Uid: uid, Version: 3}},
+			wantOut: confirmed,
+		},
+		{
+			name:    "uid alone",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			options: &ateapipb.DeleteOptions{Uid: uid},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Uid: uid}},
+			wantOut: confirmed,
+		},
+		{
+			name:    "version alone",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			options: &ateapipb.DeleteOptions{Version: 3},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Version: 3}},
+			wantOut: confirmed,
 		},
 		{
 			name:         "missing policy on an existing actor fails",
 			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound},
+			wantReq:      unguarded,
+			wantActorReq: wantActorReq,
+			wantErr:      `actor "c1" in atespace "team-a" has no egress policy`,
+		},
+		{
+			name:         "guarded delete not found still reads actor",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound},
+			options:      &ateapipb.DeleteOptions{Uid: uid, Version: 3},
+			wantReq:      &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Uid: uid, Version: 3}},
 			wantActorReq: wantActorReq,
 			wantErr:      `actor "c1" in atespace "team-a" has no egress policy`,
 		},
 		{
 			name:         "missing actor fails",
 			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")},
+			wantReq:      unguarded,
 			wantActorReq: wantActorReq,
 			wantErr:      `actor "c1" in atespace "team-a" not found`,
 		},
 		{
 			name:         "actor lookup error wraps",
 			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.PermissionDenied, "denied")},
+			wantReq:      unguarded,
 			wantActorReq: wantActorReq,
 			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
 		},
 		{
+			name:    "aborted conflict wraps",
+			deleter: &fakeEgressPolicyDeleter{err: status.Error(codes.Aborted, "EgressPolicy version conflict")},
+			options: &ateapipb.DeleteOptions{Version: 3},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Version: 3}},
+			wantErr: `failed to delete egress policy for actor "c1" in atespace "team-a": rpc error: code = Aborted desc = EgressPolicy version conflict`,
+		},
+		{
 			name:    "unavailable wraps",
 			deleter: &fakeEgressPolicyDeleter{err: status.Error(codes.Unavailable, "api-server down")},
+			wantReq: unguarded,
 			wantErr: `failed to delete egress policy for actor "c1" in atespace "team-a": rpc error: code = Unavailable desc = api-server down`,
 		},
 	}
@@ -945,6 +990,7 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 			runner := &deleteEgressPolicyRunner{
 				deleter: test.deleter,
 				actor:   actor,
+				options: test.options,
 				stdout:  &stdout,
 			}
 			err := runner.Run(context.Background())
@@ -955,7 +1001,7 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 			if gotErr != test.wantErr {
 				t.Fatalf("Run() error = %q, want %q", gotErr, test.wantErr)
 			}
-			if diff := cmp.Diff(wantReq, test.deleter.req, protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(test.wantReq, test.deleter.req, protocmp.Transform()); diff != "" {
 				t.Errorf("request mismatch (-want +got):\n%s", diff)
 			}
 			if diff := cmp.Diff(test.wantActorReq, test.deleter.actorReq, protocmp.Transform()); diff != "" {
