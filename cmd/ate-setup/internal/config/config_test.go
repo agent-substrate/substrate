@@ -182,7 +182,7 @@ func TestLoadPostgresOwnerWithoutReadWrite(t *testing.T) {
 	}
 }
 
-// ATE_API_POSTGRES_SCHEMA defaults to public, as in the shell installer, and
+// ATE_API_POSTGRES_SCHEMA defaults to substrate, as in the apiserver, and
 // an explicit value wins.
 func TestLoadPostgresSchema(t *testing.T) {
 	loadEnv(t)
@@ -190,17 +190,17 @@ func TestLoadPostgresSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresSchemaName() != DefaultPostgresSchema {
-		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), DefaultPostgresSchema)
+	if cfg.PostgresSchemaName() != "substrate" {
+		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "substrate")
 	}
 
-	t.Setenv("ATE_API_POSTGRES_SCHEMA", "substrate")
+	t.Setenv("ATE_API_POSTGRES_SCHEMA", "tenant_schema")
 	cfg, err = Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresSchemaName() != "substrate" {
-		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "substrate")
+	if cfg.PostgresSchemaName() != "tenant_schema" {
+		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "tenant_schema")
 	}
 }
 

@@ -45,7 +45,7 @@ const (
 const DefaultRolloutTimeout = 60 * time.Second
 
 const (
-	DefaultPostgresSchema        = "public"
+	DefaultPostgresSchema        = "substrate"
 	DefaultPostgresReadWriteRole = "substrate_readwrite"
 	DefaultPostgresOwnerRole     = "substrate_owner"
 )

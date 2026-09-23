@@ -154,7 +154,7 @@ usage() {
   echo "  ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH     true (default) | false (password-over-proxy escape hatch)"
   echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
-  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
+  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: substrate)"
   echo ""
   echo "Authentication configuration:"
   echo ""

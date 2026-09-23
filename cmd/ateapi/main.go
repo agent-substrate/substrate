@@ -80,7 +80,7 @@ var (
 	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN, URI, or @file:/absolute/path).")
 	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Stable PostgreSQL role for read/write connections. Required for a rotated login user.")
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Stable PostgreSQL role for owner connections.")
-	postgresSchema                    = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresMaxConnLifetime           = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
 	postgresBootstrap                 = pflag.Bool("postgres-bootstrap", false, "Create missing fixed PostgreSQL identities before migrations.")
 	postgresAdminUsernameFile         = pflag.String("postgres-admin-username-file", "", "File that contains the PostgreSQL administrator username.")

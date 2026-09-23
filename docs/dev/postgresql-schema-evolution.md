@@ -54,7 +54,7 @@ For manual provisioning, the optional `substrate.bootstrap_owner_role` and
 `substrate.bootstrap_readwrite_role` settings select custom group roles; they
 default to the bundled development role names.
 
-Standalone Substrate defaults to the existing `public` schema. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema; Kagent's umbrella chart selects `substrate` for a shared database.
+Standalone Substrate defaults to the `substrate` schema, including under Kagent's umbrella chart. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema.
 
 - Use the next sequential `NNNNNN_name.sql` filename.
 - Add exactly one `-- +goose Up` annotation.

@@ -8,7 +8,7 @@ Substrate supports separate users for DDL (ownership) and DML (runtime) use. A s
 ## BYO DB Configuration
 A custom database can be provided to Substrate.
 
-`ATE_API_POSTGRES_SCHEMA` (or `--postgres-schema` when running `ateapi` directly) selects the schema, defaulting to `public`. Bootstrap prepares that schema and its grants when enabled; otherwise, the operator must ensure they exist. `ateapi` then uses the schema for both connection pools and migrations, overriding any `search_path` in the connection strings.
+`ATE_API_POSTGRES_SCHEMA` (or `--postgres-schema` when running `ateapi` directly) selects the schema, defaulting to `substrate`. Bootstrap prepares that schema and its grants when enabled; otherwise, the operator must ensure they exist. `ateapi` then uses the schema for both connection pools and migrations, overriding any `search_path` in the connection strings.
 
 ### Operator Provisioned BYO DB
 For production systems, the recommendation is to fully provision an external Postgres Database and provide credentials to Substrate to interact with that database. The `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` and `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING` are used to configure Substrate's owner and runtime connection pools.

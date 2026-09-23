@@ -68,12 +68,11 @@ with `gcloud sql instances patch`.
 ## 2. One-time roles and schema privileges
 
 [IAM database users](https://docs.cloud.google.com/sql/docs/postgres/add-manage-iam-users)
-are created with no privileges, and PostgreSQL 15+ removed
-`PUBLIC`'s `CREATE` on the `public` schema. By default, ateapi connects as the
+are created with no privileges. By default, ateapi connects as the
 IAM user and then assumes `substrate_owner` for migrations or
 `substrate_readwrite` for application queries. Create these roles, grant the
-IAM user membership, and configure the owner's default privileges before
-deploying. The IAM database username is the GSA email **without**
+IAM user membership, create the `substrate` schema, and configure the
+owner's default privileges before deploying. The IAM database username is the GSA email **without**
 `.gserviceaccount.com`.
 
 Getting that `postgres` session on a private-IP-only instance takes two
@@ -92,16 +91,15 @@ CREATE ROLE substrate_owner NOLOGIN;
 CREATE ROLE substrate_readwrite NOLOGIN;
 GRANT substrate_owner TO postgres WITH SET TRUE;
 GRANT substrate_owner, substrate_readwrite TO "ate-api-server@<project>.iam";
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE, CREATE ON SCHEMA public TO substrate_owner;
-GRANT USAGE ON SCHEMA public TO substrate_readwrite;
-ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA public
+CREATE SCHEMA substrate AUTHORIZATION substrate_owner;
+GRANT USAGE ON SCHEMA substrate TO substrate_readwrite;
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO substrate_readwrite;
-ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA public
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
   GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO substrate_readwrite;
-ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA public
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
   GRANT EXECUTE ON ROUTINES TO substrate_readwrite;
-ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA public
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
   GRANT USAGE ON TYPES TO substrate_readwrite;
 COMMIT;
 SQL
@@ -180,9 +178,8 @@ Optional environment variables:
   avoid conflicting configuration.
   Stable roles keep grants and object ownership across username rotations.
 - `ATE_API_POSTGRES_SCHEMA` — the schema holding the store's tables
-  (default `public`). A dedicated schema such as `substrate` is recommended
-  when using separate logins. Create it with `substrate_owner` as owner,
-  and target it in the schema and default privilege grants in section 2.
+  (default `substrate`). If you override it, create the named schema with
+  the owner role as owner and target it in the grants in section 2.
 - `ATE_API_POSTGRES_POOL_MAX_CONNS` — pgxpool connections per ateapi replica
   (default: `max(4, NumCPU)`); appended as `pool_max_conns` to whichever DSN
   is in effect (synthesized, in-cluster default, or explicitly provided —
@@ -213,7 +210,7 @@ Common failure modes:
 | proxy: `PERMISSION_DENIED` on startup | GSA missing `roles/cloudsql.client`, or the Workload Identity annotation/binding is absent |
 | `FATAL: Cloud SQL IAM service account authentication failed` | GSA missing `roles/cloudsql.instanceUser`, or the IAM database user was not created |
 | ateapi: `role "substrate_owner" does not exist` or `permission denied to set role` | Create the roles and grant the IAM database user membership (section 2) |
-| ateapi: `permission denied for schema public` | The one-time schema grants (section 2) were not run |
+| ateapi: `permission denied for schema substrate` | The one-time schema grants (section 2) were not run |
 | ateapi: `permission denied for table` | The owner role's default privileges (section 2) were not configured before migrations |
 | proxy: instance connection errors mentioning IAM | `cloudsql.iam_authentication` flag is off on the instance |
 
