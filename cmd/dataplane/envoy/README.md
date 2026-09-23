@@ -23,5 +23,5 @@ During cluster setup (`ate-setup`), the image is built from this directory via `
 To build the image manually from the repository root:
 
 ```bash
-docker build -t envoy-dataplane cmd/dataplane/envoy
+docker buildx build -t envoy-dataplane cmd/dataplane/envoy
 ```
