@@ -485,6 +485,7 @@ func publishGoldenTag(t *testing.T, tc *testContext, tmpl *ateapipb.ActorTemplat
 	tag, err = tc.persistence.UpdateTag(context.Background(), resources.TagRefFromTag(tag), store.PreconditionFrom(tag),
 		func(toUpdate *ateapipb.Tag) error {
 			toUpdate.Status.Snapshot = &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+			toUpdate.Status.State = ateapipb.TagState_TAG_STATE_READY
 			return nil
 		})
 	if err != nil {

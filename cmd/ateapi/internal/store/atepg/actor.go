@@ -63,7 +63,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		}
 		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
 	}
-	if err := updateTagBorrow(ctx, tx, dbActor); err != nil {
+	if err := updateTagBorrow(ctx, tx, dbActor.GetMetadata().GetUid(), "", dbActor.GetStatus().GetExternalSnapshot().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -72,36 +72,86 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	return dbActor, nil
 }
 
-// updateTagBorrow upserts or clears the actor's borrow of a Tag's external
-// snapshot.
-func updateTagBorrow(ctx context.Context, tx pgx.Tx, actor *ateapipb.Actor) error {
-	actorUID := actor.GetMetadata().GetUid()
-
-	var tagUID string
-	if snapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); snapshotURI != "" {
-		uri, err := resources.ParseSnapshotURI(snapshotURI)
-		if err != nil {
-			return fmt.Errorf("reading the external snapshot of actor %s: %w", actorUID, err)
-		}
-		if owner, ok := uri.Owner().TagUID(); ok {
-			tagUID = owner
-		}
+// updateTagBorrow records the change of the actor's external snapshot from
+// prevURI to newURI in tag_borrows. It is a no-op unless the Tag being
+// borrowed changes.
+//
+// A new borrow is refused with ErrTagNotReady unless the Tag exists and is
+// READY. The Tag row is share-locked, so a concurrent move to DELETING either
+// waits for this borrow to commit and then sees it, or commits first and is
+// seen here.
+func updateTagBorrow(ctx context.Context, tx pgx.Tx, actorUID, prevURI, newURI string) error {
+	newTagAtespace, newTagUID, err := borrowedTag(newURI)
+	if err != nil {
+		return fmt.Errorf("reading the external snapshot of actor %s: %w", actorUID, err)
+	}
+	if _, prevTagUID, err := borrowedTag(prevURI); err == nil && prevTagUID == newTagUID {
+		// Tag didn't change, there's nothing to update.
+		return nil
 	}
 
-	if tagUID == "" {
+	// New snapshot belongs to an actor, not to a tag.
+	// We delete all previous borrowed tags from the actor in that case.
+	if newTagUID == "" {
 		if _, err := tx.Exec(ctx, `DELETE FROM tag_borrows WHERE actor_uid = $1`, actorUID); err != nil {
 			return fmt.Errorf("clearing the tag borrow of actor %s: %w", actorUID, err)
 		}
 		return nil
 	}
+
+	// 1. Share-lock the Tag row. A concurrent UpdateTag moving the Tag to
+	// DELETING needs the row lock, so it waits for this transaction to commit
+	// and then sees the borrow in tag_borrows. If it committed first, this read
+	// sees DELETING. Either way a Tag can't be deleted while it is borrowed.
+	var tagBytes []byte
+	err = tx.QueryRow(ctx, `
+		SELECT proto FROM tags
+		WHERE atespace = $1 AND uid = $2
+		FOR SHARE`, newTagAtespace, newTagUID).Scan(&tagBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("actor %s borrows missing tag %s: %w", actorUID, newTagUID, store.ErrTagNotReady)
+	}
+	if err != nil {
+		return fmt.Errorf("locking tag %s borrowed by actor %s: %w", newTagUID, actorUID, err)
+	}
+	// 2. Refuse to borrow a Tag that isn't READY.
+	tag := &ateapipb.Tag{}
+	if err := unmarshalStored(tagBytes, tag); err != nil {
+		return fmt.Errorf("unmarshaling tag %s: %w", newTagUID, err)
+	}
+	if state := tag.GetStatus().GetState(); state != ateapipb.TagState_TAG_STATE_READY {
+		return fmt.Errorf("actor %s borrows tag %s in state %v: %w", actorUID, newTagUID, state, store.ErrTagNotReady)
+	}
+
+	// 3. Record the borrow, replacing any Tag the actor borrowed before.
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO tag_borrows (actor_uid, tag_uid)
 		VALUES ($1, $2)
 		ON CONFLICT (actor_uid) DO UPDATE SET tag_uid = $2`,
-		actorUID, tagUID); err != nil {
-		return fmt.Errorf("recording the borrow of tag %s by actor %s: %w", tagUID, actorUID, err)
+		actorUID, newTagUID); err != nil {
+		return fmt.Errorf("recording the borrow of tag %s by actor %s: %w", newTagUID, actorUID, err)
 	}
 	return nil
+}
+
+// borrowedTag returns the atespace and UID of the Tag that owns the snapshot
+// at snapshotURI, or a zero UID if there is no snapshot or a Tag does not own
+// it.
+func borrowedTag(snapshotURI string) (atespace, uid string, err error) {
+	if snapshotURI == "" {
+		return "", "", nil
+	}
+	uri, err := resources.ParseSnapshotURI(snapshotURI)
+	if err != nil {
+		return "", "", err
+	}
+	owner := uri.Owner()
+	if uid, ok := owner.TagUID(); ok {
+		return owner.Atespace(), uid, nil
+	}
+
+	// Snapshot is owned by an actor
+	return "", "", nil
 }
 
 func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
@@ -148,6 +198,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbActor.Metadata)
+	prevSnapshotURI := dbActor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
 	if err := mutate(dbActor); err != nil {
 		return nil, err
 	}
@@ -179,7 +230,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
-	if err := updateTagBorrow(ctx, tx, dbActor); err != nil {
+	if err := updateTagBorrow(ctx, tx, currentUID, prevSnapshotURI, dbActor.GetStatus().GetExternalSnapshot().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
