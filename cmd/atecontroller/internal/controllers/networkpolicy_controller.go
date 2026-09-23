@@ -33,13 +33,17 @@ import (
 
 const (
 	networkPolicyFieldOwner = "ate-networkpolicy"
-	ateSystemNamespace      = "ate-system"
 	atenetRouterAppName     = "atenet-router"
 )
 
 type NetworkPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// SystemNamespace is the namespace atenet-router runs in. The generated
+	// ingress policy admits only that namespace, so a value that does not
+	// match the running router blocks every request to the worker pool.
+	SystemNamespace string
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch
@@ -74,7 +78,7 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
 	log := log.FromContext(ctx)
 
-	npAC := buildNetworkPolicyApplyConfig(wp)
+	npAC := r.buildNetworkPolicyApplyConfig(wp)
 
 	if err := r.Apply(ctx, npAC, client.FieldOwner(networkPolicyFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply NetworkPolicy %s:%s: %w", *npAC.Namespace, *npAC.Name, err)
@@ -86,7 +90,7 @@ func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1al
 	return nil
 }
 
-func buildNetworkPolicyApplyConfig(wp *atev1alpha1.WorkerPool) *networkingv1ac.NetworkPolicyApplyConfiguration {
+func (r *NetworkPolicyReconciler) buildNetworkPolicyApplyConfig(wp *atev1alpha1.WorkerPool) *networkingv1ac.NetworkPolicyApplyConfiguration {
 	np := networkingv1ac.NetworkPolicy(resources.NetworkPolicyName(wp.Name), wp.Namespace).
 		WithLabels(map[string]string{
 			"ate.dev/worker-pool": wp.Name,
@@ -110,7 +114,7 @@ func buildNetworkPolicyApplyConfig(wp *atev1alpha1.WorkerPool) *networkingv1ac.N
 					WithFrom(
 						networkingv1ac.NetworkPolicyPeer().
 							WithNamespaceSelector(metav1ac.LabelSelector().
-								WithMatchLabels(map[string]string{"kubernetes.io/metadata.name": ateSystemNamespace})).
+								WithMatchLabels(map[string]string{"kubernetes.io/metadata.name": r.SystemNamespace})).
 							WithPodSelector(metav1ac.LabelSelector().
 								WithMatchLabels(map[string]string{"app": atenetRouterAppName})),
 					),

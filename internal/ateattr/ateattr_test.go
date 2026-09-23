@@ -418,6 +418,12 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotPhaseTotal, "total"},
 
 		{SandboxClassUnknown, "unknown"},
+		{TemplateUnknown, "unknown"},
+
+		{RouterResumeNone, "none"},
+		{RouterResumeTriggered, "triggered"},
+		{RouterResumeJoined, "joined"},
+		{RouterResumeUnknown, "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -889,5 +895,24 @@ func TestActorRefLogAttrs(t *testing.T) {
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("ActorRefLogAttrs() = %v, want %v", got, want)
+	}
+}
+
+func TestNormalizeTemplateDimension(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty falls back to unknown", in: "", want: TemplateUnknown},
+		{name: "template name preserved", in: "counter", want: "counter"},
+		{name: "atespace preserved", in: "ate-demo", want: "ate-demo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeTemplateDimension(tt.in); got != tt.want {
+				t.Errorf("NormalizeTemplateDimension(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

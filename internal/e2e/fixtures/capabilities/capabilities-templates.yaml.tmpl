@@ -31,7 +31,7 @@ containers:
 - name: probe
   image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80
@@ -63,7 +63,7 @@ containers:
     capabilities:
       drop: ["ALL"]
       add: ["NET_BIND_SERVICE"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80

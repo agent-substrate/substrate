@@ -216,6 +216,83 @@ func TestClientLoaderCachesAndReloads(t *testing.T) {
 	}
 }
 
+func TestPoolLoaderServesCachedParseWhileFileUnchanged(t *testing.T) {
+	trust := makeTrustBundle(t, 5)
+	path := writeBundle(t, trust)
+	getPool := PoolLoader(path)
+
+	first, err := getPool()
+	if err != nil {
+		t.Fatalf("PoolLoader() first call error = %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat bundle: %v", err)
+	}
+	// Overwrite with same-length garbage and restore the mtime so identity,
+	// size, and mtime all still match: the cached pool must be served, since a
+	// re-read would fail loudly on the garbage.
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), len(trust)), 0o600); err != nil {
+		t.Fatalf("overwrite bundle: %v", err)
+	}
+	if err := os.Chtimes(path, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatalf("restore mtime: %v", err)
+	}
+
+	second, err := getPool()
+	if err != nil {
+		t.Fatalf("PoolLoader() with unchanged stat error = %v", err)
+	}
+	if !second.Equal(first) {
+		t.Fatalf("PoolLoader() returned a re-parsed pool, want the cached one")
+	}
+}
+
+func TestPoolLoaderPicksUpProjectedVolumeRotation(t *testing.T) {
+	path := writeProjectedBundle(t, makeTrustBundle(t, 1))
+	getPool := PoolLoader(path)
+
+	before, err := getPool()
+	if err != nil {
+		t.Fatalf("PoolLoader() first call error = %v", err)
+	}
+
+	rotated := makeTrustBundle(t, 2)
+	if err := rotateProjectedBundle(path, rotated); err != nil {
+		t.Fatalf("rotate bundle: %v", err)
+	}
+
+	after, err := getPool()
+	if err != nil {
+		t.Fatalf("PoolLoader() after rotation error = %v", err)
+	}
+	if after.Equal(before) {
+		t.Fatalf("PoolLoader() did not pick up the rotated trust bundle")
+	}
+	want, err := ParsePool(path)
+	if err != nil {
+		t.Fatalf("ParsePool() error = %v", err)
+	}
+	if !after.Equal(want) {
+		t.Fatalf("PoolLoader() pool does not match the rotated trust bundle")
+	}
+}
+
+func TestPoolLoaderErrorWhenBundleMissing(t *testing.T) {
+	getPool := PoolLoader(t.TempDir() + "/absent.pem")
+	if _, err := getPool(); err == nil {
+		t.Fatalf("PoolLoader() error = nil, want missing-file error")
+	}
+}
+
+func TestParsePoolRejectsBundleWithoutCertificates(t *testing.T) {
+	path := writeBundle(t, []byte("not a certificate"))
+	if _, err := ParsePool(path); err == nil {
+		t.Fatalf("ParsePool() error = nil, want no-certificates error")
+	}
+}
+
 func TestLoaderConcurrentHandshakes(t *testing.T) {
 	bundles := [][]byte{makeBundle(t, 1), makeBundle(t, 2)}
 	path := writeProjectedBundle(t, bundles[0])
@@ -312,6 +389,13 @@ func makeBundle(t *testing.T, serial int64) []byte {
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: generateCertificate(t, serial)}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...,
 	)
+}
+
+// makeTrustBundle returns a PEM trust bundle of a single CERTIFICATE block
+// whose serial number lets tests tell one bundle from another.
+func makeTrustBundle(t *testing.T, serial int64) []byte {
+	t.Helper()
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: generateCertificate(t, serial)})
 }
 
 func leafSerial(t *testing.T, cert *tls.Certificate) int64 {

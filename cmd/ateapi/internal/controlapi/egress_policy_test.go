@@ -887,6 +887,8 @@ func TestCredentialURIValidation(t *testing.T) {
 		"ate-secret://kubernetes.io//provider/secret",
 		"ate-secret://kubernetes.io/provider/secret/",
 		"ate-secret://kubernetes.io:443/provider/secret",
+		"ate-secret://kubernetes.io/provider/sec%2Fret", // percent-encoded separator
+		"ate-secret://kubernetes.io/provider/sec%2Dret", // percent-encoding of any kind
 	} {
 		if validCredentialURI(uri) {
 			t.Errorf("validCredentialURI(%q) = true", uri)

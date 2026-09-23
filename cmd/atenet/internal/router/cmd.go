@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 func NewRouterCmd() *cobra.Command {
@@ -47,6 +48,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	cmd.Flags().StringVar(&cfg.AtenetRouter, "atenet-dataplane", string(atenetRouterEnvoy), "Atenet ingress and egress dataplane: envoy or agentgateway")
 	cmd.Flags().StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
+	cmd.Flags().StringVar(&cfg.RouterServiceName, "router-service-name", installdefaults.RouterServiceName, "Service name of this atenet-router in the operations namespace. Override when the deployment renames the Service.")
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().StringVar(&cfg.AteapiAddr, "ateapi-address", "k8s:///api.ate-system.svc:443", "gRPC dial target for the cluster ateapi Control instance.")
 	cmd.Flags().IntVar(&cfg.HttpPort, "port-http", 8080, "TCP port for workload traffic entering through the Envoy Router")
@@ -68,7 +70,7 @@ func NewRouterCmd() *cobra.Command {
 	// and only when injection is enabled: an empty --credential-provider-address
 	// leaves injection off, so an EgressPolicy rule requiring it is skipped and
 	// the request passes through without the credential.
-	cmd.Flags().StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as a ate-secret:// prefix (e.g. ate-secret://kubernetes.io); a policy credential URI naming any other provider is refused. Empty disables the check (dev only)")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as a ate-secret:// prefix (e.g. ate-secret://k8s.io); a policy credential URI naming any other provider is refused. Empty disables the check (dev only)")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; required unless --credential-provider-insecure is set")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")

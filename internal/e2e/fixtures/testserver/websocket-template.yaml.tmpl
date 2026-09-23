@@ -26,7 +26,7 @@ containers:
 - name: websocket
   image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
   args: ["websocket"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

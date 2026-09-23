@@ -15,83 +15,35 @@
 package steps
 
 import (
-	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"maps"
 	"slices"
 	"testing"
 
-	appsv1 "k8s.io/api/apps/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
+	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/internal/localca"
 )
 
-func TestBuildAPIServerSecretEnvVars(t *testing.T) {
-	const runtimeDSN = "postgresql://runtime@postgres:5432/atepg"
-	const ddlDSN = "postgresql://ddl@postgres:5432/atepg"
+// ate-api-server requires both connection strings and its schema in the
+// credential-bearing Secret.
+func TestBuildAPIServerEnvVars(t *testing.T) {
+	const readWriteDSN = "postgresql://readwrite@postgres/atepg"
+	const ownerDSN = "postgresql://owner@postgres/atepg"
 
-	got := buildAPIServerSecretEnvVars(runtimeDSN, ddlDSN)
+	got := buildAPIServerEnvVars(readWriteDSN, ownerDSN, "public")
 
-	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}
+	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Errorf("keys = %v, want %v", keys, want)
 	}
-	if got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != runtimeDSN {
-		t.Errorf("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"], runtimeDSN)
+	if got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != readWriteDSN || got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != ownerDSN {
+		t.Errorf("unexpected PostgreSQL connections: %v", got)
 	}
-	if got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != ddlDSN {
-		t.Errorf("ATE_API_POSTGRES_OWNER_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"], ddlDSN)
-	}
-}
-
-func TestAPIServerEnvHash(t *testing.T) {
-	configVars := map[string]string{"ATE_API_POSTGRES_SCHEMA": "substrate"}
-	secretVars := buildAPIServerSecretEnvVars("runtime", "ddl")
-
-	want := apiServerEnvHash(configVars, secretVars)
-	if got := apiServerEnvHash(configVars, secretVars); got != want {
-		t.Fatalf("stable inputs produced hashes %q and %q", want, got)
-	}
-	for name, values := range map[string][2]map[string]string{
-		"schema": {
-			{"ATE_API_POSTGRES_SCHEMA": "other"},
-			secretVars,
-		},
-		"connection string": {
-			configVars,
-			buildAPIServerSecretEnvVars("other", "ddl"),
-		},
-		"owner connection string": {
-			configVars,
-			buildAPIServerSecretEnvVars("runtime", "other"),
-		},
-	} {
-		if got := apiServerEnvHash(values[0], values[1]); got == want {
-			t.Errorf("changing %s did not change the hash", name)
-		}
-	}
-}
-
-func TestAnnotateAPIServerEnvHash(t *testing.T) {
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-		Name:      "ate-api-server",
-		Namespace: NamespaceAteSystem,
-	}}
-	e := &Env{Kube: &kube.Client{Typed: fake.NewSimpleClientset(deployment)}}
-
-	if err := e.annotateAPIServerEnvHash(context.Background(), "new-hash"); err != nil {
-		t.Fatal(err)
-	}
-	got, err := e.Kube.Typed.AppsV1().Deployments(NamespaceAteSystem).Get(
-		context.Background(), "ate-api-server", metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Spec.Template.Annotations[apiServerEnvHashKey] != "new-hash" {
-		t.Errorf("environment hash annotation = %q, want new-hash", got.Spec.Template.Annotations[apiServerEnvHashKey])
+	if got["ATE_API_POSTGRES_SCHEMA"] != "public" {
+		t.Errorf("ATE_API_POSTGRES_SCHEMA = %q, want %q", got["ATE_API_POSTGRES_SCHEMA"], "public")
 	}
 }
 
@@ -149,7 +101,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 // the shape here — one named CA, marked active, with a usable root and the
 // requested key type — turns a library change into a failing unit test rather
 // than a cluster whose signers pick the wrong CA.
-func TestNewCAPoolBytes(t *testing.T) {
+func TestNewCAPoolSecretData(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		id      string
@@ -160,12 +112,23 @@ func TestNewCAPoolBytes(t *testing.T) {
 		{"egress mitm", poolKeyID, localca.KeyTypeECDSAP256, x509.ECDSA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			poolBytes, err := newCAPoolBytes(tc.id, tc.keyType)
+			data, err := newCAPoolSecretData(tc.id, tc.keyType)
 			if err != nil {
-				t.Fatalf("newCAPoolBytes() error = %v", err)
+				t.Fatalf("newCAPoolSecretData() error = %v", err)
 			}
 
-			pool, err := localca.Unmarshal(poolBytes)
+			// The egress dataplanes mount tls.crt and tls.key from this
+			// Secret non-optionally, so dropping either one wedges their
+			// pods in ContainerCreating rather than failing anything here.
+			wantKeys := []string{"pool", corev1.TLSCertKey, corev1.TLSPrivateKeyKey}
+			if diff := cmp.Diff(wantKeys, slices.Sorted(maps.Keys(data))); diff != "" {
+				t.Errorf("secret keys differ (-want +got):\n%s", diff)
+			}
+			if _, err := tls.X509KeyPair(data[corev1.TLSCertKey], data[corev1.TLSPrivateKeyKey]); err != nil {
+				t.Errorf("tls.X509KeyPair() error = %v, want the CA certificate and key to form a usable pair", err)
+			}
+
+			pool, err := localca.Unmarshal(data["pool"])
 			if err != nil {
 				t.Fatalf("Unmarshal() error = %v", err)
 			}

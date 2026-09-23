@@ -46,25 +46,20 @@ func TestDemoTemplatesRender(t *testing.T) {
 
 	covered := 0
 	for _, demo := range demos.All() {
-		switch d := demo.(type) {
-		case interface{ SubstrateDemo() *demos.Substrate }:
-			covered++
-			t.Run(demo.Name(), func(t *testing.T) {
-				s := d.SubstrateDemo()
-				demotest.AssertRendered(t, render(t, s.WorkerPoolManifest))
-				for _, tmpl := range s.Templates {
-					demotest.AssertRenderedActorTemplate(t, render(t, tmpl.Manifest), tmpl.Ref)
-				}
-			})
-		case interface{ TemplatePath() string }:
-			covered++
-			t.Run(demo.Name(), func(t *testing.T) {
-				demotest.AssertRendered(t, render(t, d.TemplatePath()))
-			})
-		default:
-			// demo-claude-code-multiplex has its own placeholders, and is
-			// covered by its own package's test.
+		// demo-claude-code-multiplex has its own placeholders, and is covered
+		// by its own package's test; it is the one demo this skips.
+		d, ok := demo.(interface{ SubstrateDemo() *demos.Substrate })
+		if !ok {
+			continue
 		}
+		covered++
+		t.Run(demo.Name(), func(t *testing.T) {
+			s := d.SubstrateDemo()
+			demotest.AssertRendered(t, render(t, s.WorkerPoolManifest))
+			for _, tmpl := range s.Templates {
+				demotest.AssertRenderedActorTemplate(t, render(t, tmpl.Manifest), tmpl.Ref)
+			}
+		})
 	}
 	if want := len(demos.All()) - 1; covered != want {
 		t.Errorf("covered %d demo templates, want %d", covered, want)

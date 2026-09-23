@@ -32,7 +32,7 @@ containers:
   # Gate the golden snapshot on the probe actually serving, so the single
   # (un-retried) GET /resources the suite makes after resuming cannot race a
   # sandbox that was checkpointed before the listener was up.
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /healthz
       port: 80

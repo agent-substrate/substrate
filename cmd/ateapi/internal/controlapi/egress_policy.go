@@ -264,6 +264,10 @@ func validCredentialURI(raw string) bool {
 		return false
 	}
 	escapedPath := u.EscapedPath()
+	// Reject percent-encoding in the path of secret uri.
+	if escapedPath != u.Path {
+		return false
+	}
 	if !strings.HasPrefix(escapedPath, "/") || strings.HasSuffix(escapedPath, "/") {
 		return false
 	}

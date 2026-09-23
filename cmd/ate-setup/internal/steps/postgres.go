@@ -22,21 +22,21 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// pgx cannot derive tls-server-end-point channel-binding data from the
-// Ed25519-signed service certificate. TLS verification, client certificates,
-// and SCRAM authentication remain required independently.
+// The serving certificate uses Ed25519, for which pgx cannot derive SCRAM
+// channel-binding data. TLS and client-certificate verification remain enabled.
 const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
 
-func bundledPostgresDSN(role, password string) string {
-	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", role, password, postgresTLSParams)
+func bundledPostgresDSN(user, password string) string {
+	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
 }
 
 func (e *Env) postgresReadWriteConnectionStrings(ctx context.Context) (string, string, error) {
 	if readWriteDSN := e.Cfg.PostgresReadWriteConnectionString; readWriteDSN != "" {
-		if e.Cfg.PostgresOwnerConnectionString == "" {
-			return "", "", fmt.Errorf("owner connection string is required with an external read/write connection string")
+		ownerDSN := e.Cfg.PostgresOwnerConnectionString
+		if ownerDSN == "" {
+			ownerDSN = readWriteDSN
 		}
-		return readWriteDSN, e.Cfg.PostgresOwnerConnectionString, nil
+		return readWriteDSN, ownerDSN, nil
 	}
 	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
 		return "", "", err
@@ -45,35 +45,72 @@ func (e *Env) postgresReadWriteConnectionStrings(ctx context.Context) (string, s
 }
 
 func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
-	adminSecret, err := e.Kube.GetSecret(ctx, NamespaceAteSystem, SecretPostgresAdmin)
+	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretPostgresAdmin)
 	if err != nil {
 		return err
 	}
-	if adminSecret == nil {
-		if err := e.Kube.ApplySecret(ctx, NamespaceAteSystem, SecretPostgresAdmin, map[string]string{
+	if secret == nil {
+		return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresAdmin, map[string]string{
 			"POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres",
-		}); err != nil {
-			return err
-		}
-	} else if len(adminSecret.Data["POSTGRES_USER"]) == 0 || len(adminSecret.Data["POSTGRES_PASSWORD"]) == 0 {
-		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER and POSTGRES_PASSWORD", NamespaceAteSystem, SecretPostgresAdmin)
+		})
+	}
+	if len(secret.Data["POSTGRES_USER"]) == 0 || len(secret.Data["POSTGRES_PASSWORD"]) == 0 {
+		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER and POSTGRES_PASSWORD", e.Namespace(), SecretPostgresAdmin)
 	}
 	return nil
 }
 
-// useBundledPostgres reports whether ateapi uses the in-cluster database
-// (when no external DSN is configured). Gates applying the bundled StatefulSet
-// and waiting on its rollout in DeployAteSystem.
-func (e *Env) useBundledPostgres() bool {
-	return e.Cfg.PostgresReadWriteConnectionString == ""
+// postgresPlan says where ateapi's store comes from: the bundled StatefulSet,
+// or something the installer does not deploy. It gates both applying the
+// StatefulSet and waiting on its rollout, since waiting on an object that will
+// never exist only fails at the timeout.
+type postgresPlan struct {
+	// bundled selects the in-cluster StatefulSet.
+	bundled bool
+	// external names what replaces it, for the log line. A DSN aimed at a
+	// database that was never deployed otherwise surfaces only as an
+	// ate-api-server rollout timeout minutes later, with nothing pointing at
+	// the cause.
+	external string
+}
+
+// planPostgres decides between the bundled database and an external one,
+// configured either as an explicit DSN or as a Cloud SQL instance — the
+// latter possibly adopted from the cluster.
+func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
+	if e.Cfg.PostgresReadWriteConnectionString != "" {
+		return postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}, nil
+	}
+	instance, err := e.resolveCloudSQLInstance(ctx)
+	if err != nil {
+		return postgresPlan{}, err
+	}
+	if instance != "" {
+		return postgresPlan{external: "Cloud SQL instance " + instance}, nil
+	}
+	return postgresPlan{bundled: true}, nil
 }
 
 // applyBundledPostgres applies the bundled PostgreSQL StatefulSet, or logs that
 // it was skipped in favor of an external database.
-func (e *Env) applyBundledPostgres(ctx context.Context) error {
-	if !e.useBundledPostgres() {
-		log.Step("Skipping bundled PostgreSQL: external database configured (ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING)")
+func (e *Env) applyBundledPostgres(ctx context.Context, plan postgresPlan) error {
+	if !plan.bundled {
+		log.Stepf("Skipping bundled PostgreSQL: external database configured (%s)", plan.external)
 		return nil
+	}
+	return e.applyPostgresManifest(ctx)
+}
+
+// applyPostgresManifest applies the bundled StatefulSet for the target
+// environment. The kind overlay shrinks its CPU request and volume to what a
+// local cluster can actually satisfy.
+func (e *Env) applyPostgresManifest(ctx context.Context) error {
+	if e.Cfg.Kind {
+		built, err := e.Kustomize(installDir + "/kind/postgres")
+		if err != nil {
+			return err
+		}
+		return e.Kube.ApplyBytes(ctx, built)
 	}
 	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("postgres", "postgres.yaml"))
 }
@@ -87,13 +124,6 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 		return err
 	}
 	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
-		return err
-	}
-	if err := e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, map[string]string{
-		"ATE_API_POSTGRES_READ_WRITE_ROLE": e.Cfg.PostgresReadWriteRole,
-		"ATE_API_POSTGRES_OWNER_ROLE":      e.Cfg.PostgresOwnerRole,
-		"ATE_API_POSTGRES_SCHEMA":          e.Cfg.PostgresSchemaName(),
-	}); err != nil {
 		return err
 	}
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
@@ -116,8 +146,8 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 		return err
 	}
 
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("postgres", "postgres.yaml")); err != nil {
+	if err := e.applyPostgresManifest(ctx); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, NamespaceAteSystem, "postgres", e.Cfg.RolloutTimeout)
+	return e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout)
 }

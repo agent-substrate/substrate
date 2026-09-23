@@ -38,7 +38,10 @@ func TestParseValid(t *testing.T) {
 		"resume_mode": "explicit",
 		"lifecycle_mode": "pause",
 		"durdir_read_mode": "data",
-		"durdir_template": "glutton-durdir-data"
+		"durdir_template": "glutton-durdir-data",
+		"sweperf_template": "swebench-astropy-7336",
+		"sweperf_total_steps": 21,
+		"sweperf_num_cycles": 4
 	}`)
 
 	cfg, err := Parse(jsonBlob, Config{})
@@ -75,6 +78,15 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.DurDirTemplate != "glutton-durdir-data" {
 		t.Errorf("DurDirTemplate: got %q, want glutton-durdir-data", cfg.DurDirTemplate)
+	}
+	if cfg.SweperfTemplate != "swebench-astropy-7336" {
+		t.Errorf("SweperfTemplate: got %q, want swebench-astropy-7336", cfg.SweperfTemplate)
+	}
+	if cfg.SweperfTotalSteps != 21 {
+		t.Errorf("SweperfTotalSteps: got %d, want 21", cfg.SweperfTotalSteps)
+	}
+	if cfg.SweperfNumCycles != 4 {
+		t.Errorf("SweperfNumCycles: got %d, want 4", cfg.SweperfNumCycles)
 	}
 }
 
@@ -134,6 +146,14 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "invalid read mode",
 			json: `{"durdir_read_mode": "invalid_read"}`,
+		},
+		{
+			name: "negative sweperf total steps",
+			json: `{"sweperf_total_steps": -1}`,
+		},
+		{
+			name: "negative sweperf num cycles",
+			json: `{"sweperf_num_cycles": -1}`,
 		},
 	}
 

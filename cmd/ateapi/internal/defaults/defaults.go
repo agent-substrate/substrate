@@ -75,17 +75,17 @@ func applySnapshotsConfigDefaults(sc *ateapipb.SnapshotsConfig) {
 
 func applyContainerDefaults(c *ateapipb.Container) {
 	const (
-		defaultReadyzTimeoutSeconds int32 = 30
-		defaultReadyzPath                 = "/"
+		defaultWakeupProbeTimeoutSeconds int32 = 30
+		defaultWakeupProbePath                 = "/"
 	)
-	if c == nil || c.Readyz == nil {
+	if c == nil || c.WakeupProbe == nil {
 		return
 	}
-	if c.Readyz.TimeoutSeconds == 0 {
-		c.Readyz.TimeoutSeconds = defaultReadyzTimeoutSeconds
+	if c.WakeupProbe.TimeoutSeconds == 0 {
+		c.WakeupProbe.TimeoutSeconds = defaultWakeupProbeTimeoutSeconds
 	}
-	if hg := c.Readyz.HttpGet; hg != nil && hg.Path == "" {
-		hg.Path = defaultReadyzPath
+	if hg := c.WakeupProbe.HttpGet; hg != nil && hg.Path == "" {
+		hg.Path = defaultWakeupProbePath
 	}
 }
 

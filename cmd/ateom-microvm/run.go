@@ -37,9 +37,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
+	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -113,7 +113,6 @@ const (
 	assetCH        = "cloud-hypervisor"
 	assetKernel    = "kata-kernel"
 	assetImage     = "kata-image"
-	assetConfig    = "kata-config"
 	assetVirtiofsd = "virtiofsd"
 )
 
@@ -185,12 +184,11 @@ type actorContainer struct {
 	imageMounts []*ateompb.ImageVolumeMount
 }
 
-// resolvedRuntime holds the concrete binary/config paths for a request, taken
-// from fetched runtime assets when present, else the process flags.
+// resolvedRuntime holds the concrete binary paths for a request, taken from fetched
+// runtime assets when present, else the process flags.
 type resolvedRuntime struct {
-	chBinary   string // path to the cloud-hypervisor binary
-	configFile string // path to the kata configuration.toml
-	virtiofsd  string // path to virtiofsd (overlay RO lower); "" => "virtiofsd" on PATH
+	chBinary  string // path to the cloud-hypervisor binary
+	virtiofsd string // path to virtiofsd (overlay RO lower); "" => "virtiofsd" on PATH
 }
 
 // firstNonEmpty returns the first non-empty string, or "" if all are empty.
@@ -203,13 +201,12 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// resolveRuntime resolves the cloud-hypervisor binary + the kata config path from
-// fetched assets, falling back to flags.
+// resolveRuntime resolves the cloud-hypervisor binary from fetched assets, falling
+// back to the flag.
 func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 	return resolvedRuntime{
-		chBinary:   firstNonEmpty(paths[assetCH], s.chBinary),
-		configFile: firstNonEmpty(paths[assetConfig], s.kataConfig),
-		virtiofsd:  paths[assetVirtiofsd],
+		chBinary:  firstNonEmpty(paths[assetCH], s.chBinary),
+		virtiofsd: paths[assetVirtiofsd],
 	}
 }
 
@@ -264,8 +261,8 @@ func writeGuestResolvConf(rootfs string) error {
 // start each container.
 //
 // Contract with atelet:
-//   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd,
-//     base kata config) are on disk and passed as runtime asset paths.
+//   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd)
+//     are on disk and passed as runtime asset paths.
 //   - The OCI bundle (config.json + populated rootfs/) is prepared per container.
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
@@ -302,7 +299,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Retain the attribution before the boot rather than after it, so a sample
 	// taken against a workload that dies mid-boot is still attributable. A cold
 	// boot can take a while and can be retried, and an actor that never reaches
-	// readyz is one whose usage is worth reporting rather than the one case that
+	// wakeup probe is one whose usage is worth reporting rather than the one case that
 	// reports nothing. The defer drops it again if the boot fails outright.
 	// Matches ateom-gvisor's RunWorkload.
 	s.activeActor.Store(&attribution)
@@ -437,14 +434,11 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
-	// Guest sizing + agent kernel params from the kata config.
-	memMiB, vcpus, kparams, err := s.guestConfig(rr)
-	if err != nil {
-		return err
-	}
+	// Guest sizing + agent kernel params.
+	memMiB, vcpus, kparams := s.guestConfig()
 
 	// Right-size the VM to the actor's declared limits (see internal/sizing),
-	// keeping the kata-config values above as the fallback when a limit is unset.
+	// keeping the defaults above as the fallback when a limit is unset.
 	// vCPUs round up; VM RAM reserves a fixed margin for the VMM + virtiofsd, which
 	// share the pod cgroup with the guest RAM. A declared memory limit the reserve
 	// leaves too small to boot is rejected (resolveGuestMemMiB) rather than silently
@@ -593,9 +587,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}
 	tContainers := time.Now()
 
-	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
-		return fmt.Errorf("while waiting for container readyz: %w", err)
+	// Block until every wakeup-probe-enabled container reports 200.
+	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
+		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
 	// Everything from BootVM onward, split. ateom used to log only the total, which
@@ -604,7 +598,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		slog.Duration("vsock_wait", tVsock.Sub(tBooted)),
 		slog.Duration("agent_dial", tDialed.Sub(tVsock)),
 		slog.Duration("containers", tContainers.Sub(tDialed)),
-		slog.Duration("readyz", time.Since(tContainers)),
+		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
 	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
@@ -729,28 +723,20 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 	return vfsdCmd, nil
 }
 
-// guestConfig reads guest sizing + agent kernel params from the resolved kata
-// config, enabling the debug console (vsock 1026) for in-guest diagnostics and,
-// with kataDebug, raising the agent log level.
-func (s *AteomService) guestConfig(rr resolvedRuntime) (memMiB, vcpus int, kparams string, err error) {
-	var cfgBytes []byte
-	if rr.configFile != "" {
-		cfgBytes, _ = os.ReadFile(rr.configFile)
-	}
-	cfg, err := kata.ParseConfig(cfgBytes, 2048, 1)
-	if err != nil {
-		return 0, 0, "", fmt.Errorf("while parsing kata config: %w", err)
-	}
-	kparams = kata.WithDebugConsole(cfg.KernelParams)
+// guestConfig returns the default guest sizing and the agent kernel params, enabling
+// the debug console (vsock 1026) for in-guest diagnostics and, with kataDebug, raising
+// the agent log level.
+func (s *AteomService) guestConfig() (memMiB, vcpus int, kparams string) {
+	kparams = kata.WithDebugConsole()
 	if s.kataDebug {
 		kparams = kata.WithAgentDebug(kparams)
 	}
-	return cfg.MemoryMiB, cfg.VCPUs, kparams, nil
+	return kata.DefaultMemoryMiB, kata.DefaultVCPUs, kparams
 }
 
 // resolveGuestMemMiB returns the micro-VM guest RAM (MiB) for an actor's declared
-// memory limit. declaredBytes == 0 means "unset" and returns fallbackMiB (the
-// kata-config default). Otherwise the guest gets the declared memory minus the VMM
+// memory limit. declaredBytes == 0 means "unset" and returns fallbackMiB
+// (kata.DefaultMemoryMiB). Otherwise the guest gets the declared memory minus the VMM
 // reserve; if that leaves less than a bootable minimum it errors — naming the limit,
 // the reserve, and the minimum — instead of silently reverting to the (larger)
 // fallback, which would boot the actor bigger than the worker was sized for and OOM

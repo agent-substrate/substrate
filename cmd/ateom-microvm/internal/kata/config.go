@@ -15,72 +15,32 @@
 package kata
 
 import (
-	"fmt"
 	"strings"
-
-	toml "github.com/pelletier/go-toml/v2"
 )
 
-// KataConfig holds the values ateom reads from a kata configuration.toml. ateom
-// owns the cloud-hypervisor boot and points it at the runtime-fetched asset paths
-// directly, so the only things it needs from the config are the guest sizing and
-// the agent kernel command line.
-type KataConfig struct {
-	// MemoryMiB is the guest RAM size ([hypervisor.clh] default_memory).
-	MemoryMiB int
-	// VCPUs is the guest vCPU count ([hypervisor.clh] default_vcpus).
-	VCPUs int
-	// KernelParams is the guest kernel command line ([hypervisor.clh]
-	// kernel_params): the kata-agent parameters (agent.log, the systemd target,
-	// etc.). ateom appends these to the cloud-hypervisor payload cmdline, since
+const (
+	// TODO(#1724): Tune the following values for Substrate actors.
+	// DefaultMemoryMiB is the default guest memory size (MiB).
+	DefaultMemoryMiB = 2048
+	// DefaultVCPUs is the default guest vCPU count.
+	DefaultVCPUs = 1
+)
+
+const (
+	// baseKernelParams is the guest kernel command line parameters ateom boots with;
 	// there is no kata shim to inject them.
-	KernelParams string
-}
+	baseKernelParams         = "cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1"
+	debugConsoleKernelParams = baseKernelParams + " agent.debug_console agent.debug_console_vport=1026"
+)
 
-// clhConfigTOML mirrors the subset of a kata configuration.toml ateom reads.
-// Unmarshalling ignores every other key, so it stays valid across kata releases.
-type clhConfigTOML struct {
-	Hypervisor struct {
-		CLH struct {
-			DefaultMemory int    `toml:"default_memory"`
-			DefaultVCPUs  int    `toml:"default_vcpus"`
-			KernelParams  string `toml:"kernel_params"`
-		} `toml:"clh"`
-	} `toml:"hypervisor"`
-}
-
-// ParseConfig reads the guest sizing and kernel_params from a kata
-// configuration.toml. memDefault/vcpuDefault are substituted when the key is
-// absent or non-positive (kata also accepts default_vcpus = -1 meaning "all host
-// CPUs", which ateom does not support).
-func ParseConfig(base []byte, memDefault, vcpuDefault int) (KataConfig, error) {
-	var c clhConfigTOML
-	if err := toml.Unmarshal(base, &c); err != nil {
-		return KataConfig{}, fmt.Errorf("parsing kata config: %w", err)
-	}
-	cfg := KataConfig{
-		MemoryMiB:    c.Hypervisor.CLH.DefaultMemory,
-		VCPUs:        c.Hypervisor.CLH.DefaultVCPUs,
-		KernelParams: c.Hypervisor.CLH.KernelParams,
-	}
-	if cfg.MemoryMiB <= 0 {
-		cfg.MemoryMiB = memDefault
-	}
-	if cfg.VCPUs <= 0 {
-		cfg.VCPUs = vcpuDefault
-	}
-	return cfg, nil
-}
-
-// WithDebugConsole appends the kata-agent debug-console kernel parameters so the
-// guest agent binds a root debug shell on vsock port 1026, which DebugConsoleDump
-// connects to for in-guest diagnostics. Both params are required: agent.debug_console
-// enables the console and agent.debug_console_vport=1026 makes the agent bind it on
-// the vsock port (the agent only binds a vsock listener when the vport is > 0).
-// Idempotent.
-func WithDebugConsole(kernelParams string) string {
-	return appendKernelParams(kernelParams, "agent.debug_console_vport",
-		"agent.debug_console agent.debug_console_vport=1026")
+// WithDebugConsole returns the kernel params with the kata-agent debug console
+// enabled, so the guest agent binds a root debug shell on vsock port 1026, which
+// DebugConsoleDump connects to for in-guest diagnostics. Both params are required:
+// agent.debug_console enables the console and agent.debug_console_vport=1026 makes
+// the agent bind it on the vsock port (the agent only binds a vsock listener when
+// the vport is > 0).
+func WithDebugConsole() string {
+	return debugConsoleKernelParams
 }
 
 // WithAgentDebug appends agent.log=debug so the guest kata-agent emits

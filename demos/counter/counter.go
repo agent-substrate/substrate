@@ -118,7 +118,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(response))
 	})
-	// /readyz is the endpoint the ateom-gvisor readyz probe polls. It returns
+	// /readyz is the endpoint the ateom-gvisor wakeup probe polls. It returns
 	// 200 only once initialization (the random-file write) has completed.
 	// After a checkpoint+restore the atomic flag is part of the snapshot, so
 	// the endpoint returns 200 immediately on resume.

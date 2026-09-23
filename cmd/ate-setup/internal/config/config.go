@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -43,12 +44,18 @@ const (
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
 const DefaultRolloutTimeout = 60 * time.Second
 
-// DefaultPostgresSchema mirrors the shell installer's default for
-// ATE_API_POSTGRES_SCHEMA, the PostgreSQL schema holding the Substrate tables.
 const (
 	DefaultPostgresSchema        = "public"
 	DefaultPostgresReadWriteRole = "substrate_readwrite"
 	DefaultPostgresOwnerRole     = "substrate_owner"
+)
+
+// Cloud SQL Auth Proxy IP types, the values ATE_API_POSTGRES_CLOUDSQL_IP_TYPE
+// accepts.
+const (
+	CloudSQLIPTypePrivate = "private"
+	CloudSQLIPTypePublic  = "public"
+	CloudSQLIPTypePSC     = "psc"
 )
 
 // devEnvFile is the optional per-developer environment script at the repo root.
@@ -64,14 +71,20 @@ type Config struct {
 	// Kind selects the local Kind install profile (ATE_INSTALL_KIND).
 	Kind bool
 
+	// Namespace is the namespace the control plane is installed into, from
+	// ATE_NAMESPACE. It defaults to the canonical installdefaults.SystemNamespace,
+	// so an install that does not set it is unaffected. The checked-in manifests
+	// under manifests/ate-install/ name that namespace literally, so the
+	// manifest-applying steps refuse any other value; see Env.RequireCanonicalNamespace.
+	Namespace string
+
 	// Kubeconfig and Context select the target cluster. Empty Context means
 	// "use the current context" (the KUBECTL_CONTEXT convention).
 	//
-	// Kubeconfig falls back to $KUBECONFIG rather than staying empty. The
-	// client-go loading rules consult that variable on their own, so leaving
-	// it out here would point ate-setup at one cluster while the shell scripts
-	// it delegates to, which are handed this value through ScriptEnv, used
-	// another.
+	// Kubeconfig is a single file, handed to client-go as its explicit path. It
+	// falls back to $KUBECONFIG rather than staying empty so that ate-setup and
+	// the shell scripts it delegates to agree on the cluster — but only when
+	// that variable names one file. See loadKubeconfig.
 	Kubeconfig string
 	Context    string
 
@@ -80,6 +93,12 @@ type Config struct {
 	ProjectID       string
 	ClusterName     string
 	ClusterLocation string
+
+	// ExpectedJWTIssuer is the service account token issuer ate-api-server
+	// trusts (EXPECTED_JWT_ISSUER). It overrides both the GKE derivation from
+	// the coordinates above and OpenID discovery, for clusters whose issuer
+	// follows neither form.
+	ExpectedJWTIssuer string
 
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
@@ -95,19 +114,29 @@ type Config struct {
 
 	// Router selects the atenet router dataplane.
 	Router string
-	// PostgresReadWriteConnectionString is the apiserver's store connection string.
-	// Empty uses the bundled PostgreSQL read/write role.
+	// The read/write and owner connections can use different login identities.
+	// An empty owner connection uses the read/write connection for Cloud SQL or
+	// another external database. Both empty selects bundled PostgreSQL.
 	PostgresReadWriteConnectionString string
-	// PostgresOwnerConnectionString is the optional schema-owner connection
-	// string. An external database requires both connection strings.
-	PostgresOwnerConnectionString string
-	// PostgresReadWriteRole and PostgresOwnerRole are stable NOLOGIN roles assumed
-	// after authentication when login usernames rotate.
-	PostgresReadWriteRole string
-	PostgresOwnerRole     string
+	PostgresOwnerConnectionString     string
+	PostgresReadWriteRole             string
+	PostgresOwnerRole                 string
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
+	// PostgresPoolMaxConns sizes the apiserver's pgxpool
+	// (ATE_API_POSTGRES_POOL_MAX_CONNS). It is spliced into the DSN rather
+	// than passed separately, because that is the only place pgxpool reads it
+	// from. Empty leaves the pgxpool default in place.
+	PostgresPoolMaxConns string
+	// PostgresServerCAFile is a local PEM file holding the server CA of an
+	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
+	// published as the postgres-server-ca Secret, which ate-api-server mounts
+	// at /run/postgres-server-ca/server-ca.pem for sslmode=verify-ca DSNs.
+	PostgresServerCAFile string
+	// CloudSQL points the apiserver at a Cloud SQL instance through the Auth
+	// Proxy sidecar instead of a directly reachable PostgreSQL.
+	CloudSQL CloudSQLConfig
 
 	// RolloutTimeout is the timeout duration for rollout status checks.
 	RolloutTimeout time.Duration
@@ -141,10 +170,42 @@ type Config struct {
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string
 
+	// kubeconfigEnv is what ScriptEnv exports as $KUBECONFIG. Unlike Kubeconfig
+	// it may be a PATH-style list of files, which kubectl understands and
+	// client-go's explicit path does not.
+	kubeconfigEnv string
+
 	// shellEnv is the process environment layered over .ate-dev-env.sh. It is
 	// kept so that the shell scripts ate-setup still shells out to see the same
 	// variables the shell installer would have exported to them.
 	shellEnv map[string]string
+}
+
+// CloudSQLConfig is the operator's Cloud SQL intent, as expressed by the
+// ATE_API_POSTGRES_CLOUDSQL_* variables.
+//
+// Every field is empty-means-unspecified except Instance, which is three-way:
+// a non-empty instance selects Cloud SQL, an explicitly empty one removes it,
+// and an unset one (InstanceSet false) adopts whatever the target cluster
+// already records. Without that distinction a redeploy from a shell that
+// simply never exported the variable would tear the proxy sidecar out from
+// under a working installation.
+type CloudSQLConfig struct {
+	// Instance is the instance connection name, PROJECT:REGION:INSTANCE.
+	Instance string
+	// InstanceSet records whether ATE_API_POSTGRES_CLOUDSQL_INSTANCE was
+	// present in the environment at all, empty value included.
+	InstanceSet bool
+
+	// GSA is the Google service account the proxy authenticates as, and whose
+	// email (minus the .gserviceaccount.com suffix) is the IAM database user.
+	GSA string
+	// IAMAuth enables automatic IAM database authentication ("true" or
+	// "false"). Empty defaults to enabled.
+	IAMAuth string
+	// IPType selects which instance address the proxy dials: one of the
+	// CloudSQLIPType constants. Empty defaults to private.
+	IPType string
 }
 
 // Options carries the raw flag values the root command collects, before
@@ -161,6 +222,7 @@ type Options struct {
 	ExperimentalEgressCredentialInjection bool
 	CredentialProviderName                string
 	CredentialProviderAddress             string
+	OtlpEndpoint                          string
 
 	// Image source selection.
 	ImageRepo string
@@ -180,10 +242,14 @@ func Load(opts Options) (*Config, error) {
 
 	env := environ()
 
+	// ATE_INSTALL_KIND is read as well as --kind: hack/install-ate-kind.sh
+	// selects the Kind profile by exporting it.
+	kind := opts.Kind || env["ATE_INSTALL_KIND"] == "true"
+
 	// Sourcing is skipped for Kind installs the same way the shell kind installer
 	// exports NO_DEV_ENV: the GKE-shaped variables in a developer's file would
 	// otherwise point a local install at a cloud project.
-	if !opts.NoDevEnv && !opts.Kind && os.Getenv("NO_DEV_ENV") == "" {
+	if !opts.NoDevEnv && !kind && os.Getenv("NO_DEV_ENV") == "" {
 		path := filepath.Join(root, devEnvFile)
 		if _, statErr := os.Stat(path); statErr == nil {
 			sourced, srcErr := sourceShellEnv(path, root)
@@ -207,6 +273,15 @@ func Load(opts Options) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid --rollout-timeout %q (must be a duration like 60s, 5m): %w", timeoutStr, err)
 		}
+		// A non-positive timeout is never what the caller meant. It would make
+		// every wait a single probe against a workload that has not had time to
+		// start, failing the install with a rollout timeout on the first
+		// Deployment. kubectl reads --timeout=0 as "wait forever"; ate-setup
+		// does not offer an unbounded wait, so say so rather than silently
+		// meaning the opposite.
+		if d <= 0 {
+			return nil, fmt.Errorf("invalid --rollout-timeout %q: must be positive (kubectl reads 0 as no timeout, which ate-setup does not support)", timeoutStr)
+		}
 		rolloutTimeout = d
 	}
 
@@ -224,23 +299,41 @@ func Load(opts Options) (*Config, error) {
 	extproc := firstNonEmpty(opts.AdditionalEgressExtprocService, env["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"])
 	injection := opts.ExperimentalEgressCredentialInjection || env["ATE_CREDENTIAL_INJECTION_ENABLED"] == "true"
 
+	// Read with the two-value form: an exported but empty
+	// ATE_API_POSTGRES_CLOUDSQL_INSTANCE means "remove Cloud SQL", which an
+	// absent one does not. See CloudSQLConfig.
+	cloudsqlInstance, cloudsqlInstanceSet := env["ATE_API_POSTGRES_CLOUDSQL_INSTANCE"]
+
+	kubeconfig, kubeconfigEnv := loadKubeconfig(opts.Kubeconfig, env["KUBECONFIG"])
+
 	cfg := &Config{
-		Root:                                  root,
-		Kind:                                  opts.Kind,
-		Kubeconfig:                            firstNonEmpty(opts.Kubeconfig, env["KUBECONFIG"]),
-		Context:                               firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
-		ProjectID:                             env["PROJECT_ID"],
-		ClusterName:                           env["CLUSTER_NAME"],
-		ClusterLocation:                       env["CLUSTER_LOCATION"],
-		BucketName:                            env["BUCKET_NAME"],
-		KODockerRepo:                          env["KO_DOCKER_REPO"],
-		KODefaultPlatforms:                    env["KO_DEFAULTPLATFORMS"],
-		Images:                                loadImageSource(opts, env),
-		PostgresReadWriteConnectionString:     env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"],
-		PostgresOwnerConnectionString:         env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"],
-		PostgresReadWriteRole:                 firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
-		PostgresOwnerRole:                     firstNonEmpty(env["ATE_API_POSTGRES_OWNER_ROLE"], DefaultPostgresOwnerRole),
-		PostgresSchema:                        env["ATE_API_POSTGRES_SCHEMA"],
+		Root:                              root,
+		Kind:                              kind,
+		Namespace:                         firstNonEmpty(env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
+		Kubeconfig:                        kubeconfig,
+		Context:                           firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
+		ProjectID:                         env["PROJECT_ID"],
+		ClusterName:                       env["CLUSTER_NAME"],
+		ClusterLocation:                   env["CLUSTER_LOCATION"],
+		ExpectedJWTIssuer:                 env["EXPECTED_JWT_ISSUER"],
+		BucketName:                        env["BUCKET_NAME"],
+		KODockerRepo:                      env["KO_DOCKER_REPO"],
+		KODefaultPlatforms:                env["KO_DEFAULTPLATFORMS"],
+		Images:                            loadImageSource(opts, env),
+		PostgresReadWriteConnectionString: firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"], env["ATE_API_POSTGRES_CONNECTION_STRING"]),
+		PostgresOwnerConnectionString:     env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"],
+		PostgresReadWriteRole:             firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
+		PostgresOwnerRole:                 firstNonEmpty(env["ATE_API_POSTGRES_OWNER_ROLE"], DefaultPostgresOwnerRole),
+		PostgresSchema:                    env["ATE_API_POSTGRES_SCHEMA"],
+		PostgresPoolMaxConns:              env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
+		PostgresServerCAFile:              env["ATE_API_POSTGRES_SERVER_CA_FILE"],
+		CloudSQL: CloudSQLConfig{
+			Instance:    cloudsqlInstance,
+			InstanceSet: cloudsqlInstanceSet,
+			GSA:         env["ATE_API_POSTGRES_CLOUDSQL_GSA"],
+			IAMAuth:     env["ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH"],
+			IPType:      env["ATE_API_POSTGRES_CLOUDSQL_IP_TYPE"],
+		},
 		RolloutTimeout:                        rolloutTimeout,
 		rolloutTimeoutSet:                     timeoutStr != "",
 		PodcertWorkersPerSigner:               podcertWorkers,
@@ -250,12 +343,13 @@ func Load(opts Options) (*Config, error) {
 		CredentialProviderName:                firstNonEmpty(opts.CredentialProviderName, env["ATE_CREDENTIAL_PROVIDER_NAME"]),
 		CredentialProviderAddress:             firstNonEmpty(opts.CredentialProviderAddress, env["ATE_CREDENTIAL_PROVIDER_ADDRESS"]),
 		AnthropicAPIKey:                       env["ANTHROPIC_API_KEY"],
-		OtlpEndpoint:                          env["ATE_OTLP_ENDPOINT"],
+		OtlpEndpoint:                          firstNonEmpty(opts.OtlpEndpoint, env["ATE_OTLP_ENDPOINT"]),
 		BenchmarkActorMemory:                  env["BENCHMARK_ACTOR_MEMORY"],
+		kubeconfigEnv:                         kubeconfigEnv,
 		shellEnv:                              env,
 	}
 
-	if opts.Kind {
+	if kind {
 		applyKindDefaults(cfg)
 	}
 
@@ -265,6 +359,25 @@ func Load(opts Options) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// loadKubeconfig splits the kubeconfig setting into the path handed to
+// client-go and the value exported to the shell scripts.
+//
+// $KUBECONFIG is a PATH-style list, and developers who juggle clusters do set
+// it to several files. client-go's explicit path is a single file, so passing
+// such a value through makes every command fail with
+// `stat /a.yaml:/b.yaml: no such file or directory`. The default loading rules
+// already read $KUBECONFIG and merge its entries, so a list is left to them:
+// the explicit path stays empty and the scripts still see the list.
+func loadKubeconfig(flag, env string) (explicitPath, scriptValue string) {
+	if flag != "" {
+		return flag, flag
+	}
+	if strings.ContainsRune(env, os.PathListSeparator) {
+		return "", env
+	}
+	return env, env
 }
 
 // loadImageSource resolves where images come from.
@@ -292,9 +405,6 @@ func validate(cfg *Config) error {
 	if cfg.PostgresOwnerConnectionString != "" && cfg.PostgresReadWriteConnectionString == "" {
 		return fmt.Errorf("ATE_API_POSTGRES_OWNER_CONNECTION_STRING requires ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")
 	}
-	if cfg.PostgresReadWriteConnectionString != "" && cfg.PostgresOwnerConnectionString == "" {
-		return fmt.Errorf("ATE_API_POSTGRES_OWNER_CONNECTION_STRING is required with ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")
-	}
 	switch cfg.Router {
 	case RouterEnvoy, RouterAgentgateway:
 	default:
@@ -302,6 +412,15 @@ func validate(cfg *Config) error {
 	}
 	if cfg.PodcertWorkersPerSigner < 0 {
 		return fmt.Errorf("--podcert-workers-per-signer must be a positive integer, got %d", cfg.PodcertWorkersPerSigner)
+	}
+	// Only an explicitly supplied value is checked. One adopted from the
+	// cluster is derived from the recorded CSQL_PROXY_* keys and so is always
+	// one of these by construction.
+	switch cfg.CloudSQL.IPType {
+	case "", CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC:
+	default:
+		return fmt.Errorf("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE must be %s, %s, or %s, got %q",
+			CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC, cfg.CloudSQL.IPType)
 	}
 	if cfg.AdditionalEgressExtprocService != "" {
 		if err := validateExtprocService(cfg.AdditionalEgressExtprocService); err != nil {
@@ -418,13 +537,14 @@ func (c *Config) ScriptEnv() []string {
 	// and the kind profile.
 	for name, value := range map[string]string{
 		"KUBECTL_CONTEXT":     c.Context,
-		"KUBECONFIG":          c.Kubeconfig,
+		"KUBECONFIG":          c.kubeconfigEnv,
 		"BUCKET_NAME":         c.BucketName,
 		"KO_DOCKER_REPO":      c.KODockerRepo,
 		"KO_DEFAULTPLATFORMS": c.KODefaultPlatforms,
 		"PROJECT_ID":          c.ProjectID,
 		"CLUSTER_NAME":        c.ClusterName,
 		"CLUSTER_LOCATION":    c.ClusterLocation,
+		"ATE_OTLP_ENDPOINT":   c.OtlpEndpoint,
 	} {
 		if value == "" {
 			// An empty value means "not configured". Leaving the variable set

@@ -49,7 +49,7 @@ containers:
   - name: OTEL_RESOURCE_ATTRIBUTES
     value: "service.name=glutton-actor"
   # Hold ResumeActor open until port 80 actually answers.
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80

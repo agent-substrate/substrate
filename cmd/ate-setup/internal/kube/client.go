@@ -22,7 +22,6 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
@@ -43,7 +42,9 @@ type Client struct {
 	Typed     kubernetes.Interface
 	Dynamic   dynamic.Interface
 	discovery discovery.CachedDiscoveryInterface
-	mapper    meta.RESTMapper
+	// mapper is held as the concrete deferred mapper, not as meta.RESTMapper,
+	// because only the concrete type exposes Reset. See InvalidateDiscovery.
+	mapper *restmapper.DeferredDiscoveryRESTMapper
 }
 
 // New builds a Client for the given kubeconfig and context. An empty context
@@ -86,8 +87,14 @@ func New(kubeconfig, kubeContext string) (*Client, error) {
 // worked. Inside one long-lived process the RESTMapper would keep serving the
 // pre-CRD discovery document and report "no matches for kind", so every code
 // path that installs CRDs has to call this afterwards.
+//
+// Resetting the mapper is what does the work. The deferred mapper builds its
+// delegate from discovery once and then holds it, so emptying the discovery
+// cache underneath it changes nothing: the stale delegate keeps answering.
+// Reset drops the delegate and invalidates the discovery cache it was built
+// from, which is why it is the mapper and not the cache that is reset here.
 func (c *Client) InvalidateDiscovery() {
-	c.discovery.Invalidate()
+	c.mapper.Reset()
 }
 
 // ServerVersion returns the API server version, doubling as a connectivity

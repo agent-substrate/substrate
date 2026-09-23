@@ -52,7 +52,6 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_restore_duration",
 	"ate_actor_checkpoint_duration",
 	"atenet_router_route_duration",
-	"ate_scheduler_eligible_workers",
 }
 
 // ScrapeAgentGatewayRouterMetrics reads the AgentGateway router's native
@@ -66,7 +65,7 @@ func ScrapeAgentGatewayRouterMetrics(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating k8s client: %w", err)
 	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, agentGatewayRouterStatsPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), agentGatewayRouterStatsPort)
 	if err != nil {
 		return "", err
 	}

@@ -26,11 +26,19 @@ import (
 // sourceEnvScript sources path in a bash subshell and prints every exported
 // variable NUL-separated. compgen -e is used rather than `env -0` because the
 // latter's -0 flag is not portable across the BSD env on macOS.
+//
+// The sourced file gets a stdout that is not the one the records go to.
+// Developer env files print things — `gcloud config get-value` echoes a note,
+// a file may announce which project it selected — and anything they wrote to
+// the record stream would be parsed as part of the first variable, silently
+// losing it. Everything they print goes to stderr instead, where it is only
+// surfaced if the file fails.
 const sourceEnvScript = `
 set -o errexit
+exec 3>&1 1>&2
 source "$1"
 for __ate_name in $(compgen -e); do
-  printf '%s=%s\0' "${__ate_name}" "${!__ate_name}"
+  printf '%s=%s\0' "${__ate_name}" "${!__ate_name}" >&3
 done
 `
 

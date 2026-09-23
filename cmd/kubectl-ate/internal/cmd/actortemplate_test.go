@@ -43,7 +43,7 @@ containers:
 - name: counter
   image: ko://github.com/agent-substrate/substrate/demos/counter
   command: ["/ko-app/counter", "--extra-port=9090"]
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
@@ -81,7 +81,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			Name:    "counter",
 			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
 			Command: []string{"/ko-app/counter", "--extra-port=9090"},
-			Readyz: &ateapipb.ContainerReadyz{
+			WakeupProbe: &ateapipb.ContainerWakeupProbe{
 				HttpGet: &ateapipb.HTTPGetAction{Path: "/readyz", Port: 80},
 			},
 			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/home/counter"}},

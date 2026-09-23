@@ -35,7 +35,7 @@ containers:
   - "--ServerApp.disable_check_xsrf=True"
   - "--port=80"
   - "--ip=0.0.0.0"
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /api
       port: 80

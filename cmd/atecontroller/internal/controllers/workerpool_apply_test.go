@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -206,7 +208,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildDeploymentApplyConfig(tt.wp, ateomOTelSettings{})
+			got := buildDeploymentApplyConfig(tt.wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("buildDeploymentApplyConfig() mismatch (-want +got):\n%s", diff)
 			}
@@ -226,7 +228,7 @@ func TestBuildDeploymentApplyConfigMetadata(t *testing.T) {
 		},
 	})
 
-	got := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
+	got := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount)
 	wantLabels := map[string]string{
 		"project":             "agent-substrate",
 		"team":                "compute",
@@ -268,7 +270,7 @@ func TestMicroVMPodShape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.SandboxClass = tt.class
-			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
+			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec
 
 			// /dev/kvm must come from the device plugin, never a hostPath: a
 			// hostPath mount carries no cgroup device allow rule, and the
@@ -361,7 +363,7 @@ func TestMicroVMDeviceRequestsPreserveTemplateResources(t *testing.T) {
 		},
 	})
 	wp.Spec.SandboxClass = atev1alpha1.SandboxClassMicroVM
-	c := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec.Containers[0]
+	c := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec.Containers[0]
 
 	if got, ok := deviceLimit(c, string(corev1.ResourceMemory)); !ok || got != "2Gi" {
 		t.Errorf("memory limit = %q (present=%v), want 2Gi", got, ok)
@@ -426,12 +428,36 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 // TestTerminationGracePeriodSeconds asserts the pod's grace period is hardcoded to 3600s.
 func TestTerminationGracePeriodSeconds(t *testing.T) {
 	wp := testWorkerPoolApplyConfig(nil)
-	ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
+	ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec
 	if ps.TerminationGracePeriodSeconds == nil {
 		t.Fatalf("TerminationGracePeriodSeconds not set")
 	}
 	if *ps.TerminationGracePeriodSeconds != 3600 {
 		t.Errorf("TerminationGracePeriodSeconds = %d, want 3600", *ps.TerminationGracePeriodSeconds)
+	}
+}
+
+// TestRolloutStrategy pins the rollout settings a pool edit rolls workers
+// with: delete first, never surge, and a progress deadline that outlasts the
+// actors' drain window.
+func TestRolloutStrategy(t *testing.T) {
+	wp := testWorkerPoolApplyConfig(nil)
+	spec := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec
+	if spec.Strategy == nil || spec.Strategy.RollingUpdate == nil {
+		t.Fatalf("Strategy.RollingUpdate not set")
+	}
+	if got := *spec.Strategy.Type; got != appsv1.RollingUpdateDeploymentStrategyType {
+		t.Errorf("Strategy.Type = %q, want RollingUpdate", got)
+	}
+	ru := spec.Strategy.RollingUpdate
+	if got := ru.MaxSurge.String(); got != "0" {
+		t.Errorf("MaxSurge = %q, want 0", got)
+	}
+	if got := ru.MaxUnavailable.String(); got != "10%" {
+		t.Errorf("MaxUnavailable = %q, want 10%%", got)
+	}
+	if spec.ProgressDeadlineSeconds == nil || *spec.ProgressDeadlineSeconds <= int32(workerTerminationGracePeriodSeconds) {
+		t.Errorf("ProgressDeadlineSeconds = %v, want above the %ds grace period", spec.ProgressDeadlineSeconds, workerTerminationGracePeriodSeconds)
 	}
 }
 
@@ -450,7 +476,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{Endpoint: tt.endpoint}).
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{Endpoint: tt.endpoint}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
 				Spec.Template.Spec.Containers[0]
 			env := envByName(c.Env)
 
@@ -536,7 +562,7 @@ func TestBuildDeploymentApplyConfigMetricExportTuning(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
 				Spec.Template.Spec.Containers[0]
 			env := envByName(c.Env)
 			for _, k := range []string{"OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT"} {
@@ -593,7 +619,7 @@ func TestBuildDeploymentApplyConfigTracesSamplerPropagation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
 				Spec.Template.Spec.Containers[0]
 			env := envByName(c.Env)
 			for _, k := range []string{"OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG"} {
@@ -728,6 +754,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				"--atunnel-connect-listen-address=:8443",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
+				"--atunnel-client-identity="+installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
 				"--atunnel-egress-listen-address=0.0.0.0:15001",
 				"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
 			).
@@ -805,9 +832,110 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithBlockOwnerDeletion(true)).
 		WithSpec(appsv1ac.DeploymentSpec().
 			WithReplicas(wp.Spec.Replicas).
+			WithStrategy(appsv1ac.DeploymentStrategy().
+				WithType(appsv1.RollingUpdateDeploymentStrategyType).
+				WithRollingUpdate(appsv1ac.RollingUpdateDeployment().
+					WithMaxSurge(intstr.FromInt32(0)).
+					WithMaxUnavailable(intstr.FromString("10%")))).
+			WithProgressDeadlineSeconds(4800).
 			WithSelector(metav1ac.LabelSelector().
 				WithMatchLabels(map[string]string{"ate.dev/worker-pool": wp.Name})).
 			WithTemplate(corev1ac.PodTemplateSpec().
 				WithLabels(map[string]string{"ate.dev/worker-pool": wp.Name}).
 				WithSpec(podSpecAC)))
+}
+
+// TestBuildDeploymentAtunnelIdentitiesRelocatedNamespace pins the SPIFFE
+// identities handed to ateom to the controller's namespace. atunnel runs in
+// the actor's pod, so it cannot derive atelet's or the router's namespace
+// itself; if these carry the wrong one, the credential broker handshake and
+// actor ingress both fail closed. Every other case here passes the canonical
+// namespace and so would pass against a hardcoded value too.
+func TestBuildDeploymentAtunnelIdentitiesRelocatedNamespace(t *testing.T) {
+	const relocated = "substrate-test"
+
+	c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{}, relocated, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
+		Spec.Template.Spec.Containers[0]
+
+	want := map[string]string{
+		"--atunnel-client-identity=": "spiffe://cluster.local/ns/substrate-test/sa/atenet-router",
+		"--atunnel-broker-identity=": "spiffe://cluster.local/ns/substrate-test/sa/atelet",
+	}
+	for flag, wantVal := range want {
+		var got string
+		for _, arg := range c.Args {
+			if strings.HasPrefix(arg, flag) {
+				got = strings.TrimPrefix(arg, flag)
+			}
+		}
+		if got == "" {
+			t.Fatalf("no %s argument found in %v", flag, c.Args)
+		}
+		if got != wantVal {
+			t.Errorf("%s%s, want %s%s", flag, got, flag, wantVal)
+		}
+	}
+}
+
+// TestBuildDeploymentAtunnelIdentitiesPrefixedServiceAccounts covers a
+// deployment that renames the ServiceAccounts, which is what a packaging layer
+// does when it prefixes every resource name. The SPIFFE ID embeds the
+// ServiceAccount name, so identities built from the compiled-in defaults name
+// accounts that do not exist and atunnel rejects the peer.
+func TestBuildDeploymentAtunnelIdentitiesPrefixedServiceAccounts(t *testing.T) {
+	const (
+		namespace = "kagent-system"
+		atelet    = "kagent-atelet"
+		router    = "kagent-atenet-router"
+	)
+
+	c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{}, namespace, atelet, router).
+		Spec.Template.Spec.Containers[0]
+
+	want := map[string]string{
+		"--atunnel-client-identity=": "spiffe://cluster.local/ns/kagent-system/sa/kagent-atenet-router",
+		"--atunnel-broker-identity=": "spiffe://cluster.local/ns/kagent-system/sa/kagent-atelet",
+	}
+	for flag, wantVal := range want {
+		var got string
+		for _, arg := range c.Args {
+			if strings.HasPrefix(arg, flag) {
+				got = strings.TrimPrefix(arg, flag)
+			}
+		}
+		if got != wantVal {
+			t.Errorf("%s%s, want %s%s", flag, got, flag, wantVal)
+		}
+	}
+}
+
+// TestBuildDeploymentOmitsBrokerIdentityForCanonicalInstall pins the flag's
+// absence, which is what keeps a rolling upgrade working. docs/upgrade.md runs
+// the outgoing worker pool alongside the new one, and this controller
+// reconciles that pool's Deployment while it is still pinned to its old image.
+// An ateom from before --atunnel-broker-identity existed exits on the
+// unrecognized flag, so passing it would crashloop every old worker the moment
+// the control plane rolled out.
+func TestBuildDeploymentOmitsBrokerIdentityForCanonicalInstall(t *testing.T) {
+	c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{},
+		installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
+		Spec.Template.Spec.Containers[0]
+
+	for _, arg := range c.Args {
+		if strings.HasPrefix(arg, "--atunnel-broker-identity=") {
+			t.Fatalf("canonical install passed %q; an ateom predating the flag exits on it", arg)
+		}
+	}
+
+	// The value it would have carried is the one such an ateom already assumes,
+	// so omitting it changes nothing for either binary.
+	var clientIdentity string
+	for _, arg := range c.Args {
+		if strings.HasPrefix(arg, "--atunnel-client-identity=") {
+			clientIdentity = strings.TrimPrefix(arg, "--atunnel-client-identity=")
+		}
+	}
+	if want := installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace); clientIdentity != want {
+		t.Errorf("--atunnel-client-identity=%s, want %s", clientIdentity, want)
+	}
 }

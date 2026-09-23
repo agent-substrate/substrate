@@ -131,7 +131,7 @@ message RunWorkloadRequest {
   WorkloadSpec spec = 7;
 
   // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
-  // "virtiofsd", "kata-kernel", "kata-image", "kata-config")
+  // "virtiofsd", "kata-kernel", "kata-image")
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 8;
@@ -142,7 +142,7 @@ message RunWorkloadRequest {
   // The actor's declared size, from the ActorTemplate's resource limits. ateom
   // sizes the sandbox to these (cgroup caps via the OCI spec, and for the
   // micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
-  // runtime default (unlimited for gVisor, the kata config for the micro-VM).
+  // runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
   int64 cpu_milli = 11;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 12; // Memory limit in bytes.
 }
@@ -161,7 +161,7 @@ message WorkloadSpec {
 
 message Container {
   string name = 1;
-  Readyz readyz = 2;
+  WakeupProbe wakeup_probe = 2;
 
   // Field 3 was durable_dir_volumes: the mount paths alone, which only worked
   // while an actor was limited to a single durable-dir volume.
@@ -220,9 +220,9 @@ message ImageVolumeMount {
   string mount_path = 2;
 }
 
-// Readyz describes how to check that a container is ready to serve.
+// WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
-message Readyz {
+message WakeupProbe {
   HTTPGetAction http_get = 1;
   // How long to keep polling before giving up and failing the actor start.
   int32 timeout_seconds = 2;

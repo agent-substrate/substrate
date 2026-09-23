@@ -13,9 +13,10 @@
 // limitations under the License.
 
 // Command ate-setup installs and tears down Agent Substrate on a Kubernetes
-// cluster. It is a Go port of hack/install-ate.sh and the scripts it sources,
-// which remain in place and still work; see cmd/ate-setup/commands.md for the
-// flag-by-flag mapping between the two.
+// cluster. It is the installer; hack/install-ate.sh is a shim that translates
+// its historical flags onto these commands. See cmd/ate-setup/commands.md for
+// the flag-by-flag mapping and cmd/ate-setup/cli-diff.md for what the
+// translation does not cover.
 package main
 
 import (

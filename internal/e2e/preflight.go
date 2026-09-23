@@ -38,10 +38,10 @@ func PreflightChecks() error {
 
 	// Check deployments.
 	deployments := []string{
-		"ate-controller",
-		"ate-api-server",
+		ResourceName("ate-controller"),
+		ResourceName("ate-api-server"),
 	}
-	namespace := "ate-system"
+	namespace := SystemNamespace()
 	for _, depName := range deployments {
 		dep, err := clients.K8s.AppsV1().Deployments(namespace).Get(ctx, depName, metav1.GetOptions{})
 		if err != nil {

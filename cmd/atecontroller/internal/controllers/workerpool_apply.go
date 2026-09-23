@@ -17,6 +17,7 @@ package controllers
 import (
 	"slices"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -27,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -37,6 +39,21 @@ const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod
 // workerTerminationGracePeriodSeconds is the hardcoded pod termination grace
 // period for worker pods (60 minutes).
 const workerTerminationGracePeriodSeconds int64 = 3600
+
+// Rollout settings for the pool's Deployment. A pool edit rolls the workers
+// through the eviction path, so the strategy is chosen for the actors on them:
+//
+//   - maxSurge 0 with a 10% maxUnavailable, which Kubernetes raises to at
+//     least one pod. To make the roll smooth, make it gradual, maxSurge should
+//     be 0 to avoid any potential stall for small size WorkerPool.
+//   - progressDeadlineSeconds above the 3600s pod grace period, with room for
+//     the replacement to start, so a batch waiting out the drain does not have
+//     kubectl rollout status report a failed rollout.
+const (
+	workerRolloutMaxSurge                = 0
+	workerRolloutMaxUnavailable          = "10%"
+	workerRolloutProgressDeadlineSeconds = int32(4800)
+)
 
 // ateomOTelSettings is the telemetry configuration propagated to ateom worker
 // pods. A zero value leaves the pods without telemetry env.
@@ -76,7 +93,7 @@ const (
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here. otel, when it carries an endpoint, is propagated to the
 // ateom container so it pushes telemetry to that collector.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings) *appsv1ac.DeploymentApplyConfiguration {
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -89,18 +106,42 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 	}
 	labels["ate.dev/worker-pool"] = wp.Name
 
+	args := []string{
+		"--pod-uid=$(POD_UID)",
+		"--atunnel-listen-address=:443",
+		"--atunnel-connect-listen-address=:8443",
+		"--atunnel-credential-bundle=" + atunnelIdentityMountPath + "/credential-bundle.pem",
+		"--atunnel-trust-bundle=" + atunnelIdentityMountPath + "/trust-bundle.pem",
+		// The peers atunnel authenticates live in substrate's namespace, not
+		// the worker's, so the controller passes their identities rather than
+		// letting ateom assume the default install. --atunnel-client-identity
+		// has been accepted by every ateom that carries this controller's
+		// contemporaries, so it is always safe to pass.
+		"--atunnel-client-identity=" + installdefaults.SPIFFEID(systemNamespace, routerServiceAccount),
+	}
+
+	// --atunnel-broker-identity is newer than the oldest ateom a rolling
+	// upgrade still has running. docs/upgrade.md keeps the outgoing worker pool
+	// serving alongside the new one, and that pool's Deployment is reconciled
+	// by this controller while still pinned to its old image, which exits on an
+	// unrecognized flag. An ateom without the flag hardcodes the canonical
+	// identity, and an ateom with it defaults to the same, so omitting the flag
+	// when it carries that value is equivalent for both and keeps the upgrade
+	// intact. A relocated or renamed install passes something else and needs an
+	// image new enough to accept it, which it necessarily has.
+	if brokerIdentity := installdefaults.SPIFFEID(systemNamespace, ateletServiceAccount); brokerIdentity != installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace) {
+		args = append(args, "--atunnel-broker-identity="+brokerIdentity)
+	}
+
+	args = append(args,
+		"--atunnel-egress-listen-address=0.0.0.0:15001",
+		"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
+	)
+
 	containerAC := corev1ac.Container().
 		WithName("ateom").
 		WithImage(wp.Spec.WorkerImage).
-		WithArgs(
-			"--pod-uid=$(POD_UID)",
-			"--atunnel-listen-address=:443",
-			"--atunnel-connect-listen-address=:8443",
-			"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
-			"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
-			"--atunnel-egress-listen-address=0.0.0.0:15001",
-			"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
-		).
+		WithArgs(args...).
 		WithPorts(corev1ac.ContainerPort().
 			WithName("https").
 			WithContainerPort(443).
@@ -203,6 +244,12 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithBlockOwnerDeletion(true)).
 		WithSpec(appsv1ac.DeploymentSpec().
 			WithReplicas(wp.Spec.Replicas).
+			WithStrategy(appsv1ac.DeploymentStrategy().
+				WithType(appsv1.RollingUpdateDeploymentStrategyType).
+				WithRollingUpdate(appsv1ac.RollingUpdateDeployment().
+					WithMaxSurge(intstr.FromInt32(workerRolloutMaxSurge)).
+					WithMaxUnavailable(intstr.FromString(workerRolloutMaxUnavailable)))).
+			WithProgressDeadlineSeconds(workerRolloutProgressDeadlineSeconds).
 			WithSelector(metav1ac.LabelSelector().
 				WithMatchLabels(map[string]string{"ate.dev/worker-pool": wp.Name})).
 			WithTemplate(corev1ac.PodTemplateSpec().

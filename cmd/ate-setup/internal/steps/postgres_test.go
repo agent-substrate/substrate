@@ -15,7 +15,6 @@
 package steps
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,81 +22,92 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
-func TestUseBundledPostgres(t *testing.T) {
+func TestPlanPostgres(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		connString string
-		want       bool
+		cloudSQL   config.CloudSQLConfig
+		recorded   map[string]string
+		want       postgresPlan
 	}{
-		{name: "no external database", connString: "", want: true},
 		{
-			name:       "external database configured",
+			name: "no external database",
+			want: postgresPlan{bundled: true},
+		},
+		{
+			name:       "explicit DSN",
 			connString: "postgresql://user@db.example.com:5432/atepg",
-			want:       false,
+			want:       postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
+		},
+		{
+			name:     "Cloud SQL instance from the environment",
+			cloudSQL: config.CloudSQLConfig{Instance: "p:r:i", InstanceSet: true},
+			want:     postgresPlan{external: "Cloud SQL instance p:r:i"},
+		},
+		{
+			name:     "Cloud SQL instance adopted from the cluster",
+			recorded: map[string]string{envCloudSQLInstance: "p:r:i"},
+			want:     postgresPlan{external: "Cloud SQL instance p:r:i"},
+		},
+		{
+			// The removal case: the cluster still records an instance, but
+			// the operator asked for it to go away.
+			name:     "explicitly empty instance ignores the cluster record",
+			cloudSQL: config.CloudSQLConfig{InstanceSet: true},
+			recorded: map[string]string{envCloudSQLInstance: "p:r:i"},
+			want:     postgresPlan{bundled: true},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: tc.connString}}
-			if got := e.useBundledPostgres(); got != tc.want {
-				t.Errorf("useBundledPostgres() = %v, want %v", got, tc.want)
+			e := &Env{
+				Cfg: &config.Config{
+					PostgresReadWriteConnectionString: tc.connString,
+					CloudSQL:                          tc.cloudSQL,
+				},
+				Kube: fakeKube(t, apiServerEnvVarsConfigMap(tc.recorded)),
+			}
+			got, err := e.planPostgres(t.Context())
+			if err != nil {
+				t.Fatalf("planPostgres() error = %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("planPostgres() = %+v, want %+v", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestPostgresReadWriteConnectionStrings(t *testing.T) {
-	t.Run("external owner connection is required", func(t *testing.T) {
-		const dsn = "postgresql://runtime@db.example/atepg"
-		e := &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: dsn}}
-		_, _, err := e.postgresReadWriteConnectionStrings(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "owner connection string is required") {
-			t.Fatalf("postgresReadWriteConnectionStrings error = %v", err)
-		}
-	})
+func TestPostgresConnectionStrings(t *testing.T) {
+	admin := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem},
+		Data:       map[string][]byte{"POSTGRES_USER": []byte("custom-admin"), "POSTGRES_PASSWORD": []byte("custom-password")},
+	}
+	e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, admin)}
+	readWrite, owner, err := e.postgresReadWriteConnectionStrings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readWrite, "substrate_readwrite_user:substrate-readwrite") || !strings.Contains(owner, "substrate_admin_user:substrate-admin") || !strings.Contains(readWrite, "channel_binding=disable") {
+		t.Fatalf("unexpected bundled connections: %q, %q", readWrite, owner)
+	}
+	if got, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretPostgresAdmin); err != nil || string(got.Data["POSTGRES_USER"]) != "custom-admin" {
+		t.Fatalf("administrator Secret changed: %v, %v", got, err)
+	}
 
-	t.Run("bundled credentials are reused", func(t *testing.T) {
-		adminSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem},
-			Data: map[string][]byte{
-				"POSTGRES_USER":     []byte("custom-admin"),
-				"POSTGRES_PASSWORD": []byte("custom-password"),
-			},
-		}
-		e := &Env{
-			Cfg:  &config.Config{},
-			Kube: &kube.Client{Typed: fake.NewSimpleClientset(adminSecret)},
-		}
-		readWriteDSN, ownerDSN, err := e.postgresReadWriteConnectionStrings(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(readWriteDSN, "substrate_readwrite_user:substrate-readwrite") || !strings.Contains(ownerDSN, "substrate_admin_user:substrate-admin") || readWriteDSN == ownerDSN {
-			t.Fatalf("unexpected bundled connection strings: %q, %q", readWriteDSN, ownerDSN)
-		}
-		if !strings.Contains(readWriteDSN, "channel_binding=disable") || !strings.Contains(ownerDSN, "channel_binding=disable") {
-			t.Fatalf("bundled connection strings do not disable unsupported channel binding: %q, %q", readWriteDSN, ownerDSN)
-		}
-		readWriteAgain, ownerAgain, err := e.postgresReadWriteConnectionStrings(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if readWriteAgain != readWriteDSN || ownerAgain != ownerDSN {
-			t.Fatal("bundled PostgreSQL connection strings changed on the second read")
-		}
-		gotAdmin, err := e.Kube.GetSecret(context.Background(), NamespaceAteSystem, SecretPostgresAdmin)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(gotAdmin.Data["POSTGRES_USER"]) != "custom-admin" {
-			t.Fatal("existing administrator Secret changed")
-		}
-	})
+	e.Cfg.PostgresReadWriteConnectionString = "readwrite-dsn"
+	readWrite, owner, err = e.postgresReadWriteConnectionStrings(t.Context())
+	if err != nil || readWrite != "readwrite-dsn" || owner != "readwrite-dsn" {
+		t.Fatalf("single external login: %q, %q, %v", readWrite, owner, err)
+	}
+	e.Cfg.PostgresOwnerConnectionString = "owner-dsn"
+	readWrite, owner, err = e.postgresReadWriteConnectionStrings(t.Context())
+	if err != nil || readWrite != "readwrite-dsn" || owner != "owner-dsn" {
+		t.Fatalf("separate external logins: %q, %q, %v", readWrite, owner, err)
+	}
 }
 
 // The StatefulSet lives in a subdirectory that the bundle render does not

@@ -195,7 +195,7 @@ func TestHealthServiceIsServing(t *testing.T) {
 	}
 }
 
-// The ingress Actor's readyz is an HTTP GET, so this handler is the only thing
+// The ingress Actor's wakeup probe is an HTTP GET, so this handler is the only thing
 // that gets it to PhaseReady — the gRPC port answers such a request with a
 // protocol error. A 404 from a mistyped path would look exactly like a template
 // that never boots.
