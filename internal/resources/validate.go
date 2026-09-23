@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -83,6 +85,50 @@ func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field
 func ValidateAteomUID(targetAteomUID string) error {
 	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
 		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// ValidateActorDirs checks the directories atelet passes to ateom: each one
+// set, absolute and clean, and every one but root_dir below root_dir.
+func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+	if actorDirs == nil {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	rootDir := actorDirs.GetRootDir()
+	errs := validateAbsDir(rootDir, fldPath.Child("root_dir"))
+	rootDirOK := len(errs) == 0
+	for _, actorDir := range []struct{ name, path string }{
+		{"oci_bundle_dir", actorDirs.GetOciBundleDir()},
+		{"runsc_state_dir", actorDirs.GetRunscStateDir()},
+		{"pid_file_dir", actorDirs.GetPidFileDir()},
+		{"checkpoint_dir", actorDirs.GetCheckpointDir()},
+		{"restore_dir", actorDirs.GetRestoreDir()},
+		{"durable_dir_volume_mounts_dir", actorDirs.GetDurableDirVolumeMountsDir()},
+		{"system_info_volume_roots_dir", actorDirs.GetSystemInfoVolumeRootsDir()},
+		{"volumes_dir", actorDirs.GetVolumesDir()},
+	} {
+		dirPath := fldPath.Child(actorDir.name)
+		if dirErrs := validateAbsDir(actorDir.path, dirPath); len(dirErrs) > 0 {
+			errs = append(errs, dirErrs...)
+			continue
+		}
+		if !rootDirOK {
+			continue
+		}
+		if rel, err := filepath.Rel(rootDir, actorDir.path); err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			errs = append(errs, field.Invalid(dirPath, actorDir.path, "must be below root_dir"))
+		}
+	}
+	return errs
+}
+
+func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
+	if dir == "" {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
+		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
 	}
 	return nil
 }

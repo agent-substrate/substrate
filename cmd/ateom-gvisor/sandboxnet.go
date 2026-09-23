@@ -26,12 +26,12 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
 // prepareSandboxNetwork builds the actor's network and starts serving it.
-func (s *AteomService) prepareSandboxNetwork(ctx context.Context, actorUID string) error {
+func (s *AteomService) prepareSandboxNetwork(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
 	if err := s.releaseSandboxNetwork(ctx); err != nil {
 		return err
 	}
@@ -46,10 +46,12 @@ func (s *AteomService) prepareSandboxNetwork(ctx context.Context, actorUID strin
 	}
 
 	// Point the sandbox resolver at its gateway.
-	if _, err := actorResolvConf(actorUID); err != nil {
+	path, err := actorResolvConf(actorDirs)
+	if err != nil {
 		_ = session.Close(ctx)
 		return err
 	}
+	s.resolvConf = path
 
 	return s.sandbox.Replace(ctx, session)
 }
@@ -57,21 +59,27 @@ func (s *AteomService) prepareSandboxNetwork(ctx context.Context, actorUID strin
 // releaseSandboxNetwork stops serving the actor and takes its network down,
 // along with the resolv.conf atelet's per-activation reset leaves behind.
 func (s *AteomService) releaseSandboxNetwork(ctx context.Context) error {
-	if session := s.sandbox.Session(); session != nil {
-		if err := os.Remove(ateompath.ActorResolvConfPath(session.Network.ActorUID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if s.resolvConf != "" {
+		if err := os.Remove(s.resolvConf); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			slog.WarnContext(ctx, "Failed to remove the actor resolv.conf", slog.Any("err", err))
 		}
+		s.resolvConf = ""
 	}
 	return s.sandbox.Close(ctx)
 }
 
+// resolvConfPath is the resolver bind source outside the actor's rootfs.
+func resolvConfPath(actorDirs *ateompb.ActorDirs) string {
+	return filepath.Join(actorDirs.GetRootDir(), "resolv.conf")
+}
+
 // actorResolvConf writes the resolver bind source outside the actor's rootfs.
-func actorResolvConf(actorUID string) (string, error) {
+func actorResolvConf(actorDirs *ateompb.ActorDirs) (string, error) {
 	pod, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return "", fmt.Errorf("reading the worker pod resolv.conf: %w", err)
 	}
-	path := ateompath.ActorResolvConfPath(actorUID)
+	path := resolvConfPath(actorDirs)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("creating the actor directory: %w", err)
 	}

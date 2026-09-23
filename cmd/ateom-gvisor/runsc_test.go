@@ -20,21 +20,24 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
+
+var testActorDirs = &ateompb.ActorDirs{RunscStateDir: "/node/actors/test-actor-123/runsc-state"}
 
 func TestKillArgs(t *testing.T) {
 	r := &runsc{
-		path:     "/usr/bin/runsc",
-		actorUID: "test-actor-123",
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
 	}
 
 	got := r.killArgs("my-container", "SIGTERM")
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
-		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"-root", testActorDirs.GetRunscStateDir(),
 		"kill",
 		"my-container",
 		"SIGTERM",
@@ -47,15 +50,16 @@ func TestKillArgs(t *testing.T) {
 
 func TestWaitArgs(t *testing.T) {
 	r := &runsc{
-		path:     "/usr/bin/runsc",
-		actorUID: "test-actor-123",
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
 	}
 
 	got := r.waitArgs("my-container")
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
-		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"-root", testActorDirs.GetRunscStateDir(),
 		"wait",
 		"my-container",
 	}
@@ -67,15 +71,16 @@ func TestWaitArgs(t *testing.T) {
 
 func TestPauseArgs(t *testing.T) {
 	r := &runsc{
-		path:     "/usr/bin/runsc",
-		actorUID: "test-actor-123",
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
 	}
 
 	got := r.pauseArgs(ocispec.PauseContainer)
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
-		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"-root", testActorDirs.GetRunscStateDir(),
 		"pause",
 		ocispec.PauseContainer,
 	}
@@ -87,15 +92,16 @@ func TestPauseArgs(t *testing.T) {
 
 func TestResumeArgs(t *testing.T) {
 	r := &runsc{
-		path:     "/usr/bin/runsc",
-		actorUID: "test-actor-123",
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
 	}
 
 	got := r.resumeArgs(ocispec.PauseContainer)
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
-		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"-root", testActorDirs.GetRunscStateDir(),
 		"resume",
 		ocispec.PauseContainer,
 	}
