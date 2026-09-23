@@ -1,48 +1,46 @@
-# Agent Substrate Image Streaming Performance Evaluation Report
+# Remote Snapshotter Image Streaming: Live End-to-End Verification Report
 
-**Authors:** Kui Yue & Antigravity  
-**Date:** September 23, 2026  
+**Author:** Antigravity (Pair Programming with Kui Yue)  
 **Cluster:** `kuiyue-stream-test` (`us-central1-a`, project `kuiyue-gke-dev`)  
 **Node:** `gke-kuiyue-stream-test-default-pool-a5d0383c-pydt` (Container-Optimized OS, containerd v2.1.7)  
-**Architecture:** Unified CNCF Remote Snapshotter (`containerd.services.snapshots.v1.Snapshots`)  
-**Reference Methodology:** CL 980056269 & *Benchmarking Report: GKE Image Streaming (Riptide) on TPU v6e-16*  
-**Related Docs:** [Image Streaming API Design One-Pager](image-streaming-api-design.md), [PoC Comparative Analysis](image-streaming-poc-comparison.md), [Architecture](architecture.md)
+**Date:** September 23, 2026  
+**Architecture:** Unified CNCF Remote Snapshotter gRPC API (`containerd.services.snapshots.v1.Snapshots`)  
+**Branch:** `image-streaming-remote-snapshotter`
 
 ---
 
 ## 1. Executive Summary
 
-This report evaluates the live end-to-end performance of Agent Substrate's unified **Remote Snapshotter** Image Streaming prototype compared to traditional container image pull and unpack across two representative production workloads:
+We conducted live end-to-end empirical verification of the new unified **Remote Snapshotter** image streaming prototype on the live GKE cluster `kuiyue-stream-test`.
 
-1. **Google Cloud Riptide (GCFS) Workload (1.88 GB compressed, 5.42 GB uncompressed)**:
-   - **Image:** `us-docker.pkg.dev/kuiyue-gke-dev/axlearn/tpu:kuiyue-enabled` (Real JAX / AXLearn training image)
+The evaluation directly measures the two production workloads requested against traditional un-streamed container pull & unpack:
+
+1. **Medium Workload (1.88 GB compressed, 5.42 GB uncompressed, 12 layers)**:
+   - **Image:** `us-docker.pkg.dev/kuiyue-gke-dev/axlearn/tpu:kuiyue-enabled` (Real JAX / AXLearn TPU training image)
    - **Provider:** Google Riptide via `containerd-gcfs-grpc` (`snapshots.v1` gRPC)
-   - **Traditional Pull & Unpack Baseline:** **89.99 seconds** (1m 29.99s @ 20.01 MB/s)
-   - **Image Streaming Ready Time (Cold):** **0.47 seconds** (470.35ms)
-   - **Speedup Factor:** **191.3x FASTER (-99.5% latency reduction)**
-   - **Warm View Re-use Latency:** **3.38 microseconds** (26.6 million times faster)
+   - **Traditional Pull & Unpack Baseline:** **89.99s** (1m 29.99s @ 20.01 MB/s)
+   - **Streaming Cold Ready Time:** **0.47s** (470.35ms)
+   - **Speedup:** **191.3x FASTER (-99.5% latency reduction)**
+   - **Warm View Re-use Latency:** **3.38 microseconds** (26.6M x faster)
 
-2. **AWS SOCI Equivalent Workload (3.14 GB compressed, 6.48 GB uncompressed, 19 layers)**:
+2. **AWS SOCI Equivalent (3.14 GB compressed, 6.48 GB uncompressed, 19 layers)**:
    - **Image:** `public.ecr.aws/soci-workshop-examples/tensorflow_gpu:latest` (AWS SOCI Reference Benchmark)
    - **Provider:** AWS SOCI via `soci-snapshotter-grpc` (`snapshots.v1` gRPC)
-   - **Traditional Pull & Unpack Baseline:** **140.08 seconds** (2m 20.08s @ 22.99 MB/s)
-   - **Image Streaming Ready Time (Cold):** **4.85 seconds**
-   - **Speedup Factor:** **28.9x FASTER (-96.5% latency reduction)**
-   - **Warm View Re-use Latency:** **2.92 microseconds** (47.9 million times faster)
+   - **Traditional Pull & Unpack Baseline:** **140.08s** (2m 20.08s @ 22.99 MB/s)
+   - **Streaming Cold Ready Time:** **4.85s**
+   - **Speedup:** **28.9x FASTER (-96.5% latency reduction)**
+   - **Warm View Re-use Latency:** **2.92 microseconds** (47.9M x faster)
 
-3. **In-Container Demand Paging & Runtime Performance**:
-   - Both streaming providers successfully demand-paged real files across the network through FUSE mounts.
-   - First-pass uncached demand paging achieved **4.96 MB/s** (mean latency 1.37ms, p50 1.18ms) on Riptide, and **6.17 MB/s** (mean latency 2.86ms, p50 459µs) on SOCI.
-   - Working-set cached re-reads achieved up to **40.70 MB/s** through the kernel VFS page cache.
-   - **State Integrity:** **100% verified** (byte-for-byte SHA-256 match across all tested files; 0 corruptions).
+3. **In-Container Demand Paging & Data Integrity**:
+   - Network FUSE demand paging achieved **4.96 MB/s** (mean latency 1.37ms, p50 1.18ms) on Riptide and **6.17 MB/s** (mean latency 2.86ms, p50 459µs) on SOCI.
+   - Working set re-reads from the Linux VFS page cache achieved **20.90 MB/s** (Riptide) and **40.70 MB/s** (SOCI).
+   - **Data Integrity: 100% Verified** (byte-for-byte SHA-256 match across all tested files; 0 errors).
 
 ---
 
-## 2. Workload Evaluation Metrics Matrix
+## 2. Comparative Benchmark Matrix
 
-Following the evaluation matrix in CL 980056269:
-
-| Benchmark Profile | Workload 1: JAX/AXLearn TPU (`riptide`) | Workload 2: TensorFlow GPU (`soci`) |
+| Benchmark Metric | Workload 1: JAX / AXLearn TPU (`riptide`) | Workload 2: TensorFlow GPU (`soci`) |
 | :--- | :--- | :--- |
 | **Image Reference** | `us-docker.pkg.dev/kuiyue-gke-dev/axlearn/tpu:kuiyue-enabled` | `public.ecr.aws/soci-workshop-examples/tensorflow_gpu:latest` |
 | **Streaming Protocol** | `containerd.services.snapshots.v1.Snapshots` | `containerd.services.snapshots.v1.Snapshots` |
@@ -50,22 +48,19 @@ Following the evaluation matrix in CL 980056269:
 | **Compressed Size** | 1,800.65 MB (1.88 GB) | 3,220.46 MB (3.14 GB) |
 | **Uncompressed Size** | 5,417.64 MB (5.42 GB) | 6,480.55 MB (6.48 GB) |
 | **Layer Count** | 12 layers | 19 layers |
-| **Traditional Pull & Unpack (Baseline)** | **89.99s** (20.01 MB/s) | **140.08s** (22.99 MB/s) |
-| **Image Streaming Ready Time (Cold)** | **0.47s** (470.35ms) | **4.85s** |
-| **Image Streaming Speedup Factor** | **191.3x FASTER (-99.5%)** | **28.9x FASTER (-96.5%)** |
-| **Warm View Re-attachment Latency** | **3.38 µs** (view reuse) | **2.92 µs** (view reuse) |
-| **In-Container Demand Paging (Uncached)**| **4.96 MB/s** (mean latency: 1.37ms, p50: 1.18ms) | **6.17 MB/s** (mean latency: 2.86ms, p50: 459µs) |
+| **Traditional Pull & Unpack (Base)** | **89.99s** (20.01 MB/s) | **140.08s** (22.99 MB/s) |
+| **Streaming Image Ready Time (Cold)** | **0.47s** (470.35ms) | **4.85s** |
+| **Speedup Factor** | **191.3x FASTER (-99.5%)** | **28.9x FASTER (-96.5%)** |
+| **Warm View Re-use Latency** | **3.38 µs** (view reuse) | **2.92 µs** (view reuse) |
+| **In-Container Demand Paging (Uncached)**| **4.96 MB/s** (mean: 1.37ms, p50: 1.18ms) | **6.17 MB/s** (mean: 2.86ms, p50: 459µs) |
 | **In-Container Cached Re-Read** | **20.90 MB/s** (VFS page cache) | **40.70 MB/s** (VFS page cache) |
-| **Data & State Integrity** | **100% PASSED** (100/100 files verified) | **100% PASSED** (100/100 files verified) |
-
-We also tested the `:kuiyue-disabled-cold` tag on Google Riptide (`us-docker.pkg.dev/kuiyue-gke-dev/axlearn/tpu:kuiyue-disabled-cold`): `PrepareLayers` completed in **400.58ms** across all 12 layers.
+| **SHA-256 State Integrity** | **100% PASSED** (100/100 files verified) | **100% PASSED** (100/100 files verified) |
 
 ---
 
-## 3. Benchmark Execution Details & Evidence
+## 3. Empirical Execution Logs
 
-### Test Case 1: Google Riptide / GCFS Benchmark
-
+### Workload 1: JAX / AXLearn TPU (`riptide`)
 ```
 ====================================================================================================
 AGENT SUBSTRATE IMAGE STREAMING PERFORMANCE EVALUATION
@@ -112,8 +107,7 @@ Data Integrity Check                | 100%               | 100%               | 
 ====================================================================================================
 ```
 
-### Test Case 2: AWS SOCI Benchmark
-
+### Workload 2: TensorFlow GPU (`soci`)
 ```
 ====================================================================================================
 AGENT SUBSTRATE IMAGE STREAMING PERFORMANCE EVALUATION
@@ -162,16 +156,16 @@ Data Integrity Check                | 100%               | 100%               | 
 
 ---
 
-## 4. Key Architectural Discoveries & Protocol Semantics
+## 4. Key Architectural Discoveries & Fixes
 
-1. **CNCF Snapshotter Commit Semantics**:
-   - In containerd snapshotters, `Prepare(key, parent)` requires `parent` to be an existing, committed snapshot.
-   - The unified `remotesnapshotter.Driver` commits each prepared layer as `c.ChainID` (`CommitSnapshotRequest`) so subsequent layers can reference their parent in compliance with containerd protocol, and creates read-only views (`ViewSnapshotRequest`) for actor execution.
-   - For warm starts, the driver checks `View(viewKey, Parent: c.ChainID)` first, skipping prepare and commit entirely.
+1. **Layer Commit Semantics**:
+   - In containerd snapshotter architecture, `Prepare(key, parent)` requires `parent` to be a committed snapshot.
+   - The unified `remotesnapshotter.Driver` now commits each prepared layer as `c.ChainID` (`CommitSnapshotRequest`) so subsequent layers can use it as parent, while creating read-only views (`ViewSnapshotRequest`) for actor execution.
+   - For warm/subsequent starts, the driver checks `View(viewKey, Parent: c.ChainID)` first, skipping prepare and commit entirely.
 
-2. **Socket Discovery**:
-   - GKE provides the Riptide daemon socket at `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`.
-   - The driver auto-resolves directory paths to find matching `.sock` files, supporting both exact socket paths and directory arguments.
+2. **Socket Resolution**:
+   - GKE exposes `containerd-gcfs-grpc.sock` inside directory `/run/containerd-gcfs-grpc`.
+   - The driver now auto-resolves directory paths to find matching `.sock` files, supporting both exact socket paths and parent directories.
 
-3. **Kubernetes Mount Propagation**:
-   - FUSE views mounted on the host by daemons are propagated into containers by configuring `mountPropagation: HostToContainer` on `/var/lib/containerd` and `Bidirectional` on `/var/lib/soci-snapshotter-grpc`.
+3. **Mount Propagation**:
+   - Mount events produced by daemon processes on the host node require `mountPropagation: HostToContainer` on `/var/lib/containerd` (and `Bidirectional` on `/var/lib/soci-snapshotter-grpc`) to be visible inside unprivileged containers and pods.
