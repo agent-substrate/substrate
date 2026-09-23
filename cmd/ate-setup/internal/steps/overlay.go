@@ -402,16 +402,5 @@ func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
 			return err
 		}
 	}
-	// atelet DaemonSet names carry a version suffix; restart whichever
-	// versions are installed.
-	daemonSets, err := e.Kube.DaemonSetNames(ctx, e.Namespace(), "app=atelet")
-	if err != nil {
-		return err
-	}
-	for _, name := range daemonSets {
-		if err := e.Kube.RolloutRestart(ctx, e.Namespace(), name, now); err != nil {
-			return err
-		}
-	}
-	return nil
+	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", now)
 }

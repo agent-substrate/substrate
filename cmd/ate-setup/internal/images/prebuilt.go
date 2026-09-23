@@ -118,11 +118,10 @@ func (p *Prebuilt) pin(ctx context.Context, image string) (string, error) {
 
 // rewrite replaces every ko:// reference with the image it maps to.
 //
-// Substitution is textual, the same way SubstituteVersion fills
-// ${SUBSTRATE_VERSION}. References appear in CRD fields as well as pod specs (a
-// WorkerPool's spec.workerImage, an ActorTemplate's image), so a schema walk
-// would need to know every such field, and rewriting the bytes leaves
-// everything else -- the multi-kilobyte Envoy configuration blocks in
+// Substitution is textual. References appear in CRD fields as well as pod
+// specs (a WorkerPool's spec.workerImage, an ActorTemplate's image), so a
+// schema walk would need to know every such field, and rewriting the bytes
+// leaves everything else -- the multi-kilobyte Envoy configuration blocks in
 // particular -- exactly as committed.
 func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error) {
 	// Collect the failures rather than stopping at the first. Diagnosing them

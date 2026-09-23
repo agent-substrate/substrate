@@ -16,9 +16,6 @@ package steps
 
 import (
 	"context"
-	"fmt"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -44,12 +41,6 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 		return err
 	}
 
-	// atelet DaemonSet names carry a version suffix.
-	if err := e.Kube.Typed.AppsV1().DaemonSets(e.Namespace()).DeleteCollection(ctx,
-		metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: "app=atelet"}); err != nil {
-		return fmt.Errorf("while deleting atelet daemonsets: %w", err)
-	}
-
 	for _, path := range [][]string{
 		{"components", "agentgateway", "configmap.yaml"},
 		{"postgres", "postgres.yaml"},
@@ -59,7 +50,7 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 			return err
 		}
 	}
-	return e.UnlabelNodesSubstrateVersion(ctx)
+	return nil
 }
 
 // DeleteAtenet removes the atenet dataplane.

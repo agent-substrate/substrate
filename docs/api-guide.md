@@ -36,29 +36,6 @@ syntax.
 metadata; they do not affect actor scheduling. Actor selectors match
 `WorkerPool.metadata.labels`, not `WorkerPool.spec.template.labels`.
 
-#### Pin pools to the installed substrate version (`template.nodeSelector`)
-
-The installation labels every node with the substrate build version it deployed.
-Set the same label as a `nodeSelector` on every pool, so its workers only run
-on nodes of that version:
-
-```yaml
-spec:
-  template:
-    nodeSelector:
-      ate.dev/substrate-version: "<installed version>"
-```
-
-Read the installed version off the atelet DaemonSet:
-
-```bash
-kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version
-```
-
-The pin is critical to make a rolling upgrade possible. An upgrade moves nodes to
-the new version one at a time, deleting each node's old worker pods once it
-moves. A pinned pool cannot put those pods back on a moved node, so the old
-version drains away node by node. An unpinned pool breaks this constraints.
 #### Worker Capacity (`spec.template.resources`)
 
 Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope available to host an actor sandbox, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).

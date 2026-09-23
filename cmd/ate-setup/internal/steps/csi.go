@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -315,8 +316,8 @@ spec:
 
 	// The image cache directories under ateomHostDir were just wiped, so
 	// atelet has to recreate them.
-	log.Infof("Restarting the atelet DaemonSets (if present)...")
-	return e.RestartAteletDaemonSets(ctx)
+	log.Infof("Restarting the atelet DaemonSet (if present)...")
+	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", time.Now())
 }
 
 func (e *Env) setupCSINFS(ctx context.Context) error {
@@ -447,8 +448,8 @@ spec:
 		return err
 	}
 
-	log.Infof("Restarting the atelet DaemonSets (if present)...")
-	return e.RestartAteletDaemonSets(ctx)
+	log.Infof("Restarting the atelet DaemonSet (if present)...")
+	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", time.Now())
 }
 
 // checkNFSDSupport verifies the host kernel can serve NFS. The in-cluster NFS

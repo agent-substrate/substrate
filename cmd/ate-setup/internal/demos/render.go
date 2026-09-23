@@ -33,16 +33,10 @@ var ExternalVolumePlaceholders = []string{
 	"EXTERNAL_VOLUMES",
 }
 
-// Render expands a demo template with the configured bucket name and the
-// build version (pool templates pin worker pods to version-labeled nodes).
+// Render expands a demo template with the configured bucket name.
 func Render(e *steps.Env, relPath string, extraValues map[string]string, drop []string) ([]byte, error) {
-	version, _, err := e.SubstrateVersion()
-	if err != nil {
-		return nil, err
-	}
 	values := map[string]string{
 		bucketNamePlaceholder: e.Cfg.BucketName,
-		"SUBSTRATE_VERSION":   version,
 	}
 	for k, v := range extraValues {
 		values[k] = v

@@ -378,13 +378,10 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 	})
 
 	t.Run("patches and restarts the consumers", func(t *testing.T) {
-		// The atelet DaemonSet name carries a substrate version suffix, so it
-		// can only be found by label.
 		atelet := &appsv1.DaemonSet{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: NamespaceAteSystem,
-				Name:      "atelet-v1-2-3",
-				Labels:    map[string]string{"app": "atelet"},
+				Name:      "atelet",
 			},
 		}
 		e := &Env{
@@ -405,7 +402,7 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		if !restartedAt(t, e, "deployment", "ate-api-server") {
 			t.Error("ate-api-server was not restarted")
 		}
-		if !restartedAt(t, e, "daemonset", "atelet-v1-2-3") {
+		if !restartedAt(t, e, "daemonset", "atelet") {
 			t.Error("the atelet DaemonSet was not restarted")
 		}
 	})

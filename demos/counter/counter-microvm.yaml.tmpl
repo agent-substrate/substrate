@@ -42,8 +42,6 @@ spec:
   sandboxClass: microvm
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
   template:
-    nodeSelector:
-      ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The micro-VM sandbox itself is
     # sized by the ActorTemplate's resources in counter-microvm-template.yaml.tmpl,

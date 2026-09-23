@@ -72,11 +72,6 @@ type Env struct {
 	// work on a machine with no container registry credentials configured, and
 	// the build-from-source resolver fails at construction without them.
 	resolver imageResolver
-
-	// substrateVersion caches the derived build version and its object-name
-	// suffix; see SubstrateVersion.
-	substrateVersion       string
-	substrateVersionSuffix string
 }
 
 // Namespace is the namespace the control plane is installed into. It is

@@ -143,16 +143,6 @@ go run ./tools/setup-gcp create cluster [flags]
 `NODE_MACHINE_TYPE` was named `GVISOR_NODE_MACHINE_TYPE`. The old name still
 works and warns; rename it in your `.ate-dev-env.sh`.
 
-**Node version labels:** pool labels are the birth default for every node GKE
-creates later (autoscaling, auto-repair, node upgrades), and `setup-gcp` does
-not set `ate.dev/substrate-version` on the pool, so those nodes arrive
-unlabeled and run no dataplane pods (see the README's note on node version
-labels). Stamp the pool with
-`gcloud container node-pools update ... --node-labels=...` (list the existing
-labels first and carry them all over; the flag replaces the full set), and
-create additional pools with
-`--node-labels=ate.dev/substrate-version=<build version>`.
-
 ### 3. Create Bucket
 
 Creates a GCS bucket for storing snapshots.

@@ -124,13 +124,7 @@ unpinned reference is rejected by admission and every demo fails to deploy.
 Pinning also gives a pre-built install the property a `ko` install had for free,
 that a tag moving afterwards cannot change what is running.
 
-That tag also becomes the substrate version, which names the atelet DaemonSet
-and sets the node label partitioning nodes across coexisting versions. It has
-to: that label must describe the atelet actually running, which came from the
-image, not the checkout `git describe` happens to be sitting on. `VERSION`
-overrides it, as it always has.
-
-The rewrite is textual, one token at a time, matching `SubstituteVersion` above.
+The rewrite is textual, one token at a time.
 A reference is replaced wherever it appears, so the code needs no list of which
 fields hold images — `workerImage:` in a CRD spec is rewritten like any other —
 and the applied manifest differs from the checked-in YAML only in the image

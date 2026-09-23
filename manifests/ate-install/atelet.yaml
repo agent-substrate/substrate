@@ -95,41 +95,27 @@ description: "Node-local ate components that every actor activation depends on."
 
 ---
 # 6. Create DaemonSet
-#
-# ${SUBSTRATE_VERSION} and ${SUBSTRATE_VERSION_SUFFIX} are placeholders that
-# hack/install-ate.sh fills in after kustomize/ko.
-#
-# During a rolling upgrade both old/new version DaemonSets coexist, each pinned 
-# to nodes carrying a version label while the operator flip nodes from old version
-# label to new versio label one at a time.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: atelet-${SUBSTRATE_VERSION_SUFFIX}
+  name: atelet
   namespace: ate-system
   labels:
     app: atelet
-    ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
 spec:
   selector:
     matchLabels:
       app: atelet
-      ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
   template:
     metadata:
       labels:
         app: atelet
-        ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
       priorityClassName: ate-node-critical
-      # Pin to nodes labelled with this substrate version. install-ate.sh labels unlabeled
-      # nodes at install time; the operator owns the label afterwards.
-      nodeSelector:
-        ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
       # Budget for the full shutdown sequence: --drain-delay (0 for atelet) +
       # --drain-timeout (5m). Sized long because Checkpoint/Restore stream
       # multi-GiB snapshots and must not be force-cancelled mid-upload. The sum

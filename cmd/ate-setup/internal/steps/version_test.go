@@ -21,72 +21,36 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
-// TestSubstrateVersionPrebuilt covers the version a prebuilt install stamps.
+// TestSubstrateVersionPrebuilt covers the version a prebuilt install reports.
 // Root points at a directory that is not a checkout, so `git describe` has
 // nothing to say and only the image tag can supply it.
 func TestSubstrateVersionPrebuilt(t *testing.T) {
 	t.Setenv("VERSION", "")
 
 	cases := []struct {
-		name       string
-		source     images.Source
-		want       string
-		wantSuffix string
+		name   string
+		source images.Source
+		want   string
 	}{{
-		name:       "tag is the version",
-		source:     images.Source{Repo: "example.com/substrate", Tag: "v0.0.0-503-4b3423c0"},
-		want:       "v0.0.0-503-4b3423c0",
-		wantSuffix: "v0-0-0-503-4b3423c0",
+		name:   "tag is the version",
+		source: images.Source{Repo: "example.com/substrate", Tag: "v0.0.0-503-4b3423c0"},
+		want:   "v0.0.0-503-4b3423c0",
 	}, {
-		name:       "a tag carrying its digest is the version without it",
-		source:     images.Source{Repo: "example.com/substrate", Tag: "v0.0.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-		want:       "v0.0.0",
-		wantSuffix: "v0-0-0",
+		name:   "a tag carrying its digest is the version without it",
+		source: images.Source{Repo: "example.com/substrate", Tag: "v0.0.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+		want:   "v0.0.0",
 	}, {
-		name:       "built from source falls back to git",
-		source:     images.Source{},
-		want:       "dev",
-		wantSuffix: "dev",
+		name:   "built from source falls back to git",
+		source: images.Source{},
+		want:   "dev",
 	}}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{Cfg: &config.Config{Root: t.TempDir(), Images: tc.source}}
-			got, suffix, err := e.SubstrateVersion()
-			if err != nil {
-				t.Fatalf("SubstrateVersion: %v", err)
-			}
-			if got != tc.want || suffix != tc.wantSuffix {
-				t.Fatalf("SubstrateVersion = %q, %q; want %q, %q", got, suffix, tc.want, tc.wantSuffix)
+			if got := e.SubstrateVersion(); got != tc.want {
+				t.Fatalf("SubstrateVersion = %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestSubstituteVersion(t *testing.T) {
-	e := &Env{substrateVersion: "v1.2.3", substrateVersionSuffix: "v1-2-3"}
-	in := "" +
-		"metadata:\n" +
-		"  name: atelet-${SUBSTRATE_VERSION_SUFFIX}\n" +
-		"  labels:\n" +
-		"    ate.dev/substrate-version: ${SUBSTRATE_VERSION}\n" +
-		"nodeSelector:\n" +
-		"  ate.dev/substrate-version: \"${SUBSTRATE_VERSION}\"\n"
-	// The unquoted scalar is re-quoted (an all-digit version must land as a
-	// YAML string); already-quoted values and name suffixes pass through.
-	want := "" +
-		"metadata:\n" +
-		"  name: atelet-v1-2-3\n" +
-		"  labels:\n" +
-		"    ate.dev/substrate-version: \"v1.2.3\"\n" +
-		"nodeSelector:\n" +
-		"  ate.dev/substrate-version: \"v1.2.3\"\n"
-
-	got, err := e.SubstituteVersion([]byte(in))
-	if err != nil {
-		t.Fatalf("SubstituteVersion: %v", err)
-	}
-	if string(got) != want {
-		t.Fatalf("SubstituteVersion mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }

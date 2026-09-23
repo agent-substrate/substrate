@@ -33,10 +33,7 @@ var workerImages = []string{"ateom-gvisor", "ateom-microvm"}
 // output. A WorkerPool moves to this build by pointing its workerImage at
 // the ref.
 func (e *Env) PublishWorkerImages(ctx context.Context, w io.Writer) error {
-	version, _, err := e.SubstrateVersion()
-	if err != nil {
-		return err
-	}
+	version := e.SubstrateVersion()
 	log.Stepf("publish_worker_images (%s)", version)
 	runner, err := e.koRunner()
 	if err != nil {
