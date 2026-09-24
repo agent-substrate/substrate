@@ -66,7 +66,7 @@ func cleartextInjectionPolicy(pattern string) *ateapipb.EgressPolicy {
 // policyHandler builds a Handler for an actor whose policy is policy (nil
 // means none) with the cache disabled, so each callout sees the mock as is.
 func policyHandler(policy *ateapipb.EgressPolicy) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, nil, "")
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, nil, "", PeerCertificateSourceEnvoy)
 }
 
 // testSNI is the server name the test actor's TLS connection presented, on
@@ -360,7 +360,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.client, nil, 0, nil, "")
+			h := New(tc.client, nil, 0, nil, "", PeerCertificateSourceEnvoy)
 			_, err := h.HandleRequestHeaders(context.Background(), requestMetadata("api.example.com"))
 			wantStatus(t, err, tc.want)
 		})
@@ -371,7 +371,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 // could be allowed through it, and warms the cache for the requests inside.
 func TestConnectLegRequiresAPolicy(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor", actorCertOptions{})
+	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/actor/default/my-actor", actorCertOptions{})
 
 	tests := []struct {
 		name   string
@@ -386,8 +386,8 @@ func TestConnectLegRequiresAPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL, nil, "")
-			res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
+			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL, nil, "", PeerCertificateSourceEnvoy)
+			res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(encodedCertificateChain(leaf)))
 			if tc.want == 0 {
 				wantAllowed(t, res, err)
 				if calls := tc.client.policyCalls.Load(); calls != 1 {
@@ -443,7 +443,7 @@ func TestDenialBodyIsUniform(t *testing.T) {
 // A caller that gives up mid-fetch is neither a denial nor an outage.
 func TestCanceledCallerIsNotAPolicyFailure(t *testing.T) {
 	client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
-	h := New(client, nil, 0, nil, "")
+	h := New(client, nil, 0, nil, "", PeerCertificateSourceEnvoy)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {

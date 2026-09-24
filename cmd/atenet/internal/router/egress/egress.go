@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,30 +45,21 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
 const (
-	// agentgatewayClientCertificateAttribute is the PEM peer certificate agentgateway
-	// computes from the downstream TLS connection for ext_proc.
-	agentgatewayClientCertificateAttribute = "source.certificate"
-	// forwardedClientCertHeader is the header Envoy fills in with details of
-	// the mTLS peer, including the PEM chain it validated. The egress filter
-	// chain sets forward_client_cert_details: SANITIZE_SET, so whatever a
-	// client sends under this name is discarded and replaced by Envoy's own
-	// value.
-	//
-	// This is the only channel that can carry a whole certificate to ext_proc
-	// so the gateway can verify the chain, key usages, and ateom SPIFFE URI.
-	//
-	// TODO(identity): Audit that this cannot be stomped by a header sent by the
-	// actor.
-	forwardedClientCertHeader = "x-forwarded-client-cert"
-	// xfccChainKey is the x-forwarded-client-cert key holding the URL-encoded
-	// PEM of the full presented chain, leaf first.
-	xfccChainKey = "chain"
+	PeerCertificateSourceEnvoy        PeerCertificateSource = "envoy"
+	PeerCertificateSourceAgentgateway PeerCertificateSource = "agentgateway"
+
+	agentgatewayClientCertificateAttribute = extproc.AgentgatewayClientCertificateAttribute
 )
+
+// PeerCertificateSource selects the trusted dataplane-produced field that
+// carries the actor certificate to ext_proc.
+type PeerCertificateSource string
 
 // deniedBody is the body of every policy denial. The reason goes to the log,
 // not to the actor.
@@ -91,6 +83,8 @@ type Handler struct {
 	// its ate-secret:// credential URIs); a credential URI naming another
 	// provider is refused.
 	providerName string
+	// peerCertificateSource comes from router configuration, never request data.
+	peerCertificateSource PeerCertificateSource
 }
 
 // New builds the egress handler. actorIdentityRoots is the egress listener's
@@ -102,13 +96,14 @@ type Handler struct {
 // matching a rule that requires an injection is denied. providerName, when
 // set, is the provider this gateway serves; a credential URI naming another
 // provider is refused.
-func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string, peerCertificateSource PeerCertificateSource) *Handler {
 	return &Handler{
-		apiClient:          apiClient,
-		actorIdentityRoots: actorIdentityRoots,
-		policies:           newPolicyCache(apiClient, policyCacheTTL),
-		provider:           provider,
-		providerName:       providerName,
+		apiClient:             apiClient,
+		actorIdentityRoots:    actorIdentityRoots,
+		policies:              newPolicyCache(apiClient, policyCacheTTL),
+		provider:              provider,
+		providerName:          providerName,
+		peerCertificateSource: peerCertificateSource,
 	}
 }
 
@@ -150,7 +145,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress unavailable: no actor-identity CA configured")
 	}
 
-	actorRef, err := h.authenticateActorCertificate(md)
+	identity, err := h.authenticateActorCertificate(md)
 	if err != nil {
 		// The body stays generic on purpose: an actor that fails authentication
 		// has not proven it is anyone, so it gets no detail about why. The
@@ -161,11 +156,14 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: invalid actor certificate")
 	}
 
-	if err := h.validateActor(ctx, actorRef); err != nil {
+	if err := validateIdentity(identity); err != nil {
+		return extproc.Result{}, err
+	}
+	if err := h.validateActor(ctx, identity); err != nil {
 		return extproc.Result{}, err
 	}
 
-	ref := resources.ActorRef{Atespace: actorRef.Atespace, Name: actorRef.Name}
+	ref := resources.ActorRef{Atespace: identity.Atespace, Name: identity.ActorName}
 
 	// atunnel always sends the address the actor's kernel dialed, never a
 	// name. Refuse a name here, where there is still a response to do it with.
@@ -254,61 +252,90 @@ func (h *Handler) lookupPolicy(ctx context.Context, leg string, ref resources.Ac
 	return policy, nil
 }
 
-// validateActor checks the actor certified by the certificate against the control
-// plane's current view of that actor: it still exists and it is running. Every
-// error it returns is already a client-facing ext_proc denial.
-func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef) error {
-	// Confirm the certified actor still exists.
+// validateIdentity checks that the certificate identity names legal resources
+// before the values are used as control-plane lookup keys.
+func validateIdentity(identity *substratex509.ActorIdentity) error {
+	if !resources.IsValidResourceName(identity.Atespace) || !resources.IsValidResourceName(identity.ActorName) {
+		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
+			"egress denied: invalid actor identity %q/%q", identity.Atespace, identity.ActorName)
+	}
+	return nil
+}
+
+// validateActor checks the actor certified by the certificate against the
+// control plane's current view: it still exists, has the certified UID, and is
+// running. Every error it returns is already a client-facing ext_proc denial.
+func (h *Handler) validateActor(ctx context.Context, identity *substratex509.ActorIdentity) error {
+	atespace, actorName := identity.Atespace, identity.ActorName
+	// Confirm the certified actor still exists. The name is only a lookup key;
+	// the UID below is what authorizes the actor.
 	// TODO: this can cause heavy load on ate api server. Change it based on https://github.com/agent-substrate/substrate/issues/592.
 	actor, err := h.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 	})
 	if err != nil {
-		return mapEgressIdentityError(actorRef.Atespace, actorRef.Name, err)
+		return mapEgressIdentityError(atespace, actorName, err)
+	}
+	if uid := actor.GetMetadata().GetUid(); uid != identity.ActorUid {
+		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
+			"egress denied: actor %q/%q is not the actor this certificate was issued to", atespace, actorName)
 	}
 
 	// The actor performing egress must actually be running.
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
-			"egress denied: actor %q/%q is %s, not running", actorRef.Atespace, actorRef.Name, actor.GetStatus().GetState())
+			"egress denied: actor %q/%q is %s, not running", atespace, actorName, actor.GetStatus().GetState())
 	}
 	return nil
 }
 
-// authenticateActorCertificate turns the mTLS peer certificate Envoy recorded
-// on the request into a verified ActorRef, or an error describing why it
-// cannot be trusted.
-func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (resources.ActorRef, error) {
-	if certificate := md.Attribute(agentgatewayClientCertificateAttribute); certificate != "" {
-		chain, err := parseCertificateChainPEM([]byte(certificate))
-		if err != nil {
-			return resources.ActorRef{}, err
+// authenticateActorCertificate parses only the peer certificate field selected
+// by trusted router configuration. Request headers never select or supply it.
+func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (*substratex509.ActorIdentity, error) {
+	var certificate string
+	switch h.peerCertificateSource {
+	case PeerCertificateSourceEnvoy:
+		peer := md.DynamicMetadata[extproc.EgressPeerCertificateMetadataNamespace]
+		if peer == nil {
+			return nil, fmt.Errorf("request carries no trusted Envoy peer certificate metadata")
 		}
-		return h.verifyActorCertificate(chain)
+		value := peer.GetFields()[extproc.EgressPeerCertificateChainKey]
+		encoded, ok := value.GetKind().(*structpb.Value_StringValue)
+		if !ok || encoded.StringValue == "" {
+			return nil, fmt.Errorf("trusted Envoy peer certificate metadata carries no non-empty %q field", extproc.EgressPeerCertificateChainKey)
+		}
+		decoded, err := url.PathUnescape(encoded.StringValue)
+		if err != nil {
+			return nil, fmt.Errorf("decoding the client certificate chain: %w", err)
+		}
+		certificate = decoded
+	case PeerCertificateSourceAgentgateway:
+		certificate = md.Attribute(agentgatewayClientCertificateAttribute)
+		if certificate == "" {
+			return nil, fmt.Errorf("request carries no trusted agentgateway peer certificate")
+		}
+	default:
+		return nil, fmt.Errorf("egress handler has invalid peer certificate source %q", h.peerCertificateSource)
 	}
-	header := md.Header(forwardedClientCertHeader)
-	if header == "" {
-		return resources.ActorRef{}, fmt.Errorf("request carries no %s header", forwardedClientCertHeader)
-	}
-	chain, err := parseXFCCChain(header)
+	chain, err := parseCertificateChainPEM([]byte(certificate))
 	if err != nil {
-		return resources.ActorRef{}, err
+		return nil, err
 	}
 	return h.verifyActorCertificate(chain)
 }
 
 // verifyActorCertificate checks that chain[0] is a live, non-CA, client-auth
-// ateom actor certificate issued by the actor-identity CA, and returns the
-// ActorRef from its SPIFFE URI.
+// actor certificate issued by the actor-identity CA, and returns its
+// certificate-bound ActorIdentity.
 //
 // The chain is verified here even though Envoy already did it at the handshake
 // (require_client_certificate with the actor-identity CA as trusted_ca). We have
-// to parse the certificate anyway to inspect its SPIFFE URI and usages, and
+// to parse the certificate anyway to inspect its ActorIdentity and usages, and
 // trusting a parsed-but-unverified certificate is a well-worn source of CVEs.
 // It also keeps the handler safe if the Envoy config is ever loosened, and costs
 // one signature check per CONNECT rather than per request. The IsCA, ClientAuth-EKU,
-// and ateom SPIFFE URI checks below have no Envoy-side equivalent at all.
-func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.ActorRef, error) {
+// and identity-extension checks below have no Envoy-side equivalent at all.
+func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (*substratex509.ActorIdentity, error) {
 	leaf := chain[0]
 	intermediates := x509.NewCertPool()
 	for _, cert := range chain[1:] {
@@ -317,14 +344,17 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 
 	now := time.Now()
 	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate is outside its validity period (%s..%s)",
+		return nil, fmt.Errorf("actor certificate is outside its validity period (%s..%s)",
 			leaf.NotBefore.Format(time.RFC3339), leaf.NotAfter.Format(time.RFC3339))
 	}
 	// An actor certificate is an end-entity credential. Refusing IsCA here stops
 	// a leaked or mis-issued CA certificate from being replayed as a leaf: chain
 	// verification alone would happily accept one.
 	if leaf.IsCA {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate is a CA certificate")
+		return nil, fmt.Errorf("actor certificate is a CA certificate")
+	}
+	if !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
+		return nil, fmt.Errorf("actor certificate cannot authenticate a TLS client")
 	}
 
 	if _, err := leaf.Verify(x509.VerifyOptions{
@@ -333,45 +363,20 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}); err != nil {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate is not signed by the actor-identity CA: %w", err)
+		return nil, fmt.Errorf("actor certificate is not signed by the actor-identity CA: %w", err)
 	}
-
-	// Check that this is an ateom certificate --- the SPIFFE URI should be of
-	// the form `spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}`.
-	if len(leaf.URIs) != 1 {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate has %d URI SANs, want 1", len(leaf.URIs))
-	}
-	ref, err := resources.ActorRefFromAteomForActorSPIFFEURL(leaf.URIs[0])
+	identity, err := substratex509.ActorIdentityFromCertificate(leaf)
 	if err != nil {
-		return resources.ActorRef{}, fmt.Errorf("while parsing actor from SPIFFE ID: %w", err)
+		return nil, fmt.Errorf("actor certificate has no single valid ActorIdentity extension: %w", err)
 	}
-	return ref, nil
-}
-
-// parseXFCCChain extracts the presented certificate chain, leaf first, from an
-// x-forwarded-client-cert header value.
-func parseXFCCChain(header string) ([]*x509.Certificate, error) {
-	// One element per proxy hop. SANITIZE_SET makes Envoy the only writer, so
-	// anything but exactly one element means either an unexpected proxy in front
-	// of the gateway or a listener that lost SANITIZE_SET — in both cases we no
-	// longer know which element describes our actual peer, so refuse to guess.
-	elements := splitXFCCUnquoted(header, ',')
-	if len(elements) != 1 {
-		return nil, fmt.Errorf("expected exactly one %s element, got %d", forwardedClientCertHeader, len(elements))
+	if identity == nil || identity.Atespace == "" || identity.ActorName == "" || identity.ActorUid == "" {
+		return nil, fmt.Errorf("actor certificate identity is missing or incomplete")
 	}
-	encoded, ok := xfccValue(elements[0], xfccChainKey)
-	if !ok {
-		return nil, fmt.Errorf("%s carries no %q value", forwardedClientCertHeader, xfccChainKey)
+	wantURI := resources.ActorSPIFFEID(resources.ActorRef{Atespace: identity.Atespace, Name: identity.ActorName}).String()
+	if len(leaf.URIs) != 1 || leaf.URIs[0].String() != wantURI {
+		return nil, fmt.Errorf("actor certificate URI SANs %v do not match its ActorIdentity", leaf.URIs)
 	}
-	// Envoy percent-encodes the PEM. PathUnescape, not QueryUnescape: base64
-	// bodies contain '+', and query unescaping would decode it to a space and
-	// silently corrupt the DER.
-	chainPEM, err := url.PathUnescape(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("decoding the client certificate chain: %w", err)
-	}
-
-	return parseCertificateChainPEM([]byte(chainPEM))
+	return identity, nil
 }
 
 func parseCertificateChainPEM(chainPEM []byte) ([]*x509.Certificate, error) {
@@ -396,82 +401,6 @@ func parseCertificateChainPEM(chainPEM []byte) ([]*x509.Certificate, error) {
 		return nil, fmt.Errorf("client certificate value carries no certificate")
 	}
 	return chain, nil
-}
-
-// xfccValue returns the value of key in one x-forwarded-client-cert element.
-// Keys are matched case-insensitively; Envoy emits "Chain", but the header is
-// consumed by enough different proxies that assuming its casing is not worth
-// the failure mode.
-func xfccValue(element, key string) (string, bool) {
-	for _, pair := range splitXFCCUnquoted(element, ';') {
-		k, v, found := strings.Cut(pair, "=")
-		if !found || !strings.EqualFold(strings.TrimSpace(k), key) {
-			continue
-		}
-		return unquoteXFCC(strings.TrimSpace(v)), true
-	}
-	return "", false
-}
-
-// splitXFCCUnquoted splits on sep, ignoring separators inside a quoted value.
-// x-forwarded-client-cert quotes any value containing its own delimiters, which
-// the PEM ones always do.
-func splitXFCCUnquoted(s string, sep rune) []string {
-	var parts []string
-	var current strings.Builder
-	quoted := false
-	escaped := false
-	for _, r := range s {
-		switch {
-		case escaped:
-			current.WriteRune(r)
-			escaped = false
-		case quoted && r == '\\':
-			current.WriteRune(r)
-			escaped = true
-		case r == '"':
-			quoted = !quoted
-			current.WriteRune(r)
-		case r == sep && !quoted:
-			parts = append(parts, current.String())
-			current.Reset()
-		default:
-			current.WriteRune(r)
-		}
-	}
-	parts = append(parts, current.String())
-
-	trimmed := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part = strings.TrimSpace(part); part != "" {
-			trimmed = append(trimmed, part)
-		}
-	}
-	return trimmed
-}
-
-// unquoteXFCC strips the surrounding quotes from an x-forwarded-client-cert
-// value and undoes the backslash escaping inside them.
-func unquoteXFCC(value string) string {
-	if len(value) < 2 || !strings.HasPrefix(value, `"`) || !strings.HasSuffix(value, `"`) {
-		return value
-	}
-	inner := value[1 : len(value)-1]
-	var out strings.Builder
-	escaped := false
-	for _, r := range inner {
-		if escaped {
-			out.WriteRune(r)
-			escaped = false
-			continue
-		}
-		if r == '\\' {
-			escaped = true
-			continue
-		}
-		out.WriteRune(r)
-	}
-	return out.String()
 }
 
 // mapEgressIdentityError converts a GetActor failure into a client-facing

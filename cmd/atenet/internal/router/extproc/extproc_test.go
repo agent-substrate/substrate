@@ -16,24 +16,64 @@ package extproc
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // stubHandler records that it ran and returns an empty successful Result.
 type stubHandler struct {
 	direction Direction
 	called    bool
+	metadata  *RequestMetadata
 }
 
 func (h *stubHandler) Direction() Direction { return h.direction }
 
-func (h *stubHandler) HandleRequestHeaders(context.Context, *RequestMetadata) (Result, error) {
+func (h *stubHandler) HandleRequestHeaders(_ context.Context, md *RequestMetadata) (Result, error) {
 	h.called = true
+	h.metadata = md
 	return Result{Response: &extprocv3.HeadersResponse{Response: &extprocv3.CommonResponse{}}}, nil
+}
+
+func TestProcessRequestHeadersForwardsDynamicMetadata(t *testing.T) {
+	h := &stubHandler{direction: DirectionEgress}
+	s := NewServer(50051, nil, Handlers{DirectionEgress: h})
+	req := connectRequest("envoy.filters.http.ext_proc", EgressFilterChainName)
+	req.MetadataContext = &corev3.Metadata{FilterMetadata: map[string]*structpb.Struct{
+		"dev.ate.egress.peer_certificate": {Fields: map[string]*structpb.Value{
+			"chain": structpb.NewStringValue("encoded-peer-chain"),
+		}},
+	}}
+	attrs := req.Attributes
+	s.processRequestHeaders(context.Background(), req, req.GetRequestHeaders())
+	if h.metadata.DynamicMetadata["dev.ate.egress.peer_certificate"] != req.MetadataContext.FilterMetadata["dev.ate.egress.peer_certificate"] {
+		t.Fatal("dynamic metadata was copied instead of forwarded")
+	}
+	if !reflect.DeepEqual(h.metadata.Attributes, attrs) {
+		t.Fatalf("attributes changed: got %#v want %#v", h.metadata.Attributes, attrs)
+	}
+	if _, ok := h.metadata.Headers["x-forwarded-client-cert"]; ok {
+		t.Fatal("certificate header was copied into request metadata")
+	}
+	if got := h.metadata.DynamicMetadata["dev.ate.egress.peer_certificate"].GetFields()["chain"].GetStringValue(); got != "encoded-peer-chain" {
+		t.Errorf("chain metadata = %q, want encoded-peer-chain", got)
+	}
+	if got := h.metadata.Attribute(FilterChainNameAttribute); got != EgressFilterChainName {
+		t.Fatalf("filter chain attribute = %q, want %q", got, EgressFilterChainName)
+	}
+	h = &stubHandler{direction: DirectionEgress}
+	req = connectRequest("envoy.filters.http.ext_proc", EgressFilterChainName)
+	s = NewServer(50051, nil, Handlers{DirectionEgress: h})
+	s.processRequestHeaders(context.Background(), req, req.GetRequestHeaders())
+	if h.metadata.DynamicMetadata != nil {
+		t.Fatalf("nil metadata context became %#v", h.metadata.DynamicMetadata)
+	}
 }
 
 // The mux must pick the handler by the Envoy-asserted filter chain, and refuse

@@ -68,6 +68,12 @@ spec:
     volumeMounts:
     - name: "actor-identity-unknown"
       mountPath: "/run/actor-identity-unknown"
+    - name: "actor-identity-live"
+      mountPath: "/run/actor-identity-live"
+    - name: "actor-identity-live-chain"
+      mountPath: "/run/actor-identity-live-chain"
+    - name: "actor-identity-wrong-uid"
+      mountPath: "/run/actor-identity-wrong-uid"
     - name: "podidentity"
       mountPath: "/run/podidentity.podcert.ate.dev"
     - name: "servicedns-ca"
@@ -76,6 +82,18 @@ spec:
   - name: "actor-identity-unknown"
     secret:
       secretName: egressprobe-unknown-actor
+  - name: "actor-identity-live"
+    secret:
+      secretName: egressprobe-live-actor
+      optional: true
+  - name: "actor-identity-live-chain"
+    secret:
+      secretName: egressprobe-live-actor-chain
+      optional: true
+  - name: "actor-identity-wrong-uid"
+    secret:
+      secretName: egressprobe-wrong-uid
+      optional: true
   - name: "podidentity"
     projected:
       sources:

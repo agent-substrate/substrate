@@ -22,8 +22,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"net/url"
-	"path"
 	"testing"
 	"time"
 
@@ -32,6 +32,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 )
 
 // The gateway's front door requires a client certificate signed by the
@@ -89,7 +91,7 @@ func actorIdentityCA(t *testing.T, ctx context.Context) *localca.CA {
 
 // mintActorCredential issues a client credential for an actor, in the shape
 // atunnel gets from ateapi.
-func mintActorCredential(t *testing.T, ca *localca.CA, atespace, actorName string) []byte {
+func mintActorCredential(t *testing.T, ca *localca.CA, identity *substratex509.ActorIdentity) []byte {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -97,12 +99,9 @@ func mintActorCredential(t *testing.T, ca *localca.CA, atespace, actorName strin
 		t.Fatalf("generating actor key: %v", err)
 	}
 
+	ref := resources.ActorRef{Atespace: identity.Atespace, Name: identity.ActorName}
 	template := &x509.Certificate{
-		URIs: []*url.URL{{
-			Scheme: "spiffe",
-			Host:   "substrate-actor.local",
-			Path:   path.Join("ateom-for-actor", atespace, actorName),
-		}},
+		URIs:                  []*url.URL{resources.ActorSPIFFEID(ref)},
 		NotBefore:             time.Now().Add(-5 * time.Minute),
 		NotAfter:              time.Now().Add(actorCertificateLifetime),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -111,10 +110,13 @@ func mintActorCredential(t *testing.T, ca *localca.CA, atespace, actorName strin
 		IsCA:                  false,
 		Issuer:                pkix.Name{CommonName: "api.ate-system.svc.cluster.local"},
 	}
+	if err := substratex509.AddActorIdentityToCertificate(identity, template); err != nil {
+		t.Fatalf("adding actor identity extension: %v", err)
+	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, ca.RootCertificate, key.Public(), ca.SigningKey)
 	if err != nil {
-		t.Fatalf("signing the actor certificate for %s/%s: %v", atespace, actorName, err)
+		t.Fatalf("signing the actor certificate for %s/%s: %v", identity.Atespace, identity.ActorName, err)
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
@@ -125,6 +127,28 @@ func mintActorCredential(t *testing.T, ca *localca.CA, atespace, actorName strin
 	// first, then the chain leaf-first.
 	bundle := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	return bundle
+}
+
+// mintActorCredentialWithIntermediate proves the probe sends a complete chain;
+// the gateway trusts only the actor root, so omitting this intermediate must fail.
+func mintActorCredentialWithIntermediate(t *testing.T, ca *localca.CA, identity *substratex509.ActorIdentity) []byte {
+	t.Helper()
+	intermediateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediateTemplate := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "test actor intermediate"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(actorCertificateLifetime), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	intermediateDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate, ca.RootCertificate, &intermediateKey.PublicKey, ca.SigningKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate, err := x509.ParseCertificate(intermediateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := mintActorCredential(t, &localca.CA{RootCertificate: intermediate, SigningKey: intermediateKey}, identity)
+	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediateDER})...)
 	return bundle
 }
 
@@ -148,5 +172,7 @@ func provisionProbeCredentials(t *testing.T, ctx context.Context, ns string) {
 
 	// The name is scoped to the probe's namespace so a stray record cannot
 	// collide with anything.
-	writeCredentialSecret(t, ctx, ns, unknownActorCredentialSecret, mintActorCredential(t, actorIdentityCA(t, ctx), probeAtespace, "no-such-actor-"+ns))
+	writeCredentialSecret(t, ctx, ns, unknownActorCredentialSecret, mintActorCredential(t, actorIdentityCA(t, ctx), &substratex509.ActorIdentity{
+		Atespace: probeAtespace, ActorName: "no-such-actor-" + ns, ActorUid: "00000000-0000-0000-0000-000000000000",
+	}))
 }

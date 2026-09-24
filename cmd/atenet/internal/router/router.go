@@ -246,7 +246,11 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				slog.String("provider_name", s.cfg.CredentialProvider.Name))
 		}
 
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
+		peerCertificateSource := egress.PeerCertificateSourceEnvoy
+		if s.cfg.atenetRouter() == atenetRouterAgentgateway {
+			peerCertificateSource = egress.PeerCertificateSourceAgentgateway
+		}
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName, peerCertificateSource)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 
