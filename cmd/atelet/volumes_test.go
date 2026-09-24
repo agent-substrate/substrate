@@ -44,14 +44,14 @@ type fakeWorkerPlugin struct {
 	mountCalls  []mountCall
 }
 
-func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, attributes map[string]string) error {
+func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
 	f.mountCalls = append(f.mountCalls, mountCall{
-		volumeID:   volumeID,
-		targetPath: targetPath,
-		attributes: attributes,
+		volumeID:   req.VolumeID,
+		targetPath: req.TargetPath,
+		attributes: req.VolumeContext,
 	})
 	if f.mountErrs != nil {
-		if err, ok := f.mountErrs[volumeID]; ok {
+		if err, ok := f.mountErrs[req.VolumeID]; ok {
 			return err
 		}
 	}

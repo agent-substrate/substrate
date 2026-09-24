@@ -62,10 +62,10 @@ func (p *MockVolumePlugin) DriverName(ctx context.Context) (string, error) {
 }
 
 // CreateVolume simulates volume provisioning.
-func (p *MockVolumePlugin) CreateVolume(ctx context.Context, name string, capacity string, storageClass string, parameters map[string]string) (string, map[string]string, error) {
-	volumeID := "mock-vol-" + name
-	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", name), slog.String("capacity", capacity), slog.String("storageClass", storageClass), slog.String("volumeID", volumeID))
-	return volumeID, parameters, nil
+func (p *MockVolumePlugin) CreateVolume(ctx context.Context, req CreateVolumeRequest) (CreateVolumeResponse, error) {
+	volumeID := "mock-vol-" + req.Name
+	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", req.Name), slog.String("capacity", req.Capacity), slog.String("volumeID", volumeID))
+	return CreateVolumeResponse{VolumeID: volumeID, VolumeContext: req.Parameters}, nil
 }
 
 // DeleteVolume simulates volume deletion.
@@ -74,10 +74,11 @@ func (p *MockVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) er
 	return nil
 }
 
-// AttachVolume simulates volume attachment to a node.
-func (p *MockVolumePlugin) AttachVolume(ctx context.Context, volumeID string, node string) error {
-	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", volumeID), slog.String("node", node))
-	return nil
+// AttachVolume simulates volume attachment to a node. The mock driver needs no
+// attachment metadata, so the response carries no publish context.
+func (p *MockVolumePlugin) AttachVolume(ctx context.Context, req AttachVolumeRequest) (AttachVolumeResponse, error) {
+	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", req.VolumeID), slog.String("node", req.Node))
+	return AttachVolumeResponse{}, nil
 }
 
 // DetachVolume simulates volume detachment from a node.
@@ -87,25 +88,25 @@ func (p *MockVolumePlugin) DetachVolume(ctx context.Context, volumeID string, no
 }
 
 // MountVolume simulates mounting volume on the host.
-func (p *MockVolumePlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error {
-	slog.InfoContext(ctx, "MockVolumePlugin.MountVolume", slog.String("volumeID", volumeID), slog.String("targetPath", targetPath))
+func (p *MockVolumePlugin) MountVolume(ctx context.Context, req MountVolumeRequest) error {
+	slog.InfoContext(ctx, "MockVolumePlugin.MountVolume", slog.String("volumeID", req.VolumeID), slog.String("targetPath", req.TargetPath))
 
-	volumeDir := filepath.Join(mockVolumeDirectories, volumeID)
+	volumeDir := filepath.Join(mockVolumeDirectories, req.VolumeID)
 	if err := os.MkdirAll(volumeDir, 0755); err != nil {
-		slog.ErrorContext(ctx, "MockVolumePlugin.MountVolume failed: mkdir error", slog.String("volumeID", volumeID), slog.Any("error", err))
+		slog.ErrorContext(ctx, "MockVolumePlugin.MountVolume failed: mkdir error", slog.String("volumeID", req.VolumeID), slog.Any("error", err))
 		return fmt.Errorf("failed to create mock volume directory %q: %w", volumeDir, err)
 	}
 
 	testFilePath := filepath.Join(volumeDir, "test.txt")
 	if err := os.WriteFile(testFilePath, []byte("test content\n"), 0644); err != nil {
-		slog.ErrorContext(ctx, "MockVolumePlugin.MountVolume failed: create test file error", slog.String("volumeID", volumeID), slog.Any("error", err))
+		slog.ErrorContext(ctx, "MockVolumePlugin.MountVolume failed: create test file error", slog.String("volumeID", req.VolumeID), slog.Any("error", err))
 		return fmt.Errorf("failed to create test file in %q: %w", volumeDir, err)
 	}
 
 	// Use symlink instead of bind mount to avoid atelet requiring bidirectional mount propagation.
-	_ = os.Remove(targetPath)
-	if err := os.Symlink(volumeDir, targetPath); err != nil {
-		return fmt.Errorf("failed to symlink %q to %q: %w", volumeDir, targetPath, err)
+	_ = os.Remove(req.TargetPath)
+	if err := os.Symlink(volumeDir, req.TargetPath); err != nil {
+		return fmt.Errorf("failed to symlink %q to %q: %w", volumeDir, req.TargetPath, err)
 	}
 	return nil
 }

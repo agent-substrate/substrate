@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -114,17 +115,21 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, status.Errorf(codes.FailedPrecondition, "failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
 		}
 
-		storageVolumeID, volCtx, volErr := plugin.CreateVolume(ctx, actVolID, specVol.GetExternalVolumeTemplate().GetCapacity(), sc.Provisioner, sc.Parameters)
+		resp, volErr := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
+			Name:       actVolID,
+			Capacity:   specVol.GetExternalVolumeTemplate().GetCapacity(),
+			Parameters: sc.Parameters,
+		})
 		if volErr != nil {
 			return resultVolumes, status.Errorf(codes.Internal, "failed to create volume %q: %v", specVol.GetName(), volErr)
 		}
 
 		resultVolumes = append(resultVolumes, &ateapipb.ExternalVolume{
 			VolumeName:      volName,
-			StorageVolumeId: storageVolumeID,
+			StorageVolumeId: resp.VolumeID,
 			VolumeType:      sc.Provisioner,
 			Status:          ateapipb.ExternalVolume_STATUS_CREATED,
-			VolumeContext:   volCtx,
+			VolumeContext:   resp.VolumeContext,
 		})
 	}
 	return resultVolumes, nil
