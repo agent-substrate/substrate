@@ -16,13 +16,13 @@ package resources
 
 import "testing"
 
-func TestActorSPIFFEIDRoundTrip(t *testing.T) {
+func TestAteomForActorSPIFFEIDRoundTrip(t *testing.T) {
 	ref := ActorRef{Atespace: "team-a", Name: "agent-7"}
-	id := ActorSPIFFEID(ref)
-	if want := "spiffe://substrate-actor.local/atespace/team-a/actor/agent-7"; id.String() != want {
+	id := AteomForActorSPIFFEID(ref)
+	if want := "spiffe://substrate-actor.local/ateom-for-actor/team-a/agent-7"; id.String() != want {
 		t.Fatalf("ActorSPIFFEID(%v) = %q, want %q", ref, id, want)
 	}
-	got, err := ActorRefFromSPIFFEID(id.String())
+	got, err := ActorRefFromAteomForActorSPIFFEID(id.String())
 	if err != nil {
 		t.Fatalf("ActorRefFromSPIFFEID(%q): %v", id, err)
 	}
@@ -50,7 +50,7 @@ func TestActorRefFromSPIFFEIDRejects(t *testing.T) {
 		"spiffe://substrate-actor.local/atespace/team/actor/agent/",
 		"spiffe://substrate-actor.local/atespace/te%2Fam/actor/agent",
 	} {
-		if ref, err := ActorRefFromSPIFFEID(id); err == nil {
+		if ref, err := ActorRefFromAteomForActorSPIFFEID(id); err == nil {
 			t.Errorf("ActorRefFromSPIFFEID(%q) = %v, want error", id, ref)
 		}
 	}
