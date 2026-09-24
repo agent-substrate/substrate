@@ -418,6 +418,19 @@ message EgressPolicy {
   repeated EgressRule rules = 2;
 }
 
+// EgressPolicyTemplate is the caller-owned part of an EgressPolicy: the
+// rules, without resource metadata. It appears on an ActorTemplate.
+message EgressPolicyTemplate {
+  // Rules are copied verbatim onto the created Actor's EgressPolicy and
+  // carry the same semantics: evaluated in order, first match wins, deny
+  // when no rule matches.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=256
+  // +k8s:listType=atomic # rule order matters
+  repeated EgressRule rules = 1;
+}
+
 // EgressRule authorizes a request using exactly one destination matcher.
 message EgressRule {
   // Matches when the request hostname matches any configured pattern. Effects
@@ -788,6 +801,17 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 8;
+
+  // default_egress_policy is copied onto every Actor created from this
+  // template as the Actor's "default" EgressPolicy, in the same transaction
+  // as the Actor itself. That includes the golden Actor the template
+  // reconciler creates, which no client can create a policy for before it
+  // boots. An Actor created from a template without it has no policy and
+  // is denied all egress until a policy is created. The copy is a snapshot:
+  // a later change to this field does not touch existing Actors.
+  //
+  // +k8s:optional
+  EgressPolicyTemplate default_egress_policy = 9;
 }
 
 message Resources {

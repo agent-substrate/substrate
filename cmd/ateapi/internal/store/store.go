@@ -72,6 +72,11 @@ type Interface interface {
 	// ErrFailedPrecondition if the actor's atespace does not exist.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
+	// CreateActorWithEgressPolicy is CreateActor plus the actor's "default"
+	// egress policy, written in the same transaction: either both exist
+	// afterwards or neither does. Returns the same errors as CreateActor.
+	CreateActorWithEgressPolicy(ctx context.Context, actor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error)
+
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 

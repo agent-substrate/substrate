@@ -218,6 +218,56 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	t.Helper()
 
+	t.Run("CreateActorWithEgressPolicy", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actor := &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "session-1"},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		}
+		policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
+			Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
+		}}}
+
+		created, err := s.CreateActorWithEgressPolicy(ctx, actor, policy)
+		if err != nil {
+			t.Fatalf("CreateActorWithEgressPolicy failed: %v", err)
+		}
+		actorRef := resources.ActorRefFromActor(created)
+		if created.GetMetadata().GetUid() == "" || created.GetMetadata().GetVersion() != 1 {
+			t.Fatalf("created actor metadata = %v", created.GetMetadata())
+		}
+		got, err := s.GetEgressPolicy(ctx, actorRef)
+		if err != nil {
+			t.Fatalf("GetEgressPolicy failed: %v", err)
+		}
+		if md := got.GetMetadata(); md.GetName() != "default" || md.GetAtespace() != testAtespace || md.GetUid() == "" || md.GetVersion() != 1 {
+			t.Fatalf("policy metadata = %v", md)
+		}
+		if diff := cmp.Diff(policy.GetRules(), got.GetRules(), protocmp.Transform()); diff != "" {
+			t.Fatalf("policy rules differ (-want +got):\n%s", diff)
+		}
+		if _, err := s.CreateActorWithEgressPolicy(ctx, actor, policy); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("duplicate create error = %v, want ErrAlreadyExists", err)
+		}
+
+		// A failed write leaves neither row behind.
+		missing := &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "no-such-atespace", Name: "session-2"},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		}
+		if _, err := s.CreateActorWithEgressPolicy(ctx, missing, policy); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("create in missing atespace error = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.GetActor(ctx, resources.ActorRefFromActor(missing)); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetActor after failed create = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetEgressPolicy(ctx, resources.ActorRefFromActor(missing)); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetEgressPolicy after failed create = %v, want ErrNotFound", err)
+		}
+	})
+
 	t.Run("EgressPolicy_Lifecycle", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
