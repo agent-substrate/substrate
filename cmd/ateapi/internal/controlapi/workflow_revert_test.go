@@ -96,7 +96,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			// The snapshot revert must preserve, plus the node-local state a
 			// pause left behind, which it must not. Revert drops the pointer;
 			// pruning the bytes it names is still a TODO (#641).
-			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
+			const keptURI = "gs://snapshots/atespaces/team-a/actors/keep/snapshots/snapshot"
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: keptURI}
 				s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "local-1"}
@@ -277,7 +277,7 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			// so its snapshots can only be placed now.
 			current := mustActorSnapshotURI(t, template, actor, "current")
 			if tt.tagOwnedSnapshot {
-				current = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+				current = mustSeedReadyTag(t, ctx, persistence, template, "team-a", "v1")
 			}
 			objects.PutSnapshot(t, current, "manifest.json")
 			inFlight := mustActorSnapshotURI(t, template, actor, inFlightSnapshotName)

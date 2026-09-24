@@ -468,7 +468,8 @@ Snapshots may be given tags owned and addressed by an Atespace. The same tag
 name may exist in different Atespaces. A tag is an immutable alias and retention pin:
 it holds its own copy of the external snapshot, made at creation, so it outlives the 
 Actor that took it, and publishing it permits reuse from other Atespaces without changing its
-`atespace/name` address. Deleting a tag deletes that copy; an Atespace with
+`atespace/name` address. Deleting a tag deletes that copy, so it is refused
+while an Actor created from the tag is still borrowing it; an Atespace with
 tags cannot be deleted until they are.
 
 ### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)

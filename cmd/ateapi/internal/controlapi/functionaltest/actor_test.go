@@ -71,7 +71,7 @@ func TestCreateActor_Success(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 	}
@@ -385,6 +385,7 @@ func TestCreateActor_PendingTag(t *testing.T) {
 				SnapshotUri:  snapshotURI.String(),
 				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			}
+			toUpdate.Status.State = ateapipb.TagState_TAG_STATE_READY
 			return nil
 		}); err != nil {
 		t.Fatalf("finalizing the tag: %v", err)
@@ -403,6 +404,93 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	// tag still owns those objects.
 	if got := clone.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI.String() {
 		t.Errorf("clone external snapshot = %q, want the tag's %q", got, snapshotURI)
+	}
+}
+
+// TestCreateActor_SourceTagNotReady verifies an Actor is seeded only from a
+// READY tag, whether the tag is named explicitly or is the template's golden
+// tag. A refused create records no borrow, so the tag can still be deleted.
+func TestCreateActor_SourceTagNotReady(t *testing.T) {
+	tests := []struct {
+		name    string
+		golden  bool
+		state   ateapipb.TagState
+		wantMsg string
+	}{
+		{
+			name:    "explicit-creating",
+			state:   ateapipb.TagState_TAG_STATE_CREATING,
+			wantMsg: "source Tag is still being created or failed creation",
+		},
+		{
+			name:    "explicit-deleting",
+			state:   ateapipb.TagState_TAG_STATE_DELETING,
+			wantMsg: "source Tag is being deleted",
+		},
+		{
+			name:    "golden-creating",
+			golden:  true,
+			state:   ateapipb.TagState_TAG_STATE_CREATING,
+			wantMsg: "source Tag is still being created or failed creation",
+		},
+		{
+			name:    "golden-deleting",
+			golden:  true,
+			state:   ateapipb.TagState_TAG_STATE_DELETING,
+			wantMsg: "source Tag is being deleted",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-source-tag-" + tt.name)
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+			ctx := context.Background()
+			tmpl := createTemplate(t, tc, ns)
+
+			actor := &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
+				ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+			}
+			var tag *ateapipb.Tag
+			if tt.golden {
+				golden, err := tc.persistence.GetTag(ctx, resources.TagRefFromObjectRef(tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()))
+				if err != nil {
+					t.Fatalf("GetTag(golden): %v", err)
+				}
+				tag = golden
+			} else {
+				tag = seedTag(t, tc, "source", "source-tag", func(tag *ateapipb.Tag) {
+					tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
+					if tt.state == ateapipb.TagState_TAG_STATE_CREATING {
+						// A tag still being created has no snapshot yet.
+						tag.Status.Snapshot = nil
+						tag.Status.State = ateapipb.TagState_TAG_STATE_CREATING
+					}
+				})
+				actor.SourceTag = resources.TagRefFromTag(tag).ToObjectRef()
+			}
+			if tag.GetStatus().GetState() != tt.state {
+				var err error
+				tag, err = tc.persistence.UpdateTag(ctx, resources.TagRefFromTag(tag), store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+					toUpdate.Status.State = tt.state
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("moving tag to %v: %v", tt.state, err)
+				}
+			}
+
+			_, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: actor})
+			assertGrpcError(t, err, codes.FailedPrecondition, tt.wantMsg)
+			if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "clone"}}); status.Code(err) != codes.NotFound {
+				t.Errorf("GetActor(clone) after the refusal = %v, want NotFound", err)
+			}
+			// DeleteTag is refused while any Actor borrows the tag's snapshot.
+			if _, err := tc.client.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: resources.TagRefFromTag(tag).ToObjectRef()}); err != nil {
+				t.Errorf("DeleteTag after the refusal: %v", err)
+			}
+		})
 	}
 }
 
@@ -692,7 +780,7 @@ func TestUpdateActor_Success(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -838,7 +926,7 @@ func TestUpdateActor(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -1808,7 +1896,7 @@ func TestResumeActor(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
 				WorkerNamespace: ns,
@@ -2205,6 +2293,7 @@ func TestSuspendActor(t *testing.T) {
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		Status: &ateapipb.TagStatus{
+			State:            ateapipb.TagState_TAG_STATE_READY,
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			StorageLocation:  tmpl.GetSnapshotConfig().GetStorageLocation(),
@@ -2336,6 +2425,16 @@ func TestSuspendActor(t *testing.T) {
 	// The Actor took only what it owned with it.
 	assertSnapshotCollected(t, tc, snapshotURI)
 	assertSnapshotPresent(t, tc, tagSnapshotURI)
+
+	// The cross-atespace clone never suspended, so the tag's snapshot is still
+	// its starting state. A borrow holds the tag back from whichever atespace it
+	// was taken out in.
+	if _, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteTag while other/cross-atespace borrows it = %v, want FailedPrecondition", err)
+	}
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "other", Name: "cross-atespace"}}); err != nil {
+		t.Fatalf("DeleteActor(other/cross-atespace) failed: %v", err)
+	}
 
 	if deleted, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef}); err != nil || deleted.GetMetadata().GetName() != tagRef.GetName() {
 		t.Fatalf("DeleteTag = (%v, %v)", deleted, err)
@@ -2608,7 +2707,7 @@ func TestPauseActor(t *testing.T) {
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			},
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t, tc, tmpl), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 	}
 

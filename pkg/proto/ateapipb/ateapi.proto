@@ -91,9 +91,9 @@ service Control {
   // Publish or unpublish a Tag without changing its address.
   rpc UpdateTag(UpdateTagRequest) returns (Tag) {}
 
-  // Delete a Tag and the external snapshot it owns. Actors created from the
-  // tag that have not yet been suspended still point at that external snapshot
-  // and become unrecoverable, so do not delete a tag while such Actors exist.
+  // Delete a Tag and the external snapshot it owns. Rejects
+  // (FailedPrecondition) while an Actor created from the tag is still
+  // borrowing that snapshot, which it does until its own first suspend.
   rpc DeleteTag(DeleteTagRequest) returns (Tag) {}
 
   // List Workers.
@@ -648,10 +648,31 @@ message WorkerAssignment {
   string node_name = 7;
 }
 
+// TagState is where a Tag is in its lifecycle.
+enum TagState {
+  TAG_STATE_UNSPECIFIED = 0;
+  // The tag's name is taken and its snapshot is being copied. A tag whose
+  // create died stays here until it is deleted.
+  TAG_STATE_CREATING = 1;
+  // The snapshot is complete. Actors can only be created from a READY tag.
+  TAG_STATE_READY = 2;
+  // The snapshot is being collected. Terminal: no Actor can be created from
+  // the tag again, and the tag is removed once its snapshot is gone.
+  TAG_STATE_DELETING = 3;
+  // Keep this in sync with TagStatus.state's maximum.
+}
+
 // TagStatus is the server-owned state of a Tag.
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
 message TagStatus {
+  // state is the Tag's current lifecycle state.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the TagState enum
+  TagState state = 5;
+
   // snapshot is the external snapshot this tag points at. Unset while the tag
   // is still being created, and immutable once set: a tag never moves between
   // snapshots. A tag is usable only once this is set.

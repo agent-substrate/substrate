@@ -1032,6 +1032,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 					SourceActor: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
 					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 					Status: &ateapipb.TagStatus{
+						State:            ateapipb.TagState_TAG_STATE_READY,
 						ActorTemplateUid: stored.GetMetadata().GetUid(),
 						Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tt.goldenURI, ContentScope: tt.goldenScope},
 					},
@@ -1396,12 +1397,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{run: true},
 		},
 		{
-			name:  "06 inherited golden snapshot rejects a malformed URI",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}, tmplUID: "current"},
-			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
-			want:  restoreWant{code: codes.DataLoss},
-		},
-		{
 			name:  "07 template repoint with a late golden still cold-boots",
 			actor: actorSeed{tmplUID: "old-template-uid"},
 			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}},
@@ -1535,11 +1530,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotURI:    actorURI,
 				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 			},
-		},
-		{
-			name:  "18 malformed durable snapshot URI fails with DataLoss",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
-			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
 			name: "19 Full pause snapshot restores locally as Full",
@@ -1743,7 +1733,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					Metadata:    &ateapipb.ResourceMetadata{Atespace: "ns", Name: "golden"},
 					SourceActor: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
 					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-					Status:      &ateapipb.TagStatus{ActorTemplateUid: createdTmpl.GetMetadata().GetUid(), Snapshot: tt.tmpl.golden},
+					Status:      &ateapipb.TagStatus{State: ateapipb.TagState_TAG_STATE_READY, ActorTemplateUid: createdTmpl.GetMetadata().GetUid(), Snapshot: tt.tmpl.golden},
 				}); err != nil {
 					t.Fatalf("create golden tag: %v", err)
 				}

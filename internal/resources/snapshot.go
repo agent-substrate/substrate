@@ -80,6 +80,16 @@ func TagSnapshotOwner(atespace, tagUID string) SnapshotOwner {
 // IsZero reports whether o is the zero SnapshotOwner.
 func (o SnapshotOwner) IsZero() bool { return o == SnapshotOwner{} }
 
+// TagUID returns the UID of the Tag that owns the snapshot, and whether a Tag
+// owns it at all. An Actor holding a tag-owned snapshot is borrowing it, and
+// the Tag may not be deleted out from under it.
+func (o SnapshotOwner) TagUID() (string, bool) {
+	if o.kind != tagsOwnerKind {
+		return "", false
+	}
+	return o.id, true
+}
+
 // Atespace returns the atespace the owner belongs to.
 func (o SnapshotOwner) Atespace() string { return o.atespace }
 
