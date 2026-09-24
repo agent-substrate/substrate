@@ -251,3 +251,123 @@ func TestLocalSnapshotGC(t *testing.T) {
 		t.Errorf("reading actor dir %s: %v", actorDir, err)
 	}
 }
+
+// TestRestoreUsesRequestSandboxAssets checks that Restore runs the actor with
+// the sandbox assets on the request, not the ones recorded in the snapshot
+// manifest.
+func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "actor-uid-1"
+		ateomUID     = "ateom-uid-1"
+		snapshotName = "pause-snap-1"
+	)
+
+	ateom := &fakeAteom{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
+	serveFakeAteom(t, ateom)
+
+	host := imageVolumeTestRegistry(t)
+	image := host + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	checkpointPause := host + "/pause:v1"
+	pushTestImage(t, checkpointPause, singleFileLayer(t, "pause", "pause-v1"))
+	restorePause := host + "/pause:v2"
+	pushTestImage(t, restorePause, singleFileLayer(t, "pause", "pause-v2"))
+
+	runsc := []byte("runsc binary")
+	s := &AteomHerder{
+		ateomDialer:       newAteomDialer(1),
+		imageCache:        newImageVolumeStore(t),
+		anonGCSClient:     fakeObjectStorage{data: runsc},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+	}
+	assetsWithPause := func(pause string) *ateletpb.SandboxAssets {
+		return &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   pause,
+			Assets: map[string]*ateletpb.ArchAssets{
+				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+					runscAssetName: {
+						Url:    "gs://test-bucket/runsc",
+						Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+					},
+				}},
+			},
+		}
+	}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+
+	if _, err := s.Run(ctx, &ateletpb.RunRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		SandboxAssets:         assetsWithPause(checkpointPause),
+		Spec:                  spec,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		Spec:                  spec,
+		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Config: &ateletpb.CheckpointRequest_LocalConfig{
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		},
+	}); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(ateompath.LocalSnapshotDir(actorUID, snapshotName), sandboxManifestName))
+	if err != nil {
+		t.Fatalf("reading snapshot manifest: %v", err)
+	}
+	manifestRec, err := unmarshalSandboxRecord(manifest)
+	if err != nil {
+		t.Fatalf("unmarshalling snapshot manifest: %v", err)
+	}
+	if manifestRec.PauseImage != checkpointPause {
+		t.Fatalf("manifest pause image = %q, want %q", manifestRec.PauseImage, checkpointPause)
+	}
+
+	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		SandboxAssets:         assetsWithPause(restorePause),
+		Spec:                  spec,
+		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Config: &ateletpb.RestoreRequest_LocalConfig{
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		},
+	}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	got, err := readSandboxRecord(actorUID)
+	if err != nil {
+		t.Fatalf("reading on-node sandbox record: %v", err)
+	}
+	if got.PauseImage != restorePause {
+		t.Errorf("restored actor pause image = %q, want the request's %q", got.PauseImage, restorePause)
+	}
+}
