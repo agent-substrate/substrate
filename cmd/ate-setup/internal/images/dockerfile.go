@@ -25,18 +25,28 @@ import (
 	"time"
 )
 
+// dockerfilePlatforms is the buildx --platform value: the install's
+// KO_DEFAULTPLATFORMS, so the image lands on the same nodes as the ko images,
+// or linux/amd64 when unset.
+func dockerfilePlatforms(koDefaultPlatforms string) string {
+	if koDefaultPlatforms == "" {
+		return "linux/amd64"
+	}
+	return koDefaultPlatforms
+}
+
 // BuildDockerfileImage builds a Dockerfile-based image from contextPath, pushes
 // it to dockerRepo/<imageName>, and returns the digest-pinned reference.
 //
 // The image is tagged with the build time only to give buildx a stable name to
 // push to; the returned reference always uses the digest, so a stale tag can
 // never be resolved by accident.
-func BuildDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName, contextPath string) (string, error) {
+func BuildDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName, contextPath, koDefaultPlatforms string) (string, error) {
 	repo := strings.TrimSuffix(dockerRepo, "/") + "/" + imageName
 	stageTag := fmt.Sprintf("%s:build-%d", repo, time.Now().Unix())
 
 	build := exec.CommandContext(ctx, "docker", "buildx", "build",
-		"--platform=linux/amd64",
+		"--platform="+dockerfilePlatforms(koDefaultPlatforms),
 		"--push",
 		"-t", stageTag,
 		contextPath,

@@ -98,7 +98,7 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 		return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress")
 	}
 
-	imageReference, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, e.Cfg.Path(envoyDataplaneDockefile))
+	imageReference, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, e.Cfg.Path(envoyDataplaneDockefile), e.Cfg.KODefaultPlatforms)
 	if err != nil {
 		return nil, err
 	}
