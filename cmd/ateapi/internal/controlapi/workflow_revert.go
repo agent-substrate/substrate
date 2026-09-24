@@ -185,7 +185,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 				// can revert again — that retry needs no live worker.
 				slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 					append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", terr))...)
-				if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationRevert); cerr != nil {
+				if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationRevert, ateletCrashMessage("Terminate", terr)); cerr != nil {
 					return cerr
 				}
 				return fmt.Errorf("actor %s crashed: %w", actorRef, terr)
@@ -256,6 +256,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.InProgressSnapshotUri = ""
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		toUpdate.Status.LocalSnapshot = nil
+		toUpdate.Status.Crash = nil
 		return nil
 	})
 	if err != nil {

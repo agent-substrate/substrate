@@ -350,7 +350,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
 
 		// Crash the actor if its worker assignment is missing. We should never be in this state.
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerAssignmentMissing); cerr != nil {
 			return nil, cerr
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -360,7 +360,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if err != nil {
 		// Crash the actor if it was assigned to a deleted pod.
 		if errors.Is(err, store.ErrNotFound) {
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerGone); cerr != nil {
 				return nil, cerr
 			}
 			return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -371,7 +371,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 			slog.String("actor", actorRef.String()),
 			slog.String("worker", worker.GetWorkerNamespace()+"/"+worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); cerr != nil {
 			return nil, cerr
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef.String())
@@ -384,7 +384,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if !hosted {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer hosts it",
 			slog.String("worker", worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerReassigned); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -402,7 +402,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		if _, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil {
 			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerIneligible); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -707,7 +707,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if _, err = client.Restore(ctx, req); err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateletCrashMessage("Restore", err)); cerr != nil {
 				return tele, cerr
 			}
 			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
@@ -757,7 +757,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if _, err = client.Restore(ctx, req); err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateletCrashMessage("Restore", err)); cerr != nil {
 				return tele, cerr
 			}
 			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
@@ -792,7 +792,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if _, err = client.Run(ctx, req); err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateletCrashMessage("Run", err)); cerr != nil {
 				return tele, cerr
 			}
 			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)

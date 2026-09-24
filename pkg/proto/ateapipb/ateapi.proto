@@ -591,6 +591,26 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:format=k8s-short-name
   string in_progress_local_snapshot_name = 8;
+
+  // crash records why and when the Actor entered CRASHED. It is set with the
+  // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
+  //
+  // +k8s:optional
+  ActorCrash crash = 9;
+}
+
+// ActorCrash describes the failure that moved an Actor to CRASHED.
+message ActorCrash {
+  // message is a human-readable description of the failure.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096
+  string message = 1;
+
+  // crash_time is when the Actor entered CRASHED.
+  //
+  // +k8s:optional
+  google.protobuf.Timestamp crash_time = 2;
 }
 
 // WorkerAssignment points at the Worker currently hosting an Actor.

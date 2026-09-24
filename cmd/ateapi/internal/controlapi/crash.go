@@ -19,17 +19,43 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// Fixed messages recorded in ActorCrash.message for crashes due to non-atelet
+// reasons. A failed atelet call builds its message with ateletCrashMessage instead.
+const (
+	crashMessageWorkerAssignmentMissing  = "actor has no worker assignment in a state that requires one"
+	crashMessageLocalSnapshotNodeUnknown = "node holding the actor's local snapshot is unknown"
+	crashMessageWorkerGone               = "assigned worker no longer exists"
+	crashMessageWorkerDraining           = "assigned worker is draining"
+	crashMessageWorkerReassigned         = "assigned worker no longer hosts the actor"
+	crashMessageWorkerIneligible         = "assigned worker no longer satisfies the actor's placement constraints"
+	crashMessageWorkerPodGone            = "worker pod went away while hosting the actor"
+)
+
+// maxCrashMessageBytes matches the maxLength on ActorCrash.message.
+const maxCrashMessageBytes = 4096
+
+// ateletCrashMessage describes a failed atelet call with the error text atelet
+// returned, since its gRPC code is Unknown for most failures.
+// TODO: consider sanizing the error message returned by atelet.
+func ateletCrashMessage(rpc string, err error) string {
+	return fmt.Sprintf("atelet %s: %s", rpc, status.Convert(err).Message())
+}
+
 // crashActor moves the actor to CRASHED state and frees the worker it was
-// assigned to, if any, so the worker can host other actors.
-func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName string) error {
+// assigned to, if any, so the worker can host other actors. message is
+// recorded in the actor's status.
+func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
@@ -57,6 +83,10 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 
 	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		// An actor crashed concurrently, e.g. by worker deletion, keeps its first crash.
+		if !wasAlreadyCrashed {
+			toUpdate.Status.Crash = newActorCrash(opName, message)
+		}
 
 		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
 		// later DeleteActor or RevertActor can delete what they name: each is
@@ -77,6 +107,18 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	}
 
 	return nil
+}
+
+// newActorCrash records a crash that happens now, prefixing message with the
+// operation that failed when it is known.
+func newActorCrash(opName, message string) *ateapipb.ActorCrash {
+	if opName = ateattr.NormalizeOperationName(opName); opName != ateattr.OperationUnknown {
+		message = opName + " failed: " + message
+	}
+	return &ateapipb.ActorCrash{
+		Message:   truncateUTF8(strings.ToValidUTF8(message, "�"), maxCrashMessageBytes),
+		CrashTime: timestamppb.Now(),
+	}
 }
 
 // logActorCrashed carries the identity ate.actor.crashes cannot: actor identity

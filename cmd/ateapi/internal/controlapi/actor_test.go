@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -561,6 +562,89 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressLocalSnapshotName = "BAD NAME" })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_local_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)
+		})
+	}
+}
+
+func TestValidateActorStatusCrash(t *testing.T) {
+	crashPath := field.NewPath("status", "crash")
+	withCrash := func(mutate ...func(*ateapipb.ActorCrash)) func(*ateapipb.Actor) {
+		return withActorStatus(func(s *ateapipb.ActorStatus) {
+			s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+			s.Crash = &ateapipb.ActorCrash{
+				Message:   crashMessageWorkerGone,
+				CrashTime: &timestamppb.Timestamp{Seconds: 867},
+			}
+			for _, m := range mutate {
+				m(s.Crash)
+			}
+		})
+	}
+
+	tests := []struct {
+		name   string
+		oldVal *ateapipb.Actor
+		newVal *ateapipb.Actor
+		want   field.ErrorList
+	}{
+		{
+			name:   "set crash",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash()),
+		},
+		{
+			name:   "set empty crash",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { *c = ateapipb.ActorCrash{} })),
+		},
+		{
+			name:   "clear crash",
+			oldVal: validActor(withCrash()),
+			newVal: validActor(withActorStatus()),
+		},
+		{
+			name:   "replace crash",
+			oldVal: validActor(withCrash()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) {
+				c.Message = crashMessageWorkerDraining
+				c.CrashTime = &timestamppb.Timestamp{Seconds: 5309}
+			})),
+		},
+		{
+			name:   "message at max length",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4096) })),
+		},
+		{
+			name:   "message too long",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+			want:   field.ErrorList{field.TooLong(crashPath.Child("message"), nil, 4096).WithOrigin("maxLength")},
+		},
+		{
+			name:   "truncated crash message fits",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) {
+				c.Message = newActorCrash("pause", strings.Repeat("x", 2*maxCrashMessageBytes)).GetMessage()
+			})),
+		},
+		{
+			// Unchanged fields are not revalidated on update, so a crash stored
+			// before a limit was tightened does not block later status writes.
+			name:   "unchanged overlong crash is not revalidated",
+			oldVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+		},
+		{
+			name:   "changed overlong crash is revalidated",
+			oldVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("y", 4097) })),
+			want:   field.ErrorList{field.TooLong(crashPath.Child("message"), nil, 4096).WithOrigin("maxLength")},
+		},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)

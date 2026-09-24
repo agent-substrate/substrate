@@ -192,6 +192,9 @@ func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageWorkerAssignmentMissing; msg != want {
+		t.Errorf("crash message = %q, want %q", msg, want)
+	}
 }
 
 // newTestPersistence returns an isolated PostgreSQL-backed store.
@@ -734,5 +737,8 @@ func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	}
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
+		t.Errorf("crash message = %q, want %q", msg, want)
 	}
 }

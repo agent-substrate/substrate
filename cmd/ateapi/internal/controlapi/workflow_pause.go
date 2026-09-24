@@ -160,7 +160,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause); err != nil {
+		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", status.Errorf(codes.FailedPrecondition, "CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
@@ -201,7 +201,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	if _, err = client.Checkpoint(ctx, req); err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationPause); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateletCrashMessage("Checkpoint", err)); cerr != nil {
 			return wireSnapshotScope, cerr
 		}
 		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
@@ -254,6 +254,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		}
 		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
+		var crashStatus *ateapipb.ActorCrash
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
@@ -262,6 +263,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			slog.LogAttrs(ctx, slog.LevelError, "Node name not found during finalize pause, crashing actor",
 				ateattr.ActorRefLogAttrs(actorRef)...)
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
+			crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
 		}
 		contentScope := actorTemplate.GetSnapshotConfig().GetOnPause()
 		sandboxClass := ""
@@ -274,6 +276,9 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 
 		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 			toUpdate.Status.State = newState
+			if newState == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
+				toUpdate.Status.Crash = crashStatus
+			}
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
 			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
 				localSnapshot := &ateapipb.LocalSnapshot{

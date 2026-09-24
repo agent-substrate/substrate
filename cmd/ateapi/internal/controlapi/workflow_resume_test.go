@@ -739,15 +739,18 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "resume failed: "+crashMessageWorkerAssignmentMissing; msg != want {
+		t.Errorf("crash message = %q, want %q", msg, want)
+	}
 }
 
-// TestValidateAssignedWorker_WorkerOwnership verifies that RESUMING recovery
-// only proceeds on a worker whose assignment still names this actor: the
+// TestValidateAssignedWorker verifies that RESUMING recovery only proceeds on
+// a live, non-draining worker whose assignment still names this actor: the
 // recovery path loads the worker by pod name only, so the assignment may have
 // been cleared and the worker re-claimed by another actor in the meantime. On
 // a mismatch the actor is crashed and the worker — which is not ours — must
 // not be written.
-func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
+func TestValidateAssignedWorker(t *testing.T) {
 	ownAssignment := &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 		ActorUid: "own-actor-uid",
@@ -760,14 +763,21 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 		ActorUid: "stale-incarnation-uid",
 	}
+	activeStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}}
+	drainingStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapipb.WorkerResources{Actors: 1}}
 
 	tests := []struct {
-		name         string
+		name string
+		// workerStatus is the stored worker's status, nil for a worker that
+		// is gone.
+		workerStatus *ateapipb.WorkerStatus
 		sandboxClass string
 		assignment   *ateapipb.ActorAssignment
 		// wantCode is codes.OK when validateAssignedWorker must return nil.
 		wantCode       codes.Code
 		wantActorState ateapipb.ActorState
+		// wantCrashMessage is the crash recorded when the actor is crashed.
+		wantCrashMessage string
 		// wantAssignment is the assignment expected on the stored worker
 		// afterwards; wantWorkerWrite false additionally asserts the worker
 		// version did not move (no write at all).
@@ -775,31 +785,54 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 		wantWorkerWrite bool
 	}{
 		{
-			name:           "crashes actor and leaves worker untouched when assigned to another actor",
-			sandboxClass:   "gvisor",
-			assignment:     otherAssignment,
-			wantCode:       codes.Aborted,
-			wantActorState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
-			wantAssignment: otherAssignment,
+			name:             "crashes actor when worker is gone",
+			wantCode:         codes.Aborted,
+			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantCrashMessage: "resume failed: " + crashMessageWorkerGone,
 		},
 		{
-			name:           "crashes actor and leaves worker untouched when assigned to previous incarnation of same actor",
-			sandboxClass:   "gvisor",
-			assignment:     staleIncarnationAssignment,
-			wantCode:       codes.Aborted,
-			wantActorState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
-			wantAssignment: staleIncarnationAssignment,
+			name:             "crashes actor and leaves worker untouched when worker is draining",
+			workerStatus:     drainingStatus,
+			sandboxClass:     "gvisor",
+			assignment:       ownAssignment,
+			wantCode:         codes.Aborted,
+			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantCrashMessage: "resume failed: " + crashMessageWorkerDraining,
+			wantAssignment:   ownAssignment,
 		},
 		{
-			name:           "crashes actor and leaves worker untouched when assignment is cleared",
-			sandboxClass:   "gvisor",
-			assignment:     nil,
-			wantCode:       codes.Aborted,
-			wantActorState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
-			wantAssignment: nil,
+			name:             "crashes actor and leaves worker untouched when assigned to another actor",
+			workerStatus:     activeStatus,
+			sandboxClass:     "gvisor",
+			assignment:       otherAssignment,
+			wantCode:         codes.Aborted,
+			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantCrashMessage: "resume failed: " + crashMessageWorkerReassigned,
+			wantAssignment:   otherAssignment,
+		},
+		{
+			name:             "crashes actor and leaves worker untouched when assigned to previous incarnation of same actor",
+			workerStatus:     activeStatus,
+			sandboxClass:     "gvisor",
+			assignment:       staleIncarnationAssignment,
+			wantCode:         codes.Aborted,
+			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantCrashMessage: "resume failed: " + crashMessageWorkerReassigned,
+			wantAssignment:   staleIncarnationAssignment,
+		},
+		{
+			name:             "crashes actor and leaves worker untouched when assignment is cleared",
+			workerStatus:     activeStatus,
+			sandboxClass:     "gvisor",
+			assignment:       nil,
+			wantCode:         codes.Aborted,
+			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantCrashMessage: "resume failed: " + crashMessageWorkerReassigned,
+			wantAssignment:   nil,
 		},
 		{
 			name:           "passes for own eligible worker",
+			workerStatus:   activeStatus,
 			sandboxClass:   "gvisor",
 			assignment:     ownAssignment,
 			wantCode:       codes.OK,
@@ -807,13 +840,15 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 			wantAssignment: ownAssignment,
 		},
 		{
-			name:            "releases own ineligible worker and crashes actor",
-			sandboxClass:    "microvm",
-			assignment:      ownAssignment,
-			wantCode:        codes.Aborted,
-			wantActorState:  ateapipb.ActorState_ACTOR_STATE_CRASHED,
-			wantAssignment:  nil,
-			wantWorkerWrite: true,
+			name:             "releases own ineligible worker and crashes actor",
+			workerStatus:     activeStatus,
+			sandboxClass:     "microvm",
+			assignment:       ownAssignment,
+			wantCode:         codes.Aborted,
+			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantCrashMessage: "resume failed: " + crashMessageWorkerIneligible,
+			wantAssignment:   nil,
+			wantWorkerWrite:  true,
 		},
 	}
 
@@ -822,23 +857,26 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
-			if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
-				Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
-				WorkerNamespace: "worker-ns",
-				WorkerPool:      "pool",
-				WorkerPod:       "pod-1",
-				WorkerPodUid:    testWorkerUID("pod-1"),
-				SandboxClass:    tt.sandboxClass,
-				Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
-			}); err != nil {
-				t.Fatalf("CreateWorker: %v", err)
-			}
-			seedAssignment(t, persistence, testWorkerUID("pod-1"), tt.assignment)
-			// Fetch the stored version so the no-write assertion below can
-			// detect any optimistic update.
-			seeded, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
-			if err != nil {
-				t.Fatalf("GetWorker: %v", err)
+			var seeded *ateapipb.Worker
+			if tt.workerStatus != nil {
+				if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+					WorkerPodUid:    testWorkerUID("pod-1"),
+					SandboxClass:    tt.sandboxClass,
+					Status:          tt.workerStatus,
+				}); err != nil {
+					t.Fatalf("CreateWorker: %v", err)
+				}
+				seedAssignment(t, persistence, testWorkerUID("pod-1"), tt.assignment)
+				// Fetch the stored version so the no-write assertion below can
+				// detect any optimistic update.
+				var err error
+				if seeded, err = persistence.GetWorker(ctx, testWorkerUID("pod-1")); err != nil {
+					t.Fatalf("GetWorker: %v", err)
+				}
 			}
 
 			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING)
@@ -858,7 +896,7 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 				},
 			}
 			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
-			_, err = w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
+			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
 			if got := status.Code(err); got != tt.wantCode {
 				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
@@ -870,7 +908,13 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 			if actor.GetStatus().GetState() != tt.wantActorState {
 				t.Errorf("stored actor state = %v, want %v", actor.GetStatus().GetState(), tt.wantActorState)
 			}
+			if msg := actor.GetStatus().GetCrash().GetMessage(); msg != tt.wantCrashMessage {
+				t.Errorf("crash message = %q, want %q", msg, tt.wantCrashMessage)
+			}
 
+			if tt.workerStatus == nil {
+				return
+			}
 			stored, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
