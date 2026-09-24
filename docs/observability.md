@@ -163,7 +163,7 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
 
 **What this stream won't tell you.** It only writes when something changes. So an actor that has been sitting in the same state since before your logs roll over has no record, and no state. Ask the control plane what state something is in right now. Use this stream to see how it got there and when. Records can also go missing, like any other log, and a gap looks the same as an actor that just sat still. If you want to count activations, use the router's access log instead.
 
-`Actor crashed` is the exception, and carries the same two keys with `ate.actor.state="crashed"`. It is written once per committed transition into `ACTOR_STATE_CRASHED`, beside the [`ate.actor.crashes`](#the-metric-registry) increment and under the same already-crashed guard, so the two can never disagree about how many crashes happened. A consumer deriving state therefore selects on `ate.actor.state` under ateapi's resource (`service.name=ateapi`), not on the message. The resource is what makes the record authoritative: worker pods export through [the ateom relay](#the-ateom-otlp-relay) when they have it, and the relay admits only ateom resources, so a record carrying these keys under any other resource is not a state change.
+`Actor crashed` is the exception, and carries the same two keys with `ate.actor.state="crashed"`. It is written once per committed transition into `ACTOR_STATE_CRASHED`, beside the [`ate.actor.crashes`](#the-metric-registry) increment and under the same already-crashed guard, so the two can never disagree about how many crashes happened. A consumer deriving state therefore selects on `ate.actor.state` under ateapi's resource (`service.name=ateapi`), not on the message. The resource is what makes the record authoritative. [The ateom relay](#the-ateom-otlp-relay) admits only ateom resources, so once worker pods have no direct path to the collector, a record carrying these keys under any other resource cannot come from a worker pod. Until then this is a rule the consumer applies, not one the transport enforces.
 
 ```json
 {"time":"…","level":"ERROR","msg":"Actor crashed",
@@ -178,7 +178,7 @@ The counter carries the same reason but no actor identity, so this record is the
 
 #### The same records over OTLP
 
-Both records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. ateapi is the only emitter today. The ateoms have a LoggerProvider on the same switch and export through [the ateom relay](#the-ateom-otlp-relay), which carries logs, traces, and metrics.
+Both records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. ateapi is the only emitter today. The ateoms have a LoggerProvider on the same switch and export through [the ateom relay](#the-ateom-otlp-relay), which carries logs, traces, and metrics. atecontroller does not pass `OTEL_LOGS_EXPORTER` to worker pods, so the kind ConfigMap turns on ateapi only; the ateoms stay at `none` until the controller propagates it.
 
 Two `event.name` values, which is the OTLP LogRecord's own field rather than an attribute:
 
