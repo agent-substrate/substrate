@@ -435,7 +435,7 @@ func TestSweperfPollJobCompletion(t *testing.T) {
 		cfg, _, _ := newTestConfig(t, handler)
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-		if err := u.pollJobCompletion(context.Background(), "job-1", 1); err != nil {
+		if _, err := u.pollJobCompletion(context.Background(), "job-1", 1); err != nil {
 			t.Errorf("pollJobCompletion failed unexpectedly: %v", err)
 		}
 	})
@@ -453,10 +453,52 @@ func TestSweperfPollJobCompletion(t *testing.T) {
 		cfg, _, _ := newTestConfig(t, handler)
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-		if err := u.pollJobCompletion(context.Background(), "job-1", 1); err == nil {
+		if _, err := u.pollJobCompletion(context.Background(), "job-1", 1); err == nil {
 			t.Errorf("pollJobCompletion expected error on failed job, got nil")
 		}
 	})
+
+	t.Run("returns reported execution duration", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Raw JSON, as replay.py sends it, so the field name is checked too.
+			fmt.Fprint(w, `{"job_id":"job-1","status":"COMPLETED","exit_code":0,"completed_step":5,"execution_duration_ms":1234.5}`)
+		})
+		cfg, _, _ := newTestConfig(t, handler)
+		u := &sweperfUser{cfg: cfg, actorName: "act"}
+
+		jobResp, err := u.pollJobCompletion(context.Background(), "job-1", 1)
+		if err != nil {
+			t.Fatalf("pollJobCompletion failed unexpectedly: %v", err)
+		}
+		got, ok := innerDuration(jobResp)
+		if want := 1234500 * time.Microsecond; !ok || got != want {
+			t.Errorf("innerDuration = %v, %v; want %v, true", got, ok, want)
+		}
+	})
+}
+
+func TestInnerDuration(t *testing.T) {
+	ms := func(v float64) *float64 { return &v }
+	tests := []struct {
+		name    string
+		jobResp *jobStatusResponse
+		want    time.Duration
+		wantOK  bool
+	}{
+		{"nil status", nil, 0, false},
+		{"field absent (older server)", &jobStatusResponse{Status: "COMPLETED"}, 0, false},
+		{"negative", &jobStatusResponse{ExecutionDurationMs: ms(-1)}, 0, false},
+		{"zero", &jobStatusResponse{ExecutionDurationMs: ms(0)}, 0, true},
+		{"fractional ms", &jobStatusResponse{ExecutionDurationMs: ms(2.5)}, 2500 * time.Microsecond, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := innerDuration(tc.jobResp)
+			if got != tc.want || ok != tc.wantOK {
+				t.Errorf("innerDuration = %v, %v; want %v, %v", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
 }
 
 func TestSweperfUserLifecycleAndReset(t *testing.T) {
