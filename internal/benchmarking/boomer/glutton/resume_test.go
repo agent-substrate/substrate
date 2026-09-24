@@ -45,11 +45,11 @@ func TestResumeRetriesConcurrentUpdateConflict(t *testing.T) {
 	u, fakeCtrl := newResumeTestActor(t, conflictErr(), conflictErr())
 
 	start := time.Now()
-	ok := u.resume(context.Background())
+	err := u.resume(context.Background())
 	elapsed := time.Since(start)
 
-	if !ok {
-		t.Fatal("resume = false, want true after conflicts clear")
+	if err != nil {
+		t.Fatalf("resume = %v, want nil after conflicts clear", err)
 	}
 	if got := resumeCalls(fakeCtrl); got != 3 {
 		t.Errorf("ResumeActor calls = %d, want 3 (two conflicts, then success)", got)
@@ -65,8 +65,8 @@ func TestResumeRetriesConcurrentUpdateConflict(t *testing.T) {
 func TestResumeDoesNotRetryOtherErrors(t *testing.T) {
 	u, fakeCtrl := newResumeTestActor(t, status.Error(codes.Unavailable, "down"))
 
-	if u.resume(context.Background()) {
-		t.Fatal("resume = true, want false on a non-conflict error")
+	if err := u.resume(context.Background()); err == nil {
+		t.Fatal("resume = nil, want an error on a non-conflict error")
 	}
 	if got := resumeCalls(fakeCtrl); got != 1 {
 		t.Errorf("ResumeActor calls = %d, want 1 (no retry for non-conflict errors)", got)
@@ -80,8 +80,8 @@ func TestResumeGivesUpAfterMaxAttempts(t *testing.T) {
 	}
 	u, fakeCtrl := newResumeTestActor(t, errs...)
 
-	if u.resume(context.Background()) {
-		t.Fatal("resume = true, want false when every attempt conflicts")
+	if err := u.resume(context.Background()); err == nil {
+		t.Fatal("resume = nil, want an error when every attempt conflicts")
 	}
 	if got := resumeCalls(fakeCtrl); got != resumeMaxAttempts {
 		t.Errorf("ResumeActor calls = %d, want %d", got, resumeMaxAttempts)
@@ -93,8 +93,8 @@ func TestResumeRetryHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if u.resume(ctx) {
-		t.Fatal("resume = true, want false with a canceled context")
+	if err := u.resume(ctx); err == nil {
+		t.Fatal("resume = nil, want an error with a canceled context")
 	}
 	// The first retry is immediate; the second retry's select sees the
 	// canceled context and stops instead of sleeping.

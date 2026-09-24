@@ -35,6 +35,19 @@ type fakeControlClient struct {
 	// resumeErrs is returned by successive ResumeActor calls, in order, until
 	// it is drained; every call after that succeeds.
 	resumeErrs []error
+	// suspendErrs does the same for SuspendActor.
+	suspendErrs []error
+}
+
+// nextErr pops the head of errs, or returns nil once it is drained. Callers
+// hold f.mu.
+func nextErr(errs *[]error) error {
+	if len(*errs) == 0 {
+		return nil
+	}
+	err := (*errs)[0]
+	*errs = (*errs)[1:]
+	return err
 }
 
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
@@ -55,9 +68,7 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
-	if len(f.resumeErrs) > 0 {
-		err := f.resumeErrs[0]
-		f.resumeErrs = f.resumeErrs[1:]
+	if err := nextErr(&f.resumeErrs); err != nil {
 		return nil, err
 	}
 	return &ateapipb.ResumeActorResponse{}, nil
@@ -67,6 +78,9 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
+	if err := nextErr(&f.suspendErrs); err != nil {
+		return nil, err
+	}
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
