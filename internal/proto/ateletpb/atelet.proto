@@ -421,7 +421,7 @@ message UploadPausedCheckpointRequest {
   string actor_template_atespace = 4;
   string actor_template_name = 5;
 
-  // The local checkpoint to upload: LocalSnapshotInfo.snapshot_name recorded
+  // The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
   // at pause time.
   string local_snapshot_name = 6;
 

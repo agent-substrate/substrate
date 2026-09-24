@@ -451,65 +451,65 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "external_snapshot", "actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		"valid actor.status.local_snapshot_info.snapshot_name",
+		"valid actor.status.local_snapshot.snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "snap-1"}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "snap-1"}
 		})),
 		nil,
 	}, {
-		"invalid actor.status.local_snapshot_info.snapshot_name",
+		"invalid actor.status.local_snapshot.snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "SNAP 1"}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "SNAP 1"}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"invalid actor.status.local_snapshot_info.node_vms entry",
+		"invalid actor.status.local_snapshot.node_vms entry",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: []string{"node-1", "NOT A NODE"}}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "NOT A NODE"}}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots").Index(1), nil, "").WithOrigin("format=k8s-long-name")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		"too many actor.status.local_snapshot_info.node_vms entries",
+		"too many actor.status.local_snapshot.node_vms entries",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			nodes := make([]string, 257)
 			for i := range nodes {
 				nodes[i] = fmt.Sprintf("node-%d", i)
 			}
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: nodes}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: nodes}
 		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots"), 257, 256).WithOrigin("maxItems")},
+		field.ErrorList{field.TooMany(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots"), 257, 256).WithOrigin("maxItems")},
 	}, {
-		"duplicate actor.status.local_snapshot_info.node_vms entry",
+		"duplicate actor.status.local_snapshot.node_vms entry",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: []string{"node-1", "node-1"}}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "node-1"}}
 		})),
-		field.ErrorList{field.Duplicate(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots").Index(1), nil)},
+		field.ErrorList{field.Duplicate(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil)},
 	}, {
-		"valid actor.status.local_snapshot_info.content_scope",
+		"valid actor.status.local_snapshot.content_scope",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
 		})),
 		nil,
 	}, {
-		"negative actor.status.local_snapshot_info.content_scope",
+		"negative actor.status.local_snapshot.content_scope",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope(-1)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(-1)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "content_scope"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("minimum")},
 	}, {
-		"invalid actor.status.local_snapshot_info.content_scope",
+		"invalid actor.status.local_snapshot.content_scope",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope(3)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(3)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "content_scope"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("maximum")},
 	}, {
 		"too many actor_volumes",
 		validInput(),

@@ -603,7 +603,8 @@ func (x *ExternalSnapshot) GetActorTemplateUid() string {
 	return ""
 }
 
-type LocalSnapshotInfo struct {
+// LocalSnapshot records information about a node-local snapshot.
+type LocalSnapshot struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The name of the local checkpoint on each of the nodes below. Checkpoint
 	// names are server-generated UUIDs, but any resource name is valid here.
@@ -633,20 +634,20 @@ type LocalSnapshotInfo struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *LocalSnapshotInfo) Reset() {
-	*x = LocalSnapshotInfo{}
+func (x *LocalSnapshot) Reset() {
+	*x = LocalSnapshot{}
 	mi := &file_ateapi_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *LocalSnapshotInfo) String() string {
+func (x *LocalSnapshot) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*LocalSnapshotInfo) ProtoMessage() {}
+func (*LocalSnapshot) ProtoMessage() {}
 
-func (x *LocalSnapshotInfo) ProtoReflect() protoreflect.Message {
+func (x *LocalSnapshot) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -658,26 +659,26 @@ func (x *LocalSnapshotInfo) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use LocalSnapshotInfo.ProtoReflect.Descriptor instead.
-func (*LocalSnapshotInfo) Descriptor() ([]byte, []int) {
+// Deprecated: Use LocalSnapshot.ProtoReflect.Descriptor instead.
+func (*LocalSnapshot) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *LocalSnapshotInfo) GetSnapshotName() string {
+func (x *LocalSnapshot) GetSnapshotName() string {
 	if x != nil {
 		return x.SnapshotName
 	}
 	return ""
 }
 
-func (x *LocalSnapshotInfo) GetNodeVmsWithLocalSnapshots() []string {
+func (x *LocalSnapshot) GetNodeVmsWithLocalSnapshots() []string {
 	if x != nil {
 		return x.NodeVmsWithLocalSnapshots
 	}
 	return nil
 }
 
-func (x *LocalSnapshotInfo) GetContentScope() SnapshotContentScope {
+func (x *LocalSnapshot) GetContentScope() SnapshotContentScope {
 	if x != nil {
 		return x.ContentScope
 	}
@@ -1522,7 +1523,7 @@ type ActorStatus struct {
 	// Node-local state used only while the Actor is paused.
 	//
 	// +k8s:optional
-	LocalSnapshotInfo *LocalSnapshotInfo `protobuf:"bytes,5,opt,name=local_snapshot_info,json=localSnapshotInfo,proto3" json:"local_snapshot_info,omitempty"`
+	LocalSnapshot *LocalSnapshot `protobuf:"bytes,5,opt,name=local_snapshot,json=localSnapshot,proto3" json:"local_snapshot,omitempty"`
 	// Volumes attached to the actor. These volumes only live as long as the actor.
 	// They are deleted when the actor is deleted. Each template volume
 	// appears at most once.
@@ -1600,9 +1601,9 @@ func (x *ActorStatus) GetExternalSnapshot() *ExternalSnapshot {
 	return nil
 }
 
-func (x *ActorStatus) GetLocalSnapshotInfo() *LocalSnapshotInfo {
+func (x *ActorStatus) GetLocalSnapshot() *LocalSnapshot {
 	if x != nil {
-		return x.LocalSnapshotInfo
+		return x.LocalSnapshot
 	}
 	return nil
 }
@@ -7176,8 +7177,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x10ExternalSnapshot\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12A\n" +
 	"\rcontent_scope\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\x12,\n" +
-	"\x12actor_template_uid\x18\x03 \x01(\tR\x10actorTemplateUid\"\xbd\x01\n" +
-	"\x11LocalSnapshotInfo\x12#\n" +
+	"\x12actor_template_uid\x18\x03 \x01(\tR\x10actorTemplateUid\"\xb9\x01\n" +
+	"\rLocalSnapshot\x12#\n" +
 	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x12@\n" +
 	"\x1dnode_vms_with_local_snapshots\x18\x02 \x03(\tR\x19nodeVmsWithLocalSnapshots\x12A\n" +
 	"\rcontent_scope\x18\x03 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\"\x90\x01\n" +
@@ -7236,13 +7237,13 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x19CredentialHeaderInjection\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
-	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\xcc\x03\n" +
+	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\xbf\x03\n" +
 	"\vActorStatus\x12(\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x12.ateapi.ActorStateR\x05state\x12E\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x127\n" +
 	"\x18in_progress_snapshot_uri\x18\x03 \x01(\tR\x15inProgressSnapshotUri\x12E\n" +
-	"\x11external_snapshot\x18\x04 \x01(\v2\x18.ateapi.ExternalSnapshotR\x10externalSnapshot\x12I\n" +
-	"\x13local_snapshot_info\x18\x05 \x01(\v2\x19.ateapi.LocalSnapshotInfoR\x11localSnapshotInfo\x12;\n" +
+	"\x11external_snapshot\x18\x04 \x01(\v2\x18.ateapi.ExternalSnapshotR\x10externalSnapshot\x12<\n" +
+	"\x0elocal_snapshot\x18\x05 \x01(\v2\x15.ateapi.LocalSnapshotR\rlocalSnapshot\x12;\n" +
 	"\ractor_volumes\x18\a \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\x12D\n" +
 	"\x1fin_progress_local_snapshot_name\x18\b \x01(\tR\x1binProgressLocalSnapshotName\"\x8f\x02\n" +
 	"\x10WorkerAssignment\x12)\n" +
@@ -7646,7 +7647,7 @@ var file_ateapi_proto_goTypes = []any{
 	(WorkerState)(0),                           // 7: ateapi.WorkerState
 	(ExternalVolume_Status)(0),                 // 8: ateapi.ExternalVolume.Status
 	(*ExternalSnapshot)(nil),                   // 9: ateapi.ExternalSnapshot
-	(*LocalSnapshotInfo)(nil),                  // 10: ateapi.LocalSnapshotInfo
+	(*LocalSnapshot)(nil),                      // 10: ateapi.LocalSnapshot
 	(*Selector)(nil),                           // 11: ateapi.Selector
 	(*ResourceMetadata)(nil),                   // 12: ateapi.ResourceMetadata
 	(*ExternalVolume)(nil),                     // 13: ateapi.ExternalVolume
@@ -7753,7 +7754,7 @@ var file_ateapi_proto_goTypes = []any{
 }
 var file_ateapi_proto_depIdxs = []int32{
 	0,   // 0: ateapi.ExternalSnapshot.content_scope:type_name -> ateapi.SnapshotContentScope
-	0,   // 1: ateapi.LocalSnapshotInfo.content_scope:type_name -> ateapi.SnapshotContentScope
+	0,   // 1: ateapi.LocalSnapshot.content_scope:type_name -> ateapi.SnapshotContentScope
 	109, // 2: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
 	112, // 3: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
 	112, // 4: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
@@ -7774,7 +7775,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	2,   // 19: ateapi.ActorStatus.state:type_name -> ateapi.ActorState
 	22,  // 20: ateapi.ActorStatus.worker_assignment:type_name -> ateapi.WorkerAssignment
 	9,   // 21: ateapi.ActorStatus.external_snapshot:type_name -> ateapi.ExternalSnapshot
-	10,  // 22: ateapi.ActorStatus.local_snapshot_info:type_name -> ateapi.LocalSnapshotInfo
+	10,  // 22: ateapi.ActorStatus.local_snapshot:type_name -> ateapi.LocalSnapshot
 	13,  // 23: ateapi.ActorStatus.actor_volumes:type_name -> ateapi.ExternalVolume
 	26,  // 24: ateapi.WorkerAssignment.worker:type_name -> ateapi.ObjectRef
 	9,   // 25: ateapi.TagStatus.snapshot:type_name -> ateapi.ExternalSnapshot

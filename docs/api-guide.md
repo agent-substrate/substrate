@@ -511,7 +511,7 @@ Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE
 *   **Request:** `RevertActorRequest`
     *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING`, `ACTOR_STATE_PAUSED`, and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries). Calling `RevertActor` on an already `ACTOR_STATE_SUSPENDED` actor returns `FAILED_PRECONDITION`.
 *   **Response:** `RevertActorResponse` containing the reverted `Actor` in `ACTOR_STATE_SUSPENDED`.
-*   Reverting terminates any bound worker sandbox, clears node-local pause checkpoints (`localSnapshotInfo`), and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed `externalSnapshot`.
+*   Reverting terminates any bound worker sandbox, clears node-local pause checkpoints (`localSnapshot`), and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed `externalSnapshot`.
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`

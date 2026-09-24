@@ -170,7 +170,8 @@ message ExternalSnapshot {
   string actor_template_uid = 3;
 }
 
-message LocalSnapshotInfo {
+// LocalSnapshot records information about a node-local snapshot.
+message LocalSnapshot {
   // The name of the local checkpoint on each of the nodes below. Checkpoint
   // names are server-generated UUIDs, but any resource name is valid here.
   //
@@ -572,7 +573,7 @@ message ActorStatus {
   // Node-local state used only while the Actor is paused.
   //
   // +k8s:optional
-  LocalSnapshotInfo local_snapshot_info = 5;
+  LocalSnapshot local_snapshot = 5;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted. Each template volume

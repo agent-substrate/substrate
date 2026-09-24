@@ -523,10 +523,10 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("external_snapshot"), obj.ExternalSnapshot, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ActorStatus.LocalSnapshotInfo
+	{ // field ateapipb.ActorStatus.LocalSnapshot
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.LocalSnapshotInfo,
+			obj, oldObj *ateapipb.LocalSnapshot,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -543,14 +543,14 @@ func Validate_ActorStatus(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_LocalSnapshotInfo(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_LocalSnapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ActorStatus) *ateapipb.LocalSnapshotInfo {
-				return oldObj.LocalSnapshotInfo
+			func(oldObj *ateapipb.ActorStatus) *ateapipb.LocalSnapshot {
+				return oldObj.LocalSnapshot
 			})
-		errs = append(errs, fn(fldPath.Child("local_snapshot_info"), obj.LocalSnapshotInfo, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("local_snapshot"), obj.LocalSnapshot, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.ActorStatus.ActorVolumes
@@ -4723,13 +4723,13 @@ func Validate_ListWorkersRequest(
 	return errs
 }
 
-// Validate_LocalSnapshotInfo validates an instance of LocalSnapshotInfo according
+// Validate_LocalSnapshot validates an instance of LocalSnapshot according
 // to declarative validation rules in the API schema.
-func Validate_LocalSnapshotInfo(
+func Validate_LocalSnapshot(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.LocalSnapshotInfo) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.LocalSnapshot) (errs field.ErrorList) {
 
-	{ // field ateapipb.LocalSnapshotInfo.SnapshotName
+	{ // field ateapipb.LocalSnapshot.SnapshotName
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -4754,13 +4754,13 @@ func Validate_LocalSnapshotInfo(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.LocalSnapshotInfo) *string {
+			func(oldObj *ateapipb.LocalSnapshot) *string {
 				return &oldObj.SnapshotName
 			})
 		errs = append(errs, fn(fldPath.Child("snapshot_name"), &obj.SnapshotName, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.LocalSnapshotInfo.NodeVmsWithLocalSnapshots
+	{ // field ateapipb.LocalSnapshot.NodeVmsWithLocalSnapshots
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []string,
@@ -4793,13 +4793,13 @@ func Validate_LocalSnapshotInfo(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.LocalSnapshotInfo) []string {
+			func(oldObj *ateapipb.LocalSnapshot) []string {
 				return oldObj.NodeVmsWithLocalSnapshots
 			})
 		errs = append(errs, fn(fldPath.Child("node_vms_with_local_snapshots"), obj.NodeVmsWithLocalSnapshots, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.LocalSnapshotInfo.ContentScope
+	{ // field ateapipb.LocalSnapshot.ContentScope
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.SnapshotContentScope,
@@ -4827,7 +4827,7 @@ func Validate_LocalSnapshotInfo(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.LocalSnapshotInfo) *ateapipb.SnapshotContentScope {
+			func(oldObj *ateapipb.LocalSnapshot) *ateapipb.SnapshotContentScope {
 				return &oldObj.ContentScope
 			})
 		errs = append(errs, fn(fldPath.Child("content_scope"), &obj.ContentScope, oldVal, oldObj != nil)...)

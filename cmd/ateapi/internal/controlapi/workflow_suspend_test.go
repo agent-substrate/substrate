@@ -288,7 +288,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 			InProgressSnapshotUri: snapshotURI,
-			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
+			LocalSnapshot: &ateapipb.LocalSnapshot{
 				SnapshotName:              "actor-1-pause-snapshot",
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 			},
@@ -320,8 +320,8 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	if got := stored.GetStatus().GetInProgressSnapshotUri(); got != "" {
 		t.Errorf("InProgressSnapshotUri = %q, want cleared", got)
 	}
-	if stored.GetStatus().GetLocalSnapshotInfo() != nil {
-		t.Errorf("LocalSnapshotInfo = %v, want cleared", stored.GetStatus().GetLocalSnapshotInfo())
+	if stored.GetStatus().GetLocalSnapshot() != nil {
+		t.Errorf("LocalSnapshot = %v, want cleared", stored.GetStatus().GetLocalSnapshot())
 	}
 }
 
@@ -569,21 +569,21 @@ func TestCommitSnapshotScope(t *testing.T) {
 }
 
 // TestIsPausedOriginSuspend pins the paused-origin discriminator:
-// LocalSnapshotInfo alone must not select the paused path, because resume
+// LocalSnapshot alone must not select the paused path, because resume
 // leaves it stale on RUNNING actors; only PAUSED state, or SUSPENDING with
 // no worker assignment, means the suspend uploads a local snapshot.
 func TestIsPausedOriginSuspend(t *testing.T) {
 	assignment := &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod-1"}
-	localInfo := &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}}
+	localInfo := &ateapipb.LocalSnapshot{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}}
 	tests := []struct {
 		name  string
 		actor *ateapipb.Actor
 		want  bool
 	}{
-		{"paused actor", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_PAUSED, LocalSnapshotInfo: localInfo}}, true},
-		{"suspending retry of a paused-origin suspend", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, LocalSnapshotInfo: localInfo}}, true},
-		{"running actor with stale local snapshot info", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, LocalSnapshotInfo: localInfo, WorkerAssignment: assignment}}, false},
-		{"suspending retry of a running-origin suspend with stale local snapshot info", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, LocalSnapshotInfo: localInfo, WorkerAssignment: assignment}}, false},
+		{"paused actor", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_PAUSED, LocalSnapshot: localInfo}}, true},
+		{"suspending retry of a paused-origin suspend", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, LocalSnapshot: localInfo}}, true},
+		{"running actor with stale local snapshot info", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, LocalSnapshot: localInfo, WorkerAssignment: assignment}}, false},
+		{"suspending retry of a running-origin suspend with stale local snapshot info", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, LocalSnapshot: localInfo, WorkerAssignment: assignment}}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -629,8 +629,8 @@ func TestEnsureMarkedSuspending_PausedScopeRejection(t *testing.T) {
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
-					State:             ateapipb.ActorState_ACTOR_STATE_PAUSED,
-					LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}, ContentScope: tc.captured},
+					State:         ateapipb.ActorState_ACTOR_STATE_PAUSED,
+					LocalSnapshot: &ateapipb.LocalSnapshot{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}, ContentScope: tc.captured},
 				},
 			})
 
@@ -660,8 +660,8 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 		created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 			Status: &ateapipb.ActorStatus{
-				State:             ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-				LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{SnapshotName: "snap"},
+				State:         ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+				LocalSnapshot: &ateapipb.LocalSnapshot{SnapshotName: "snap"},
 			},
 		})
 
@@ -688,7 +688,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			Status: &ateapipb.ActorStatus{
 				State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 				InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-dest"),
-				LocalSnapshotInfo:     &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}},
+				LocalSnapshot:         &ateapipb.LocalSnapshot{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}},
 			},
 		})
 
@@ -709,7 +709,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 }
 
 // TestSuspendActor_PausedWithoutLocalSnapshotCrashes verifies a PAUSED actor
-// whose LocalSnapshotInfo is missing (corrupted store state: nothing records
+// whose LocalSnapshot is missing (corrupted store state: nothing records
 // where the pause snapshot lives) is crashed by the suspend workflow rather
 // than left flapping between PAUSED and SUSPENDING.
 func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
