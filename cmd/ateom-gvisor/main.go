@@ -134,7 +134,7 @@ func do(ctx context.Context) error {
 	const serviceName = "ateom-gvisor"
 	// Export through atelet's node-local relay when it is there, so telemetry
 	// never touches the worker pod's network. A nil conn means it is not, and
-	// both providers fall back to dialing the collector directly.
+	// the providers fall back to dialing the collector directly.
 	//
 	// A relay that cannot be dialed is logged rather than fatal, matching both
 	// ends of the same decision: Dial already treats an absent socket as a
@@ -169,6 +169,20 @@ func do(ctx context.Context) error {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+
+	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
+		ServiceName:  serviceName,
+		Exporter:     serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		ExporterConn: relayConn,
+		RelayCapable: true,
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize logging", err)
+	}
+	// Nil when the exporter is none.
+	if lp != nil {
+		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
+	}
 
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podUID)

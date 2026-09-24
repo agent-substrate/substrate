@@ -18,7 +18,13 @@ import (
 	"context"
 	"testing"
 
+	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"google.golang.org/grpc"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 func TestResolveLogsExporter(t *testing.T) {
@@ -139,6 +145,66 @@ func TestInitLoggingDisabled(t *testing.T) {
 		t.Errorf("InitLogging() with the exporter disabled replaced the global provider")
 	}
 }
+
+// The log path's half of the relay decision, asserted on the resource an
+// emitted record carries rather than on what relayAttrs returns, so dropping
+// the attrs in newLoggerProvider fails here. TestRelayAttrs pins the values.
+func TestLoggerProviderRelayAttribute(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		relayCapable bool
+		conn         *grpc.ClientConn
+		want         string // "" means absent
+	}{
+		{name: "relay", relayCapable: true, conn: lazyConn(t), want: "relay"},
+		{name: "direct", relayCapable: true, want: "direct"},
+		{name: "not relay capable", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := emittedResource(t, tc.relayCapable, tc.conn)[string(ateattr.OTLPRelayKey)]
+			if ok != (tc.want != "") || got != tc.want {
+				t.Errorf("%s = %q (present %t), want %q", string(ateattr.OTLPRelayKey), got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// emittedResource builds the provider the way InitLogging does, emits one
+// record through a capturing processor, and returns that record's resource.
+func emittedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map[string]string {
+	t.Helper()
+	proc := &captureProcessor{}
+	lp, err := newLoggerProvider(context.Background(), LoggingOptions{
+		ServiceName:  "ateom-gvisor",
+		Exporter:     LogsExporterOTLP,
+		ExporterConn: conn,
+		RelayCapable: relayCapable,
+	}, proc)
+	if err != nil {
+		t.Fatalf("newLoggerProvider: %v", err)
+	}
+	t.Cleanup(func() {
+		// A cancelled context skips the OTLP flush; no collector listens here.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_ = lp.Shutdown(ctx)
+	})
+	lp.Logger("test").Emit(context.Background(), otellog.Record{})
+	if proc.res == nil {
+		t.Fatal("no record reached the processor")
+	}
+	return resourceAttrs(proc.res)
+}
+
+type captureProcessor struct{ res *resource.Resource }
+
+func (c *captureProcessor) OnEmit(_ context.Context, r *sdklog.Record) error {
+	c.res = r.Resource()
+	return nil
+}
+func (c *captureProcessor) Enabled(context.Context, sdklog.EnabledParameters) bool { return true }
+func (c *captureProcessor) Shutdown(context.Context) error                         { return nil }
+func (c *captureProcessor) ForceFlush(context.Context) error                       { return nil }
 
 func TestInitLoggingRequiresOptions(t *testing.T) {
 	t.Parallel()
