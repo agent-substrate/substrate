@@ -17,7 +17,7 @@ limitations under the License.
 # Autoscaling WorkerPools with an HPA
 
 This describes how to autoscale a `WorkerPool` on how many of its workers are
-currently assigned, using a Kubernetes HorizontalPodAutoscaler (HPA) fed by the
+currently full, using a Kubernetes HorizontalPodAutoscaler (HPA) fed by the
 `ate_workerpool_workers` metric through prometheus-adapter.
 
 ## Prerequisites
@@ -52,17 +52,21 @@ The example HPA uses an **External** metric with target type **AverageValue**:
 desiredReplicas = ceil( metricValue / target.averageValue )
 ```
 
-where `metricValue = max(ate_workerpool_workers{namespace=<ns>, name=<pool>, state=assigned})`:
-the pool's assigned-worker count. WorkerPool names are only unique within a
+where `metricValue = max(ate_workerpool_workers{namespace=<ns>, name=<pool>, state=at_capacity})`:
+the pool's count of full workers. WorkerPool names are only unique within a
 namespace, so the selector must pin both.
 
-`averageValue` is the target **assigned-workers-per-replica**:
+This is the pool's utilization only while each worker holds one actor, which
+is true today. Once a worker holds more, a count of workers cannot say how full
+the pool is, and this signal needs to change.
 
-| `averageValue` | Meaning                                     | Example (`assigned=7`) |
-| -------------- | ------------------------------------------- | ---------------------- |
-| `"0.7"` (700m) | ~70% assigned / 30% idle headroom (default) | `ceil(7/0.7) = 10`     |
-| `"1"`          | pack to 100%, no idle headroom              | `ceil(7/1) = 7`        |
-| `"0.5"` (500m) | lots of headroom, ~2× replicas              | `ceil(7/0.5) = 14`     |
+`averageValue` is the target **full-workers-per-replica**:
+
+| `averageValue` | Meaning                                  | Example (`at_capacity=7`) |
+| -------------- | ---------------------------------------- | ------------------------- |
+| `"0.7"` (700m) | ~70% full / 30% idle headroom (default)  | `ceil(7/0.7) = 10`        |
+| `"1"`          | pack to 100%, no idle headroom           | `ceil(7/1) = 7`           |
+| `"0.5"` (500m) | lots of headroom, ~2× replicas           | `ceil(7/0.5) = 14`        |
 
 Lower `averageValue` → more idle headroom → more replicas.
 
@@ -102,7 +106,7 @@ Confirm that `prometheus-adapter` is serving the external metric:
 kubectl get apiservice v1beta1.external.metrics.k8s.io          # Available=True
 
 # 2. The external metric resolves for the counter pool
-kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-autoscaled-workerpool/ate_workerpool_workers?labelSelector=ate_worker_state%3Dassigned,ate_workerpool_namespace%3Date-demo-autoscaled-workerpool,ate_workerpool_name%3Dcounter"
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-autoscaled-workerpool/ate_workerpool_workers?labelSelector=ate_worker_state%3Dat_capacity,ate_workerpool_namespace%3Date-demo-autoscaled-workerpool,ate_workerpool_name%3Dcounter"
 ```
 
 ## How to Use
@@ -142,7 +146,7 @@ done
 
 ### 3. Watch the HPA scale up
 
-As the assigned worker count increases, watch the HPA scale up the pool's replicas:
+As the count of full workers increases, watch the HPA scale up the pool's replicas:
 
 ```sh
 kubectl -n ate-demo-autoscaled-workerpool get hpa counter -w
@@ -151,7 +155,7 @@ kubectl -n ate-demo-autoscaled-workerpool get workerpool counter -w
 
 ### 4. Trigger scale-down
 
-Suspend the actors to drop the assigned worker count. After the 300s stabilization window, the HPA will scale down the pool:
+Suspend the actors to drop the count of full workers. After the 300s stabilization window, the HPA will scale down the pool:
 
 ```sh
 for i in {001..015}; do

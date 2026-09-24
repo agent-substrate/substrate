@@ -217,11 +217,12 @@ const (
 // meaning success, never as a parallel _failures counter.
 const ErrorTypeKey = attribute.Key("error.type")
 
-// Values for WorkerStateKey. Only idle and assigned are representable today;
-// starting and unhealthy workers are not modeled in the cache.
+// Values for WorkerStateKey. Unschedulable wins over occupancy.
 const (
-	WorkerStateIdle     = "idle"
-	WorkerStateAssigned = "assigned"
+	WorkerStateIdle          = "idle"
+	WorkerStatePartial       = "partial"
+	WorkerStateAtCapacity    = "at_capacity"
+	WorkerStateUnschedulable = "unschedulable"
 )
 
 // Values for ActorOperationNameKey: the actor lifecycle operations ateapi

@@ -82,7 +82,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		type key struct{ namespace, pool, state, class string }
 		tally := make(map[key]int64)
-		// Seed both states at 0 for every known pool so a saturated or empty pool
+		// Seed every state at 0 for every known pool so a saturated or empty pool
 		// reports 0, not an absent series that breaks idle==0 alerts. A failed
 		// list just means no seeding this cycle, not a broken observation.
 		if pools, err := listPools(labels.Everything()); err == nil {
@@ -91,17 +91,13 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 				if class == "" {
 					class = string(atev1alpha1.SandboxClassGvisor)
 				}
-				tally[key{p.Namespace, p.Name, ateattr.WorkerStateIdle, class}] = 0
-				tally[key{p.Namespace, p.Name, ateattr.WorkerStateAssigned, class}] = 0
+				for _, state := range workerStates {
+					tally[key{p.Namespace, p.Name, state, class}] = 0
+				}
 			}
 		}
 		for _, w := range ws {
-			// Occupancy comes from the allocation total rather than the
-			// assignment list, which a listed worker does not carry.
-			state := ateattr.WorkerStateIdle
-			if w.GetStatus().GetAllocated().GetActors() > 0 {
-				state = ateattr.WorkerStateAssigned
-			}
+			state := workerState(w)
 			// CreateWorker does not validate the class, thus a worker can have an
 			// empty one. Report it as unknown, not as the pool's class: the
 			// scheduler puts no actor on a worker that offers no class, thus the
@@ -123,6 +119,30 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		return fmt.Errorf("register %s callback: %w", workerpoolWorkersMetric, err)
 	}
 	return nil
+}
+
+var workerStates = []string{
+	ateattr.WorkerStateIdle,
+	ateattr.WorkerStatePartial,
+	ateattr.WorkerStateAtCapacity,
+	ateattr.WorkerStateUnschedulable,
+}
+
+// workerState counts actor slots only. A capacity not yet reported is
+// unschedulable, not full.
+func workerState(w *ateapipb.Worker) string {
+	capacity := w.GetStatus().GetCapacity().GetActors()
+	if w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE || capacity <= 0 {
+		return ateattr.WorkerStateUnschedulable
+	}
+	switch allocated := w.GetStatus().GetAllocated().GetActors(); {
+	case allocated <= 0:
+		return ateattr.WorkerStateIdle
+	case allocated < capacity:
+		return ateattr.WorkerStatePartial
+	default:
+		return ateattr.WorkerStateAtCapacity
+	}
 }
 
 // Instruments holds ateapi's actor-lifecycle and scheduler duration histograms.
