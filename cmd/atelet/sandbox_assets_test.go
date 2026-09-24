@@ -21,9 +21,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -169,4 +172,55 @@ type nopWriteCloser struct {
 
 func (n nopWriteCloser) Close() error {
 	return nil
+}
+
+func TestRecordFromRequest(t *testing.T) {
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	valid := func() *ateletpb.SandboxAssets {
+		return &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   testPauseImage,
+			Assets: map[string]*ateletpb.ArchAssets{
+				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+					gvisorAssetName: {Url: "gs://bucket/gvisor.tar.zst", Sha256: sha},
+				}},
+			},
+		}
+	}
+
+	t.Run("valid request projects onto this architecture", func(t *testing.T) {
+		got, err := recordFromRequest(valid())
+		if err != nil {
+			t.Fatalf("recordFromRequest: %v", err)
+		}
+		want := &sandboxAssetsRecord{
+			SandboxClass: "gvisor",
+			PauseImage:   testPauseImage,
+			Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor.tar.zst", SHA256: sha}},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("recordFromRequest mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ateletpb.SandboxAssets) *ateletpb.SandboxAssets
+	}{
+		{"missing", func(*ateletpb.SandboxAssets) *ateletpb.SandboxAssets { return nil }},
+		{"no assets for this architecture", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
+			sa.Assets = map[string]*ateletpb.ArchAssets{"not-" + runtime.GOARCH: sa.Assets[runtime.GOARCH]}
+			return sa
+		}},
+		{"no pause image", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
+			sa.PauseImage = ""
+			return sa
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := recordFromRequest(tc.mutate(valid())); err == nil {
+				t.Error("recordFromRequest succeeded, want an error")
+			}
+		})
+	}
 }

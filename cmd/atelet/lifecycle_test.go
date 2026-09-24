@@ -205,6 +205,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		TargetAteomUid:        ateomUID,
+		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,

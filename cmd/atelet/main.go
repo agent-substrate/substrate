@@ -1008,10 +1008,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	checkpointDir := ateompath.RestoreStateDir(actorUID)
 
-	// The snapshot is self-describing: recover the sandbox binaries that created
-	// it from the manifest stored beside the checkpoint images (the Restore
-	// request no longer carries the sandbox config). Fetch the (small) manifest
-	// first — both the checkpoint download and the OCI/asset prep below need it.
+	// Fetch the snapshot manifest stored beside the checkpoint images
+	// first: it lists the checkpoint files to download and records the actor
+	// identity and the sandbox that captured the snapshot, which the runtime
+	// sandbox is checked against below.
 	tManifest := time.Now()
 	manifestDone := false
 	defer func() {
@@ -1051,10 +1051,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// On a DATA_ON_GOLDEN restore the actor's snapshot holds only durable-dir data; the guest
 	// state (memory + VM state) comes from the template's golden snapshot. Fetch
-	// the golden manifest too: its SnapshotFiles complete the restore set below,
-	// and its pinned sandbox binaries are the ones that will run the restored
-	// guest (the golden snapshot's memory image must be resumed by the binaries
-	// that created it).
+	// the golden manifest too: its SnapshotFiles complete the restore set below.
 	var goldenRec *sandboxAssetsRecord
 	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
 		goldenURI, err := resources.ParseSnapshotURI(req.GetGoldenSnapshotUri())
@@ -1084,15 +1081,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	op.kind = restoreSnapshotKind(req, sandboxRec)
 	op.sandboxClass = sandboxRec.SandboxClass
 
-	// The record whose pinned sandbox (binaries + pause image) runs the restored
-	// workload: the golden's for a DATA_ON_GOLDEN restore, the snapshot's own
-	// otherwise. The golden's set wins because the guest state being resumed is
-	// the golden snapshot's memory image, and a memory image must be resumed by
-	// the exact sandbox that produced it; the actor's snapshot contributes only
-	// durable data (a plain tar), which no sandbox version reads back.
-	runtimeRec := sandboxRec
-	if goldenRec != nil {
-		runtimeRec = goldenRec
+	// The sandbox (binaries + pause image) that runs the restored workload
+	// comes from the request, resolved by the control plane from the
+	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
+	// files to restore and the actor identity.
+	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid sandbox_assets: %v", err)
 	}
 
 	// Undo the Register if the restore fails.
@@ -1232,11 +1227,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
 
-	// Record the (manifest-pinned) sandbox binaries on-node so a subsequent
-	// Checkpoint of this restored actor can re-pin the same version. For a
-	// DATA_ON_GOLDEN restore that is the golden's set — those are the binaries
-	// actually running the guest (Checkpoint overwrites the identity fields
-	// from its own request).
+	// Record the sandbox binaries actually running the guest on-node so a
+	// subsequent Checkpoint of this restored actor can re-pin the same version
+	// (Checkpoint overwrites the identity fields from its own request).
 	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
 		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
 		return nil, err
@@ -1714,6 +1707,10 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 
 	if err := validateSnapshotScope(req.GetScope()); err != nil {
 		return err
+	}
+
+	if req.GetSandboxAssets() == nil {
+		return fmt.Errorf("missing sandbox_assets")
 	}
 
 	switch req.GetType() {

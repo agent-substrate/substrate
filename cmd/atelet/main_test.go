@@ -231,6 +231,10 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   testPauseImage,
+		},
 	}
 }
 
@@ -339,6 +343,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", makeReq(), false},
+		{"missing sandbox assets", makeReq(func(r *ateletpb.RestoreRequest) { r.SandboxAssets = nil }), true},
 		{"empty snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "" }), true},
 		{"bucketless snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "relative/path" }), true},
 		{"invalid ateom uid", makeReq(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }), true},
