@@ -34,6 +34,8 @@ func TestBootstrapCreatesManagedIdentities(t *testing.T) {
 
 	ownerDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+OwnerUserName+":"+defaultOwnerPassword+"@", 1)
 	readWriteDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+ReadWriteUserName+":"+defaultReadWritePassword+"@", 1)
+	ownerDSN += "&pool_max_conns=4"
+	readWriteDSN += "&pool_max_conns=4"
 	cfg := BootstrapConfig{
 		EndpointSource:  ownerDSN,
 		ReadWriteSource: readWriteDSN,
@@ -151,7 +153,7 @@ func TestBootstrapPublicSchema(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := Connect(ctx, readWriteDSN, ownerDSN, ReadWriteRoleName, OwnerRoleName, "public", 0)
+	p, err := Connect(ctx, readWriteDSN, ownerDSN, ReadWriteRoleName, OwnerRoleName, "public", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

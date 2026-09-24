@@ -400,7 +400,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", dsn, "", "", schema, 0)
+	persistence, err := Connect(ctx, dsn+"&search_path=public", dsn, "", "", schema, 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -527,12 +527,18 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	ddlPath := filepath.Join(t.TempDir(), "ddl-dsn")
 	writeConnectionString(t, runtimePath, runtimeDSN)
 	writeConnectionString(t, ddlPath, ddlDSN)
-	p, err := Connect(ctx, "@file:"+runtimePath, "@file:"+ddlPath, runtimeRole, ddlRole, schema, 0)
+	p, err := Connect(ctx, "@file:"+runtimePath, "@file:"+ddlPath, runtimeRole, ddlRole, schema, 0, 20)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
 	defer p.pool.Close()
 	defer p.Close()
+	if got := p.pool.Config().MaxConns; got != 20 {
+		t.Fatalf("read/write pool MaxConns = %d, want 20", got)
+	}
+	if got := p.ownerPool.Config().MaxConns; got != ownerPoolMaxConns {
+		t.Fatalf("owner pool MaxConns = %d, want %d", got, ownerPoolMaxConns)
+	}
 
 	if _, err := p.CreateAtespace(ctx, newTestAtespace("runtime-write")); err != nil {
 		t.Fatalf("read/write operation failed: %v", err)
@@ -617,7 +623,7 @@ func TestConnectSingleRoleDoesNotRequireSchemaOwnership(t *testing.T) {
 	})
 
 	dsn := strings.Replace(containerDSN, "://atepg:atepg@", "://"+role+":"+password+"@", 1)
-	p, err := Connect(ctx, dsn, dsn, "", "", schema, 0)
+	p, err := Connect(ctx, dsn, dsn, "", "", schema, 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

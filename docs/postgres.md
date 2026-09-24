@@ -17,6 +17,8 @@ To provision the roles and users, run [identity.sql](../cmd/ateapi/internal/stor
 
 User credentials are passed into Substrate through `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` and `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`. These can be defined as DSNs directly or can be read by Substrate on connect from files using the following syntax: `@file:<path-to-file>`. The file path must be absolute. This approach can be used with the `--postgres-max-conn-lifetime` configuration in order to update connection credentials. The file will be reread when a new connection is created. When running `ateapi` directly, pass the DSNs as flags or use `@env` flags to read these environment variables; the installer manifest already uses `@env`.
 
+`ATE_API_POSTGRES_POOL_MAX_CONNS` (or `--postgres-pool-max-conns` when running `ateapi` directly) sets the limit for each read/write pool (the store and OpenFGA) after the connection string is loaded, including with `@file:`. When unset, a `pool_max_conns` value in the DSN or the pgxpool default applies. This setting does not affect the owner or watch pools; they are capped at 2 and 3 connections, respectively.
+
 `ateapi` uses the same `@env` flag pattern for role names and schema. `ATE_API_POSTGRES_BOOTSTRAP` is read directly unless `--postgres-bootstrap` is set; the administrator credential file paths and `--postgres-max-conn-lifetime` are flag-only.
 
 ### Bootstrapped BYO DB

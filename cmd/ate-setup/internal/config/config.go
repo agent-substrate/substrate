@@ -121,13 +121,15 @@ type Config struct {
 	PostgresOwnerConnectionString     string
 	PostgresReadWriteRole             string
 	PostgresOwnerRole                 string
+	// These distinguish an explicit role override from the default when
+	// adopting an existing Cloud SQL installation.
+	PostgresReadWriteRoleSet bool
+	PostgresOwnerRoleSet     bool
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
-	// PostgresPoolMaxConns sizes the apiserver's pgxpool
-	// (ATE_API_POSTGRES_POOL_MAX_CONNS). It is spliced into the DSN rather
-	// than passed separately, because that is the only place pgxpool reads it
-	// from. Empty leaves the pgxpool default in place.
+	// PostgresPoolMaxConns sizes the apiserver's read/write pool
+	// (ATE_API_POSTGRES_POOL_MAX_CONNS). Empty leaves the DSN or pgxpool default.
 	PostgresPoolMaxConns string
 	// PostgresServerCAFile is a local PEM file holding the server CA of an
 	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
@@ -326,6 +328,8 @@ func Load(opts Options) (*Config, error) {
 		PostgresOwnerConnectionString:     ownerConnectionString,
 		PostgresReadWriteRole:             firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
 		PostgresOwnerRole:                 firstNonEmpty(env["ATE_API_POSTGRES_OWNER_ROLE"], DefaultPostgresOwnerRole),
+		PostgresReadWriteRoleSet:          env["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "",
+		PostgresOwnerRoleSet:              env["ATE_API_POSTGRES_OWNER_ROLE"] != "",
 		PostgresSchema:                    env["ATE_API_POSTGRES_SCHEMA"],
 		PostgresPoolMaxConns:              env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
 		PostgresServerCAFile:              env["ATE_API_POSTGRES_SERVER_CA_FILE"],

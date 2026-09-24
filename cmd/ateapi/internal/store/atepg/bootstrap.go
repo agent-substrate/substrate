@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -74,10 +75,11 @@ func Bootstrap(ctx context.Context, cfg BootstrapConfig) error {
 	if err != nil {
 		return err
 	}
-	connConfig, err := pgx.ParseConfig(dsn)
+	ownerPoolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return errors.New("parsing PostgreSQL bootstrap connection string: invalid value")
 	}
+	connConfig := ownerPoolConfig.ConnConfig
 	readWriteSource, err := newConnectionStringSource(cfg.ReadWriteSource)
 	if err != nil {
 		return err
@@ -86,10 +88,11 @@ func Bootstrap(ctx context.Context, cfg BootstrapConfig) error {
 	if err != nil {
 		return err
 	}
-	readWriteConfig, err := pgx.ParseConfig(readWriteDSN)
+	readWritePoolConfig, err := pgxpool.ParseConfig(readWriteDSN)
 	if err != nil {
 		return errors.New("parsing PostgreSQL read/write connection string: invalid value")
 	}
+	readWriteConfig := readWritePoolConfig.ConnConfig
 	if connConfig.User != OwnerUserName {
 		return fmt.Errorf("PostgreSQL owner connection string must contain the %q user", OwnerUserName)
 	}

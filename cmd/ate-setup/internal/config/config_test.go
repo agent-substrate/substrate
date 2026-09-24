@@ -168,6 +168,9 @@ func TestLoadPostgresIdentityOverrides(t *testing.T) {
 	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" || cfg.PostgresReadWriteRole != "tenant_readwrite" || cfg.PostgresOwnerRole != "tenant_owner" {
 		t.Fatalf("PostgreSQL identity overrides not loaded: %+v", cfg)
 	}
+	if !cfg.PostgresReadWriteRoleSet || !cfg.PostgresOwnerRoleSet {
+		t.Fatalf("PostgreSQL role overrides not marked as explicit: %+v", cfg)
+	}
 }
 
 func TestLoadPostgresOwnerWithoutReadWrite(t *testing.T) {

@@ -116,12 +116,15 @@ var _ store.Interface = (*Persistence)(nil)
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
 // Connect opens read/write and owner pools. It creates the schema and applies migrations.
-func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRole, schema string, maxConnLifetime time.Duration) (*Persistence, error) {
+func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRole, schema string, maxConnLifetime time.Duration, poolMaxConns int32) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
 	if maxConnLifetime < 0 {
 		return nil, fmt.Errorf("PostgreSQL maximum connection lifetime must not be negative")
+	}
+	if poolMaxConns < 0 {
+		return nil, fmt.Errorf("PostgreSQL pool maximum connections must not be negative")
 	}
 	readWriteSource, ownerSource, err := connectionStringSources(readWriteDSN, ownerDSN)
 	if err != nil {
@@ -130,6 +133,9 @@ func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRo
 	cfg, err := poolConfig(readWriteSource, readWriteRole, maxConnLifetime)
 	if err != nil {
 		return nil, err
+	}
+	if poolMaxConns > 0 {
+		cfg.MaxConns = poolMaxConns
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
 	ownerCfg, err := poolConfig(ownerSource, ownerRole, maxConnLifetime)

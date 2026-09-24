@@ -24,7 +24,6 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -52,6 +51,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	readWriteDSN := e.Cfg.PostgresReadWriteConnectionString
 	ownerDSN := e.Cfg.PostgresOwnerConnectionString
 	readWriteFromOperator := readWriteDSN != ""
+	poolMaxConns := e.Cfg.PostgresPoolMaxConns
 
 	cloudsql, err := e.resolveCloudSQL(ctx)
 	if err != nil {
@@ -77,19 +77,48 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if ownerDSN == "" {
 		ownerDSN = readWriteDSN
 	}
-	readWriteDSN = withPoolMaxConns(readWriteDSN, e.Cfg.PostgresPoolMaxConns, readWriteFromOperator)
+	readWriteRole := e.Cfg.PostgresReadWriteRole
+	ownerRole := e.Cfg.PostgresOwnerRole
+	schema := e.Cfg.PostgresSchemaName()
+	if cloudsql.Adopted {
+		recorded, err := e.recordedAPIServerEnvVars(ctx)
+		if err != nil {
+			return err
+		}
+		if !e.Cfg.PostgresReadWriteRoleSet && recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "" {
+			readWriteRole = recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"]
+		}
+		if !e.Cfg.PostgresOwnerRoleSet && recorded["ATE_API_POSTGRES_OWNER_ROLE"] != "" {
+			ownerRole = recorded["ATE_API_POSTGRES_OWNER_ROLE"]
+		}
+		if poolMaxConns == "" {
+			poolMaxConns = recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"]
+		}
+		if e.Cfg.PostgresSchema == "" {
+			secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
+			if err != nil {
+				return err
+			}
+			if secret != nil && len(secret.Data["ATE_API_POSTGRES_SCHEMA"]) != 0 {
+				schema = string(secret.Data["ATE_API_POSTGRES_SCHEMA"])
+			}
+		}
+	}
 	log.Infof("POSTGRES_READ_WRITE_CONNECTION_STRING: %s", redactDSN(readWriteDSN))
 	log.Infof("POSTGRES_OWNER_CONNECTION_STRING: %s", redactDSN(ownerDSN))
 
 	configVars := cloudSQLEnvVars(cloudsql)
-	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = e.Cfg.PostgresReadWriteRole
-	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = e.Cfg.PostgresOwnerRole
+	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
+	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
 	configVars["ATE_API_POSTGRES_BOOTSTRAP"] = strconv.FormatBool(cloudsql.Instance == "" && !readWriteFromOperator)
+	if poolMaxConns != "" {
+		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
+	}
 	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
 	}
 	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars,
-		buildAPIServerEnvVars(readWriteDSN, ownerDSN, e.Cfg.PostgresSchemaName())); err != nil {
+		buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema)); err != nil {
 		return err
 	}
 	if err := e.applyPostgresServerCA(ctx); err != nil {
@@ -148,37 +177,6 @@ func (e *Env) applyPostgresServerCA(ctx context.Context) error {
 	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresServerCA, map[string]string{
 		"server-ca.pem": string(pem),
 	})
-}
-
-// poolMaxConnsPattern matches the setting in either DSN format: a URI query
-// parameter, delimited by &, or a keyword/value pair, delimited by a space.
-var poolMaxConnsPattern = regexp.MustCompile(`pool_max_conns=[^ &]*`)
-
-// withPoolMaxConns splices pgxpool sizing into the DSN, the only place pgxpool
-// reads it from. Without it the pool silently queues clients at its default
-// size.
-//
-// A DSN the operator supplied on this run wins outright. The environment
-// variable does however overwrite the setting in an adopted DSN, so that a
-// scaling change is not silently dropped on redeploy.
-func withPoolMaxConns(dsn, maxConns string, dsnFromOperator bool) string {
-	if maxConns == "" {
-		return dsn
-	}
-	if loc := poolMaxConnsPattern.FindStringIndex(dsn); loc != nil {
-		if dsnFromOperator {
-			return dsn
-		}
-		return dsn[:loc[0]] + "pool_max_conns=" + maxConns + dsn[loc[1]:]
-	}
-	switch {
-	case strings.Contains(dsn, "://") && strings.Contains(dsn, "?"):
-		return dsn + "&pool_max_conns=" + maxConns
-	case strings.Contains(dsn, "://"):
-		return dsn + "?pool_max_conns=" + maxConns
-	default:
-		return dsn + " pool_max_conns=" + maxConns
-	}
 }
 
 var (

@@ -30,7 +30,7 @@ func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, containerDSN, "", "", "public", 0)
+	p, err := Connect(ctx, containerDSN, containerDSN, "", "", "public", 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, containerDSN, "", "", "public", 0)
+	p, err := Connect(ctx, containerDSN, containerDSN, "", "", "public", 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

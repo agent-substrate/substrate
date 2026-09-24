@@ -82,6 +82,7 @@ var (
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Stable PostgreSQL role for owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresMaxConnLifetime           = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
+	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in each read/write PostgreSQL pool (store and OpenFGA). Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
 	postgresBootstrap                 = pflag.Bool("postgres-bootstrap", false, "Create missing fixed PostgreSQL identities before migrations.")
 	postgresAdminUsernameFile         = pflag.String("postgres-admin-username-file", "", "File that contains the PostgreSQL administrator username.")
 	postgresAdminPasswordFile         = pflag.String("postgres-admin-password-file", "", "File that contains the PostgreSQL administrator password.")
@@ -115,7 +116,7 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
 	if err := loadFlagsFromEnv(); err != nil {
-		serverboot.Fatal(ctx, "Invalid PostgreSQL bootstrap configuration", err)
+		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
 	if *postgresBootstrap {
 		if err := runPostgresBootstrap(ctx); err != nil {
@@ -401,6 +402,15 @@ func loadFlagsFromEnv() error {
 			*postgresBootstrap = enabled
 		}
 	}
+	if !pflag.CommandLine.Changed("postgres-pool-max-conns") {
+		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_POOL_MAX_CONNS"); ok && raw != "" {
+			value, err := strconv.ParseInt(raw, 10, 32)
+			if err != nil || value <= 0 {
+				return fmt.Errorf("ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer")
+			}
+			*postgresPoolMaxConns = int32(value)
+		}
+	}
 	return nil
 }
 
@@ -451,6 +461,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Duration("postgres-max-conn-lifetime", *postgresMaxConnLifetime),
+		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -498,6 +509,9 @@ func connectStore(ctx context.Context) (store.Interface, error) {
 	if *postgresMaxConnLifetime < 0 {
 		return nil, fmt.Errorf("--postgres-max-conn-lifetime must not be negative")
 	}
+	if *postgresPoolMaxConns < 0 {
+		return nil, fmt.Errorf("--postgres-pool-max-conns must not be negative")
+	}
 	persistence, err := connectPostgresWithRetries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
@@ -513,7 +527,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole, *postgresSchema, *postgresMaxConnLifetime)
+		persistence, err := atepg.Connect(ctx, *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole, *postgresSchema, *postgresMaxConnLifetime, *postgresPoolMaxConns)
 		if err == nil {
 			return persistence, nil
 		}
