@@ -779,7 +779,7 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 	}
 	return ch.VmConfig{
 		Cpus:    ch.CpusConfig{BootVcpus: int32(vcpus), MaxVcpus: int32(vcpus)},
-		Memory:  ch.MemoryConfig{Size: int64(memMiB) * 1024 * 1024, Shared: true},
+		Memory:  ch.MemoryConfig{Size: int64(memMiB) * 1024 * 1024, Shared: true, Thp: true},
 		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
 		Disks: []ch.DiskConfig{
 			{Path: image, Readonly: true, ImageType: "Raw", NumQueues: int32(vcpus), QueueSize: 1024},

@@ -188,6 +188,9 @@ func do(ctx context.Context) error {
 	if err := ensureSharedPropagation(ctx, "/run/kata-containers"); err != nil {
 		return fmt.Errorf("while making /run/kata-containers a shared mount: %w", err)
 	}
+	if err := ensureShmemTHP(ctx, "/sys"); err != nil {
+		slog.WarnContext(ctx, "Could not enable shmem transparent hugepages; guest memfd may use 4 KiB EPT pages", slog.Any("err", err))
+	}
 
 	// Clean up any old socket.
 	sockPath := ateompath.AteomSocketPath(*podUID)
@@ -346,6 +349,46 @@ func ensureSharedPropagation(ctx context.Context, path string) error {
 		return fmt.Errorf("marking %q rshared: %w", path, err)
 	}
 	slog.InfoContext(ctx, "Made mount rshared for kata virtio-fs propagation", slog.String("path", path))
+	return nil
+}
+
+// ensureShmemTHP configures /sys/kernel/mm/transparent_hugepage/shmem_enabled
+// to "within_size" so memfd-backed shared guest RAM (>= 2 MiB) uses 2 MiB
+// Transparent Huge Pages in KVM EPT page tables instead of 4 KiB base pages.
+// Container runtimes bind-mount /sys read-only by default, so if writing fails
+// with EROFS it temporarily remounts sysRoot read-write (mirroring setNetSysctl
+// in internal/ateomnet/net.go).
+func ensureShmemTHP(ctx context.Context, sysRoot string) error {
+	path := sysRoot + "/kernel/mm/transparent_hugepage/shmem_enabled"
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	cur := strings.TrimSpace(string(b))
+	if strings.Contains(cur, "[within_size]") || strings.Contains(cur, "[always]") {
+		slog.InfoContext(ctx, "shmem transparent hugepages already enabled", slog.String("shmem_enabled", cur))
+		return nil
+	}
+
+	const mode = "within_size"
+	if err := os.WriteFile(path, []byte(mode+"\n"), 0o644); !errors.Is(err, unix.EROFS) {
+		if err != nil {
+			return fmt.Errorf("writing %s: %w", path, err)
+		}
+		slog.InfoContext(ctx, "Enabled shmem transparent hugepages for guest memfd", slog.String("mode", mode))
+		return nil
+	}
+
+	if err := unix.Mount("none", sysRoot, "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
+		return fmt.Errorf("remounting %s read-write: %w", sysRoot, err)
+	}
+	defer func() {
+		_ = unix.Mount("none", sysRoot, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
+	}()
+	if err := os.WriteFile(path, []byte(mode+"\n"), 0o644); err != nil {
+		return fmt.Errorf("writing %s after remount: %w", path, err)
+	}
+	slog.InfoContext(ctx, "Enabled shmem transparent hugepages for guest memfd", slog.String("mode", mode))
 	return nil
 }
 
