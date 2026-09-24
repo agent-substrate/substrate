@@ -1,0 +1,127 @@
+{
+  "actor": "prof-1790111204",
+  "steps": [
+    {
+      "step": "create actor record",
+      "trace_id": "69f23b716ce42a9a569add01067412e4",
+      "notes": [],
+      "ateapi": {
+        "ateapi_rpc_total": 0.002045791
+      },
+      "images": {},
+      "atelet_restore": {},
+      "ateom": {},
+      "ateom_meta": {},
+      "client_wall": 0.4410582969430834,
+      "placement": ""
+    },
+    {
+      "step": "initial activation (resume #1)",
+      "trace_id": "abae72a9d6ebb00a05c26327dae56c62",
+      "notes": [
+        "worker profiling-68cc5d4c97-jhfjk on gke-substrate-poc-substrate-node-pool-6a57472e-smpv",
+        "Actor has durable snapshot; Restoring from snapshot"
+      ],
+      "ateapi": {
+        "_worker_pod": "profiling-68cc5d4c97-jhfjk",
+        "_node": "gke-substrate-poc-substrate-node-pool-6a57472e-smpv",
+        "ateapi_rpc_total": 0.265775397
+      },
+      "images": {
+        "pause:3.10.2": "HIT",
+        "swebench-verified": "HIT"
+      },
+      "atelet_restore": {
+        "volume_mount": 5.22e-07,
+        "manifest_fetch": 0.026024277,
+        "sandbox_assets": 1.9664e-05,
+        "download": 0.074465765,
+        "oci_unpack": 0.000595008,
+        "ateom_restore": 0.153818227,
+        "total": 0.257671421
+      },
+      "ateom": {
+        "01. Actor restoring": 0.007883071899414062,
+        "02. runsc create[_pause]": 0.03100299835205078,
+        "03. runsc restore[_pause]": 0.014560937881469727,
+        "04. runsc create[testbed]": 0.007257938385009766,
+        "05. runsc restore[testbed]": 0.0923302173614502
+      },
+      "ateom_meta": {
+        "worker_pod": "profiling-68cc5d4c97-jhfjk",
+        "ateom_total": 0.15303516387939453
+      },
+      "client_wall": 0.6822725480888039,
+      "placement": "node gke-substrate-poc-substrate-node-pool-6a57472e-smpv"
+    },
+    {
+      "step": "live suspend",
+      "trace_id": "f45736c12aca6d49a22c23ce9dd72e3e",
+      "notes": [],
+      "ateapi": {
+        "finalize_suspended.get_actor": 0.000201777,
+        "finalize_suspended.release_worker": 0.001885267,
+        "finalize_suspended.refetch_actor": 0.000131164,
+        "finalize_suspended.release_snapshot": 3.3544e-05,
+        "finalize_suspended.update_actor": 0.000794584,
+        "finalize_suspended.total": 0.00307151,
+        "ateapi_rpc_total": 0.29485788100000004
+      },
+      "images": {},
+      "atelet_restore": {},
+      "ateom": {
+        "01. Actor checkpointing": 6.318092346191406e-05,
+        "02. runsc checkpoint[_pause]": 0.030505895614624023,
+        "03. runsc kill[testbed]": 0.007077932357788086,
+        "04. runsc wait[testbed]": 0.0071871280670166016,
+        "05. runsc kill[_pause]": 0.006943941116333008,
+        "06. runsc wait[_pause]": 0.050009965896606445
+      },
+      "ateom_meta": {
+        "worker_pod": "profiling-68cc5d4c97-jhfjk",
+        "ateom_total": 0.10178804397583008
+      },
+      "client_wall": 0.6703464239835739,
+      "placement": ""
+    },
+    {
+      "step": "resume from snapshot",
+      "trace_id": "ebce17ec8d531808655269656a812c90",
+      "notes": [
+        "worker profiling-68cc5d4c97-jhfjk on gke-substrate-poc-substrate-node-pool-6a57472e-smpv",
+        "Actor has durable snapshot; Restoring from snapshot"
+      ],
+      "ateapi": {
+        "_worker_pod": "profiling-68cc5d4c97-jhfjk",
+        "_node": "gke-substrate-poc-substrate-node-pool-6a57472e-smpv",
+        "ateapi_rpc_total": 0.20246855500000002
+      },
+      "images": {
+        "swebench-verified": "HIT",
+        "pause:3.10.2": "HIT"
+      },
+      "atelet_restore": {
+        "volume_mount": 5.86e-07,
+        "manifest_fetch": 0.030600114,
+        "sandbox_assets": 2.4776e-05,
+        "download": 0.034934817,
+        "oci_unpack": 0.000603268,
+        "ateom_restore": 0.125274526,
+        "total": 0.194223155
+      },
+      "ateom": {
+        "01. Actor restoring": 0.008009910583496094,
+        "02. runsc create[_pause]": 0.03152894973754883,
+        "03. runsc restore[_pause]": 0.013440132141113281,
+        "04. runsc create[testbed]": 0.008018970489501953,
+        "05. runsc restore[testbed]": 0.06352996826171875
+      },
+      "ateom_meta": {
+        "worker_pod": "profiling-68cc5d4c97-jhfjk",
+        "ateom_total": 0.1245279312133789
+      },
+      "client_wall": 0.6344622611068189,
+      "placement": "same-node warm resume: gke-substrate-poc-substrate-node-pool-6a57472e-smpv -> gke-substrate-poc-substrate-node-pool-6a57472e-smpv"
+    }
+  ]
+}

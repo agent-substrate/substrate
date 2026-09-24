@@ -1,0 +1,58 @@
+{
+  "actor": "prof-1790015500",
+  "steps": [
+    {
+      "step": "create + register",
+      "trace_id": "3f8e2f5f0562bd83a4bfe4fc061bf8b4",
+      "notes": [],
+      "ateapi": {
+        "ateapi_rpc_total": 0.0021871860000000003
+      },
+      "images": {},
+      "atelet_restore": {},
+      "ateom": {},
+      "ateom_meta": {},
+      "client_wall": 0.4054481799248606,
+      "placement": ""
+    },
+    {
+      "step": "initial activation (resume #1)",
+      "trace_id": "9fc0072260c5e29ab7b551ee3556b0ec",
+      "notes": [
+        "worker profiling-68cc5d4c97-jhfjk on gke-substrate-poc-substrate-node-pool-6a57472e-smpv",
+        "Actor has durable snapshot; Restoring from snapshot"
+      ],
+      "ateapi": {
+        "_worker_pod": "profiling-68cc5d4c97-jhfjk",
+        "_node": "gke-substrate-poc-substrate-node-pool-6a57472e-smpv",
+        "ateapi_rpc_total": 0.278219508
+      },
+      "images": {
+        "swebench-verified": "HIT",
+        "pause:3.10.2": "HIT"
+      },
+      "atelet_restore": {
+        "volume_mount": 8.06e-07,
+        "manifest_fetch": 0.072375614,
+        "sandbox_assets": 2.5985e-05,
+        "download": 0.03507673,
+        "oci_unpack": 0.000690452,
+        "ateom_restore": 0.157579966,
+        "total": 0.267624442
+      },
+      "ateom": {
+        "01. Actor restoring": 0.007135152816772461,
+        "02. runsc create[_pause]": 0.03738999366760254,
+        "03. runsc restore[_pause]": 0.016048908233642578,
+        "04. runsc create[testbed]": 0.007487058639526367,
+        "05. runsc restore[testbed]": 0.08839893341064453
+      },
+      "ateom_meta": {
+        "worker_pod": "profiling-68cc5d4c97-jhfjk",
+        "ateom_total": 0.15646004676818848
+      },
+      "client_wall": 0.6609919499605894,
+      "placement": "node gke-substrate-poc-substrate-node-pool-6a57472e-smpv"
+    }
+  ]
+}

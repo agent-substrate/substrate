@@ -1,0 +1,58 @@
+# Worker pool dedicated to the lifecycle profiling runs, in the shape
+# demos/counter/counter.yaml.tmpl uses at HEAD. Kept separate from the demo
+# pools so a demo redeploy cannot move the ground under a profiling run, and
+# so the worker pods carrying profiling actors are trivially identifiable.
+#
+# Deploy with profiling/deploy-pool.sh, which substitutes the placeholders and
+# runs this through `ko apply`. Pinning an ateom digest by hand is what
+# stranded the previous pool on a stale build.
+#
+# There is no ate.dev/pool nodeSelector or toleration: bootstrap creates a
+# single GKE node pool (substrate-node-pool) and the workers run there
+# alongside everything else. The only node constraint is the substrate
+# version, which hack/install-ate.sh stamps on every node.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-profiling
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: profiling
+  namespace: ate-profiling
+  labels:
+    # The ActorTemplate's workerSelector matches this.
+    workload: profiling
+spec:
+  # More than one worker, spread over both nodes, so a resume can be profiled
+  # as a cross-node migration and not just a warm same-node restore. A pool
+  # that cannot place every replica is worse than a smaller one: the rollout
+  # never completes and the deploy blocks on it.
+  replicas: ${WORKER_COUNT}
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  # Defaults to gvisor, but stated outright so the pool shape is not an
+  # inherited surprise if the default ever moves.
+  sandboxClass: gvisor
+  template:
+    # The versioned atelet DaemonSet and worker pods schedule only to nodes
+    # carrying their substrate version.
+    nodeSelector:
+      ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
+    # Capacity comes from the limits (workerCapacity reads limits only), while
+    # kube-scheduler packs nodes by the requests, so the CPU request sits well
+    # below the limit to keep the pool placeable alongside ate-system. Memory
+    # is not compressible, so its request matches the limit.
+    #
+    # Keep the ActorTemplate's resources at or below these: an actor occupies
+    # its whole worker, and one sized above the worker never places.
+    resources:
+      limits:
+        cpu: "${WORKER_CPU}"
+        memory: ${WORKER_MEMORY}
+      requests:
+        cpu: 250m
+        memory: ${WORKER_MEMORY}
