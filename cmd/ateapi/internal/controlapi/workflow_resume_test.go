@@ -1331,6 +1331,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		golden *ateapipb.ExternalSnapshot
 		// fromData is the template's onResume boot-source policy.
 		fromData ateapipb.ResumeSource
+		// configName is the SandboxConfig the template names; "" means the
+		// "gvisor" config the workflow's lister serves.
+		configName string
 	}
 	// restoreWant pins the request atelet receives. On a non-OK code neither
 	// Restore nor Run may reach atelet; with run set the Run RPC (cold boot)
@@ -1708,7 +1711,29 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				goldenURI:      goldenURI,
 			},
 		},
+		{
+			// Restores take their sandbox from the template, like cold boots,
+			// so an unresolvable SandboxConfig stops them before atelet.
+			name:  "30 durable snapshot restore with a missing SandboxConfig is rejected",
+			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope}},
+			tmpl:  templateSeed{configName: "missing"},
+			want:  restoreWant{code: codes.FailedPrecondition},
+		},
+		{
+			name:  "31 local snapshot restore with a missing SandboxConfig is rejected",
+			actor: actorSeed{localSnapshot: &ateapipb.LocalSnapshotInfo{SnapshotName: localSnapshotName}},
+			tmpl:  templateSeed{onPause: fullScope, configName: "missing"},
+			want:  restoreWant{code: codes.FailedPrecondition},
+		},
 	}
+
+	// Every request atelet receives, Run or Restore, carries the sandbox the
+	// template's SandboxConfig resolves to.
+	wantSandboxAssets := sandboxAssetsProto(&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{
+		SandboxClass: atev1alpha1.SandboxClassGvisor,
+		PauseImage:   "pause@sha256:abc",
+		Assets:       testAssets(),
+	}})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1717,6 +1742,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			w, atelet := newWireCaptureWorkflow(t, persistence)
 
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+			configName := tt.tmpl.configName
+			if configName == "" {
+				configName = "gvisor"
+			}
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
@@ -1726,7 +1755,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				},
 				SandboxConfig: &ateapipb.SandboxConfig{
 					SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
-					ConfigName:   "gvisor",
+					ConfigName:   configName,
 				},
 			}
 			if tt.tmpl.golden != nil {
@@ -1795,10 +1824,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				if run == nil || restore != nil {
 					t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Run", restore, run)
 				}
+				if !proto.Equal(run.GetSandboxAssets(), wantSandboxAssets) {
+					t.Errorf("run SandboxAssets = %v, want %v", run.GetSandboxAssets(), wantSandboxAssets)
+				}
 				return
 			}
 			if restore == nil || run != nil {
 				t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Restore", restore, run)
+			}
+			if !proto.Equal(restore.GetSandboxAssets(), wantSandboxAssets) {
+				t.Errorf("restore SandboxAssets = %v, want %v", restore.GetSandboxAssets(), wantSandboxAssets)
 			}
 			if got := restore.GetType(); got != tt.want.checkpointType {
 				t.Errorf("restore type = %v, want %v", got, tt.want.checkpointType)
