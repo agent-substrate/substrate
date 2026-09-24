@@ -68,6 +68,16 @@ const (
 	// the CONNECT leg's answer set.
 	EgressDialAddress = "address"
 
+	// AgentgatewayClientCertificateAttribute is the CEL attribute carrying the
+	// PEM peer certificate agentgateway computed from the downstream TLS
+	// connection for ext_proc.
+	AgentgatewayClientCertificateAttribute = "source.certificate"
+	// EgressPeerCertificateMetadataNamespace is the dynamic-metadata namespace
+	// Envoy uses to carry the URL-encoded peer certificate chain to ext_proc.
+	EgressPeerCertificateMetadataNamespace = "dev.ate.egress.peer_certificate"
+	// EgressPeerCertificateChainKey is the field containing the encoded chain.
+	EgressPeerCertificateChainKey = "chain"
+
 	// directionAttribute carries the Direction outright, for dataplanes that
 	// have no Envoy filter chain to name. It is set from a dataplane expression,
 	// never from a client header. No dataplane in this repository sets it today:

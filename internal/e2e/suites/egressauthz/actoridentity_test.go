@@ -22,6 +22,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"net/url"
 	"path"
 	"testing"
@@ -129,6 +130,28 @@ func mintActorCredential(t *testing.T, ca *localca.CA, identity *substratex509.A
 	// first, then the chain leaf-first.
 	bundle := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	return bundle
+}
+
+// mintActorCredentialWithIntermediate proves the probe sends a complete chain;
+// the gateway trusts only the actor root, so omitting this intermediate must fail.
+func mintActorCredentialWithIntermediate(t *testing.T, ca *localca.CA, identity *substratex509.ActorIdentity) []byte {
+	t.Helper()
+	intermediateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediateTemplate := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "test actor intermediate"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(actorCertificateLifetime), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	intermediateDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate, ca.RootCertificate, &intermediateKey.PublicKey, ca.SigningKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate, err := x509.ParseCertificate(intermediateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := mintActorCredential(t, &localca.CA{RootCertificate: intermediate, SigningKey: intermediateKey}, identity)
+	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediateDER})...)
 	return bundle
 }
 

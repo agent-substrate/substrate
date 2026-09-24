@@ -15,7 +15,7 @@
 // Package egressauthz e2e-tests the egress gateway's front door: the two ways
 // it refuses a caller that is not a running actor.
 //
-// Both tests are negative, and that is the whole of the package on purpose.
+// The suite covers front-door denial, live certificate transport, and XFCC spoof resistance.
 //   - TestGatewayRefusesANonActorWorkload needs a credential no test process
 //     can mint. The probe's podidentity certificate is issued by kubelet from
 //     a real signer, so presenting it proves the gateway's downstream
@@ -32,7 +32,6 @@ package egressauthz
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +39,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -60,7 +58,7 @@ const (
 func TestGatewayRefusesANonActorWorkload(t *testing.T) {
 	ctx := context.Background()
 
-	probe := sharedProbe(t, ctx)
+	probe := startProbe(t, ctx)
 
 	const sni = "podidentity.example.com"
 	result := probe.handshakeAs(t, ctx, sni, podIdentityCredentialPath)
@@ -84,7 +82,7 @@ func TestGatewayRefusesANonActorWorkload(t *testing.T) {
 func TestGatewayRefusesAnUnknownActor(t *testing.T) {
 	ctx := context.Background()
 
-	probe := sharedProbe(t, ctx)
+	probe := startProbe(t, ctx)
 
 	const sni = "unknown.example.com"
 	result := probe.handshakeAs(t, ctx, sni, unknownActorCredentialPath)
@@ -112,36 +110,39 @@ type probeClient struct {
 	http    *http.Client
 }
 
-var (
-	probeOnce sync.Once
-	probeVal  *probeClient
-	probeErr  error
-)
-
-// sharedProbe returns the one probe pod the whole suite uses.
-func sharedProbe(t *testing.T, ctx context.Context) *probeClient {
+func (c *probeClient) connectAs(t *testing.T, ctx context.Context, destination, credential, xfcc string) connectResult {
 	t.Helper()
-	probeOnce.Do(func() {
-		// startProbe reports failures through t, which unwinds this goroutine
-		// without returning. Leave something behind so the tests that run
-		// afterwards fail pointing at the first one instead of dereferencing
-		// nil.
-		defer func() {
-			if probeVal == nil && probeErr == nil {
-				probeErr = errors.New("setup did not complete; see the failure reported by the first test that needed the probe")
-			}
-		}()
-		probeVal = startProbe(t, ctx)
-	})
-	if probeErr != nil {
-		t.Fatalf("starting the shared egress probe: %v", probeErr)
+	endpoint := c.baseURL + "/connect?destination=" + url.QueryEscape(destination) + "&credential-bundle=" + url.QueryEscape(credential) + "&xfcc=" + url.QueryEscape(xfcc)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return probeVal
+	resp, err := c.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out connectResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+type connectResult struct {
+	Credential    string `json:"credential"`
+	Stage         string `json:"stage"`
+	ConnectStatus int    `json:"connect_status"`
+	Error         string `json:"error"`
 }
 
 // startProbe creates the probe's namespace, mints its credentials there, builds
 // and deploys the probe, waits for it to be ready, and returns a client for it.
 func startProbe(t *testing.T, ctx context.Context) *probeClient {
+	return startProbeWithProvision(t, ctx, nil)
+}
+
+func startProbeWithProvision(t *testing.T, ctx context.Context, provision func(string)) *probeClient {
 	t.Helper()
 	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -149,6 +150,9 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	ns := e2e.CreateNamespace(t).Name
 
 	provisionProbeCredentials(t, ctx, ns)
+	if provision != nil {
+		provision(ns)
+	}
 	root, err := e2e.FindRepoRoot()
 	if err != nil {
 		t.Fatalf("FindRepoRoot: %v", err)
@@ -186,7 +190,7 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	if err != nil {
 		t.Fatalf("port-forwarding %s/%s: %v", ns, probeName, err)
 	}
-	e2e.RegisterSuiteCleanup(stop)
+	t.Cleanup(stop)
 
 	return &probeClient{
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", localPort),

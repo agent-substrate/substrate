@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -23,7 +24,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -132,6 +136,82 @@ func handshake(w http.ResponseWriter, r *http.Request, cfg probeConfig) {
 	writeJSON(w, result)
 }
 
+type connectResult struct {
+	Credential    string `json:"credential"`
+	Stage         string `json:"stage,omitempty"`
+	ConnectStatus int    `json:"connect_status,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
+func connectHandler(w http.ResponseWriter, r *http.Request, cfg probeConfig) {
+	destination := r.URL.Query().Get("destination")
+	credential := r.URL.Query().Get("credential-bundle")
+	if destination == "" || credential == "" {
+		http.Error(w, "missing destination or credential-bundle query parameter", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), cfg.handshakeTimeout)
+	defer cancel()
+	status, stage, err := connect(ctx, destination, credential, r.URL.Query().Get("xfcc"), cfg)
+	result := connectResult{Credential: credential, Stage: stage, ConnectStatus: status}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	writeJSON(w, result)
+}
+
+func connect(ctx context.Context, destination, credentialBundle, xfcc string, cfg probeConfig) (int, string, error) {
+	cert, err := credbundle.ClientLoader(credentialBundle)(nil)
+	if err != nil {
+		return 0, stageClient, fmt.Errorf("loading credential bundle: %w", err)
+	}
+	rootsPEM, err := os.ReadFile(cfg.trustBundlePath)
+	if err != nil {
+		return 0, stageClient, fmt.Errorf("reading gateway trust bundle: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(rootsPEM) {
+		return 0, stageClient, fmt.Errorf("gateway trust bundle contains no certificates")
+	}
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", cfg.gatewayAddress)
+	if err != nil {
+		return 0, stageTunnel, fmt.Errorf("dialing gateway: %w", err)
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return 0, stageTunnel, fmt.Errorf("setting gateway deadline: %w", err)
+		}
+	}
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: serverName(cfg.gatewayAddress), RootCAs: roots, MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{*cert}})
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return 0, stageGatewayTLS, fmt.Errorf("gateway TLS handshake: %w", err)
+	}
+	defer tlsConn.Close()
+	req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: destination}, Host: destination, Header: make(http.Header)}
+	if xfcc != "" {
+		req.Header.Set("X-Forwarded-Client-Cert", xfcc)
+	}
+	if err := req.Write(tlsConn); err != nil {
+		return 0, stageTunnel, fmt.Errorf("writing CONNECT request: %w", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if err != nil {
+		return 0, stageTunnel, fmt.Errorf("reading CONNECT response: %w", err)
+	}
+	status := resp.StatusCode
+	// Close the transport before closing a successful CONNECT body: net/http
+	// represents that body with the live tunnel and Close may otherwise wait for
+	// EOF from the gateway.
+	_ = tlsConn.Close()
+	_ = resp.Body.Close()
+	if status >= 200 && status < 300 {
+		return status, "", nil
+	}
+	return status, stageConnect, nil
+}
+
 func encodeChain(chain []*x509.Certificate) string {
 	var out []byte
 	for _, cert := range chain {
@@ -233,6 +313,9 @@ func newEgressProbeCmd() *cobra.Command {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/handshake", func(w http.ResponseWriter, r *http.Request) {
 				handshake(w, r, cfg)
+			})
+			mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
+				connectHandler(w, r, cfg)
 			})
 			mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)

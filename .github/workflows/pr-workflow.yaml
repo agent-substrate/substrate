@@ -158,6 +158,32 @@ jobs:
       # TLS is intercepted, their passthrough assumptions
       # (TestActorEgressHTTPS's end-to-end TLS with the origin) no longer hold.
       run: hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=${{ matrix.dataplane }} --experimental-use-sdsmint
+    - name: Run E2E tests (egress certificate identity, sdsmint)
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressauthz -count=1 -v -args --no-color
+    - name: Verify egress certificate chain producer mutation (Envoy)
+      if: matrix.dataplane == 'envoy'
+      run: |
+        set -euo pipefail
+        kube=(kubectl --context kind-kind)
+        original_data="$(mktemp)"
+        leaf_data="$(mktemp)"
+        "${kube[@]}" -n ate-system get configmap atenet-egress -o json | jq '{data:.data}' > "$original_data"
+        jq -e '.data["envoy.yaml"] | contains("urlEncodedPemEncodedPeerCertificateChain()")' "$original_data" >/dev/null
+        jq '.data["envoy.yaml"] |= sub("urlEncodedPemEncodedPeerCertificateChain"; "urlEncodedPemEncodedPeerCertificate") | {data:.data}' "$original_data" > "$leaf_data"
+        restore() {
+          "${kube[@]}" -n ate-system patch configmap atenet-egress --type merge --patch-file "$original_data" >/dev/null
+          "${kube[@]}" -n ate-system rollout restart deployment/atenet-egress >/dev/null
+          "${kube[@]}" -n ate-system rollout status deployment/atenet-egress --timeout=180s
+          rm -f "$original_data" "$leaf_data"
+        }
+        trap restore EXIT
+        "${kube[@]}" -n ate-system patch configmap atenet-egress --type merge --patch-file "$leaf_data" >/dev/null
+        "${kube[@]}" -n ate-system rollout restart deployment/atenet-egress >/dev/null
+        "${kube[@]}" -n ate-system rollout status deployment/atenet-egress --timeout=180s
+        E2E_EGRESS_CERTIFICATE_LEAF_ONLY=1 hack/run-e2e-kind.sh ./internal/e2e/suites/egressauthz -run '^TestGatewayCertificateMetadataTransport$' -count=1 -v -args --no-color
+        restore
+        trap - EXIT
+        hack/run-e2e-kind.sh ./internal/e2e/suites/egressauthz -run '^TestGatewayCertificateMetadataTransport$' -count=1 -v -args --no-color
     - name: Run E2E tests (egress MITM trust)
       # The consumption half of the trust-bundle chain: an actor does TLS with
       # the MITM gateway's minted leaf using ONLY the projected bundle, plus a
