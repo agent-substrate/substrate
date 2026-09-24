@@ -23,6 +23,10 @@ scenario ladder, read [observability.md](observability.md).
 > Source the environment configuration file (e.g., `source .ate-dev-env.sh`)
 > first so `PROJECT_ID` etc. are set.
 >
+> The deploy scripts also source `.ate-dev-env.sh` themselves, which overrides
+> anything set in the shell. When driving a cluster other than the one that file
+> describes, set `NO_DEV_ENV=1` and export every setting explicitly instead.
+>
 > **For Local Kind Clusters**: Set `KO_DOCKER_REPO` to the local registry so images are pulled without remote cloud credentials:
 > ```bash
 > export KO_DOCKER_REPO="localhost:5001"
