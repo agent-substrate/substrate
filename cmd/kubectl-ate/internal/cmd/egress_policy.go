@@ -33,11 +33,10 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-var (
-	getEgressPolicyAtespaceFlag    string
-	createEgressPolicyAtespaceFlag string
-	createEgressPolicyFilenameFlag string
-)
+var egressPolicyFlags struct {
+	atespace string
+	filename string
+}
 
 var getEgressPolicyCmd = &cobra.Command{
 	Use:     "egress-policy <actor-name>",
@@ -173,7 +172,7 @@ func runGetEgressPolicy(cmd *cobra.Command, args []string) error {
 
 	runner := &getEgressPolicyRunner{
 		getter:    apiClient,
-		actor:     &ateapipb.ObjectRef{Atespace: getEgressPolicyAtespaceFlag, Name: args[0]},
+		actor:     &ateapipb.ObjectRef{Atespace: egressPolicyFlags.atespace, Name: args[0]},
 		outputFmt: outputFmt,
 		stdout:    cmd.OutOrStdout(),
 		stderr:    cmd.ErrOrStderr(),
@@ -204,15 +203,15 @@ func (r *createEgressPolicyRunner) Run(ctx context.Context) error {
 }
 
 func runCreateEgressPolicy(cmd *cobra.Command, args []string) error {
-	data, err := readFileOrStdin(cmd.InOrStdin(), createEgressPolicyFilenameFlag)
+	data, err := readFileOrStdin(cmd.InOrStdin(), egressPolicyFlags.filename)
 	if err != nil {
 		return err
 	}
 	policy, err := egressPolicyFromManifest(data)
 	if err != nil {
-		return fmt.Errorf("failed to parse egress policy manifest %q: %w", createEgressPolicyFilenameFlag, err)
+		return fmt.Errorf("failed to parse egress policy manifest %q: %w", egressPolicyFlags.filename, err)
 	}
-	if err := overrideEgressPolicyMetadata(policy, createEgressPolicyAtespaceFlag); err != nil {
+	if err := overrideEgressPolicyMetadata(policy, egressPolicyFlags.atespace); err != nil {
 		return err
 	}
 
@@ -225,7 +224,7 @@ func runCreateEgressPolicy(cmd *cobra.Command, args []string) error {
 
 	runner := &createEgressPolicyRunner{
 		creator:   apiClient,
-		actor:     &ateapipb.ObjectRef{Atespace: createEgressPolicyAtespaceFlag, Name: args[0]},
+		actor:     &ateapipb.ObjectRef{Atespace: egressPolicyFlags.atespace, Name: args[0]},
 		policy:    policy,
 		outputFmt: outputFmt,
 		stdout:    cmd.OutOrStdout(),
@@ -234,12 +233,12 @@ func runCreateEgressPolicy(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	getEgressPolicyCmd.Flags().StringVarP(&getEgressPolicyAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in (required)")
+	getEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
 	_ = getEgressPolicyCmd.MarkFlagRequired("atespace")
 	getCmd.AddCommand(getEgressPolicyCmd)
 
-	createEgressPolicyCmd.Flags().StringVarP(&createEgressPolicyAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in (required)")
-	createEgressPolicyCmd.Flags().StringVarP(&createEgressPolicyFilenameFlag, "filename", "f", "", "Manifest file holding one EgressPolicy; use - for stdin (required)")
+	createEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
+	createEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "Manifest file holding one EgressPolicy; use - for stdin (required)")
 	_ = createEgressPolicyCmd.MarkFlagRequired("atespace")
 	_ = createEgressPolicyCmd.MarkFlagRequired("filename")
 	createCmd.AddCommand(createEgressPolicyCmd)
