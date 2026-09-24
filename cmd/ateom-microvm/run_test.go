@@ -253,4 +253,3 @@ func TestEnsureShmemTHP(t *testing.T) {
 		t.Fatalf("ensureShmemTHP() when already [within_size] returned error: %v", err)
 	}
 }
-
