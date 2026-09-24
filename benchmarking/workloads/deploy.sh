@@ -178,6 +178,10 @@ wait_templates_ready() {
   for template in "${TEMPLATES[@]}"; do
     echo "Waiting for the benchmark-workloads/${template} golden snapshot..."
     wait_actortemplate_ready benchmark-workloads "${template}" "${WAIT_TIMEOUT_SECS}"
+    # Announce success explicitly: without this the last line of a completed
+    # deploy is identical to the last line of one that is still blocked, which
+    # makes a finished run indistinguishable from a hung one in a log.
+    echo "Golden snapshot ready for benchmark-workloads/${template}."
   done
 }
 
