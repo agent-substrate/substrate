@@ -31,7 +31,7 @@ These were treated as contracts and reproduced exactly:
   kind × router that `render_ate_system_manifests` computed with
   nested `if`s, including the plain GKE install rendering the `base`
   kustomization rather than the raw directory, which would re-apply the
-  podcertificate-controller and undo its size10 flags and worker override.
+  podcertificate-controller and undo its size10 flags and worker count.
 - **Timeouts.** 60s namespace, 60s rollout (`--rollout-timeout` /
   `ATE_INSTALL_ROLLOUT_TIMEOUT`, as in the scripts), 120s for the
   podcertificate-controller and CSI waits the scripts fixed there, 300s for the

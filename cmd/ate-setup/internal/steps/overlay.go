@@ -48,7 +48,7 @@ const cordonControlPlaneComponent = installDir + "/components/cordon-control-pla
 // dataplane. The plain GKE envoy install renders the base kustomization rather
 // than the raw manifests/ate-install directory: the directory would also
 // re-apply pod-certificate-controller.yaml (reverting the size10 flags and the
-// WORKERS_PER_SIGNER override made earlier in the install), both atenet-egress
+// WORKERS_PER_SIGNER value set earlier in the install), both atenet-egress
 // variants, and the sandboxconfig files, all of which have their own apply
 // steps.
 func SystemOverlay(cfg *config.Config) string {

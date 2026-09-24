@@ -288,7 +288,7 @@ func extProcCluster(filter map[string]any) string {
 
 // The plain GKE install renders the base kustomization, not the raw
 // directory: the directory would re-apply pod-certificate-controller.yaml and
-// undo the size10 flags and the WORKERS_PER_SIGNER override.
+// undo the size10 flags and the WORKERS_PER_SIGNER value.
 func TestSystemOverlayDefaultIsBase(t *testing.T) {
 	if got := SystemOverlay(&config.Config{Router: config.RouterEnvoy}); got != installDir+"/base" {
 		t.Errorf("SystemOverlay(envoy, GKE) = %q, want %s/base", got, installDir)
