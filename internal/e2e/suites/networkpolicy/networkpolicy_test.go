@@ -272,7 +272,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 // setupDemoCounterTemplate provisions the per-test WorkerPool and substrate
 // ActorTemplate from the substrate counter demo, returning the pool name and
 // the template. The template lives in an atespace named after the test's k8s
-// namespace, so its name needs no per-test suffix. SnapshotsConfig is copied
+// namespace, so its name needs no per-test suffix. SnapshotConfig is copied
 // from the source, as the CRD-era setup did.
 func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapipb.ActorTemplate) {
 	t.Helper()

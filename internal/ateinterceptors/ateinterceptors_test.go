@@ -24,13 +24,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/protoredact"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 func TestStatusErrorInterceptor(t *testing.T) {
@@ -98,6 +102,21 @@ func TestStatusErrorInterceptor(t *testing.T) {
 	}
 }
 
+// statusWithErrorInfo builds a status error carrying an AIP-193 ErrorInfo
+// detail, standing in for a structured error built by an upstream service.
+func statusWithErrorInfo(t *testing.T, code codes.Code, reason string, md map[string]string) error {
+	t.Helper()
+	st, err := status.New(code, "boom").WithDetails(&epb.ErrorInfo{
+		Domain:   "substrate.dev",
+		Reason:   reason,
+		Metadata: md,
+	})
+	if err != nil {
+		t.Fatalf("WithDetails: %v", err)
+	}
+	return st.Err()
+}
+
 // errorInfoOf returns the ErrorInfo detail carried by err, or nil if none.
 func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
 	t.Helper()
@@ -114,9 +133,8 @@ func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
 }
 
 // TestInternalServerUnaryInterceptorPreservesDetails verifies the interceptor
-// returns structured errors (from NewGRPCError) intact — preserving the code and
-// the ErrorInfo carrying the Reason — while collapsing plain errors to Internal
-// with no ErrorInfo detail.
+// returns status errors intact — preserving the code and any ErrorInfo detail —
+// and collapses plain errors to Internal with no ErrorInfo.
 func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -127,10 +145,22 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	}{
 		{
 			name:          "structured error keeps code and reason",
-			handlerErr:    ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), errors.New("boom")),
+			handlerErr:    statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil),
 			wantCode:      codes.DataLoss,
-			wantReason:    string(ateerrors.ReasonFaileSaveSnapshot),
+			wantReason:    "FAILED_SAVE_SNAPSHOT",
 			wantErrorInfo: true,
+		},
+		{
+			name:          "wrapped plain error collapses to Internal with no ErrorInfo",
+			handlerErr:    fmt.Errorf("while parsing manifest: %w", errors.New("bad json")),
+			wantCode:      codes.Internal,
+			wantErrorInfo: false,
+		},
+		{
+			name:          "error wrapping a status keeps its code",
+			handlerErr:    fmt.Errorf("while calling downstream: %w", status.Error(codes.Unavailable, "backend down")),
+			wantCode:      codes.Unavailable,
+			wantErrorInfo: false,
 		},
 		{
 			name:          "plain error collapses to Internal with no ErrorInfo",
@@ -179,7 +209,7 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 // must survive the public wire, even when the status is wrapped.
 func TestServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	metadata := map[string]string{"want": "0.2.0", "have": "0.1.0"}
-	structuredErr := ateerrors.NewGRPCError(context.Background(), codes.FailedPrecondition, ateerrors.ReasonInvalidCheckpointResult, metadata, errors.New("refused"))
+	structuredErr := statusWithErrorInfo(t, codes.FailedPrecondition, "INVALID_CHECKPOINT_RESULT", metadata)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("outer error: %w", structuredErr)
@@ -199,7 +229,7 @@ func TestServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	if info == nil {
 		t.Fatal("status is missing the ErrorInfo detail")
 	}
-	if got, want := info.GetReason(), string(ateerrors.ReasonInvalidCheckpointResult); got != want {
+	if got, want := info.GetReason(), "INVALID_CHECKPOINT_RESULT"; got != want {
 		t.Errorf("ErrorInfo.Reason = %q, want %q", got, want)
 	}
 	for k, want := range metadata {
@@ -325,13 +355,19 @@ func TestMaxDeadlineUnaryInterceptor_ShorterDeadlineIsPreserved(t *testing.T) {
 	}
 }
 
-func TestServerUnaryInterceptorRedactsEnvFromProtoRequestLogs(t *testing.T) {
+func captureDefaultLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
 	var log bytes.Buffer
 	origLogger := slog.Default()
 	t.Cleanup(func() {
 		slog.SetDefault(origLogger)
 	})
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&log, nil)))
+	return &log
+}
+
+func TestServerUnaryInterceptorRedactsEnvValuesFromProtoRequestLogs(t *testing.T) {
+	log := captureDefaultLog(t)
 
 	req := &ateletpb.RunRequest{
 		Spec: &ateletpb.WorkloadSpec{
@@ -340,6 +376,7 @@ func TestServerUnaryInterceptorRedactsEnvFromProtoRequestLogs(t *testing.T) {
 					Name: "main",
 					Env: []*ateletpb.EnvEntry{
 						{Name: "API_KEY", Value: "sk-secret"},
+						{Name: "PLAIN", Value: "not-a-secret"},
 					},
 				},
 			},
@@ -354,10 +391,122 @@ func TestServerUnaryInterceptorRedactsEnvFromProtoRequestLogs(t *testing.T) {
 	}
 
 	gotLog := log.String()
-	if strings.Contains(gotLog, "sk-secret") || strings.Contains(gotLog, "API_KEY") {
-		t.Fatalf("log contains env data: %s", gotLog)
+	for _, secret := range []string{"sk-secret", "not-a-secret"} {
+		if strings.Contains(gotLog, secret) {
+			t.Fatalf("log contains env value %q: %s", secret, gotLog)
+		}
 	}
-	if len(req.GetSpec().GetContainers()[0].GetEnv()) != 1 {
-		t.Fatalf("interceptor mutated original request")
+	// Names survive so the log still shows which variables were set.
+	for _, want := range []string{`"name":"API_KEY"`, `"name":"PLAIN"`, `"value":"` + protoredact.Placeholder + `"`} {
+		if !strings.Contains(gotLog, want) {
+			t.Fatalf("log missing %s: %s", want, gotLog)
+		}
+	}
+	if got := req.GetSpec().GetContainers()[0].GetEnv()[0].GetValue(); got != "sk-secret" {
+		t.Fatalf("interceptor mutated original request: env value = %q", got)
+	}
+}
+
+func TestServerUnaryInterceptorRedactsActorJWTFromResponseLogs(t *testing.T) {
+	log := captureDefaultLog(t)
+
+	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
+	resp := &ateapipb.MintActorJWTResponse{ActorJwt: token}
+
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return resp, nil
+	})
+	if err != nil {
+		t.Fatalf("ServerUnaryInterceptor failed: %v", err)
+	}
+
+	gotLog := log.String()
+	if strings.Contains(gotLog, token) {
+		t.Fatalf("log contains the actor JWT: %s", gotLog)
+	}
+	if !strings.Contains(gotLog, `"actor_jwt":"`+protoredact.Placeholder+`"`) {
+		t.Fatalf("log does not show the redacted actor_jwt: %s", gotLog)
+	}
+	if got.(*ateapipb.MintActorJWTResponse).GetActorJwt() != token {
+		t.Fatalf("interceptor mutated the response returned to the client")
+	}
+}
+
+func TestInternalServerUnaryInterceptorRedactsBytesFields(t *testing.T) {
+	log := captureDefaultLog(t)
+
+	resp := &credproviderpb.FetchSecretResponse{OpaqueBytes: []byte("hunter2-hunter2")}
+	_, err := InternalServerUnaryInterceptor(context.Background(), &credproviderpb.FetchSecretRequest{Uri: "ate-secret://kubernetes.io/ns/name"}, &grpc.UnaryServerInfo{FullMethod: "/credprovider.CredentialProvider/FetchSecret"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return resp, nil
+	})
+	if err != nil {
+		t.Fatalf("InternalServerUnaryInterceptor failed: %v", err)
+	}
+
+	gotLog := log.String()
+	// encoding/json renders []byte as base64; check both forms are absent.
+	for _, leak := range []string{"hunter2-hunter2", "aHVudGVyMi1odW50ZXIy"} {
+		if strings.Contains(gotLog, leak) {
+			t.Fatalf("log contains the fetched secret: %s", gotLog)
+		}
+	}
+	if !strings.Contains(gotLog, "ate-secret://kubernetes.io/ns/name") {
+		t.Fatalf("log lost the non-sensitive request: %s", gotLog)
+	}
+	if string(resp.GetOpaqueBytes()) != "hunter2-hunter2" {
+		t.Fatalf("interceptor mutated the response returned to the client")
+	}
+}
+
+// TestDebugRedactFieldsArePinned lists every field across our protos that
+// carries debug_redact. It fails when a label is added or removed so the
+// change is reviewed as a deliberate decision about what the logs may show.
+func TestDebugRedactFieldsArePinned(t *testing.T) {
+	want := map[string]bool{
+		"ateapi.EnvVar.value":                           true,
+		"ateapi.MintActorJWTResponse.actor_jwt":         true,
+		"atelet.EnvEntry.value":                         true,
+		"credprovider.FetchSecretResponse.opaque_bytes": true,
+	}
+	got := map[string]bool{}
+	var walk func(protoreflect.MessageDescriptors)
+	walk = func(mds protoreflect.MessageDescriptors) {
+		for i := 0; i < mds.Len(); i++ {
+			md := mds.Get(i)
+			fds := md.Fields()
+			for j := 0; j < fds.Len(); j++ {
+				fd := fds.Get(j)
+				if opts, ok := fd.Options().(*descriptorpb.FieldOptions); ok && opts.GetDebugRedact() {
+					got[string(fd.FullName())] = true
+				}
+			}
+			walk(md.Messages())
+		}
+	}
+	for _, file := range []protoreflect.FileDescriptor{ateapipb.File_ateapi_proto, ateletpb.File_atelet_proto, credproviderpb.File_credprovider_proto} {
+		walk(file.Messages())
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("%s lost its debug_redact label; the interceptor would log it in clear", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("%s is newly marked debug_redact; add it to this list if that is intended", name)
+		}
+	}
+}
+
+func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
+	log := captureDefaultLog(t)
+	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return nil, status.Error(codes.PermissionDenied, "no")
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(log.String(), `"resp":null`) {
+		t.Errorf("nil response should log as null: %s", log.String())
 	}
 }

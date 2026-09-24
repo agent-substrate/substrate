@@ -109,7 +109,7 @@ kubectl ate get workers -l <label-selector>
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises while building its golden tag. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
-| `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
+| `STATE` | Current lifecycle state (`ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`, `ACTOR_STATE_PAUSING`, `ACTOR_STATE_PAUSED`, `ACTOR_STATE_CRASHED`, `ACTOR_STATE_DELETING`, `ACTOR_STATE_REVERTING`). |
 | `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `WORKER IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
@@ -202,6 +202,9 @@ kubectl ate resume actor my-actor -a <atespace>
 # Suspend an actor (snapshots its state to storage and frees the worker)
 kubectl ate suspend actor my-actor -a <atespace>
 
+# Revert an actor to its last external snapshot (discards live, paused, or crashed state and returns to SUSPENDED)
+kubectl ate revert actor my-actor -a <atespace>
+
 # Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
 kubectl ate delete actor my-actor -a <atespace>
 
@@ -249,14 +252,18 @@ kubectl ate create egress-policy <actor-name> -a <atespace> -f policy.yaml
 # Copy the egress policy of another actor.
 kubectl ate get egress-policy <src-actor> -a <atespace> -o yaml | \
   kubectl ate create egress-policy <actor-name> -a <atespace> -f -
+
+# Replace an actor's egress policy: dump it, edit the rules, send it back.
+kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml > policy.yaml
+$EDITOR policy.yaml
+kubectl ate update egress-policy <actor-name> -a <atespace> -f policy.yaml
 ```
 
-The manifest is one `EgressPolicy` in YAML or JSON; `metadata` may be omitted
-and server-managed fields are ignored, so the output of `get -o yaml` is a valid
-manifest as is.
+#### Details
 
-`get` exits 1 when the actor does not exist; an actor without a policy prints a
-note on stderr and exits 0.
+* `create` can take a manifest with no `metadata`, taking `name` and `atespace` from the command line.
+* `update` replaces the entire policy and the manifest metadata must match `uid`
+  and `version` for the `EgressPolicy` being updated.
 
 #### `kubectl ate get egress-policy` output columns
 

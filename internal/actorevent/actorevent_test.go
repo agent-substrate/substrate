@@ -35,7 +35,6 @@ const (
 	testActorName    = "counter-1"
 	testActorUID     = "8f2a1c4e6b0d47f1"
 	testTemplateName = "counter"
-	testReason       = "ACTOR_EXITED"
 )
 
 func testAttribution() resources.ActorAttribution {
@@ -56,10 +55,9 @@ func stateChangedAttrs(state string) []slog.Attr {
 
 // crashedAttrs mirrors what controlapi.logActorCrashed builds.
 func crashedAttrs() []slog.Attr {
-	attrs := append(ateattr.ActorLogAttrs(testAttribution()),
+	return append(ateattr.ActorLogAttrs(testAttribution()),
 		slog.String(string(ateattr.ActorOperationNameKey), ateattr.OperationResume),
 		slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
-	return append(attrs, ateattr.FailureLogAttrs(testReason)...)
 }
 
 func recordAttrs(rec log.Record) map[string]string {
@@ -117,9 +115,7 @@ func TestBuildRecord(t *testing.T) {
 			wantBody: "Actor crashed",
 			wantSev:  log.SeverityError,
 			wantVals: map[string]string{
-				string(ateattr.ActorStateKey):    ateattr.ActorStateCrashed,
-				string(ateattr.FailureReasonKey): testReason,
-				string(ateattr.FailureDomainKey): ateattr.FailureDomain(testReason),
+				string(ateattr.ActorStateKey): ateattr.ActorStateCrashed,
 			},
 		},
 	}

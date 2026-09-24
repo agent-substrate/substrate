@@ -167,3 +167,79 @@ func TestSetWorkerCapacitySurfacesRejection(t *testing.T) {
 		t.Error("a rejected report returned success, so the worker would not retry")
 	}
 }
+
+type fakeSuspendService struct {
+	ateapipb.WorkerServiceClient
+
+	got []*ateapipb.RequestActorSuspendRequest
+	err error
+}
+
+func (s *fakeSuspendService) RequestActorSuspend(_ context.Context, in *ateapipb.RequestActorSuspendRequest, _ ...grpc.CallOption) (*ateapipb.RequestActorSuspendResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.got = append(s.got, in)
+	return &ateapipb.RequestActorSuspendResponse{}, nil
+}
+
+func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
+	workers := &fakeSuspendService{}
+	svc := &ateomSupportServer{workers: workers}
+
+	ctx := workerContext(t, "pod-a")
+	if _, err := svc.RequestActorSuspend(ctx, &ateletpb.RequestActorSuspendRequest{
+		ActorAtespace: "team-a",
+		ActorName:     "actor-1",
+		ActorUid:      "actor-uid-1",
+	}); err != nil {
+		t.Fatalf("RequestActorSuspend() failed: %v", err)
+	}
+
+	want := []*ateapipb.RequestActorSuspendRequest{{
+		// The Worker is named after the worker pod UID, taken from the
+		// certificate rather than the request: a worker may speak for the
+		// actors it hosts, and only the control plane knows which those are.
+		Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "actor-uid-1",
+	}}
+	if diff := cmp.Diff(want, workers.got, protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRequestActorSuspendRequiresACertificate(t *testing.T) {
+	workers := &fakeSuspendService{}
+	svc := &ateomSupportServer{workers: workers}
+
+	// No peer identity: there is no worker to attribute this to, and the
+	// request names no other way to find one.
+	_, err := svc.RequestActorSuspend(context.Background(), &ateletpb.RequestActorSuspendRequest{
+		ActorAtespace: "team-a",
+		ActorName:     "actor-1",
+		ActorUid:      "actor-uid-1",
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("unauthenticated request returned %v, want Unauthenticated", err)
+	}
+	if len(workers.got) != 0 {
+		t.Errorf("unauthenticated request was still forwarded: %v", workers.got)
+	}
+}
+
+// A refusal is an answer, not a transport failure: the worker needs to see
+// that the control plane declined so it does not treat the actor as suspended.
+func TestRequestActorSuspendSurfacesRefusal(t *testing.T) {
+	workers := &fakeSuspendService{err: status.Error(codes.FailedPrecondition, "Actor is RESUMING")}
+	svc := &ateomSupportServer{workers: workers}
+
+	_, err := svc.RequestActorSuspend(workerContext(t, "pod-a"), &ateletpb.RequestActorSuspendRequest{
+		ActorAtespace: "team-a",
+		ActorName:     "actor-1",
+		ActorUid:      "actor-uid-1",
+	})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("code = %v (err %v), want FailedPrecondition", got, err)
+	}
+}

@@ -48,8 +48,8 @@ type resumeSnapshotSource struct {
 	// selects the golden snapshot as the boot source for the pending restore:
 	// restore then combines the golden snapshot with the actor's data.
 	GoldenSnapshotURI resources.SnapshotURI
-	// TemplateReplaced is true when the snapshot's recorded template UID
-	// differs from the actor's current template.
+	// TemplateReplaced is true when the external snapshot's recorded template
+	// UID differs from the actor's current template.
 	TemplateReplaced bool
 }
 
@@ -128,7 +128,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
-	if running, err = w.finalizeRunning(leaseCtx, actorRef, actorTemplate); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -184,13 +184,8 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, status.Errorf(codes.DataLoss, "Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
-		// The Actor records the template its guest state was built on; a
-		// different UID on its current template means it was repointed since
-		// the capture.
-		// TODO: Disallow updating the ActorTemplate ID for paused actors here
-		// as well; it is already disallowed at admission time.
-		builtOnTemplateUID := actor.GetStatus().GetCurrentActorTemplateUid()
-		src.TemplateReplaced = builtOnTemplateUID != "" && builtOnTemplateUID != actorTemplate.GetMetadata().GetUid()
+		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
+		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -201,10 +196,10 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	// (the local snapshot takes precedence at restore), or when its durable
 	// snapshot holds Data. Valid Full snapshots restore from their own
 	// content and ignore the policy.
-	if actorTemplate.GetSnapshotsConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
+	if actorTemplate.GetSnapshotConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
 		dataOnly := false
 		if actor.GetStatus().GetLocalSnapshotInfo() != nil {
-			dataOnly = actorTemplate.GetSnapshotsConfig().GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+			dataOnly = actorTemplate.GetSnapshotConfig().GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		} else if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
 			dataOnly = src.Scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		}
@@ -355,7 +350,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
 
 		// Crash the actor if its worker assignment is missing. We should never be in this state.
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
 			return nil, cerr
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -365,7 +360,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if err != nil {
 		// Crash the actor if it was assigned to a deleted pod.
 		if errors.Is(err, store.ErrNotFound) {
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); cerr != nil {
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
 				return nil, cerr
 			}
 			return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -376,7 +371,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 			slog.String("actor", actorRef.String()),
 			slog.String("worker", worker.GetWorkerNamespace()+"/"+worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
 			return nil, cerr
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef.String())
@@ -389,7 +384,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if !hosted {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer hosts it",
 			slog.String("worker", worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -407,7 +402,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		if _, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil {
 			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
@@ -701,18 +696,23 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		// loadActorForResume resolved a golden URI per the template's onResume
 		// configuration, else what the pause captured.
 		switch {
-		case src.TemplateReplaced:
-			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
 		default:
-			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
+			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
-		_, err = client.Restore(ctx, req)
-		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring workload", ateattr.OperationResume)
+		if _, err = client.Restore(ctx, req); err != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
+				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+				return tele, cerr
+			}
+			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		}
+		return tele, nil
 	} else if !src.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		// Mirrors loadActorForResume's source resolution: the durable URI is
@@ -754,8 +754,15 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			CpuMilli:          cpuMilli,
 			MemoryBytes:       memBytes,
 		}
-		_, err = client.Restore(ctx, req)
-		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
+		if _, err = client.Restore(ctx, req); err != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
+				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+				return tele, cerr
+			}
+			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		}
+		return tele, nil
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
@@ -782,8 +789,15 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			CpuMilli:              cpuMilli,
 			MemoryBytes:           memBytes,
 		}
-		_, err = client.Run(ctx, req)
-		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while creating workload from spec", ateattr.OperationResume)
+		if _, err = client.Run(ctx, req); err != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
+				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume); cerr != nil {
+				return tele, cerr
+			}
+			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		}
+		return tele, nil
 	}
 }
 
@@ -794,9 +808,8 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 	return &ateletpb.EgressGateway{Address: w.egressGatewayAddress}
 }
 
-// finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
-// recording the template the sprint booted with.
-func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
+// finalizeRunning re-reads the actor for a fresh version and commits RUNNING.
+func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
 
@@ -807,9 +820,6 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
-		// Recorded at sprint start so the next resume can detect a repointed
-		// template by UID; the snapshot it restores was taken under this one.
-		toUpdate.Status.CurrentActorTemplateUid = actorTemplate.GetMetadata().GetUid()
 		return nil
 	})
 	if err != nil {

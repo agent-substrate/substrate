@@ -117,15 +117,23 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 	return store.ListResponse[*ateapipb.Atespace]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
+func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Atespace, error) {
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `DELETE FROM atespaces WHERE name = $1 RETURNING proto`, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `
+		DELETE FROM atespaces
+		WHERE name = $1
+		  AND ($2::text = '' OR uid = $2::text)
+		  AND ($3::bigint = 0 OR version = $3::bigint)
+		RETURNING proto`, name, precondition.UID, precondition.Version).Scan(&protoBytes)
 	if err != nil {
 		if isForeignKeyViolation(err) {
 			return nil, store.ErrFailedPrecondition
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
+			var uid string
+			var version int64
+			err := p.pool.QueryRow(ctx, `SELECT uid, version FROM atespaces WHERE name = $1`, name).Scan(&uid, &version)
+			return nil, mapDeleteError(err, uid, version, precondition)
 		}
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
 	}

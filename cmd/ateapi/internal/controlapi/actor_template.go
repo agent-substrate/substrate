@@ -156,45 +156,12 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.Dele
 	if errs := validateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-
-	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
-	// Serialize cleanup against golden actor/tag creation by the reconciler.
-	ctx, lease, err := acquireLease(ctx, s.impl, "lease:actortemplate:"+templateRef.Atespace+":"+templateRef.Name, "ActorTemplate "+templateRef.String())
-	if err != nil {
-		return nil, err
-	}
-	defer lease.Close()
-	tmpl, err := s.impl.GetActorTemplate(ctx, templateRef)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
-	}
-	if err != nil {
-		return nil, err
-	}
-	goldenRef := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
-	if _, err := s.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: goldenRef, AnyState: true}); err != nil && status.Code(err) != codes.NotFound {
-		return nil, fmt.Errorf("while deleting golden actor: %w", err)
-	}
-	if _, err := s.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: goldenRef}); err != nil && status.Code(err) != codes.NotFound {
-		return nil, fmt.Errorf("while deleting golden tag: %w", err)
-	}
-	deleted, err := s.impl.DeleteActorTemplate(ctx, templateRef)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
-		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
-		}
-		return nil, fmt.Errorf("while deleting actor template from DB: %w", err)
-	}
-
-	return deleted, nil
+	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
 	// TODO: implement this
-	return s.store.DeleteActorTemplate(ctx, templateRef)
+	return s.store.DeleteActorTemplate(ctx, templateRef, precondition)
 }
 
 func validateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
@@ -363,18 +330,18 @@ func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, f
 	return errs
 }
 
-// ValidateCustom_SnapshotsConfig_StorageLocation ensures an
-// ActorTemplate's snapshotsConfig.location is a well-formed
+// ValidateCustom_SnapshotConfig_StorageLocation ensures an
+// ActorTemplate's snapshotConfig.location is a well-formed
 // URI with a bucket, so a bad location fails fast.
-func ValidateCustom_SnapshotsConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
 	}
 	return nil
 }
 
-// ValidateCustom_SnapshotsConfig requires on_commit to be a subset of on_pause.
-func ValidateCustom_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
+// ValidateCustom_SnapshotConfig requires on_commit to be a subset of on_pause.
+func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
 	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}

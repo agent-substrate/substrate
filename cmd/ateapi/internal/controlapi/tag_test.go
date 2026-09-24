@@ -61,7 +61,11 @@ func TestValidateCreateTagRequest(t *testing.T) {
 			name: "valid with status",
 			req: &ateapipb.CreateTagRequest{
 				Tag: validTag(func(tag *ateapipb.Tag) {
-					tag.Status = &ateapipb.TagStatus{Snapshot: validExternalSnapshot()}
+					tag.Status = &ateapipb.TagStatus{
+						Snapshot:         validExternalSnapshot(),
+						ActorTemplateUid: someActorUID,
+						StorageLocation:  testStorageLocation,
+					}
 				}),
 			},
 			wantError: nil,
@@ -801,7 +805,6 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 				SnapshotUri:  uri.String(),
 				ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope(),
 			},
-			SourceActorUid: actor.GetMetadata().GetUid(),
 		},
 	}
 }
@@ -854,7 +857,7 @@ func TestUpdateTag_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: tagName}); err != nil {
+			if _, err := persistence.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: tagName}, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("Racing writer: DeleteTag: %v", err)
 			}
 			recreatedTag = storetest.MustCreateTag(t, ctx, persistence, newTestTag(t, tagName, actorTwo))

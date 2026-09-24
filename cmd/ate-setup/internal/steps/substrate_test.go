@@ -129,7 +129,7 @@ func TestActorTemplateFromManifestErrors(t *testing.T) {
 		{name: "empty", manifest: ""},
 		{name: "not yaml", manifest: ":\t:"},
 		// Strict parsing: a typo must fail rather than silently drop the field.
-		{name: "unknown field", manifest: "metadata:\n  atespace: a\n  name: t\nsnapshotConfig: {}\n"},
+		{name: "unknown field", manifest: "metadata:\n  atespace: a\n  name: t\nsnapshotsConfig: {}\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

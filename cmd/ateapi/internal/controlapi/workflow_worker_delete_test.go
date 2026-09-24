@@ -135,7 +135,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 		t.Errorf("in-progress local checkpoint not cleared: %v", got.GetStatus())
 	}
 	// The durable one is kept: it names the prefix whatever atelet already
-	// uploaded lives under, which the actor's delete needs to collect it.
+	// uploaded lives under, which delete or revert needs to collect it.
 	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); got.GetStatus().GetInProgressSnapshotUri() != want {
 		t.Errorf("in-progress external checkpoint not preserved: %v", got.GetStatus())
 	}
@@ -193,7 +193,7 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 				t.Errorf("crashed actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 			}
 			if tc.wantMetric {
-				assertCrashMetricDatapoint(t, reader, tc.wantOp, ateattr.ReasonWorkerPodGone, "ate-system", "tmpl", "pool-1", "gvisor", 1)
+				assertCrashMetricDatapoint(t, reader, tc.wantOp, "ate-system", "tmpl", "pool-1", "gvisor", 1)
 			} else {
 				assertNoCrashMetricDatapoint(t, reader)
 			}

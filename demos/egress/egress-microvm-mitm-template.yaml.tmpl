@@ -79,7 +79,7 @@ sandboxConfig:
   # Installed cluster-wide by hack/install-microvm-deps.sh; naming it
   # explicitly makes a missing or stale install fail loudly.
   configName: microvm
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-microvm-mitm/

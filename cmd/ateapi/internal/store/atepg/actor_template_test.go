@@ -85,8 +85,8 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 	createTestAtespace(t, s, "team-a")
 
 	if _, err := s.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata:        &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "template-a"},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{},
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "template-a"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
@@ -96,13 +96,13 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActorTemplate failed: %v", err)
 	}
-	want := &ateapipb.SnapshotsConfig{
+	want := &ateapipb.SnapshotConfig{
 		OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 		OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 		OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 	}
-	if diff := cmp.Diff(want, got.GetSnapshotsConfig(), protocmp.Transform()); diff != "" {
-		t.Errorf("GetActorTemplate did not backfill snapshots_config defaults (-want +got):\n%s", diff)
+	if diff := cmp.Diff(want, got.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
+		t.Errorf("GetActorTemplate did not backfill snapshot_config defaults (-want +got):\n%s", diff)
 	}
 
 	// ListActorTemplates decodes rows on its own path; it must backfill too.
@@ -113,7 +113,7 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 	if len(page.Items) != 1 {
 		t.Fatalf("ListActorTemplates returned %d items, want 1", len(page.Items))
 	}
-	if diff := cmp.Diff(want, page.Items[0].GetSnapshotsConfig(), protocmp.Transform()); diff != "" {
-		t.Errorf("ListActorTemplates did not backfill snapshots_config defaults (-want +got):\n%s", diff)
+	if diff := cmp.Diff(want, page.Items[0].GetSnapshotConfig(), protocmp.Transform()); diff != "" {
+		t.Errorf("ListActorTemplates did not backfill snapshot_config defaults (-want +got):\n%s", diff)
 	}
 }

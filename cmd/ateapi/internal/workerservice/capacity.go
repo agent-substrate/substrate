@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package workerservice serves the RPCs a Worker uses to tell the control
-// plane about itself.
 package workerservice
 
 import (
@@ -34,27 +32,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// Server implements ateapipb.WorkerServiceServer.
-type Server struct {
-	ateapipb.UnimplementedWorkerServiceServer
-
-	// store is where a Worker's reported capacity is recorded, and the
-	// authoritative state the report is authorized against.
-	store store.Interface
-
-	// ateletSPIFFEID is the identity the calling atelet must present.
-	ateletSPIFFEID string
-}
-
-var _ ateapipb.WorkerServiceServer = (*Server)(nil)
-
-func New(store store.Interface, ateletSPIFFEID string) *Server {
-	return &Server{store: store, ateletSPIFFEID: ateletSPIFFEID}
-}
-
 // SetWorkerCapacity records a Worker's reported capacity. As with MintCert,
 // the caller must be an atelet running on the Worker's node.
 func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerCapacityRequest) (*ateapipb.SetWorkerCapacityResponse, error) {
+	// TODO(identity): This check should be handled by OpenFGA.
 	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
 	if err != nil {
 		return nil, err

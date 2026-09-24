@@ -137,11 +137,13 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// there.
 		outActor.Status.ExternalSnapshot = proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
 		// The Actor is born with guest state, so stamp the template that state
-		// was built on now rather than at the first resume. Left empty, a
-		// repoint before that first resume reads as "no guest state" instead of
-		// "replaced template", and the resume restores the old template's
-		// memory and rootfs in full instead of the volume data alone.
-		outActor.Status.CurrentActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
+		// was built on now rather than at the first resume. The Tag records it
+		// beside its snapshot rather than on it, so the clone above does not
+		// carry it. Left empty, a repoint before that first resume reads as "no
+		// guest state" instead of "replaced template", and the resume restores
+		// the old template's memory and rootfs in full instead of the volume
+		// data alone.
+		outActor.Status.ExternalSnapshot.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
 	}
 	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
@@ -434,7 +436,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState())
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState(), toDeletePreconditions(req.GetOptions()))
 	if err != nil {
 		return nil, err
 	}
@@ -442,8 +444,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	return deleted, nil
 }
 
-func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	return s.store.DeleteActor(ctx, actorRef)
+func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
+	return s.store.DeleteActor(ctx, actorRef, precondition)
 }
 
 func validateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRequest) field.ErrorList {

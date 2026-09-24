@@ -120,6 +120,12 @@ func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRo
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
+	if readWriteRole == "" {
+		return nil, fmt.Errorf("PostgreSQL read/write role must not be empty")
+	}
+	if ownerRole == "" {
+		return nil, fmt.Errorf("PostgreSQL owner role must not be empty")
+	}
 	if maxConnLifetime < 0 {
 		return nil, fmt.Errorf("PostgreSQL maximum connection lifetime must not be negative")
 	}
@@ -270,6 +276,9 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 // until connections started failing. Re-parsing in BeforeConnect costs one
 // small file read per new connection and picks up every rotation.
 func poolConfig(source connectionStringSource, role string, maxConnLifetime time.Duration) (*pgxpool.Config, error) {
+	if role == "" {
+		return nil, fmt.Errorf("PostgreSQL role must not be empty")
+	}
 	dsn, err := source()
 	if err != nil {
 		return nil, err
@@ -293,22 +302,17 @@ func poolConfig(source connectionStringSource, role string, maxConnLifetime time
 		if !sameConnectionIdentity(cc, fresh) {
 			return fmt.Errorf("PostgreSQL connection identity changed; restart is required")
 		}
-		if role == "" && cc.User != fresh.User {
-			return fmt.Errorf("PostgreSQL user changed without a stable role; restart is required")
-		}
 		cc.User = fresh.User
 		cc.Password = fresh.Password
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
 		return nil
 	}
-	if role != "" {
-		cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-			if _, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
-				return fmt.Errorf("assuming PostgreSQL role %q: %w", role, err)
-			}
-			return nil
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if _, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+			return fmt.Errorf("assuming PostgreSQL role %q: %w", role, err)
 		}
+		return nil
 	}
 	return cfg, nil
 }
@@ -389,19 +393,9 @@ func (p *Persistence) Close() {
 	}
 }
 
-// NewPool opens a dedicated PostgreSQL connection pool configured identically
-// to this persistence instance (including TLS rotation and search_path). The
-// The pool connects as the read/write role, which cannot change schemas.
-// A subsystem that creates its own tables migrates through MigrateAsOwner first.
-func (p *Persistence) NewPool(ctx context.Context) (*pgxpool.Pool, error) {
-	return pgxpool.NewWithConfig(ctx, p.pool.Config())
-}
-
-// MigrateAsOwner runs a subsystem's migrations on the owner pool before it
-// serves traffic through a NewPool pool. Bootstrap or the external database
-// administrator supplies the read/write role's default privileges.
-func (p *Persistence) MigrateAsOwner(ctx context.Context, migrate func(context.Context, *pgxpool.Pool) error) error {
-	return migrate(ctx, p.ownerPool)
+// Pool returns the underlying PostgreSQL connection pool.
+func (p *Persistence) Pool() *pgxpool.Pool {
+	return p.pool
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
@@ -469,6 +463,20 @@ func setUpdateMetadata(newMeta, oldMeta *ateapipb.ResourceMetadata) {
 	newMeta.Version = oldMeta.Version + 1
 	newMeta.CreateTime = oldMeta.CreateTime
 	newMeta.UpdateTime = timestamppb.Now()
+}
+
+func mapDeleteError(err error, uid string, version int64, precondition store.DeletePreconditions) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("reading after a guarded delete matched nothing: %w", err)
+	}
+	if err := precondition.Check(&ateapipb.ResourceMetadata{Uid: uid, Version: version}); err != nil {
+		return err
+	}
+	// The row matches the guards now, so it changed between the two statements.
+	return store.ErrVersionConflict
 }
 
 func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }

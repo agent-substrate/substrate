@@ -23,7 +23,7 @@ vulnerabilities.**
 Use [GitHub Private Vulnerability Reporting](https://github.com/agent-substrate/substrate/security/advisories/new)
 to report privately. This is the only supported reporting channel; there is
 no security mailing list at this stage. There is no bug bounty, and this
-project is [not eligible](../README.md) for the
+project is not eligible for the
 [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
 
 Please include:

@@ -128,6 +128,10 @@ func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer) *Server
 	return &Server{client: client, nsAuth: nsAuth}
 }
 
+// Grants exposes the enforced atespace→namespace policy for /statusz. Nil
+// when authorization is disabled.
+func (s *Server) Grants() map[string][]string { return s.nsAuth.Grants() }
+
 // FetchSecret resolves one ate-secret:// URI to its Secret value.
 func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
 	ref, err := ParseURI(req.GetUri())

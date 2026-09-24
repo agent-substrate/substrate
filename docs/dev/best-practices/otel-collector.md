@@ -440,8 +440,8 @@ ateapi, through `serverboot.InitLogging`. They are off unless
 
 Everything else is stdout. `serverboot.InitLogger` writes structured JSON there,
 and `ateom` wraps actor container output with the `ate.*` metadata labels
-described in [Actor Observability](../../observability.md). No worker pod
-exports a log record at all: the ateom relay carries traces and metrics only.
+described in [Actor Observability](../../observability.md). The ateom relay
+carries logs, traces, and metrics; worker pods do not emit log records yet.
 
 Those labels sit in a nested group (`labels`, or `logging.googleapis.com/labels`
 on GKE, where the key promotes the group into `LogEntry.labels`). A filelog

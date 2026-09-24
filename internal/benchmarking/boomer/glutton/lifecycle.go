@@ -71,6 +71,11 @@ const (
 	resumeMaxBackoff    = 50 * time.Millisecond
 	resumeBackoffJitter = 5 * time.Millisecond
 
+	// Consecutive replaceIfPersistent failures it takes to replace an actor.
+	// One blip is not evidence of a wedged actor; three in a row, each
+	// spaced by the wait window, is.
+	maxConsecutiveFailures = 3
+
 	// Per-wake ping loop: pings after the first are spaced by a random gap
 	// in [minPingGap, maxPingGap). The loop stops early once the live
 	// window (liveWait) elapses so we still suspend on schedule.
@@ -136,16 +141,31 @@ func (r *taskRuntime) iterate() {
 		return
 	}
 
-	// A crashed actor stays crashed for the rest of the run: further
-	// Resume calls will keep returning Aborted and would just churn API
-	// traffic. The rotation still advances, so the other actors in the VU
-	// keep making progress.
+	ctx := context.Background()
+
+	// resume()'s failure path replaces a crashed actor on the spot, so
+	// reaching here means the replacement's create failed last time. Retry
+	// it, or the VU runs a slot short for the rest of the run.
 	if actor.crashed {
+		user.replaceActor(ctx, actor)
 		return
 	}
 
-	ctx := context.Background()
-	if !actor.resume(ctx) {
+	// Going straight back to resume on a stranded actor would turn every
+	// retryable hibernate failure into a FailedPrecondition and cost the
+	// actor anyway. SuspendActor and PauseActor are re-entrant, so finish
+	// the hibernate and pick the cycle up next iteration.
+	if actor.hibernatePending {
+		if err := actor.hibernate(ctx); err != nil && actor.noteFailure(err) {
+			user.replaceActor(ctx, actor)
+		}
+		return
+	}
+
+	if err := actor.resume(ctx); err != nil {
+		if actor.noteFailure(err) {
+			user.replaceActor(ctx, actor)
+		}
 		return
 	}
 	// Fill before the first suspend so every snapshot from cycle one on
@@ -183,7 +203,9 @@ func (r *taskRuntime) iterate() {
 	if remaining := time.Until(deadline); remaining > 0 {
 		time.Sleep(remaining)
 	}
-	actor.hibernate(ctx)
+	if err := actor.hibernate(ctx); err != nil && actor.noteFailure(err) {
+		user.replaceActor(ctx, actor)
+	}
 }
 
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
@@ -236,7 +258,7 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 		u := val.(*gluttonUser)
 		for _, a := range u.actors {
 			if a.actorRunning {
-				a.hibernate(ctx)
+				_ = a.hibernate(ctx)
 			}
 			a.delete(ctx)
 		}
@@ -287,6 +309,35 @@ func (u *gluttonUser) nextActor() *gluttonActor {
 	return a
 }
 
+// replaceActor deletes a stuck/broken actor and replaces its slot in u.actors
+// with a freshly created actor so the VU maintains full concurrency without
+// repeatedly calling a stuck actor (e.g. left in ACTOR_STATE_SUSPENDING).
+func (u *gluttonUser) replaceActor(ctx context.Context, broken *gluttonActor) {
+	// A re-entry (the last call deleted the actor but failed to create its
+	// replacement) would book a NotFound failure on every iteration.
+	if !broken.deleted {
+		broken.delete(ctx)
+		broken.deleted = true
+	}
+	replacement := &gluttonActor{
+		cfg:         broken.cfg,
+		actorName:   "sb-" + uuid.NewString(),
+		firstResume: true,
+	}
+	if err := replacement.create(ctx); err != nil {
+		slog.Warn("glutton actor replacement create failed; will retry on next failure",
+			slog.String("old_actor", broken.actorName),
+			slog.String("err", err.Error()))
+		return
+	}
+	for i, a := range u.actors {
+		if a == broken {
+			u.actors[i] = replacement
+			return
+		}
+	}
+}
+
 // gluttonActor is one actor's lifetime state within a VU. Every per-iteration
 // call in iterate() targets exactly one of these.
 type gluttonActor struct {
@@ -297,10 +348,93 @@ type gluttonActor struct {
 	ramFilled    bool
 	// crashed is set the first time ResumeActor reports the actor as
 	// ACTOR_STATE_CRASHED (codes.Aborted with "crashed" in the message).
-	// Once set, iterate() skips this actor forever — ateapi never
-	// rehabilitates a crashed actor, so retrying would just fail forever.
-	// The VU's other actors are unaffected.
+	// ateapi never rehabilitates one, so iterate() replaces it.
 	crashed bool
+	// hibernatePending is set by a failed Pause/Suspend: the actor is
+	// stranded RUNNING or SUSPENDING, which resume has no edge out of.
+	hibernatePending bool
+	// deleted is set once replaceActor has issued this actor's DeleteActor,
+	// so a second pass does not re-send it.
+	deleted bool
+	// consecutiveFailures counts replaceIfPersistent failures since the last
+	// success. See noteFailure.
+	consecutiveFailures int
+}
+
+// failureAction is what iterate() does about a failed lifecycle RPC: is this
+// actor wedged, or is the cluster busy? Only the first is worth a
+// delete + create.
+type failureAction int
+
+const (
+	// retryLater: a replacement would hit the same error, so keep the actor.
+	retryLater failureAction = iota
+	// replaceNow: this actor can never make progress again.
+	replaceNow
+	// replaceIfPersistent: counts toward maxConsecutiveFailures.
+	replaceIfPersistent
+)
+
+// classifyLifecycleFailure maps an error from ResumeActor / SuspendActor /
+// PauseActor onto what to do about it. Unrecognized codes are recoverable
+// until proven otherwise: a wrapped atelet error arrives as Unknown.
+func classifyLifecycleFailure(err error) failureAction {
+	s, ok := status.FromError(err)
+	if !ok {
+		return replaceIfPersistent
+	}
+	switch s.Code() {
+	case codes.NotFound, codes.DataLoss:
+		// The actor, or the snapshot it would resume from, is gone.
+		return replaceNow
+	case codes.FailedPrecondition:
+		// A state this operation has no edge out of — the left-in-SUSPENDING
+		// case. Nothing glutton can call moves the actor on.
+		return replaceNow
+	case codes.Aborted:
+		if strings.Contains(s.Message(), "crashed") {
+			return replaceNow
+		}
+		// Concurrent update conflict. resume() already spent its retry
+		// budget, but losing every race in one burst is still a race.
+		return replaceIfPersistent
+	case codes.ResourceExhausted, codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		// Cluster-wide and load-dependent ("no free workers available", a
+		// restarting ate-api-server): every VU sees these at once, and the
+		// replacement needs the capacity the original was denied.
+		return retryLater
+	case codes.InvalidArgument, codes.PermissionDenied, codes.Unauthenticated, codes.Unimplemented:
+		// A misconfigured run. The replacement is created the same way and
+		// fails the same way.
+		return retryLater
+	}
+	return replaceIfPersistent
+}
+
+// noteFailure records a failed lifecycle RPC against the actor and reports
+// whether the VU should replace it.
+func (u *gluttonActor) noteFailure(err error) bool {
+	switch classifyLifecycleFailure(err) {
+	case replaceNow:
+		return true
+	case retryLater:
+		return false
+	}
+	u.consecutiveFailures++
+	if u.consecutiveFailures < maxConsecutiveFailures {
+		return false
+	}
+	slog.Warn("glutton actor failed repeatedly; replacing it",
+		slog.String("actor", u.actorName),
+		slog.Int("consecutive_failures", u.consecutiveFailures),
+		slog.String("err", err.Error()))
+	return true
+}
+
+// noteSuccess clears the failure count: the actor just proved it can still
+// make progress, so the earlier failures were transient after all.
+func (u *gluttonActor) noteSuccess() {
+	u.consecutiveFailures = 0
 }
 
 func (u *gluttonActor) ref() *ateapipb.ObjectRef {
@@ -342,7 +476,7 @@ func (u *gluttonActor) create(ctx context.Context) error {
 	})
 }
 
-func (u *gluttonActor) resume(ctx context.Context) bool {
+func (u *gluttonActor) resume(ctx context.Context) error {
 	metricName := "ResumeActor"
 	if u.firstResume {
 		metricName = "ResumeActorFirstResume"
@@ -389,11 +523,12 @@ func (u *gluttonActor) resume(ctx context.Context) bool {
 				slog.String("actor", u.actorName),
 				slog.String("err", err.Error()))
 		}
-		return false
+		return err
 	}
 	u.firstResume = false
 	u.actorRunning = true
-	return true
+	u.noteSuccess()
+	return nil
 }
 
 // isConcurrentUpdateConflict identifies the transient racy-update error
@@ -408,32 +543,41 @@ func isConcurrentUpdateConflict(err error) bool {
 // hibernate takes the actor off its worker by whichever operation the
 // lifecycle mode selects: PauseActor keeps the snapshot on the node, while
 // SuspendActor writes it to durable storage.
-func (u *gluttonActor) hibernate(ctx context.Context) {
+func (u *gluttonActor) hibernate(ctx context.Context) error {
 	if u.cfg.Dyn.Load().LifecycleMode == dynconfig.LifecycleModePause {
-		u.pause(ctx)
-	} else {
-		u.suspend(ctx)
+		return u.pause(ctx)
 	}
+	return u.suspend(ctx)
 }
 
-func (u *gluttonActor) pause(ctx context.Context) {
-	_ = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+func (u *gluttonActor) pause(ctx context.Context) error {
+	err := u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
 	u.actorRunning = false
+	u.hibernatePending = err != nil
+	if err == nil {
+		u.noteSuccess()
+	}
+	return err
 }
 
-func (u *gluttonActor) suspend(ctx context.Context) {
-	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+func (u *gluttonActor) suspend(ctx context.Context) error {
+	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
 	u.actorRunning = false
+	u.hibernatePending = err != nil
+	if err == nil {
+		u.noteSuccess()
+	}
+	return err
 }
 
 func (u *gluttonActor) delete(ctx context.Context) {

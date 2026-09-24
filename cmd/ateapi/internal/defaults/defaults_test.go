@@ -37,35 +37,35 @@ func TestApply(t *testing.T) {
 		in:   (*ateapipb.ActorTemplate)(nil),
 		want: (*ateapipb.ActorTemplate)(nil),
 	}, {
-		name: "missing snapshots_config is left for validation",
+		name: "missing snapshot_config is left for validation",
 		in:   &ateapipb.ActorTemplate{},
 		want: &ateapipb.ActorTemplate{},
 	}, {
-		name: "empty snapshots_config gets every default",
-		in:   &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{}},
-		want: &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		name: "empty snapshot_config gets every default",
+		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
+		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause:  scopeFull,
 			OnCommit: scopeFull,
 			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 		}},
 	}, {
 		name: "set scopes are kept",
-		in: &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		in: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause:  scopeFull,
 			OnCommit: scopeData,
 			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
 		}},
-		want: &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause:  scopeFull,
 			OnCommit: scopeData,
 			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
 		}},
 	}, {
 		name: "present but empty on_resume gets from_data",
-		in: &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		in: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause: scopeFull, OnCommit: scopeFull, OnResume: &ateapipb.OnResumeConfig{},
 		}},
-		want: &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause: scopeFull, OnCommit: scopeFull,
 			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 		}},

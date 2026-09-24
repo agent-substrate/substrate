@@ -143,15 +143,15 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {
+func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
 	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
-		// Locked rather than plainly read so the incarnation pre was evaluated
+		// Locked rather than plainly read so the incarnation precondition was evaluated
 		// against is the one the DELETE removes.
 		deleted, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
 			return nil, err
 		}
-		if err := pre.Check(deleted.GetMetadata()); err != nil {
+		if err := precondition.Check(deleted.GetMetadata()); err != nil {
 			return nil, err
 		}
 		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)

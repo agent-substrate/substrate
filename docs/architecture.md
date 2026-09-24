@@ -471,7 +471,9 @@ Actor that took it, and publishing it permits reuse from other Atespaces without
 `atespace/name` address. Deleting a tag deletes that copy; an Atespace with
 tags cannot be deleted until they are.
 
-### Phase 4: Deletion
+### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)
+
+An actor in `ACTOR_STATE_RUNNING`, `ACTOR_STATE_PAUSED`, or `ACTOR_STATE_CRASHED` can be reverted back to `ACTOR_STATE_SUSPENDED` via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
 
 By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING` or `ACTOR_STATE_PAUSED`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 

@@ -12,19 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build-time dependencies for the Python step of hack/update/codegen.sh. Kept
-# apart from the load test's runtime requirements.txt so that regenerating the
-# protos does not pull in locust, the opentelemetry exporters and
-# google-cloud-storage.
+# Build-time dependencies for generate.sh and for the nighthawk-ingress
+# image's descriptor build. Kept apart from the load test's runtime
+# requirements.txt so that generating the protos does not pull in locust, the
+# opentelemetry exporters and google-cloud-storage.
 #
 # grpcio-tools bundles protoc along with the Python and gRPC codegen plugins.
-# It is pinned because the version stamped into the generated files
-# ("Protobuf Python Version" in *_pb2.py, GRPC_GENERATED_VERSION in
-# *_pb2_grpc.py) is whatever the generating machine happened to install: left
-# unpinned, the checked-in gencode changes depending on who ran the script.
-#
-# Bumping this pin is a deliberate act: raise it, regenerate, and keep the
-# floors in ../requirements.txt at or above the versions the new gencode
-# reports, since the protobuf runtime refuses to load gencode newer than
-# itself.
+# It is pinned because the generated files stamp the version that produced
+# them ("Protobuf Python Version" in *_pb2.py, GRPC_GENERATED_VERSION in
+# *_pb2_grpc.py), and the protobuf runtime refuses to load gencode newer than
+# itself. When bumping this pin, keep the floors in ../requirements.txt and
+# ../../nighthawk-ingress/requirements.txt at or above the versions the new
+# gencode reports.
 grpcio-tools==1.81.1

@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -22,11 +23,18 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// installDir is the manifest root, relative to the repository root.
-const installDir = "manifests/ate-install"
+const (
+	// installDir is the manifest root, relative to the repository root.
+	installDir = "manifests/ate-install"
+	// Envoy dataplane image name
+	envoyDataplaneImage = "envoy-dataplane"
+	// Envoy dataplane Dockerfile path
+	envoyDataplaneDockefile = "cmd/dataplane/envoy"
+)
 
 // SystemOverlay picks the manifest source for a full control plane install.
 //
@@ -90,14 +98,14 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 		return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress")
 	}
 
-	if !general && !injection {
-		return e.ResolveManifest(ctx, e.atenetEgressManifestPath())
+	imageReference, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, e.Cfg.Path(envoyDataplaneDockefile))
+	if err != nil {
+		return nil, err
 	}
 
 	// The general additional-ext_proc filter and egress credential injection are
 	// independent splices with their own markers, so compose them.
 	var raw []byte
-	var err error
 	if general {
 		raw, err = e.patchAtenetEgressManifest()
 	} else {
@@ -112,7 +120,14 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 			return nil, err
 		}
 	}
+	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
 	return e.ResolveManifestBytes(ctx, raw)
+}
+
+// patchEnvoyDataplaneImage replaces the ${ENVOY_DATAPLANE_IMAGE} placeholder in
+// the manifest with imageRef.
+func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
+	return bytes.ReplaceAll(raw, []byte("${ENVOY_DATAPLANE_IMAGE}"), []byte(imageRef))
 }
 
 // patchAtenetEgressInject splices the credential-provider flags into the egress

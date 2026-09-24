@@ -323,3 +323,42 @@ func TestValidation_Worker(t *testing.T) {
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 }
+
+func TestDeleteWorker_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-worker-delete-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	ref := workerRef(testWorkerName)
+	del := func(opts *ateapipb.DeleteOptions) error {
+		_, err := tc.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: ref, Options: opts})
+		return err
+	}
+
+	worker := registerWorker(t, tc, ns)
+	uid, version := worker.GetMetadata().GetUid(), worker.GetMetadata().GetVersion()
+
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
+	if _, err := tc.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: ref}); err != nil {
+		t.Fatalf("a refused delete removed the worker: %v", err)
+	}
+
+	// The delete drains the worker first, which moves the version; the guard
+	// is checked against the record the caller read.
+	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+		t.Fatalf("DeleteWorker with the matching version: %v", err)
+	}
+	worker = registerWorker(t, tc, ns)
+	if err := del(&ateapipb.DeleteOptions{Uid: worker.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteWorker with the matching uid: %v", err)
+	}
+	worker = registerWorker(t, tc, ns)
+	if err := del(&ateapipb.DeleteOptions{Uid: worker.GetMetadata().GetUid(), Version: worker.GetMetadata().GetVersion()}); err != nil {
+		t.Fatalf("DeleteWorker with both guards: %v", err)
+	}
+	_, err := tc.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: ref})
+	assertGrpcError(t, err, codes.NotFound, "Worker "+testWorkerName+" not found")
+}

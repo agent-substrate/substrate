@@ -74,8 +74,8 @@ Rules of thumb:
   type is a promise to the pipeline about what the datapoints are, and
   rollups and the actor relay act on that promise without checking.
 * **Do not add a failure counter next to a success counter.** One instrument,
-  with the failure on `error.type` or `ate.failure.reason`; the key's absence
-  means success. See [Reporting failures](#reporting-failures).
+  with the failure on `error.type`; the key's absence means success. See
+  [Reporting failures](#reporting-failures).
 * **One histogram, many phases**, rather than one histogram per phase, when
   the phases share dimensions. `ate.actor.restore.duration` carries
   `ate.snapshot.phase` as a label so the phases sit on one chart.
@@ -165,8 +165,7 @@ ones every new metric meets:
   failed before a worker was picked has no pool; the pool keys are absent, not
   `""`. `ateattr.WorkerPoolAttributes` returns nil for that case.
 * **Paired keys travel together.** `ate.workerpool.namespace` with
-  `ate.workerpool.name`; `ate.failure.reason` with `ate.failure.domain`. Use
-  the `ateattr` helpers that return the pair.
+  `ate.workerpool.name`. Use the `ateattr` helpers that return the pair.
 
 Every label key is a constant in `internal/ateattr/ateattr.go`, and every
 bounded value set is a group of constants there beside it. A metric never
@@ -191,18 +190,11 @@ the cluster.
 ## Reporting failures
 
 One instrument carries success and failure. Success is the absence of the
-failure key. Which key depends on where the error is classified:
-
-* **`error.type`** at an RPC boundary, holding the gRPC status code
-  (`status.Code(err).String()`), as `ate.actor.lifecycle.operation.duration`
-  does. Also for a bounded set of protocol statuses, as
-  `ate.imagecache.requests` does with an allow-list of HTTP codes and `_OTHER`
-  for everything else.
-* **`ate.failure.reason` and `ate.failure.domain`** together, when the failure
-  is one of substrate's own reasons (`internal/ateerrors`). Use
-  `ateattr.FailureAttributes(reason)`; never set the two keys by hand. This is
-  the right choice inside atelet and ateom handlers, where the gRPC status is
-  assigned only after the handler returns and would read `Unknown`.
+failure key, `error.type`: at an RPC boundary it holds the gRPC status code
+(`status.Code(err).String()`), as `ate.actor.lifecycle.operation.duration`
+does. It also fits a bounded set of protocol statuses, as
+`ate.imagecache.requests` does with an allow-list of HTTP codes and `_OTHER`
+for everything else.
 
 Separate a caller that gave up from a failure: `context.Canceled` and
 `context.DeadlineExceeded` are their own outcomes (`cancelled`, `timeout`) on
@@ -451,7 +443,7 @@ author can find the saturation instruments without reading each brief), and
 `buckets` for a histogram; a reader of the registry should not need the code.
 
 Attributes that already exist (`ate.template.name`, `ate.snapshot.kind`,
-`error.type`, `ate.failure.reason`) are referenced with `ref:`, not redefined.
+`error.type`) are referenced with `ref:`, not redefined.
 Mark a label `conditionally_required` and say when, rather than `required`, if
 the code omits it on some path.
 

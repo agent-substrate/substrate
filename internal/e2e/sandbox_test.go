@@ -148,7 +148,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 				}
 				// An inline placeholder with an empty value must substitute, not
 				// delete its line: the location is what the golden snapshot needs.
-				location := tmpl.GetSnapshotsConfig().GetStorageLocation()
+				location := tmpl.GetSnapshotConfig().GetStorageLocation()
 				if want := "gs://test-bucket/"; !strings.HasPrefix(location, want) {
 					t.Errorf("template %s snapshot location = %q, want it to start with %q", name, location, want)
 				}
@@ -201,7 +201,7 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				if memoryLimit(tmpl) == "" {
 					t.Errorf("template %s declares no memory limit, so the guest would boot at the kata default", name)
 				}
-				location := tmpl.GetSnapshotsConfig().GetStorageLocation()
+				location := tmpl.GetSnapshotConfig().GetStorageLocation()
 				if want := "-microvm-render/"; !strings.HasSuffix(location, want) {
 					t.Errorf("template %s snapshot location = %q, want it to end with %q", name, location, want)
 				}

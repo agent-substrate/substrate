@@ -27,11 +27,8 @@ import (
 )
 
 // fakeRunsc stands in for *runsc. containers is the set runsc has a record of;
-// calls logs every state, delete and list. The embedded interface is nil, so
-// any other command panics.
+// calls logs every command.
 type fakeRunsc struct {
-	containerRuntime
-
 	containers map[string]bool
 	calls      []string
 }
@@ -58,6 +55,16 @@ func (f *fakeRunsc) cmdDelete(_ context.Context, name string) error {
 		return errors.New("exit status 128")
 	}
 	delete(f.containers, name)
+	return nil
+}
+
+func (f *fakeRunsc) cmdKill(_ context.Context, name, signal string) error {
+	f.calls = append(f.calls, "kill "+name+" "+signal)
+	return nil
+}
+
+func (f *fakeRunsc) cmdWait(_ context.Context, name string) error {
+	f.calls = append(f.calls, "wait "+name)
 	return nil
 }
 
@@ -110,4 +117,16 @@ func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
 	}
 
 	assertCalls(t, f, "state app", "list", "state _pause", "list")
+}
+
+// The pause container is the sandbox: it must outlive the deletes of the
+// containers inside it, so stopping the actor leaves it to cleanup.
+func TestStopContainersLeavesTheSandboxToCleanup(t *testing.T) {
+	f := newFakeRunsc()
+	stopContainers(context.Background(), f, appContainers)
+	var want []string
+	for _, c := range appContainers {
+		want = append(want, "kill "+c.GetName()+" SIGKILL", "wait "+c.GetName())
+	}
+	assertCalls(t, f, want...)
 }

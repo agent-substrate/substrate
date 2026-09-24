@@ -108,7 +108,7 @@ for etcd.
 
 ## Snapshots
 
-- **Snapshot scope**: what an `ActorTemplate`'s `SnapshotsConfig` includes
+- **Snapshot scope**: what an `ActorTemplate`'s `SnapshotConfig` includes
   in a given snapshot. Two scopes exist today:
   - **`Full`**: process memory plus the rootfs delta on top of the OCI
     image, and any attached `DurableDir` volumes. Used to capture

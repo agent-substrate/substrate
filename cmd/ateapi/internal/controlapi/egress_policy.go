@@ -69,7 +69,7 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.Get
 func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
 	policy, err := s.store.GetEgressPolicy(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "EgressPolicy not found")
+		return nil, status.Errorf(codes.NotFound, "EgressPolicy for actor %s not found", actorRef)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting Actor egress policy: %w", err)
@@ -128,11 +128,11 @@ func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.
 		return nil, toGRPCStatusError(errs)
 	}
 
-	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
-	deleted, err := s.store.DeleteEgressPolicy(ctx, actorRef)
+func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {
+	deleted, err := s.store.DeleteEgressPolicy(ctx, actorRef, precondition)
 	return mapEgressPolicyWrite(deleted, err)
 }
 

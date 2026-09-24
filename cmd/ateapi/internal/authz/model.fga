@@ -37,6 +37,7 @@ type global
     define viewer: [user] or owner
 
     define can_create_atespace: owner
+    define can_list_atespaces: viewer
     define can_get: viewer
 
     # --- Policy Governance (SetPolicy / GetPolicy) ---
@@ -61,7 +62,6 @@ type atespace
     define can_create_actor: editor
     define can_create_actor_template: editor
     define can_get: viewer
-    define can_update: editor
     define can_delete: owner
 
 type actor_template

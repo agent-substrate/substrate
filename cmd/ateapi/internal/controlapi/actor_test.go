@@ -427,6 +427,30 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		nil,
 	}, {
+		"valid actor.status.external_snapshot.actor_template_uid",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+		})),
+		nil,
+	}, {
+		// Each suspend restamps the UID of the template the snapshot was captured under.
+		"changing actor.status.external_snapshot.actor_template_uid is allowed",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "fedcba98-7654-3210-fedc-ba9876543210"}
+		})),
+		nil,
+	}, {
+		"invalid actor.status.external_snapshot.actor_template_uid",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "not-a-uuid"}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "external_snapshot", "actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
 		"valid actor.status.local_snapshot_info.snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
@@ -867,9 +891,9 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 				Image:        "example.com/app:v1",
 				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 			}},
-			Volumes:         tmpl.volumes,
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:   tmpl.sandboxConfig,
+			Volumes:        tmpl.volumes,
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			SandboxConfig:  tmpl.sandboxConfig,
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}
@@ -1117,7 +1141,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("racing writer: mark deleting: %v", err)
 			}
-			if _, err := persistence.DeleteActor(ctx, actorRef); err != nil {
+			if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("racing writer: DeleteActor: %v", err)
 			}
 			recreated, err = persistence.CreateActor(ctx, &ateapipb.Actor{
@@ -1505,11 +1529,11 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if got := created.GetStatus(); got.GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() || got.GetCurrentActorTemplateUid() != tmpl.GetMetadata().GetUid() {
+			if got := created.GetStatus(); got.GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() || got.GetExternalSnapshot().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("incorrect initial status: %v", got)
 			}
 			if scenario == "own snapshot" {
-				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotsConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
+				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
 				if err != nil {
 					t.Fatal(err)
 				}

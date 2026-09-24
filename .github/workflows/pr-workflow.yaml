@@ -27,9 +27,17 @@ on:
 # and run it in a throwaway cluster.
 permissions:
   contents: read
+# Superseded pushes to a pull request are cancelled; every commit that lands on
+# main still gets its own full run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   run-tests:
     runs-on: ubuntu-latest
+    # A bound well clear of the observed runtime. Without one the platform
+    # default applies, and a wedged step burns a free-tier slot for six hours.
+    timeout-minutes: 45
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -39,8 +47,9 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
+    # Unconditional: a released migration becoming permanent is exactly what
+    # this guards, and that happens on the push to main, not on the PR.
     - name: Verify immutable PostgreSQL migrations
-      if: github.event_name == 'pull_request'
       run: hack/verify/postgresql-migrations.sh
     - run: go test -race -v ./...
     # tools/apitool has its own module so we need to run it explicitly.
@@ -60,6 +69,9 @@ jobs:
   e2e-test-matrix:
     name: E2E (${{ matrix.dataplane }})
     runs-on: ubuntu-latest
+    # Cluster bring-up, image builds and six sequential lanes; generous, but far
+    # short of the six-hour platform default a hung lane would otherwise consume.
+    timeout-minutes: 120
     continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
     strategy:
       fail-fast: false

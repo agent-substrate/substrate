@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Autoscale the counter WorkerPool based on how many of its workers are assigned.
+# Autoscale the counter WorkerPool based on how many of its workers are full.
 # The metric ate_workerpool_workers (emitted by ate-api-server) is served to the
 # External Metrics API by prometheus-adapter (demos/autoscaled-workerpool).
-# External AverageValue math: desiredReplicas = ceil(assigned / averageValue).
-# With averageValue=0.7 the pool targets ~70% assignment / 30% idle headroom.
+# External AverageValue math: desiredReplicas = ceil(at_capacity / averageValue).
+# With averageValue=0.7 the pool targets ~70% full workers / 30% idle headroom.
+# This is utilization only while each worker holds one actor. With more slots
+# per worker, a worker count cannot say how full the pool is.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -40,7 +42,7 @@ spec:
             # the counter demo ships a WorkerPool named "counter" too.
             ate_workerpool_namespace: ate-demo-autoscaled-workerpool
             ate_workerpool_name: counter
-            ate_worker_state: assigned
+            ate_worker_state: at_capacity
       target:
         type: AverageValue
         averageValue: "0.7"   # 70% utilization

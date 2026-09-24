@@ -62,7 +62,7 @@ import (
 const (
 	testAtespace = "test-atespace"
 	testActorID  = "id1"
-	// testStorageLocation is the snapshots_config.storage_location the test
+	// testStorageLocation is the snapshot_config.storage_location the test
 	// templates hand out. No object store is wired up behind it.
 	testStorageLocation = "gs://fake-fake-fake"
 
@@ -433,7 +433,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				Atespace: testAtespace,
 				Name:     "tmpl1",
 			},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
@@ -458,8 +458,8 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			StorageLocation:  testStorageLocation,
 			ActorTemplateUid: created.GetMetadata().GetUid(),
-			SourceActorUid:   "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94",
 		},
 	})
 	if err != nil {
@@ -574,7 +574,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				Atespace: testAtespace,
 				Name:     name,
 			},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
@@ -884,3 +884,6 @@ func assertSpanStr(t *testing.T, attrs map[attribute.Key]attribute.Value, key at
 		t.Errorf("%s = %q, want %q", key, v.AsString(), want)
 	}
 }
+
+// foreignUID matches no stored object, for guards that must miss.
+const foreignUID = "0f0e0d0c-0b0a-4908-8706-050403020100"

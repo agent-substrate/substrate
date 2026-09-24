@@ -132,40 +132,27 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	return dbActor, nil
 }
 
-func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor delete: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
 	var protoBytes []byte
-	err = tx.QueryRow(ctx, `
-		SELECT proto FROM actors
+	err := p.pool.QueryRow(ctx, `
+		DELETE FROM actors
 		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`,
-		atespace, name,
-	).Scan(&protoBytes)
+		  AND ($3::text = '' OR uid = $3::text)
+		  AND ($4::bigint = 0 OR version = $4::bigint)
+		RETURNING proto`, atespace, name, precondition.UID, precondition.Version).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
+		var uid string
+		var version int64
+		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
+		return nil, mapDeleteError(err, uid, version, precondition)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("locking actor %s/%s for deletion: %w", atespace, name, err)
-	}
-
-	out := &ateapipb.Actor{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
-		return nil, fmt.Errorf("unmarshaling actor for deletion: %w", err)
-	}
-	if out.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
-		return nil, store.ErrFailedPrecondition
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM actors WHERE atespace = $1 AND name = $2`, atespace, name); err != nil {
 		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor delete: %w", err)
+	out := &ateapipb.Actor{}
+	if err := unmarshalStored(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling deleted actor: %w", err)
 	}
 	return out, nil
 }

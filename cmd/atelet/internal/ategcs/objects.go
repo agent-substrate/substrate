@@ -28,12 +28,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/klauspost/compress/zstd"
 	"go.opentelemetry.io/otel"
 )
 
 var tracer = otel.Tracer("ategcs")
+
+// ErrObjectNotFound reports the object or its bucket is absent from the
+// storage backend, as opposed to a transient fetch failure.
+var ErrObjectNotFound = errors.New("object not found in storage backend")
 
 type ObjectStorage interface {
 	GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error)
@@ -46,7 +49,7 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: while parsing url: %w", ateerrors.ReasonInvalidObjectURL, err)
+		return nil, fmt.Errorf("while parsing url: %w", err)
 	}
 
 	rc, err := client.GetObject(ctx, bucket, object)
@@ -68,7 +71,7 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 func Open(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadCloser, error) {
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: while parsing url: %w", ateerrors.ReasonInvalidObjectURL, err)
+		return nil, fmt.Errorf("while parsing url: %w", err)
 	}
 	rc, err := client.GetObject(ctx, bucket, object)
 	if err != nil {
@@ -85,7 +88,7 @@ func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, con
 
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return fmt.Errorf("%w: while parsing url: %w", ateerrors.ReasonInvalidObjectURL, err)
+		return fmt.Errorf("while parsing url: %w", err)
 	}
 	if err := client.PutObject(ctx, bucket, object, bytes.NewReader(content)); err != nil {
 		return fmt.Errorf("while putting object bucket=%q object=%q: %w", bucket, object, err)
@@ -329,7 +332,7 @@ func FetchLocalFileFromGCSWithZstd(ctx context.Context, client ObjectStorage, gs
 func fetchFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, out io.Writer) (err error) {
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return fmt.Errorf("%w:while parsing URL: %w", ateerrors.ReasonInvalidObjectURL, err)
+		return fmt.Errorf("while parsing URL: %w", err)
 	}
 
 	rc, err := client.GetObject(ctx, bucket, object)

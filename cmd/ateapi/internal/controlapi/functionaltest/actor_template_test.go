@@ -16,12 +16,13 @@ package functionaltest
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"testing"
-	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
@@ -38,9 +39,9 @@ func TestActorTemplateCRUD(t *testing.T) {
 
 	created, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
-			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
-			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
+			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
 			SandboxConfig: &ateapipb.SandboxConfig{
 				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 				ConfigName:   "gvisor-default",
@@ -60,7 +61,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 	want := &ateapipb.ActorTemplate{
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://my-bucket/snapshots",
 			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
@@ -79,10 +80,10 @@ func TestActorTemplateCRUD(t *testing.T) {
 
 	_, err = tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
-			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
-			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
+			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 		},
 	})
 	assertGrpcError(t, err, codes.AlreadyExists, "ActorTemplate "+testAtespace+"/tmpl-a already exists")
@@ -135,10 +136,10 @@ func TestActorTemplateCRUD(t *testing.T) {
 	// config_name is required: a template must name its SandboxConfig.
 	_, err = tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
-			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-unnamed-config"},
-			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-unnamed-config"},
+			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 		},
 	})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, `sandbox_config\.config_name`)
@@ -194,7 +195,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if late.GetStatus().GetExternalSnapshot().GetSnapshotUri() != uri || late.GetStatus().GetCurrentActorTemplateUid() != tmpl.GetMetadata().GetUid() {
+	if late.GetStatus().GetExternalSnapshot().GetSnapshotUri() != uri || late.GetStatus().GetExternalSnapshot().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 		t.Fatal("actor did not inherit golden tag snapshot and template UID")
 	}
 	waitForWorkerAvailable(t, tc, workerName)
@@ -244,4 +245,42 @@ func TestListActorTemplates_InvalidPageToken(t *testing.T) {
 	_, err := tc.client.ListActorTemplates(context.Background(),
 		&ateapipb.ListActorTemplatesRequest{PageToken: "%%%"})
 	assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
+}
+
+func TestDeleteActorTemplate_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-delete-template-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	tmpl := createTemplateWithSelector(t, tc, "tmpl1", nil)
+	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
+	ref := templateRef.ToObjectRef()
+	del := func(opts *ateapipb.DeleteOptions) error {
+		_, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref, Options: opts})
+		return err
+	}
+
+	uid, version := tmpl.GetMetadata().GetUid(), tmpl.GetMetadata().GetVersion()
+
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
+	if _, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref}); err != nil {
+		t.Fatalf("a refused delete removed the template: %v", err)
+	}
+
+	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+		t.Fatalf("DeleteActorTemplate with the matching version: %v", err)
+	}
+	tmpl = createTemplateWithSelector(t, tc, "tmpl1", nil)
+	if err := del(&ateapipb.DeleteOptions{Uid: tmpl.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteActorTemplate with the matching uid: %v", err)
+	}
+	tmpl = createTemplateWithSelector(t, tc, "tmpl1", nil)
+	if err := del(&ateapipb.DeleteOptions{Uid: tmpl.GetMetadata().GetUid(), Version: tmpl.GetMetadata().GetVersion()}); err != nil {
+		t.Fatalf("DeleteActorTemplate with both guards: %v", err)
+	}
+	_, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+templateRef.String()+" not found")
 }

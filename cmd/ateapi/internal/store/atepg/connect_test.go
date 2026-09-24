@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestPoolConfigRereadsRotatedCredentials covers the pod certificate rotation
@@ -51,7 +50,7 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 		"postgres://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=%s&sslcert=%s&sslkey=%s",
 		rootPath, bundlePath, bundlePath)
 
-	cfg, err := poolConfig(mustConnectionStringSource(t, dsn), "", 0)
+	cfg, err := poolConfig(mustConnectionStringSource(t, dsn), "test_role", 0)
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
@@ -129,18 +128,29 @@ func TestPoolConfigRefreshesFileSource(t *testing.T) {
 	}
 }
 
-func TestPoolConfigRejectsRotatedUserWithoutStableRole(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "connection-string")
-	writeConnectionString(t, path, "postgres://runtime:old-password@postgres:5432/atepg?sslmode=disable")
-	cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "", 0)
-	if err != nil {
-		t.Fatal(err)
+func TestPoolConfigRequiresRole(t *testing.T) {
+	_, err := poolConfig(mustConnectionStringSource(t, "postgres://runtime@postgres:5432/atepg?sslmode=disable"), "", 0)
+	if err == nil || !strings.Contains(err.Error(), "role must not be empty") {
+		t.Fatalf("poolConfig error = %v, want missing-role error", err)
 	}
+}
 
-	writeConnectionString(t, path, "postgres://runtime_v2:new-password@postgres:5432/atepg?sslmode=disable")
-	err = cfg.BeforeConnect(context.Background(), cfg.ConnConfig.Copy())
-	if err == nil || !strings.Contains(err.Error(), "without a stable role") {
-		t.Fatalf("BeforeConnect error = %v, want stable-role error", err)
+func TestConnectRequiresRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		readWriteRole string
+		ownerRole     string
+		want          string
+	}{
+		{name: "read/write", ownerRole: "owner", want: "read/write role must not be empty"},
+		{name: "owner", readWriteRole: "readwrite", want: "owner role must not be empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Connect(t.Context(), "unused", "unused", tc.readWriteRole, tc.ownerRole, "substrate", 0, 0)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Connect error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -163,11 +173,11 @@ func TestConnectionStringSources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		runtimeCfg, err := poolConfig(runtimeSource, "", 0)
+		runtimeCfg, err := poolConfig(runtimeSource, "runtime_role", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ddlCfg, err := poolConfig(ddlSource, "", 0)
+		ddlCfg, err := poolConfig(ddlSource, "owner_role", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +221,7 @@ func TestPoolConfigRejectsIdentityChanges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "connection-string")
 			writeConnectionString(t, path, tt.initial)
-			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "", 0)
+			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "test_role", 0)
 			if err != nil {
 				t.Fatalf("poolConfig: %v", err)
 			}
@@ -244,7 +254,7 @@ func TestPoolConfigRefreshFailuresAreSafe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "connection-string")
 			writeConnectionString(t, path, "postgres://runtime:old-secret@postgres:5432/atepg?sslmode=disable")
-			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "", 0)
+			cfg, err := poolConfig(mustConnectionStringSource(t, "@file:"+path), "test_role", 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -276,7 +286,7 @@ func TestConnectionStringFileSourceValidation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newConnectionStringSource(%q): %v", value, err)
 		}
-		if _, err := poolConfig(source, "", 0); err == nil {
+		if _, err := poolConfig(source, "test_role", 0); err == nil {
 			t.Errorf("poolConfig accepted invalid source %q", value)
 		} else if !strings.Contains(err.Error(), strings.TrimPrefix(value, "@file:")) {
 			t.Errorf("poolConfig error %q does not identify its source path", err)
@@ -285,7 +295,7 @@ func TestConnectionStringFileSourceValidation(t *testing.T) {
 
 	malformedPath := filepath.Join(t.TempDir(), "malformed")
 	writeConnectionString(t, malformedPath, "://startup-secret")
-	_, err := poolConfig(mustConnectionStringSource(t, "@file:"+malformedPath), "", 0)
+	_, err := poolConfig(mustConnectionStringSource(t, "@file:"+malformedPath), "test_role", 0)
 	if err == nil {
 		t.Fatal("poolConfig accepted a malformed file source")
 	}
@@ -400,7 +410,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", dsn, "", "", schema, 0, 0)
+	persistence, err := Connect(ctx, dsn+"&search_path=public", dsn, "atepg", "atepg", schema, 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -568,68 +578,20 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		t.Fatalf("rotated read/write identity = %q/%q, want %q/%q", sessionUser, currentUser, runtimeLoginB, runtimeRole)
 	}
 
-	// OpenFGA creates its tables as the owner role. It uses the read/write pool for data.
-	err = p.MigrateAsOwner(ctx, func(ctx context.Context, pool *pgxpool.Pool) error {
-		_, err := pool.Exec(ctx, `
-			CREATE TABLE subsystem_data (id integer);
-			CREATE TABLE subsystem_ledger (version integer)`)
-		return err
-	})
-	if err != nil {
-		t.Fatalf("MigrateAsOwner failed: %v", err)
-	}
-	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_data VALUES (1)`); err != nil {
-		t.Errorf("read/write role cannot write a table MigrateAsOwner created: %v", err)
+	var canUseOpenFGA bool
+	if err := p.pool.QueryRow(ctx, `
+		SELECT has_table_privilege(current_user, 'tuple', 'SELECT')
+			AND has_table_privilege(current_user, 'tuple', 'INSERT')
+			AND has_table_privilege(current_user, 'tuple', 'UPDATE')
+			AND has_table_privilege(current_user, 'tuple', 'DELETE')`).Scan(&canUseOpenFGA); err != nil || !canUseOpenFGA {
+		t.Fatalf("read/write role lacks OpenFGA table privileges: %v", err)
 	}
 	var owner string
 	if err := admin.QueryRow(ctx, `SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = $1::regclass`,
-		pgx.Identifier{schema, "subsystem_data"}.Sanitize()).Scan(&owner); err != nil {
-		t.Fatalf("querying subsystem table owner: %v", err)
+		pgx.Identifier{schema, "tuple"}.Sanitize()).Scan(&owner); err != nil {
+		t.Fatalf("querying OpenFGA table owner: %v", err)
 	}
 	if owner != ddlRole {
-		t.Errorf("subsystem table owner = %q, want stable owner role %q", owner, ddlRole)
-	}
-	if _, err := p.pool.Exec(ctx, `INSERT INTO subsystem_ledger VALUES (1)`); err != nil {
-		t.Errorf("read/write role lacks default privileges on subsystem table: %v", err)
-	}
-}
-
-func TestConnectSingleRoleDoesNotRequireSchemaOwnership(t *testing.T) {
-	admin := requirePool(t)
-	ctx := t.Context()
-	const (
-		schema   = "single-role-test"
-		role     = "atepg_single_role_test"
-		password = "test-password"
-	)
-	if _, err := admin.Exec(ctx, fmt.Sprintf(`
-		DROP SCHEMA IF EXISTS %s CASCADE;
-		DROP ROLE IF EXISTS %s;
-		CREATE ROLE %s LOGIN PASSWORD '%s';
-		CREATE SCHEMA %s;
-		GRANT CREATE ON DATABASE atepg TO %s;
-		GRANT USAGE, CREATE ON SCHEMA %s TO %s`,
-		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{role}.Sanitize(),
-		pgx.Identifier{role}.Sanitize(), password, pgx.Identifier{schema}.Sanitize(),
-		pgx.Identifier{role}.Sanitize(), pgx.Identifier{schema}.Sanitize(), pgx.Identifier{role}.Sanitize())); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`
-			DROP SCHEMA IF EXISTS %s CASCADE;
-			REVOKE ALL ON DATABASE atepg FROM %s;
-			DROP ROLE IF EXISTS %s`, pgx.Identifier{schema}.Sanitize(),
-			pgx.Identifier{role}.Sanitize(), pgx.Identifier{role}.Sanitize()))
-	})
-
-	dsn := strings.Replace(containerDSN, "://atepg:atepg@", "://"+role+":"+password+"@", 1)
-	p, err := Connect(ctx, dsn, dsn, "", "", schema, 0, 0)
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.pool.Close()
-	defer p.Close()
-	if _, err := p.CreateAtespace(ctx, newTestAtespace("single-role-write")); err != nil {
-		t.Fatalf("read/write operation failed: %v", err)
+		t.Errorf("OpenFGA table owner = %q, want stable owner role %q", owner, ddlRole)
 	}
 }

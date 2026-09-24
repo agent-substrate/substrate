@@ -101,8 +101,9 @@ type Interface interface {
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
-	// missing, or ErrFailedPrecondition if not already deleting.
-	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	// missing, or ErrUIDConflict/ErrVersionConflict if precondition does not
+	// describe the actor the caller observed.
+	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions) (*ateapipb.Actor, error)
 
 	// Creates the 1:1 policy subresource for an existing Actor.
 	CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)
@@ -111,8 +112,10 @@ type Interface interface {
 	// Transactionally updates an Actor's policy when its current UID and version
 	// match the precondition.
 	UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error)
-	// Deletes and returns an Actor's policy subresource.
-	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
+	// Deletes and returns an Actor's policy subresource. Returns ErrNotFound if
+	// missing, or ErrUIDConflict/ErrVersionConflict if precondition does not
+	// describe the policy the caller observed.
+	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions) (*ateapipb.EgressPolicy, error)
 
 	// CreateTag creates an immutable tag to an actor snapshot.
 	//
@@ -151,8 +154,10 @@ type Interface interface {
 	// status.snapshot is immutable once set
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 
-	// Deletes and returns a tag.
-	DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
+	// Deletes and returns a tag. Returns ErrNotFound if missing, or
+	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
+	// tag the caller observed.
+	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapipb.Tag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
@@ -166,9 +171,11 @@ type Interface interface {
 	ListAtespaces(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Atespace], error)
 
 	// Removes an empty atespace and returns the deleted resource. Returns
-	// ErrNotFound if missing, or ErrFailedPrecondition if the atespace is not empty
-	// (e.g. there are actors in it).
-	DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
+	// ErrNotFound if missing, ErrUIDConflict/ErrVersionConflict if precondition
+	// does not describe the atespace the caller observed, or
+	// ErrFailedPrecondition if the atespace is not empty (e.g. there are actors
+	// in it).
+	DeleteAtespace(ctx context.Context, name string, precondition DeletePreconditions) (*ateapipb.Atespace, error)
 
 	// Stores a new ActorTemplate and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -191,8 +198,9 @@ type Interface interface {
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
-	// ErrNotFound if missing.
-	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
+	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
+	// precondition does not describe the template the caller observed.
+	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition DeletePreconditions) (*ateapipb.ActorTemplate, error)
 
 	// Registers a new idle worker and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -220,9 +228,9 @@ type Interface interface {
 
 	// Removes a worker by name, along with every assignment it holds, and
 	// returns the deleted resource. Returns ErrNotFound if missing, or
-	// ErrUIDConflict/ErrVersionConflict if pre does not describe the worker the
-	// caller observed.
-	DeleteWorker(ctx context.Context, name string, pre DeletePreconditions) (*ateapipb.Worker, error)
+	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
+	// worker the caller observed.
+	DeleteWorker(ctx context.Context, name string, precondition DeletePreconditions) (*ateapipb.Worker, error)
 
 	// Assignments and Worker allocation are updated atomically.
 

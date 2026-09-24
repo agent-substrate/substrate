@@ -18,13 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -107,7 +105,7 @@ func TestSnapshotLogAttrsSeconds(t *testing.T) {
 		scope:             ateattr.SnapshotScopeFull,
 		sandboxClass:      "gvisor",
 	}
-	attrs := snapshotLogAttrs(testAttribution(), op, restoreDurationMetric, nil,
+	attrs := snapshotLogAttrs(testAttribution(), op, restoreDurationMetric,
 		[]phase{
 			{ateattr.SnapshotPhaseDownload, 2500 * time.Millisecond},
 			{ateattr.SnapshotPhaseTotal, 3 * time.Second},
@@ -130,7 +128,6 @@ func TestSnapshotLogAttrs(t *testing.T) {
 	tests := []struct {
 		name        string
 		op          snapshotOp
-		err         error
 		phases      []phase
 		wantStrings map[string]string
 		wantNumbers map[string]float64
@@ -166,7 +163,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			},
 			// The phase key names the one step a datapoint timed; this record has
 			// them all, so borrowing it here would give one key two meanings.
-			wantAbsent: []string{"ate.failure.reason", "ate.snapshot.phase", "actor", "total", "download"},
+			wantAbsent: []string{"ate.snapshot.phase", "actor", "total", "download"},
 		},
 		{
 			name:   "a phase that never ran is absent, not zero",
@@ -184,40 +181,14 @@ func TestSnapshotLogAttrs(t *testing.T) {
 				templateName:      testTemplateName,
 				scope:             ateattr.SnapshotScopeFull,
 			},
-			err:    fmt.Errorf("%w: while fetching snapshot manifest", ateerrors.ReasonFailedGetExternalObject),
 			phases: []phase{{ateattr.SnapshotPhaseTotal, 700 * time.Millisecond}},
 			wantStrings: map[string]string{
-				"ate.actor.uid":      testActorUID,
-				"ate.failure.reason": string(ateerrors.ReasonFailedGetExternalObject),
+				"ate.actor.uid": testActorUID,
 			},
 			wantNumbers: map[string]float64{
 				"ate.actor.restore.duration.total": 0.7,
 			},
 			wantAbsent: []string{"ate.snapshot.kind", "ate.sandbox.class"},
-		},
-		{
-			name:   "an unclassified failure collapses onto UNKNOWN rather than leaking the message",
-			op:     fullOp,
-			err:    fmt.Errorf("dial tcp 10.96.192.187:9000: connect: connection refused"),
-			phases: []phase{{ateattr.SnapshotPhaseTotal, time.Second}},
-			wantStrings: map[string]string{
-				"ate.failure.reason": ateattr.ReasonUnknown,
-			},
-		},
-		{
-			// A restore that panicked leaves the named err nil, so the defer
-			// substitutes this. Without a reason on the record it would read as a
-			// fast success right before atelet dies.
-			name:   "a restore that unwound reports as a failure, not a fast success",
-			op:     fullOp,
-			err:    errRestoreUnwound,
-			phases: []phase{{ateattr.SnapshotPhaseVolumeMount, 4 * time.Millisecond}, {ateattr.SnapshotPhaseTotal, 9 * time.Millisecond}},
-			wantStrings: map[string]string{
-				"ate.failure.reason": ateattr.ReasonUnknown,
-			},
-			wantNumbers: map[string]float64{
-				"ate.actor.restore.duration.total": 0.009,
-			},
 		},
 		{
 			name: "a sandbox class the manifest invented is bounded, not passed through",
@@ -238,7 +209,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			attrs := snapshotLogAttrs(testAttribution(), tt.op, restoreDurationMetric, tt.err, tt.phases)
+			attrs := snapshotLogAttrs(testAttribution(), tt.op, restoreDurationMetric, tt.phases)
 
 			// json.Unmarshal keeps the last of a repeated key, so a duplicate is
 			// invisible in the rendered record and has to be caught on the slice.

@@ -59,7 +59,7 @@ resources:
     quantity: "1"
   - name: memory
     quantity: 512Mi
-snapshotsConfig:
+snapshotConfig:
   # FULL on both triggers, matching the gVisor variant: a suspend captures
   # guest memory, so the in-RAM count continues from where it left off — the
   # round-trip this demo promises. The golden-combining DATA resume path

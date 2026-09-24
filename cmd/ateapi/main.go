@@ -30,15 +30,14 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
@@ -52,7 +51,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -78,8 +76,8 @@ var (
 	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN, URI, or @file:/absolute/path).")
 	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN, URI, or @file:/absolute/path).")
-	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Stable PostgreSQL role for read/write connections. Required for a rotated login user.")
-	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Stable PostgreSQL role for owner connections.")
+	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
+	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresMaxConnLifetime           = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in each read/write PostgreSQL pool (store and OpenFGA). Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
@@ -175,31 +173,20 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
+	pool := persistence.Pool()
+	defer pool.Close()
 	// Backends may run background maintenance rooted in their own context
-	// (atepg's outbox maintenance loop); stop it on shutdown.
-	if closer, ok := persistence.(interface{ Close() }); ok {
-		defer closer.Close()
-	}
+	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
+	defer persistence.Close()
 
-	if poolProvider, ok := persistence.(interface {
-		NewPool(context.Context) (*pgxpool.Pool, error)
-		MigrateAsOwner(context.Context, func(context.Context, *pgxpool.Pool) error) error
-	}); ok {
-		// OpenFGA creates its own tables, which the read/write role cannot do.
-		// MigrateAsOwner runs the migrations as the owner role. Bootstrap
-		// establishes default read/write privileges for its new tables.
-		if err := poolProvider.MigrateAsOwner(shutdownCtx, authz.Migrate); err != nil {
-			serverboot.Fatal(ctx, "Failed to apply OpenFGA migrations", err)
-		}
-		authzPool, err := poolProvider.NewPool(shutdownCtx)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)
-		}
-		authzSrv, err := authz.NewServer(shutdownCtx, authzPool)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
-		}
-		defer authzSrv.Close()
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+	}
+	defer fgaServer.Close()
+
+	if _, _, err := authz.EnsureStoreAndModel(shutdownCtx, pool, fgaServer); err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize OpenFGA store and model", err)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -330,7 +317,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, ateletSPIFFEID))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
@@ -500,9 +487,9 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 	}
 }
 
-// connectStore builds the PostgreSQL-backed store.Interface. Startup fails if
+// connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
 // its configuration is missing or the database can't be reached.
-func connectStore(ctx context.Context) (store.Interface, error) {
+func connectStore(ctx context.Context) (*atepg.Persistence, error) {
 	if *postgresReadWriteConnectionString == "" {
 		return nil, fmt.Errorf("--postgres-read-write-connection-string is required")
 	}

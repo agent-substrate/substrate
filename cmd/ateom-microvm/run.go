@@ -210,47 +210,6 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 	}
 }
 
-// writeGuestResolvConf copies the worker pod's /etc/resolv.conf into a container's
-// bundle rootfs (the overlay RO lower) so the guest gets cluster DNS: ateom drops
-// atelet's resolv.conf bind and sends no CreateSandbox.Dns, so the guest can
-// otherwise reach IPs but not resolve names.
-//
-// The rootfs is untrusted, so the write goes through os.Root and unlinks rather
-// than truncates: an image-planted /etc or /etc/resolv.conf symlink would
-// otherwise be followed and clobber that path on the worker pod as root.
-func writeGuestResolvConf(rootfs string) error {
-	content, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return fmt.Errorf("reading host resolv.conf: %w", err)
-	}
-	if len(content) == 0 {
-		return fmt.Errorf("host /etc/resolv.conf is empty")
-	}
-	root, err := os.OpenRoot(rootfs)
-	if err != nil {
-		return fmt.Errorf("opening rootfs %q: %w", rootfs, err)
-	}
-	defer root.Close()
-	if err := root.Mkdir("etc", 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("creating %q: %w", filepath.Join(rootfs, "etc"), err)
-	}
-	if err := root.Remove("etc/resolv.conf"); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("removing existing guest resolv.conf: %w", err)
-	}
-	f, err := root.OpenFile("etc/resolv.conf", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return fmt.Errorf("creating guest resolv.conf: %w", err)
-	}
-	_, err = f.Write(content)
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fmt.Errorf("writing guest resolv.conf: %w", err)
-	}
-	return nil
-}
-
 // RunWorkload boots the actor as a cloud-hypervisor micro-VM and starts its containers.
 //
 // ateom boots cloud-hypervisor directly (no kata shim) and gives each container a
@@ -406,15 +365,10 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return err
 	}
 
-	// Networking (host side): per-activation veth into the interior netns. The
-	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
-		InteriorNetNS:      s.interiorNetNS,
-		HostVethHWAddr:     hostVethHWAddr,
-		SweepInteriorLinks: true,
-		EgressRedirectPort: s.egressRedirectPort(p.egressGateway != nil),
-	}); err != nil {
-		return fmt.Errorf("while setting up actor network: %w", err)
+	// Networking (host side): the actor's own namespace. The tap is built below
+	// (after the VM exists) so its FDs are fresh.
+	if err := s.prepareSandboxNetwork(ctx, actorUID); err != nil {
+		return err
 	}
 	defer func() {
 		if retErr != nil {
@@ -423,7 +377,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 			if cleanupErr := s.deactivateActorNetworking(cleanupCtx); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", cleanupErr))
 			}
-			if cleanupErr := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); cleanupErr != nil {
+			if cleanupErr := s.releaseSandboxNetwork(cleanupCtx); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -530,9 +484,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("while creating VM: %w", err)
 	}
 
-	// Network device: build the tap + TC mirror against the actor veth and add a
-	// virtio-net to the created (pre-boot) VM with the tap FDs (SCM_RIGHTS).
-	tapFiles, err := s.setupRestoreTap(ctx, "tap0_kata", 1)
+	// Network device: build the actor's tap and add a virtio-net to the created
+	// (pre-boot) VM with its FDs (SCM_RIGHTS).
+	tapFiles, err := setupActorTap(ctx, s.sandboxNetNS(), "tap0_kata", 1)
 	if err != nil {
 		return fmt.Errorf("while building tap: %w", err)
 	}
@@ -588,7 +542,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	tContainers := time.Now()
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandbox.Dialer())); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
@@ -655,11 +609,8 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 			return nil, fmt.Errorf("while composing rootfs for %q: %w", cn, err)
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
-		// Write cluster DNS into the lower before it's served over virtio-fs: ateom
-		// drops atelet's resolv.conf bind and sends no CreateSandbox.Dns, so without
-		// this the guest can reach IPs but not resolve names. Doing it here covers both
-		// run and restore (both reconstruct the lower from the bundle).
-		if err := writeGuestResolvConf(bundleRootfs); err != nil {
+		// Set guest DNS before serving the rootfs over virtio-fs, on boot and restore.
+		if err := writeActorResolvConf(bundleRootfs); err != nil {
 			return nil, fmt.Errorf("while writing guest resolv.conf for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
@@ -883,7 +834,7 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 	tSandbox := time.Now()
 
 	// Configure guest networking (the shim's job): eth0 IP/MAC/MTU, routes, ARP.
-	mtu := uint64(s.actorVethMTU(ctx))
+	mtu := uint64(actorTapMTUOf(ctx, s.sandboxNetNS(), "tap0_kata"))
 	netCtx, netCancel := context.WithTimeout(ctx, 20*time.Second)
 	err = s.configureGuestNetwork(netCtx, ac, mtu)
 	netCancel()
@@ -1068,7 +1019,7 @@ func (s *AteomService) configureGuestNetwork(ctx context.Context, ac *kata.Agent
 	return ac.AddARPNeighbors(ctx, []*agentpb.ARPNeighbor{{
 		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: ateomnet.ActorVethGateway},
 		Device:      ateomnet.ActorVethName,
-		Lladdr:      hostVethMAC,
+		Lladdr:      gatewayMAC,
 		State:       0x80, // NUD_PERMANENT
 	}})
 }

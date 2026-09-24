@@ -103,7 +103,7 @@ func (o SnapshotOwner) validate() error {
 }
 
 // Prefix returns the prefix holding every object this owner's snapshots are
-// made of, under an ActorTemplate's snapshotsConfig.location.
+// made of, under an ActorTemplate's snapshotConfig.location.
 func (o SnapshotOwner) Prefix(location string) (StoragePrefix, error) {
 	if err := o.validate(); err != nil {
 		return StoragePrefix{}, err
@@ -119,7 +119,7 @@ func (o SnapshotOwner) Prefix(location string) (StoragePrefix, error) {
 }
 
 // SnapshotURI is where one external snapshot's objects live in object storage:
-// an ActorTemplate's snapshotsConfig.location, plus the prefix of the resource
+// an ActorTemplate's snapshotConfig.location, plus the prefix of the resource
 // that owns the snapshot.
 //
 //	gs://bucket/root                                                    location
@@ -136,7 +136,7 @@ type SnapshotURI struct {
 }
 
 // NewActorSnapshotURI returns the URI of a snapshot an Actor took, stored
-// under an ActorTemplate's snapshotsConfig.location.
+// under an ActorTemplate's snapshotConfig.location.
 func NewActorSnapshotURI(location, atespace, actorUID, name string) (SnapshotURI, error) {
 	owner := ActorSnapshotOwner(atespace, actorUID)
 	prefix, err := owner.Prefix(location)
@@ -154,7 +154,7 @@ func NewActorSnapshotURI(location, atespace, actorUID, name string) (SnapshotURI
 }
 
 // NewTagSnapshotURI returns the URI of the snapshot a Tag owns, stored under
-// an ActorTemplate's snapshotsConfig.location. The tag's prefix and its
+// an ActorTemplate's snapshotConfig.location. The tag's prefix and its
 // snapshot's are the same: a tag holds exactly one snapshot.
 func NewTagSnapshotURI(location, atespace, tagUID string) (SnapshotURI, error) {
 	owner := TagSnapshotOwner(atespace, tagUID)
@@ -189,7 +189,7 @@ func ParseSnapshotURI(uri string) (SnapshotURI, error) {
 	return SnapshotURI{}, fmt.Errorf("invalid snapshot URI %q", uri)
 }
 
-// Location returns the ActorTemplate snapshotsConfig.location this snapshot is stored under.
+// Location returns the ActorTemplate snapshotConfig.location this snapshot is stored under.
 func (u SnapshotURI) Location() string { return u.location }
 
 // Atespace returns the atespace of the resource that owns the snapshot.

@@ -21,7 +21,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -92,7 +91,7 @@ func TestS3GetObjectClassifiesAbsence(t *testing.T) {
 			if err == nil {
 				t.Fatal("GetObject succeeded, want an error")
 			}
-			if got := errors.Is(err, ateerrors.ReasonFailedGetExternalObject); got != tc.wantAbsent {
+			if got := errors.Is(err, ErrObjectNotFound); got != tc.wantAbsent {
 				t.Errorf("errors.Is(err, ReasonFailedGetExternalObject) = %v, want %v (err: %v)", got, tc.wantAbsent, err)
 			}
 		})

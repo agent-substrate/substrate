@@ -49,13 +49,13 @@ func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 	if t == nil {
 		return
 	}
-	applySnapshotsConfigDefaults(t.SnapshotsConfig)
+	applySnapshotConfigDefaults(t.SnapshotConfig)
 	for _, c := range t.Containers {
 		applyContainerDefaults(c)
 	}
 }
 
-func applySnapshotsConfigDefaults(sc *ateapipb.SnapshotsConfig) {
+func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
 	if sc == nil {
 		return
 	}
