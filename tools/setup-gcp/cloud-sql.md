@@ -128,13 +128,12 @@ export ATE_API_POSTGRES_CLOUDSQL_GSA=ate-api-server@<project>.iam.gserviceaccoun
 What this does differently from a plain install:
 
 - Skips the bundled PostgreSQL StatefulSet (a configured Cloud SQL instance
-  counts as an external database, exactly like an explicit
-  `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`); the install logs the skip and the
-  database it deferred to.
+  counts as an external database); the install logs the skip and the database
+  it deferred to.
 - Writes the proxy's configuration (`CSQL_PROXY_*`) into the
   `ate-api-server-envvars` ConfigMap and synthesizes a passwordless DSN
   (`user=<gsa-user> host=127.0.0.1 ... sslmode=disable`) into the
-  `ate-api-server-secret-envvars` Secret.
+  `ate-api-server-secret-envvars` Secret for both database connection pools.
 - Annotates the `ate-api-server` KSA with the GSA and patches the
   `cloud-sql-proxy` native sidecar (initContainer with
   `restartPolicy: Always`; requires Kubernetes 1.29+) into the deployment.
@@ -151,47 +150,22 @@ Optional environment variables:
   to instances provisioned outside this tool: `setup-gcp create cloudsql`
   itself only creates private-services-access (private IP) instances —
   `public` and `psc` require an instance configured accordingly out-of-band.
-- `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH` — set `false` to fall back to password
-  authentication through the proxy (still encrypted and identity-verified);
-  you must then provide an explicit application connection string with the
-  password yourself (the install script rejects `false` without one because
-  a synthesized passwordless DSN cannot log in once the
-  proxy stops injecting IAM tokens).
-- `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` — a separate schema-owner DSN for
-  migrations and outbox partition maintenance. If no read/write DSN is set,
-  the read/write pool uses this DSN too. Otherwise, the owner DSN defaults to
-  `ATE_API_POSTGRES_CONNECTION_STRING`, then the read/write DSN.
-  The legacy variable alone still supplies both pools; adding a separate
-  read/write DSN leaves the legacy connection as the owner connection.
-  With separate logins, grant each login membership in its corresponding
-  role. Provision the schema and default object grants as in section 2;
-  ateapi does not grant them when bootstrap is disabled. Use a schema
-  dedicated to Substrate when configuring separate identities.
 - `ATE_API_POSTGRES_READ_WRITE_ROLE` and `ATE_API_POSTGRES_OWNER_ROLE` — stable
   `NOLOGIN` roles (defaults: `substrate_readwrite` and `substrate_owner`).
-  Neither ateapi nor the installer creates them for external databases.
-  Provision custom role names and matching grants if you override these values;
-  grant each incoming login membership before publishing its connection string.
-  ateapi runs `SET ROLE` on every new connection, so these settings take
-  precedence over a role set through connection-string `options`. A DSN role
-  must still be valid at startup; leave it out of operator-provided DSNs to
-  avoid conflicting configuration.
-  Stable roles keep grants and object ownership across username rotations.
+  If you override them, create the custom roles and substitute their names in
+  the grants in section 2. `ateapi` runs `SET ROLE` on every new connection;
+  stable roles keep grants and object ownership across IAM username rotations.
 - `ATE_API_POSTGRES_SCHEMA` — the schema holding the store's tables
   (default `substrate`). If you override it, create the named schema with
   the owner role as owner and target it in the grants in section 2.
 - `ATE_API_POSTGRES_POOL_MAX_CONNS` — connections per read/write pool
   (default: `max(4, NumCPU)`). Ateapi has separate store and OpenFGA pools
   with this limit. It does not affect the owner and watch pools, which are
-  capped at 2 and 3 connections. The setting applies after loading the DSN,
-  including from `@file:`, and overrides `pool_max_conns` in the DSN when both
-  are set.
+  capped at 2 and 3 connections.
 
 Changing the installed configuration rolls ate-api-server: the install script
 stamps a hash of the rendered configuration into the pod template
-(`ate.dev/env-hash`). For an `@file:` connection, changes to `pool_max_conns`
-inside the referenced DSN require an ate-api-server restart; credential changes
-are picked up on new connections.
+(`ate.dev/env-hash`).
 
 ## 4. Verify
 
@@ -225,21 +199,5 @@ instance shape and the data cache, storage/IOPS, connection-pool math,
 proxy sidecar resources, and Managed Connection Pooling — see
 [docs/dev/cloud-sql-scaling-guide.md](../../docs/dev/cloud-sql-scaling-guide.md).
 
-## Alternative: any external PostgreSQL (non-GCP)
-
-For a non-Cloud-SQL database, provide a DSN directly; password lives in a
-Secret and the server certificate is verified against a mounted CA. (This is
-also the shape of a [direct
-connection](https://docs.cloud.google.com/sql/docs/postgres/connection-options)
-to Cloud SQL without the proxy, if you ever need one — you then manage the
-server CA and credentials yourself.)
-
-```sh
-export ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING='postgresql://<user>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
-export ATE_API_POSTGRES_OWNER_CONNECTION_STRING='postgresql://<schema-owner>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
-export ATE_API_POSTGRES_SERVER_CA_FILE=/path/to/server-ca.pem
-./hack/install-ate.sh --deploy-ate-system
-```
-
-Provision the configured owner and read/write roles, memberships, schema,
-and default privileges before deploying, as in section 2.
+For explicit connection strings or a non-Cloud-SQL PostgreSQL database, see
+the [general PostgreSQL configuration guide](../../docs/postgres.md).
