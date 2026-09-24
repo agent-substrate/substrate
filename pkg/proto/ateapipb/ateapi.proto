@@ -166,6 +166,7 @@ message ExternalSnapshot {
   // captured from.
   //
   // +k8s:optional
+  // +k8s:format=k8s-uuid
   string actor_template_uid = 3;
 }
 

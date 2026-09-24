@@ -3128,6 +3128,9 @@ func Validate_ExternalSnapshot(
 			if earlyReturn {
 				return // do not proceed
 			}
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,

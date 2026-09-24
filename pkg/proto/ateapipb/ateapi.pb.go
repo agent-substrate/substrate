@@ -546,6 +546,7 @@ type ExternalSnapshot struct {
 	// captured from.
 	//
 	// +k8s:optional
+	// +k8s:format=k8s-uuid
 	ActorTemplateUid string `protobuf:"bytes,3,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -2288,11 +2289,10 @@ type GoldenSnapshotStatus struct {
 	// +k8s:optional
 	TakeGoldenSnapshotAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=take_golden_snapshot_at,json=takeGoldenSnapshotAt,proto3" json:"take_golden_snapshot_at,omitempty"`
 	// error_message is set when the golden snapshot build fails and will not be
-	// retried, formatted as "<Reason>: <detail>". A nonempty value is terminal,
-	// like golden_tag.
+	// retried, formatted as "<Reason>: <detail>". A nonempty value is terminal.
 	//
 	// +k8s:optional
-	// +k8s:maxLength=4096 # guardrail; the detail can carry a validation error
+	// +k8s:maxLength=4096
 	ErrorMessage  string `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

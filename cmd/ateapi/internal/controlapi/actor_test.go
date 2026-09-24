@@ -427,6 +427,30 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		nil,
 	}, {
+		"valid actor.status.external_snapshot.actor_template_uid",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+		})),
+		nil,
+	}, {
+		// Each suspend restamps the UID of the template the snapshot was captured under.
+		"changing actor.status.external_snapshot.actor_template_uid is allowed",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "fedcba98-7654-3210-fedc-ba9876543210"}
+		})),
+		nil,
+	}, {
+		"invalid actor.status.external_snapshot.actor_template_uid",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "not-a-uuid"}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "external_snapshot", "actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
 		"valid actor.status.local_snapshot_info.snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
