@@ -414,7 +414,7 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 // strings, but an external database DSN can carry a password, and the raw
 // value would otherwise be written to the log on every restart. Only the
 // parsed, non-secret parts are logged; a string that does not parse is
-// reported as such and connectStore surfaces the actual error.
+// reported as invalid and connectStore surfaces the actual error.
 func postgresConnectionAttr(connString string) slog.Attr {
 	const key = "postgres-connection-string"
 	if connString == "" {
@@ -422,7 +422,7 @@ func postgresConnectionAttr(connString string) slog.Attr {
 	}
 	cfg, err := pgconn.ParseConfig(connString)
 	if err != nil {
-		return slog.String(key, "<unparseable>")
+		return slog.String(key, "<invalid pg connection string>")
 	}
 	return slog.Group(key,
 		slog.String("host", cfg.Host),

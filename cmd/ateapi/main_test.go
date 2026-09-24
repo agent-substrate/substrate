@@ -85,7 +85,7 @@ func TestPostgresConnectionAttrNeverLogsThePassword(t *testing.T) {
 		if strings.Contains(got, password) || strings.Contains(got, raw) {
 			t.Fatalf("log line echoes an unparseable connection string: %s", got)
 		}
-		if !strings.Contains(got, `"postgres-connection-string":"<unparseable>"`) {
+		if !strings.Contains(got, `"postgres-connection-string":"<invalid pg connection string>"`) {
 			t.Errorf("expected the unparseable marker: %s", got)
 		}
 	})
