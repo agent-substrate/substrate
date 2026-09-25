@@ -14,7 +14,7 @@ Agent Substrate’s goal is sub-500ms agent startup. Profiling shows that contai
 Image streaming addresses this by replacing upfront layer downloads with on-demand demand paging over FUSE: because agent workloads typically touch only 5%–15% of their rootfs during startup, streaming reduces image ready time from **>100s down to <2.5s** (a 38x–94x speedup).
 
 However, Substrate clusters operate across heterogeneous cloud environments, for example:
-- **Google Cloud (GKE):** Riptide image streaming daemon (`/run/containerd-gcfs-grpc`).
+- **Google Cloud (GKE):** Riptide Snapshotter (`/run/containerd-gcfs-grpc`).
 - **AWS (EKS):** Seekable OCI snapshotter (`/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`).
 - **Bare Metal / Local Dev:** No streaming daemon available (traditional local cache required).
 
@@ -62,10 +62,9 @@ In standard Kubernetes environments, image streaming operates through a multi-ti
 ```
 Kubelet (Node Agent)
   └── containerd (CRI Runtime Engine: containerd.sock)
-        └── Remote Snapshotter Plugin (riptide-snapshotter / soci-snapshotter)
-              └── FUSE Daemon (gcfsd / soci engine)
-                    └── FUSE mounts (/run/.../fs)
-                          └── runsc / runc (Container Sandbox)
+        └── Remote Snapshotter Plugin (Riptide Snapshotter / SOCI Snapshotter)
+              └── FUSE mounts (/run/.../fs)
+                    └── runsc / runc (Container Sandbox)
 ```
 
 **Agent Substrate standardizes directly on the CNCF Remote Snapshotter gRPC standard (`containerd.services.snapshots.v1.Snapshots`) while bypassing `kubelet` and `containerd` CRI (`containerd.sock`):**
@@ -73,13 +72,13 @@ Kubelet (Node Agent)
 ateapi (Substrate Control Plane)
   └── atelet (Worker Node Daemon)
         └── internal/imagestreaming/drivers/remotesnapshotter
-              └── Remote Snapshotter Daemon (/run/containerd-gcfs-grpc or /run/soci-snapshotter-grpc/...)
+              └── Remote Snapshotter Daemon (Riptide Snapshotter / SOCI Snapshotter)
                     └── FUSE mounts
                           └── ateom (Substrate Sandbox Overlay Manager)
 ```
 
 #### Why Standardize on CNCF Remote Snapshotters:
-1. **Clean CloudProvider Extraction:** Substrate core avoids importing proprietary vendor client libraries or custom protocol buffers (such as GCFS RPCs). By speaking the standard CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, a single unified driver (`remotesnapshotter`) connects identically to Google Riptide (`containerd-gcfs-grpc`), AWS SOCI (`soci-snapshotter-grpc`), eStargz (`containerd-stargz-grpc`), or Nydus.
+1. **Clean CloudProvider Extraction:** Substrate core avoids importing proprietary vendor client libraries or custom protocol buffers. By speaking the standard CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, a single unified driver (`remotesnapshotter`) connects identically to the Google Riptide Snapshotter (`containerd-gcfs-grpc`), AWS SOCI Snapshotter (`soci-snapshotter-grpc`), eStargz (`containerd-stargz-grpc`), or Nydus.
 2. **Reusing Ecosystem Snapshotter Capabilities:** Rather than reimplementing layer mounting, deduplication, chunk caching, and view management inside Substrate, Substrate leverages the robust, production-hardened remote snapshotter plugins maintained by Google and AWS.
 3. **Preserving the Actor Multiplexing Model:** Substrate continues to bypass the Kubernetes control plane and `containerd.sock` CRI engine. Worker Pods remain pre-warmed and long-running. Connecting directly to the local snapshotter UNIX socket avoids containerd CRI daemon lock contention, namespace metadata sweeps, and Pod lifecycle delays.
 4. **Direct Overlay LowerDir Integration:** Snapshot mounts returned by `Prepare` / `View` are directly integrated into `ateom`'s sandbox lowerdir overlay spec (`layerN/fs:...:layer0/fs`), matching traditional unpacked layers.
@@ -90,12 +89,22 @@ By standardizing on the CNCF Remote Snapshotter interface, Google Riptide and AW
 
 | Architectural Dimension | Google Cloud Riptide (`riptide`) | AWS Seekable OCI (`soci`) |
 | :--- | :--- | :--- |
-| **Daemon Endpoint** | `/run/containerd-gcfs-grpc` | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` |
+| **Daemon Endpoint** | `/run/containerd-gcfs-grpc` (Riptide Snapshotter) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` (SOCI Snapshotter) |
 | **Interface Protocol** | `containerd.services.snapshots.v1.Snapshots` | `containerd.services.snapshots.v1.Snapshots` |
 | **Runtime Interaction** | **Bypasses containerd CRI:** speaks direct snapshotter gRPC | **Bypasses containerd CRI:** speaks direct snapshotter gRPC |
-| **FUSE Mount Location** | `/run/containerd-gcfs/...` or `/run/gcfsd/mnt/views/...` | `/var/lib/soci-snapshotter-grpc/snapshots/...` |
+| **FUSE Mount Location** | `/run/containerd-gcfs/...` | `/var/lib/soci-snapshotter-grpc/snapshots/...` |
 | **Layer View RPC** | `Prepare` / `View` with remote labels | `Prepare` / `View` with remote labels |
-| **Metadata Index** | Cloud Artifact Registry Streaming Manifests | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) |
+| **Metadata Index** | Google Cloud Artifact Registry (GAR) Streaming Manifests | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) |
+| **Registry Scope** | **GAR / GCR exclusively** (external registries fall back to non-streaming) | Any OCI registry supporting SOCI index artifacts (ECR, etc.) |
+| **Authentication Source** | Ambient Node Identity via GCE Metadata Service (`169.254.169.254`) | Ambient Node Identity via EC2 Instance Profile / link-local metadata |
+
+#### Special Characteristics and Encapsulation Boundaries
+
+1. **Riptide Snapshotter Encapsulation & CNCF gRPC Standard:**
+   Substrate communicates directly with the **Riptide Snapshotter** (`containerd-gcfs-grpc`) over its local UNIX domain socket. Substrate does not manage, monitor, or communicate with any underlying or low-level FUSE daemon; all layer virtualization, chunk demand-paging, and mount lifecycles are entirely encapsulated within the Riptide Snapshotter. While the Riptide Snapshotter implements the CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, it possesses Google-specific optimizations and out-of-band mechanisms (such as internal FUSE mounting engines and specialized metadata indexing for Google Cloud Artifact Registry) that are not part of the upstream CNCF remote snapshotter specification. From Substrate's perspective, `cmd/atelet` interfaces with the Riptide Snapshotter strictly through the standard CNCF `Snapshots.v1` gRPC contract.
+
+2. **Registry Scope: Google Artifact Registry (GAR) Exclusivity:**
+   Google Riptide is exclusively designed to stream container images hosted in Google Artifact Registry (GAR) or Google Container Registry (GCR). Riptide acceleration relies on server-side streaming manifests and layer transformations generated within Google Cloud. External registries (such as Docker Hub, Quay.io, or AWS ECR) do not contain Riptide streaming metadata. When an image from an external registry is targeted on GKE, Riptide cannot stream it. Substrate detects this during `CanStream` and automatically falls back to traditional non-streaming local caching (`imagecache.EnsureImage`).
 
 ### 3.3. Architecture Flow Diagram
 
@@ -270,7 +279,7 @@ The generic driver implements reference counting across actors sharing the same 
 - **Substrate Lifecycle Reality:** Substrate intentionally drains/crashes active actor workloads upon a node reboot (it does not attempt live in-memory VM migration).
 - **Startup Recovery in the Driver:** When `atelet` starts up after a reboot or crash, it executes an **Actor-Derived Reconciliation Model** (matching how Kubernetes `kubelet` recovers state and how Substrate's non-streaming image cache GC discovers roots):
   1. `credentialprovider.New(...)` reloads the credential config immediately from the host (`/var/lib/kubelet/credential-provider-config.yaml`).
-  2. The streaming daemon (`containerd-gcfs-grpc` / `soci-snapshotter-grpc`) is already running as a host service with its fresh metadata access.
+  2. The streaming daemon (Riptide Snapshotter `/run/containerd-gcfs-grpc` / SOCI Snapshotter `/run/soci-snapshotter-grpc/...`) is already running as a host service with its fresh metadata access.
   3. `reconcileStreamingLeases(streamer, actorsDir)` (in `cmd/atelet/streaming_reconcile.go`) scans surviving on-node bundle overlay specs (`ateompath.ActorsDir/*/bundles/*/rootfs-overlay.json`).
   4. It parses each actor's `OverlaySpec.ImageRef` and layer directory mappings across all resident/running actors, aggregating them into `[]*ActiveLease` entries with exact live reference counts, and calls `streamer.ReconcileLeases(ctx, active)`.
   5. Both `riptide` and `soci` drivers inspect live mounts on the host, reconnect to the remote snapshotter daemon socket, and restore their in-memory `d.leases` map with exact live reference counts (`refCount`) and layer paths.
@@ -348,7 +357,7 @@ flowchart TD
 
     subgraph DataPlane["Data Plane: On-Demand Chunk Streaming (Node Daemon)"]
         direction TB
-        NodeIAM["Node Cloud Metadata Service<br/>http://169.254.169.254 (Instance Identity)"] -->|Rotate / Refresh Tokens| StreamingDaemon["Remote Snapshotter Daemon<br/>(containerd-gcfs-grpc / soci-snapshotter-grpc)"]
+        NodeIAM["Node Cloud Metadata Service<br/>http://169.254.169.254 (Instance Identity)"] -->|Rotate / Refresh Tokens| StreamingDaemon["Remote Snapshotter Daemon<br/>(Riptide Snapshotter / SOCI Snapshotter)"]
         StreamingDaemon -->|FUSE Chunk HTTP Range Requests| Registry
         StreamingDaemon -->|Direct FUSE Mounts| Ateom["ateom Overlay Manager<br/>(runsc Sandboxes)"]
     end
@@ -365,10 +374,39 @@ flowchart TD
 #### 5.5.2. Data Plane: Token Refresh & Expiration
 - **Question:** How does credential refreshing and timeout handling work when a workload runs for a long time or survives a restart?
 - **How It Actually Works Under the Hood:**
-  - The streaming daemon (`containerd-gcfs-grpc` on GKE, `soci-snapshotter-grpc` on EKS) runs as a node-level daemon with direct access to the VM instance metadata service.
-  - **On GKE (Riptide/GCFS):** GCFS fetches Google OAuth2 access tokens directly from `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token`. The metadata server automatically rotates tokens before they expire (1-hour validity). GCFS handles refreshing internally whenever it performs HTTP Range requests against Artifact Registry.
-  - **On AWS (SOCI):** The SOCI daemon either uses the EC2 instance profile or invokes the `docker-credential-ecr-login` binary, which automatically negotiates and refreshes AWS authorization tokens.
+  - The streaming daemon (Riptide Snapshotter `/run/containerd-gcfs-grpc` on GKE, SOCI Snapshotter `/run/soci-snapshotter-grpc/...` on EKS) runs as a node-level daemon with direct access to the VM instance metadata service.
+  - **On GKE (Riptide Snapshotter):** The Riptide Snapshotter fetches Google OAuth2 access tokens directly from `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token` (or `http://169.254.169.254`). The metadata server automatically rotates tokens before they expire (1-hour validity). The snapshotter handles refreshing internally whenever it performs HTTP Range requests against Artifact Registry.
+  - **On AWS (SOCI Snapshotter):** The SOCI snapshotter uses the EC2 instance profile or link-local metadata service, which automatically negotiates and refreshes AWS authorization tokens.
 - **Why We Do Not Pass Tokens via Snapshot Labels:** Containerd snapshotters explicitly avoid passing bearer tokens inside `PrepareSnapshotRequest.Labels` because labels are stored persistently in SQLite/bbolt and exposed via `Stat()`/`List()` RPCs, which would leak credentials.
+
+#### 5.5.3. Architectural Decision on `imagePullSecrets` and Fallback Behavior
+
+A fundamental architectural question is how Agent Substrate handles Kubernetes `imagePullSecrets` for private registries in the image streaming path.
+
+##### The Core Architectural Rule:
+**Any workload requiring explicit `imagePullSecrets` cannot use image streaming (on either Google Riptide or external OSS streaming solutions like AWS SOCI) and always falls back to traditional non-streaming mode (`imagecache.EnsureImage`).**
+
+Image streaming in Substrate is strictly scoped to **ambient Node Identity** (GCE VM Service Account on GKE, EC2 Instance Profile on EKS).
+
+##### Why `imagePullSecrets` Cannot Be Used with Image Streaming:
+
+1. **CNCF Snapshotter Protocol Invariant:**
+   Substrate communicates with remote snapshotters strictly via the standard CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API (`Prepare`, `View`, `Stat`, `Remove`). This protocol contains **no RPC field or metadata header for client authentication credentials**.
+2. **Strict Prohibition of Token Injection via Snapshot Labels:**
+   Attempting to pass bearer tokens, registry passwords, or authorization headers inside `PrepareSnapshotRequest.Labels` is strictly forbidden:
+   - Snapshotter daemons (both Riptide Snapshotter and SOCI Snapshotter) persist snapshot labels unencrypted to disk in their internal metadata stores (SQLite or bbolt).
+   - Labels are visible to any node process querying the snapshotter via `Stat()` and `List()` RPCs, creating a severe credential leak and cross-tenant privilege escalation risk.
+3. **How OSS Streaming Products Handle Pull Secrets in Standard Kubernetes vs. Substrate:**
+   - *In Standard Kubernetes (CRI Proxy Architecture):* In standard Kubernetes, Kubelet communicates with containerd through the CRI runtime interface (`CRI.PullImage`). When a pod specifies `imagePullSecrets`, Kubelet supplies those credentials in the CRI call. OSS remote snapshotters (such as AWS SOCI or eStargz) deploy a **CRI proxy service** that sits between Kubelet and containerd. The CRI proxy intercepts `PullImage`, captures the authentication tokens, caches them in memory keyed by image/repository, and provides them to the snapshotter daemon's chunk fetcher out-of-band.
+   - *In Agent Substrate (Bypassing Kubelet & CRI):* Substrate’s entire performance thesis relies on bypassing Kubelet and containerd CRI (`containerd.sock`) to achieve sub-500ms startup without CRI lock contention or pod lifecycle overhead. Because Substrate talks directly to the Remote Snapshotter over `Snapshots.v1` gRPC, **no CRI proxy exists** to intercept and side-load credentials.
+4. **Registry Exclusivity for Google Riptide:**
+   As noted in Section 3.2, Google Riptide exclusively supports Google Artifact Registry (GAR/GCR). GAR access is authenticated ambiently via the node's GCE VM Service Account through the link-local metadata server (`http://169.254.169.254`), making `imagePullSecrets` unnecessary for accelerated images on GKE.
+
+##### Fallback Behavior for Workloads with `imagePullSecrets`:
+When an actor definition requires explicit `imagePullSecrets` (or when private registry access cannot be authenticated through the node's ambient IAM identity):
+1. `cmd/atelet` detects that streaming cannot proceed with ambient node credentials.
+2. The request automatically and transparently routes to Substrate's traditional image caching pipeline: `imagecache.EnsureImage`.
+3. `imagecache.EnsureImage` uses the provided credentials to authenticate against the private registry, downloads and verifies the complete layers, untars them into the node's local cache directory, and composes the overlay lowerdir as usual.
 
 ### 5.6. Fallback Contract & Error Codes
 
@@ -378,6 +416,8 @@ A clear contract specifies when `atelet` falls back to traditional download mode
 | :--- | :--- | :--- |
 | **Daemon Unavailable** | Socket connection refused, ENOENT, or `codes.Unavailable` | **Fallback:** Daemon is not running or node is unconfigured; fall back to `imagecache.EnsureImage`. |
 | **Unsupported Image** | Remote snapshotter returns `codes.InvalidArgument` (e.g. image does not have SOCI index or stargz format) | **Fallback:** Image cannot be streamed; fall back to standard download. |
+| **External Registry (Riptide)** | Image is hosted outside Google Artifact Registry (e.g. Docker Hub, Quay) on GKE | **Fallback:** Riptide exclusively accelerates Google Artifact Registry (GAR/GCR); fall back to standard download. |
+| **`imagePullSecrets` Required** | Workload requires explicit `imagePullSecrets` (private registry not authenticated via ambient Node IAM) | **Fallback:** CNCF `Snapshots.v1` does not support credential passing; fall back to `imagecache.EnsureImage`. |
 | **Listable Timeout** | Daemon mounts FUSE, but directory listing fails or times out (`DefaultListableTimeout`) | **Fallback:** Daemon hung or unhealthy; unmount and fall back to standard download. |
 | **Control Plane Auth (`atelet`)** | Credential provider returns 401 Unauthorized for metadata resolution | **Terminal Error / No Fallback:** If `atelet` cannot authenticate to the registry to read the manifest, standard pull will also fail with 401. |
 | **Data Plane Auth (daemon)** | Daemon returns `codes.PermissionDenied` during Prepare | **Fallback:** The daemon's node identity may lack registry permissions, while `atelet`'s credentials might differ. |
@@ -386,10 +426,10 @@ A clear contract specifies when `atelet` falls back to traditional download mode
 
 ## 6. Provider Driver Implementations
 
-| Provider | Host Socket | Protocol | Image Indexing | Control Plane Auth (atelet) | Data Plane Auth (Streaming Daemon) |
+| Provider | Host Socket | Protocol | Image Indexing & Registry Scope | Control Plane Auth (atelet) | Data Plane Auth (Streaming Daemon) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`riptide`** (Google) | `/run/containerd-gcfs-grpc` | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
-| **`soci`** (AWS) | `/run/soci-snapshotter-grpc/...` | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| **`riptide`** (Google) | `/run/containerd-gcfs-grpc` (Riptide Snapshotter) | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests (**GAR/GCR only**) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| **`soci`** (AWS) | `/run/soci-snapshotter-grpc/...` (SOCI Snapshotter) | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
 
 ---
 
