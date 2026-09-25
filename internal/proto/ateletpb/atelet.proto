@@ -65,15 +65,18 @@ message RequestActorSuspendRequest {
   // the caller's certificate names.
   //
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_atespace = 1;
 
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name, as for MintActorCertificate.
   //
   // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
 }
 

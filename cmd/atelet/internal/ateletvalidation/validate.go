@@ -15,10 +15,29 @@
 package ateletvalidation
 
 import (
+	"context"
 	"reflect"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// ValidateRequestActorSuspendRequest validates req at the RPC edge. A non-nil
+// return is the InvalidArgument error the handler responds with.
+func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) error {
+	return toInvalidArgument(Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
+}
+
+func toInvalidArgument(errs field.ErrorList) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
 
 // ateDeepEqual compares two values of any type, using proto.Equal if both are
 // proto messages, and reflect.DeepEqual otherwise. This is called by

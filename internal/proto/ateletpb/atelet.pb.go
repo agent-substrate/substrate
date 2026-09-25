@@ -297,13 +297,16 @@ type RequestActorSuspendRequest struct {
 	// the caller's certificate names.
 	//
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorAtespace string `protobuf:"bytes,1,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	// The UID of the actor --- used to guard against deletion and recreation of
 	// an actor with the same name, as for MintActorCertificate.
 	//
 	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid      string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

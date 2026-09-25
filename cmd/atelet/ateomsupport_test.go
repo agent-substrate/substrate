@@ -191,7 +191,7 @@ func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
 	if _, err := svc.RequestActorSuspend(ctx, &ateletpb.RequestActorSuspendRequest{
 		ActorAtespace: "team-a",
 		ActorName:     "actor-1",
-		ActorUid:      "actor-uid-1",
+		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
 	}); err != nil {
 		t.Fatalf("RequestActorSuspend() failed: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
 		// actors it hosts, and only the control plane knows which those are.
 		Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid: "actor-uid-1",
+		ActorUid: "01234567-89ab-cdef-0123-456789abcdef",
 	}}
 	if diff := cmp.Diff(want, workers.got, protocmp.Transform()); diff != "" {
 		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
@@ -218,7 +218,7 @@ func TestRequestActorSuspendRequiresACertificate(t *testing.T) {
 	_, err := svc.RequestActorSuspend(context.Background(), &ateletpb.RequestActorSuspendRequest{
 		ActorAtespace: "team-a",
 		ActorName:     "actor-1",
-		ActorUid:      "actor-uid-1",
+		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
 	})
 	if status.Code(err) != codes.Unauthenticated {
 		t.Errorf("unauthenticated request returned %v, want Unauthenticated", err)
@@ -237,7 +237,7 @@ func TestRequestActorSuspendSurfacesRefusal(t *testing.T) {
 	_, err := svc.RequestActorSuspend(workerContext(t, "pod-a"), &ateletpb.RequestActorSuspendRequest{
 		ActorAtespace: "team-a",
 		ActorName:     "actor-1",
-		ActorUid:      "actor-uid-1",
+		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
 	})
 	if got := status.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("code = %v (err %v), want FailedPrecondition", got, err)
