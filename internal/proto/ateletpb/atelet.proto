@@ -267,6 +267,13 @@ message SandboxAssets {
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
+  // Tagged ahead of the rest of WorkloadSpec, like volumes below: the
+  // containers' type now carries validations.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=10 # matches the template's containers bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
   repeated Container containers = 1;
 
   // Tagged ahead of the rest of WorkloadSpec: volumes' type carries
@@ -402,30 +409,50 @@ message VolumeMount {
   string mount_path = 2;
 }
 
+// Container's remaining fields are tagged in follow-ups; the ones below are
+// tagged ahead because their types carry validations (the generator requires
+// presence tags for those) or because the containers list is keyed by name.
 message Container {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
+
   string image = 2;
   repeated string command = 3;
   repeated string args = 7;
   repeated EnvEntry env = 4;
   WakeupProbe wakeup_probe = 5;
   repeated VolumeMount volume_mounts = 6;
+
+  // +k8s:optional
   SecurityContext security_context = 8;
 
   // resources are the cgroup limits for this container, resolved by
   // ate-api-server from the ActorTemplate. Unset means no limits.
+  //
+  // +k8s:optional
   ResourceLimits resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process.
 message SecurityContext {
+  // +k8s:optional
   Capabilities capabilities = 1;
 }
 
 // Capabilities adjusts a container's Linux capabilities relative to the default
 // set. Names carry no "CAP_" prefix; drop applies before add.
 message Capabilities {
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=set
+  // +k8s:customValidation # capability grammar; "ALL" not accepted
   repeated string add = 1;
+
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=set
+  // +k8s:customValidation # capability grammar
   repeated string drop = 2;
 }
 
@@ -433,8 +460,16 @@ message Capabilities {
 // map so each resource.Quantity is parsed exactly once, in ate-api-server.
 message ResourceLimits {
   // memory_bytes is the memory limit in bytes. 0 means unset.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
   int64 memory_bytes = 1;
+
   // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
   int64 cpu_millis = 2;
 }
 

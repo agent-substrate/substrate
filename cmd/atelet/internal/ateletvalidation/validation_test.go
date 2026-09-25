@@ -539,3 +539,126 @@ func TestValidateImageVolumeSource(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateResourceLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		obj  *ateletpb.ResourceLimits
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  &ateletpb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500},
+	}, {
+		name: "zero means unset",
+		obj:  &ateletpb.ResourceLimits{},
+	}, {
+		name: "negative memory_bytes",
+		obj:  &ateletpb.ResourceLimits{MemoryBytes: -1},
+		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "negative cpu_millis",
+		obj:  &ateletpb.ResourceLimits{CpuMillis: -1},
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_millis"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "cpu_millis at the cap",
+		obj:  &ateletpb.ResourceLimits{CpuMillis: 999999},
+	}, {
+		name: "cpu_millis above the cap",
+		obj:  &ateletpb.ResourceLimits{CpuMillis: 1000000},
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_millis"), nil, "").WithOrigin("maximum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_ResourceLimits(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+// TestValidateSecurityContext exercises the capability rules through the
+// parent, so errors carry their real paths.
+func TestValidateSecurityContext(t *testing.T) {
+	sc := func(add, drop []string) *ateletpb.SecurityContext {
+		return &ateletpb.SecurityContext{Capabilities: &ateletpb.Capabilities{Add: add, Drop: drop}}
+	}
+	capsPath := func(kind string) *field.Path { return field.NewPath("capabilities", kind).Index(0) }
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.SecurityContext
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  sc([]string{"NET_BIND_SERVICE"}, []string{"ALL"}),
+	}, {
+		name: "empty",
+		obj:  &ateletpb.SecurityContext{},
+	}, {
+		name: "add does not accept ALL",
+		obj:  sc([]string{"ALL"}, nil),
+		want: field.ErrorList{field.Invalid(capsPath("add"), nil, "")},
+	}, {
+		name: "drop accepts ALL",
+		obj:  sc(nil, []string{"ALL"}),
+	}, {
+		name: "CAP_ prefix rejected",
+		obj:  sc([]string{"CAP_NET_BIND_SERVICE"}, nil),
+		want: field.ErrorList{field.Invalid(capsPath("add"), nil, "")},
+	}, {
+		name: "lowercase rejected",
+		obj:  sc(nil, []string{"net_bind_service"}),
+		want: field.ErrorList{field.Invalid(capsPath("drop"), nil, "")},
+	}, {
+		name: "duplicate capability rejected by the set",
+		obj:  sc([]string{"SYS_TIME", "SYS_TIME"}, nil),
+		want: field.ErrorList{field.Duplicate(field.NewPath("capabilities", "add").Index(1), nil)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_SecurityContext(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+// TestValidateWorkloadSpecContainers exercises the newly keyed containers
+// list through the parent, as with volumes.
+func TestValidateWorkloadSpecContainers(t *testing.T) {
+	ctr := func(name string) *ateletpb.Container { return &ateletpb.Container{Name: name} }
+	tests := []struct {
+		name string
+		obj  *ateletpb.WorkloadSpec
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("main"), ctr("sidecar")}},
+	}, {
+		name: "missing container name",
+		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("")}},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("name"), "")},
+	}, {
+		name: "invalid container name: uppercase",
+		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("Main")}},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "duplicate container names",
+		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("main"), ctr("main")}},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(1), nil)},
+	}, {
+		name: "negative limits surface through the container",
+		obj: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
+			Name:      "main",
+			Resources: &ateletpb.ResourceLimits{CpuMillis: -1},
+		}}},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_WorkloadSpec(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
