@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/volumepath"
 	"github.com/distribution/reference"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -212,6 +213,30 @@ func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation,
 		return field.ErrorList{field.Invalid(fldPath, *value, "must be a URL path starting with '/', using only RFC 3986 path-segment characters, without query or fragment")}
 	}
 	return nil
+}
+
+// validateProjectedPath applies the projected-path rule shared with the
+// control plane; atelet also re-checks it at host-write time as a second
+// line of defense.
+func validateProjectedPath(fldPath *field.Path, p string) field.ErrorList {
+	if err := volumepath.ValidateProjected(p); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
+	}
+	return nil
+}
+
+func ValidateCustom_ActorMetadataItem_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == "" {
+		return nil // required is enforced by tags
+	}
+	return validateProjectedPath(fldPath, *value)
+}
+
+func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == "" {
+		return nil // required is enforced by tags
+	}
+	return validateProjectedPath(fldPath, *value)
 }
 
 // ValidateCustom_SystemInfoVolume_DataSources requires every projected file

@@ -329,7 +329,9 @@ func TestValidateSystemInfoDataSource(t *testing.T) {
 		obj:  &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"}},
 	}, {
 		name: "actor metadata alone",
-		obj:  &ateletpb.SystemInfoDataSource{ActorMetadata: &ateletpb.ActorMetadataDataSource{}},
+		obj: &ateletpb.SystemInfoDataSource{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+			{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
+		}}},
 	}, {
 		name: "neither set",
 		obj:  &ateletpb.SystemInfoDataSource{},
@@ -337,8 +339,10 @@ func TestValidateSystemInfoDataSource(t *testing.T) {
 	}, {
 		name: "both set",
 		obj: &ateletpb.SystemInfoDataSource{
-			ActorMetadata: &ateletpb.ActorMetadataDataSource{},
-			TrustBundle:   &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"},
+			ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+				{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
+			}},
+			TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"},
 		},
 		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
 	}}
@@ -984,6 +988,114 @@ func TestValidateContainerNameAndProcess(t *testing.T) {
 			op := operation.Operation{Type: operation.Create}
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_Container(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateActorMetadataDataSource(t *testing.T) {
+	item := func(f ateletpb.ActorMetadataField, path string) *ateletpb.ActorMetadataItem {
+		return &ateletpb.ActorMetadataItem{Field: f, Path: path}
+	}
+	tests := []struct {
+		name string
+		obj  *ateletpb.ActorMetadataDataSource
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "name"),
+			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, "ids/uid"),
+		}},
+	}, {
+		name: "empty items",
+		obj:  &ateletpb.ActorMetadataDataSource{},
+		want: field.ErrorList{field.Required(field.NewPath("items"), "")},
+	}, {
+		name: "same field projected twice",
+		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "a"),
+			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "b"),
+		}},
+		want: field.ErrorList{field.Duplicate(field.NewPath("items").Index(1), nil)},
+	}, {
+		name: "unspecified field",
+		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED, "a"),
+		}},
+		want: field.ErrorList{field.Required(field.NewPath("items").Index(0).Child("field"), "")},
+	}, {
+		name: "field outside the enum",
+		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+			item(ateletpb.ActorMetadataField(4), "a"),
+		}},
+		want: field.ErrorList{field.Invalid(field.NewPath("items").Index(0).Child("field"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "absolute item path",
+		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "/etc/name"),
+		}},
+		want: field.ErrorList{field.Invalid(field.NewPath("items").Index(0).Child("path"), nil, "")},
+	}, {
+		name: "escaping item path",
+		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "../name"),
+		}},
+		want: field.ErrorList{field.Invalid(field.NewPath("items").Index(0).Child("path"), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_ActorMetadataDataSource(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateTrustBundleDataSource(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.TrustBundleDataSource)) *ateletpb.TrustBundleDataSource {
+		tb := &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "trust/bundle.pem"}
+		for _, m := range mutate {
+			m(tb)
+		}
+		return tb
+	}
+	tests := []struct {
+		name string
+		obj  *ateletpb.TrustBundleDataSource
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing path",
+		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("path"), "")},
+	}, {
+		name: "absolute path",
+		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = "/trust/bundle.pem" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
+	}, {
+		name: "path with a dot segment",
+		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = "trust/./bundle.pem" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
+	}, {
+		name: "path too long",
+		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = strings.Repeat("p", 256) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("path"), nil, 255).WithOrigin("maxLength")},
+	}, {
+		name: "missing name",
+		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name: "name too long",
+		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Name = strings.Repeat("n", 254) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("name"), nil, 253).WithOrigin("maxLength")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_TrustBundleDataSource(context.Background(), op, nil, tt.obj, nil))
 		})
 	}
 }
