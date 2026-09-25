@@ -18,6 +18,11 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+if ! command -v jq &>/dev/null; then
+  echo "jq is required for benchmark workload deployment" >&2
+  exit 1
+fi
+
 # Source the environment variables if configured
 if [[ -f .ate-dev-env.sh ]]; then
   source .ate-dev-env.sh
@@ -56,6 +61,8 @@ OTLP_ENDPOINT=""
 # The timeout, in whole seconds, for waiting for the ateom worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
+WORKER_NODE_SELECTOR="{}"
+WORKER_TOLERATIONS="[]"
 
 usage() {
   echo "Usage: $0 [options]"
@@ -72,7 +79,26 @@ usage() {
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
   echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --node-selector KEY=VALUE  Require worker pods on nodes with this label (repeatable)"
+  echo "  --toleration KEY=VALUE:EFFECT  Tolerate a matching worker-node taint (repeatable)"
   echo "  -h, --help                  Show this help message"
+}
+
+add_node_selector() {
+  local selector="$1"
+  local key value
+  IFS='=' read -r key value <<<"${selector}"
+  WORKER_NODE_SELECTOR="$(jq -c --arg key "${key}" --arg value "${value}" \
+    '. + {($key): $value}' <<<"${WORKER_NODE_SELECTOR}")"
+}
+
+add_toleration() {
+  local toleration="$1"
+  local key value effect
+  IFS='=:' read -r key value effect <<<"${toleration}"
+  WORKER_TOLERATIONS="$(jq -c --arg key "${key}" --arg value "${value}" --arg effect "${effect}" \
+    '. + [{key: $key, operator: "Equal", value: $value, effect: $effect}]' \
+    <<<"${WORKER_TOLERATIONS}")"
 }
 
 # Read the endpoint from the ate-otel-config ConfigMap, which every control
@@ -133,6 +159,8 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${WORKER_NODE_SELECTOR}|${WORKER_NODE_SELECTOR}|g" \
+      -e "s|\${WORKER_TOLERATIONS}|${WORKER_TOLERATIONS}|g" \
       "${manifest}"
 }
 
@@ -170,10 +198,6 @@ wait_actortemplate_ready() {
 # snapshot exists (there is no kubectl wait for substrate resources), failing
 # fast when the template reconciler reports an error.
 wait_templates_ready() {
-  if ! command -v jq &>/dev/null; then
-    echo "jq is required to wait for the benchmark actor templates" >&2
-    return 1
-  fi
   local template
   for template in "${TEMPLATES[@]}"; do
     echo "Waiting for the benchmark-workloads/${template} golden snapshot..."
@@ -276,6 +300,20 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --wait-timeout=*)
       WAIT_TIMEOUT_SECS="${1#*=}"
+      ;;
+    --node-selector)
+      shift
+      add_node_selector "$1"
+      ;;
+    --node-selector=*)
+      add_node_selector "${1#*=}"
+      ;;
+    --toleration)
+      shift
+      add_toleration "$1"
+      ;;
+    --toleration=*)
+      add_toleration "${1#*=}"
       ;;
     -h|--help)
       usage

@@ -58,6 +58,8 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: benchmark-runner
+      nodeSelector: ${RUNNER_NODE_SELECTOR}
+      tolerations: ${RUNNER_TOLERATIONS}
       containers:
       - name: runner
         image: ${IMAGE}
@@ -72,8 +74,10 @@ spec:
         - "${TAG}"
         - "--dest"
         - "${DEST}"
-        - "--envoy-cpu"
-        - "${ENVOY_CPU}"
+        - "--dataplane"
+        - "${DATAPLANE}"
+        - "--proxy-cpu"
+        - "${PROXY_CPU}"
         - "--actors"
         - "${ACTORS}"
         - "--atespace"
