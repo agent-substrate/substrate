@@ -15,11 +15,13 @@
 package glutton
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"os"
@@ -214,6 +216,9 @@ func (s *Service) WriteDisk(ctx context.Context, req *gluttonpb.WriteDiskRequest
 	if req.GetSize() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "size must be non-negative")
 	}
+	if req.GetFileCount() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "file_count must be non-negative")
+	}
 
 	path := filepath.Join(s.dataDir, req.GetKey())
 
@@ -228,31 +233,91 @@ func (s *Service) WriteDisk(ctx context.Context, req *gluttonpb.WriteDiskRequest
 		return nil, status.Errorf(codes.InvalidArgument, "unknown write_mode %v", req.GetWriteMode())
 	}
 
+	h := sha256.New()
+	total := int64(req.GetSize())
+	count := max(int(req.GetFileCount()), 1)
+	var size int64
+
+	if count == 1 {
+		// A directory left by an earlier multi-file TRUNCATE write is
+		// replaced like any other previous contents of key.
+		if req.GetWriteMode() == gluttonpb.WriteMode_WRITE_MODE_TRUNCATE {
+			if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+				if err := os.RemoveAll(path); err != nil {
+					return nil, status.Errorf(codes.Internal, "remove %s: %v", path, err)
+				}
+			}
+		}
+		n, err := writeDiskFile(path, flag, total, req.GetWriteMode(), h)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		size = n
+	} else {
+		// TRUNCATE replaces the whole set, so a smaller count leaves no
+		// files behind from a larger one to inflate later reads.
+		if req.GetWriteMode() == gluttonpb.WriteMode_WRITE_MODE_TRUNCATE {
+			if err := os.RemoveAll(path); err != nil {
+				return nil, status.Errorf(codes.Internal, "remove %s: %v", path, err)
+			}
+		}
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return nil, status.Errorf(codes.Internal, "mkdir %s: %v", path, err)
+		}
+		for i := range count {
+			n, err := writeDiskFile(filepath.Join(path, diskFileName(i)), flag, diskFileSize(total, count, i), req.GetWriteMode(), h)
+			if err != nil {
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+			size += n
+		}
+	}
+
+	s.diskWriteBytes.Add(ctx, total)
+	return &gluttonpb.WriteDiskResponse{Size: size, Sha256: h.Sum(nil)}, nil
+}
+
+// diskFileName names the i-th file of a multi-file WriteDisk. Zero-padded so
+// that name order, which ReadDisk follows, is index order.
+func diskFileName(i int) string {
+	return fmt.Sprintf("%08d", i)
+}
+
+// diskFileSize is the i-th file's share of total bytes spread over count
+// files: the remainder goes one byte each to the first files.
+func diskFileSize(total int64, count, i int) int64 {
+	size := total / int64(count)
+	if int64(i) < total%int64(count) {
+		size++
+	}
+	return size
+}
+
+// writeDiskFile fills the file at path with size random bytes, opened with
+// flag, and folds the bytes into h. It returns the file's size after the
+// write.
+func writeDiskFile(path string, flag int, size int64, mode gluttonpb.WriteMode, h hash.Hash) (int64, error) {
 	f, err := os.OpenFile(path, flag, 0o600)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "open %s: %v", path, err)
+		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
-	h := sha256.New()
-	size := int64(req.GetSize())
 	if err := streamRandomBytes(io.MultiWriter(f, h), size); err != nil {
-		return nil, status.Errorf(codes.Internal, "write %s: %v", path, err)
+		return 0, fmt.Errorf("write %s: %w", path, err)
 	}
 
 	// OVERWRITE has no O_TRUNC, bytes from a larger, earlier write will persist.
 	// The cursor is already at size, so folding the remainder into the
 	// same digest completes it without re-reading the prefix.
-	if req.GetWriteMode() == gluttonpb.WriteMode_WRITE_MODE_OVERWRITE {
+	if mode == gluttonpb.WriteMode_WRITE_MODE_OVERWRITE {
 		tail, err := io.Copy(h, f)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "hash tail %s: %v", path, err)
+			return 0, fmt.Errorf("hash tail %s: %w", path, err)
 		}
 		size += tail
 	}
-
-	s.diskWriteBytes.Add(ctx, int64(req.GetSize()))
-	return &gluttonpb.WriteDiskResponse{Size: size, Sha256: h.Sum(nil)}, nil
+	return size, nil
 }
 
 func (s *Service) ReadDisk(ctx context.Context, req *gluttonpb.ReadDiskRequest) (*gluttonpb.ReadDiskResponse, error) {
@@ -262,40 +327,65 @@ func (s *Service) ReadDisk(ctx context.Context, req *gluttonpb.ReadDiskRequest) 
 
 	path := filepath.Join(s.dataDir, req.GetKey())
 
-	f, err := os.Open(path)
+	fi, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, status.Errorf(codes.NotFound, "file %q not found", req.GetKey())
 		}
-		return nil, status.Errorf(codes.Internal, "open %s: %v", path, err)
+		return nil, status.Errorf(codes.Internal, "stat %s: %v", path, err)
+	}
+
+	// A multi-file write is read back as its files in name order, which is
+	// the order they were written and digested in.
+	paths := []string{path}
+	if fi.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "read dir %s: %v", path, err)
+		}
+		paths = make([]string, 0, len(entries))
+		for _, entry := range entries {
+			paths = append(paths, filepath.Join(path, entry.Name()))
+		}
+	}
+
+	h := sha256.New()
+	var buf bytes.Buffer
+	w := io.Writer(h)
+	if req.GetReadMode() != gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY {
+		w = io.MultiWriter(h, &buf)
+	}
+
+	var size int64
+	for _, p := range paths {
+		n, err := readDiskFile(p, w)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		size += n
+	}
+
+	s.diskReadBytes.Add(ctx, size)
+	return &gluttonpb.ReadDiskResponse{
+		Size:   size,
+		Sha256: h.Sum(nil),
+		Data:   buf.Bytes(),
+	}, nil
+}
+
+// readDiskFile copies the file at path into w and returns its size.
+func readDiskFile(path string, w io.Writer) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
-	h := sha256.New()
-
-	if req.GetReadMode() == gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY {
-		n, err := io.Copy(h, f)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "read %s: %v", path, err)
-		}
-		s.diskReadBytes.Add(ctx, n)
-		return &gluttonpb.ReadDiskResponse{
-			Size:   n,
-			Sha256: h.Sum(nil),
-		}, nil
-	}
-
-	data, err := io.ReadAll(io.TeeReader(f, h))
+	n, err := io.Copy(w, f)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "read %s: %v", path, err)
+		return 0, fmt.Errorf("read %s: %w", path, err)
 	}
-
-	s.diskReadBytes.Add(ctx, int64(len(data)))
-	return &gluttonpb.ReadDiskResponse{
-		Size:   int64(len(data)),
-		Sha256: h.Sum(nil),
-		Data:   data,
-	}, nil
+	return n, nil
 }
 
 // Make sure it has the specified number of file descriptors open. It will open or
