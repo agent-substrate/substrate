@@ -1,0 +1,94 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Smoke test for the opt-in SLIM_ROOTFS=true guest image, which pr-workflow's E2E
+# never builds. Building it compiles kata-agent from source, so this runs only for
+# pull requests that touch the scripts assembling or installing the micro-VM assets,
+# and on demand.
+name: microvm-slim-smoke
+on:
+  pull_request:
+    paths:
+    - 'hack/microvm-assets/*.sh'
+    - 'hack/install-microvm-deps.sh'
+    - '.github/workflows/microvm-slim-smoke.yaml'
+  workflow_dispatch:
+# Nothing here writes to the repository: the job checks the tree out, builds it,
+# and runs it in a throwaway cluster.
+permissions:
+  contents: read
+# A newer push to the same pull request supersedes the running smoke test.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  slim-rootfs-smoke:
+    name: Micro-VM smoke (SLIM_ROOTFS)
+    runs-on: ubuntu-latest
+    # Cluster bring-up, a from-source kata-agent build and one E2E test; generous,
+    # but far short of the six-hour platform default a hung step would otherwise
+    # consume.
+    timeout-minutes: 90
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    - name: Enable KVM
+      # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
+      # the node and labels it for the micro-VM sandbox class.
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Create cluster
+      run: hack/create-kind-cluster.sh
+    - name: Deploy micro-VM counter demo (SLIM_ROOTFS=true)
+      # Deploys the control plane, assembles the slim asset set (kata-agent rebuilt,
+      # rootfs.img repacked), stages it, applies the SandboxConfig with the slim
+      # image's sha256 and waits for the demo's golden snapshot: a cold boot of the
+      # slim guest through to a checkpoint. There is deliberately no asset cache, since
+      # rebuilding with the changed scripts is the point.
+      env:
+        SLIM_ROOTFS: "true"
+      run: hack/run-microvm-demo-kind.sh
+    - name: Run actor lifecycle E2E (micro-VM)
+      # Builds its own golden on the slim guest, then creates actors from it and
+      # pauses, suspends, resumes, reverts and deletes them, so the slim guest is
+      # also restored from snapshots rather than only cold-booted.
+      env:
+        E2E_SANDBOX_CLASS: microvm
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -run '^TestActorLifecycle$' -v -args --no-color
+    - name: Dump diagnostics on failure
+      if: failure()
+      run: |
+        df -h / /tmp || true
+        kubectl --context kind-kind get workerpool,pods -A -o wide || true
+        dump() {
+          echo "=== logs: $1/$2 ==="
+          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
+        }
+        for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
+          dump ate-system "$p"
+        done
+        # Every worker pod: the demo pool plus the E2E test's own namespace. A
+        # micro-VM worker's logs carry ateom's output and the guest console tail.
+        kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
+          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
+          | while read -r ns name; do dump "$ns" "$name"; done
