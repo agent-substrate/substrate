@@ -97,7 +97,7 @@ log "create + resume Actor ${ATESPACE}/${ACTOR}, allow all its egress"
 ${KATE} create atespace "${ATESPACE}" >/dev/null 2>&1 || true
 ${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 ${KATE} resume actor "${ACTOR}" -a "${ATESPACE}" >/dev/null 2>&1 || true
-printf 'rules:\n- all: {}\n' | ${KATE} create egress-policy "${ACTOR}" -a "${ATESPACE}" -f - >/dev/null 2>&1 || true
+printf 'rules:\n- http: {host_patterns: ["*"], ports: ["*"]}\n- https: {host_patterns: ["*"]}\n' | ${KATE} create egress-policy "${ACTOR}" -a "${ATESPACE}" -f - >/dev/null 2>&1 || true
 # Avoid 'grep -q': its early exit triggers SIGPIPE (exit 141) under pipefail while kubectl writes.
 actor_running() {
   ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep "${ACTOR}" | grep ACTOR_STATE_RUNNING >/dev/null

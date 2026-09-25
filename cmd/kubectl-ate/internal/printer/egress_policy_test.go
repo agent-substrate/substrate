@@ -37,8 +37,8 @@ func TestPrintEgressPolicyTo(t *testing.T) {
 			CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 		},
 		Rules: []*ateapipb.EgressRule{
-			{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}},
-			{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"10.64.0.0/16"}}},
+			{Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}}},
+			{Https: &ateapipb.HTTPSRule{HostPatterns: []string{"www.example.com"}, Ports: []string{"8443"}}},
 		},
 	}
 	empty := &ateapipb.EgressPolicy{
@@ -65,12 +65,14 @@ func TestPrintEgressPolicyTo(t *testing.T) {
   uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
   version: "2"
 rules:
-- hostnames:
-    patterns:
+- http:
+    hostPatterns:
     - api.example.com
-- cidrs:
-    cidrs:
-    - 10.64.0.0/16
+- https:
+    hostPatterns:
+    - www.example.com
+    ports:
+    - "8443"
 `,
 		},
 		{
@@ -88,16 +90,19 @@ rules:
   },
   "rules": [
     {
-      "hostnames": {
-        "patterns": [
+      "http": {
+        "hostPatterns": [
           "api.example.com"
         ]
       }
     },
     {
-      "cidrs": {
-        "cidrs": [
-          "10.64.0.0/16"
+      "https": {
+        "hostPatterns": [
+          "www.example.com"
+        ],
+        "ports": [
+          "8443"
         ]
       }
     }

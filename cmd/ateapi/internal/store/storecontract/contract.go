@@ -33,7 +33,6 @@ import (
 	"google.golang.org/protobuf/reflect/protorange"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -231,7 +230,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		actorRef := resources.ActorRefFromActor(actor)
 		policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-			Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
+			Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}},
 		}}}
 
 		created, err := s.CreateEgressPolicy(ctx, actorRef, policy)
@@ -263,7 +262,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		updated, err := s.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(created), func(policy *ateapipb.EgressPolicy) error {
 			policy.Metadata.Atespace = "other"
 			policy.Metadata.Name = "other"
-			policy.Rules = []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
+			policy.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{SniPatterns: []string{"*"}, Ports: []string{"443"}}}}
 			return nil
 		})
 		if err != nil || updated.GetMetadata().GetAtespace() != testAtespace || updated.GetMetadata().GetName() != "default" || updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
@@ -3165,7 +3164,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		ref := resources.ActorRefFromActor(actor)
 		created, err := s.CreateEgressPolicy(ctx, ref, withUnknownField(&ateapipb.EgressPolicy{
 			Rules: []*ateapipb.EgressRule{withUnknownField(&ateapipb.EgressRule{
-				Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
+				Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}},
 			})},
 		}))
 		if err != nil {

@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -33,11 +32,10 @@ import (
 // or HTTPS the sdsmint gateway terminated. It runs per request, because the
 // Host can change between requests on one connection.
 //
-// The rules are walked once, in policy order, over the Host the request named
-// and the address the actor dialed; the first match decides. The answer also
-// says where the request goes, so the bytes reach what the rule checked: a
-// hostname match is resolved and dialed by name, an address or all match goes
-// to the address the actor dialed.
+// The request is decided on the Host it named and the port the actor dialed,
+// by the http rules on the cleartext leg and the https rules on the MITM leg,
+// where the connection's SNI must fall under an https rule too. An allowed
+// request is dialed by the name it was decided on.
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	ref, err := actorFromFilterState(md)
 	if err != nil {
@@ -55,28 +53,36 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		return extproc.Result{}, err
 	}
 
-	decision := policy.Evaluate(dest)
-	dial := extproc.EgressDialAddress
-	if decision.ByName {
-		dial = extproc.EgressDialName
-	}
+	decrypted := leg == extproc.EgressTLSMITMFilterChainName
+	sni := md.Attribute(extproc.RequestedServerNameAttribute)
 	// Built lazily: the allow path logs nothing at the default level.
-	attrs := func() []any {
+	attrs := func(decision egresspolicy.Decision) []any {
 		return []any{
 			slog.Any("actor", ref),
 			slog.String("leg", leg),
 			slog.String("method", md.Method),
 			slog.String("host", md.Host),
-			slog.String("originalDestination", dialedAddress(md)),
-			slog.String("sni", md.Attribute(extproc.RequestedServerNameAttribute)),
+			slog.Uint64("dialedPort", uint64(dest.Port)),
+			slog.String("sni", sni),
 			slog.Int("rule", decision.RuleIndex),
-			slog.String("dial", dial),
 		}
 	}
+	if decrypted {
+		// An https rule intercepts a connection on its SNI and port; the
+		// requests inside are then decided on their authority. The gateway
+		// still intercepts every connection, so the first half is checked
+		// here. A connection that sent no SNI is under no rule.
+		connection := connectionDestination(sni, dest.Port)
+		if decision := policy.EvaluateRequest(connection, true); !decision.Allowed {
+			slog.WarnContext(ctx, "egress denied: no https rule covers the connection's SNI", attrs(decision)...)
+			return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+		}
+	}
+	decision := policy.EvaluateRequest(dest, decrypted)
 	if !decision.Allowed {
 		// TODO(liorlieberman): do we need an audit mode to roll a policy out
 		// against live traffic without denying it first?
-		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs()...)
+		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs(decision)...)
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
 	injected, err := h.applyEffects(ctx, ref, dest, leg, decision.Effects)
@@ -84,7 +90,7 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		return extproc.Result{}, err
 	}
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		slog.DebugContext(ctx, "egress allowed", append(attrs(), slog.Int("injectedHeaders", len(injected)))...)
+		slog.DebugContext(ctx, "egress allowed", append(attrs(decision), slog.Int("injectedHeaders", len(injected)))...)
 	}
 	res := allow()
 	// ext_proc only honors the clear when the response also carries a header
@@ -92,14 +98,25 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	// empty one goes along — carrying any injected credential headers.
 	res.Response.Response.ClearRouteCache = true
 	res.Response.Response.HeaderMutation = &extprocv3.HeaderMutation{SetHeaders: injected}
-	res.DynamicMetadata = metadataAnswer(extproc.EgressDialKey, dial)
+	res.DynamicMetadata = metadataAnswer(extproc.EgressDialKey, extproc.EgressDialName)
 	return res, nil
 }
 
-// requestDestination is what the request is going to: the Host, when it is a
-// DNS name, and the address the actor dialed, which the CONNECT leg's answer
-// shares as filter state when an address rule allowed it. An IP-literal Host
-// names no host, and cidrs rules match the dialed address, never the Host.
+// connectionDestination is the SNI a decrypted connection presented, on the
+// port the actor dialed, in the form the https rules are matched against. An
+// SNI that is not a DNS name, or none at all, matches nothing.
+func connectionDestination(sni string, port uint16) egresspolicy.Destination {
+	dest, err := egresspolicy.NormalizeAuthority(sni)
+	if err != nil || dest.Hostname == "" {
+		return egresspolicy.Destination{Port: port}
+	}
+	return egresspolicy.Destination{Hostname: dest.Hostname, Port: port}
+}
+
+// requestDestination is what the request is going to: the Host, a DNS name
+// or an IP literal, and the port the actor dialed, from the CONNECT authority
+// the outer chain shares as filter state. A port in the Host is neither
+// matched nor dialed.
 //
 // A Host header naming something other than :authority is refused rather than
 // policed on one name and dialed on the other. Envoy itself never delivers two
@@ -122,26 +139,15 @@ func requestDestination(md *extproc.RequestMetadata) (egresspolicy.Destination, 
 			return egresspolicy.Destination{}, fmt.Errorf("request :authority %q and Host %q name different destinations", authority, host)
 		}
 	}
-	dest := egresspolicy.Destination{Hostname: named.Hostname, Port: named.Port}
-	if raw := dialedAddress(md); raw != "" {
+	dest := egresspolicy.Destination{Hostname: named.Hostname, IP: named.IP}
+	if raw := md.Attribute(extproc.ConnectAuthorityFilterStateAttribute); raw != "" {
 		dialed, err := egresspolicy.NormalizeAuthority(raw)
-		if err != nil || !dialed.IP.IsValid() {
-			return egresspolicy.Destination{}, fmt.Errorf("tunnel destination %q is not an IP:port", raw)
+		if err != nil || !dialed.IP.IsValid() || dialed.Port == 0 {
+			return egresspolicy.Destination{}, fmt.Errorf("CONNECT authority %q is not an IP:port", raw)
 		}
-		dest.IP, dest.Port = dialed.IP, dialed.Port
+		dest.Port = dialed.Port
 	}
 	return dest, nil
-}
-
-// dialedAddress is the address the actor dialed as IP:port, from the fields
-// of the ORIGINAL_DST filter state the CONNECT leg's answer set, or "" when
-// no address rule allowed it and nothing was set.
-func dialedAddress(md *extproc.RequestMetadata) string {
-	ip := md.Attribute(extproc.OriginalDstIPAttribute)
-	if ip == "" {
-		return ""
-	}
-	return net.JoinHostPort(ip, md.Attribute(extproc.OriginalDstPortAttribute))
 }
 
 // actorFromFilterState reads the actor from the identity filter state the

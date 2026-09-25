@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -49,7 +48,7 @@ func functionalEgressPolicy() *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 		Rules: []*ateapipb.EgressRule{{
-			Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
+			Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}},
 		}},
 	}
 }
@@ -131,7 +130,7 @@ func TestUpdateActorEgressPolicy(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-update-egress-policy")
 	created := createEgressPolicy(t, tc, actor)
 	toUpdate := proto.Clone(created).(*ateapipb.EgressPolicy)
-	toUpdate.Rules = []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
+	toUpdate.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{SniPatterns: []string{"*"}, Ports: []string{"443"}}}}
 
 	updated, err := tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{
 		Actor:        actor,
@@ -149,8 +148,8 @@ func TestUpdateActorEgressPolicy(t *testing.T) {
 	if !updated.GetMetadata().GetUpdateTime().AsTime().After(created.GetMetadata().GetUpdateTime().AsTime()) {
 		t.Errorf("update_time = %v, want after %v", updated.GetMetadata().GetUpdateTime(), created.GetMetadata().GetUpdateTime())
 	}
-	if len(updated.GetRules()) != 1 || updated.GetRules()[0].GetAll() == nil {
-		t.Errorf("updated rules = %v, want one all rule", updated.GetRules())
+	if len(updated.GetRules()) != 1 || updated.GetRules()[0].GetTlsPassthrough() == nil {
+		t.Errorf("updated rules = %v, want one tls_passthrough rule", updated.GetRules())
 	}
 
 	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor})

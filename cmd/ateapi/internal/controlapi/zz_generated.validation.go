@@ -23,7 +23,6 @@ import (
 	context "context"
 
 	ateapipb "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	operation "k8s.io/apimachinery/pkg/api/operation"
 	safe "k8s.io/apimachinery/pkg/api/safe"
@@ -1132,56 +1131,6 @@ func Validate_Atespace(
 				return oldObj.Metadata
 			})
 		errs = append(errs, fn(fldPath.Child("metadata"), obj.Metadata, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_CIDRRule validates an instance of CIDRRule according
-// to declarative validation rules in the API schema.
-func Validate_CIDRRule(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.CIDRRule) (errs field.ErrorList) {
-
-	{ // field ateapipb.CIDRRule.Cidrs
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj []string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_CIDRRule_Cidrs(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			// lists with set semantics require unique values
-			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.CIDRRule) []string {
-				return oldObj.Cidrs
-			})
-		errs = append(errs, fn(fldPath.Child("cidrs"), obj.Cidrs, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2860,6 +2809,10 @@ func Validate_EgressPolicy(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_EgressPolicy_Rules(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_EgressRule); len(e) != 0 {
 				errs = append(errs, e...)
@@ -2876,7 +2829,7 @@ func Validate_EgressPolicy(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_EgressRule_ = validate.NewUnionMembership(validate.NewUnionMember("hostnames"), validate.NewUnionMember("cidrs"), validate.NewUnionMember("all"))
+var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_EgressRule_ = validate.NewUnionMembership(validate.NewUnionMember("http"), validate.NewUnionMember("https"), validate.NewUnionMember("tls_passthrough"))
 
 // Validate_EgressRule validates an instance of EgressRule according
 // to declarative validation rules in the API schema.
@@ -2889,27 +2842,27 @@ func Validate_EgressRule(
 			if obj == nil {
 				return false
 			}
-			return obj.Hostnames != nil
+			return obj.Http != nil
 		},
 		func(obj *ateapipb.EgressRule) bool {
 			if obj == nil {
 				return false
 			}
-			return obj.Cidrs != nil
+			return obj.Https != nil
 		},
 		func(obj *ateapipb.EgressRule) bool {
 			if obj == nil {
 				return false
 			}
-			return obj.All != nil
+			return obj.TlsPassthrough != nil
 		}); len(e) != 0 {
 		errs = append(errs, e...)
 	}
 
-	{ // field ateapipb.EgressRule.Hostnames
+	{ // field ateapipb.EgressRule.Http
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.HostnameRule,
+			obj, oldObj *ateapipb.HTTPRule,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2926,20 +2879,20 @@ func Validate_EgressRule(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_HostnameRule(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_HTTPRule(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.EgressRule) *ateapipb.HostnameRule {
-				return oldObj.Hostnames
+			func(oldObj *ateapipb.EgressRule) *ateapipb.HTTPRule {
+				return oldObj.Http
 			})
-		errs = append(errs, fn(fldPath.Child("hostnames"), obj.Hostnames, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("http"), obj.Http, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.EgressRule.Cidrs
+	{ // field ateapipb.EgressRule.Https
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.CIDRRule,
+			obj, oldObj *ateapipb.HTTPSRule,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2956,20 +2909,20 @@ func Validate_EgressRule(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_CIDRRule(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_HTTPSRule(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.EgressRule) *ateapipb.CIDRRule {
-				return oldObj.Cidrs
+			func(oldObj *ateapipb.EgressRule) *ateapipb.HTTPSRule {
+				return oldObj.Https
 			})
-		errs = append(errs, fn(fldPath.Child("cidrs"), obj.Cidrs, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("https"), obj.Https, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.EgressRule.All
+	{ // field ateapipb.EgressRule.TlsPassthrough
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *emptypb.Empty,
+			obj, oldObj *ateapipb.TLSPassthroughRule,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2985,75 +2938,15 @@ func Validate_EgressRule(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_TLSPassthroughRule(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.EgressRule) *emptypb.Empty {
-				return oldObj.All
+			func(oldObj *ateapipb.EgressRule) *ateapipb.TLSPassthroughRule {
+				return oldObj.TlsPassthrough
 			})
-		errs = append(errs, fn(fldPath.Child("all"), obj.All, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_EgressRuleEffects validates an instance of EgressRuleEffects according
-// to declarative validation rules in the API schema.
-func Validate_EgressRuleEffects(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.EgressRuleEffects) (errs field.ErrorList) {
-
-	// custom validation
-	if e := ValidateCustom_EgressRuleEffects(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-		errs = append(errs, e...)
-	}
-
-	{ // field ateapipb.EgressRuleEffects.InjectStaticHeaders
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj []*ateapipb.CredentialHeaderInjection,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// Uniqueness validation is implemented via custom, handwritten validation
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.PtrSliceNoNils[ateapipb.CredentialHeaderInjection](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_EgressRuleEffects_InjectStaticHeaders(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.CredentialHeaderInjection, b *ateapipb.CredentialHeaderInjection) bool {
-					return a.Header == b.Header
-				}, ateDeepEqual, Validate_CredentialHeaderInjection); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.EgressRuleEffects) []*ateapipb.CredentialHeaderInjection {
-				return oldObj.InjectStaticHeaders
-			})
-		errs = append(errs, fn(fldPath.Child("inject_static_headers"), obj.InjectStaticHeaders, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("tls_passthrough"), obj.TlsPassthrough, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -4054,13 +3947,13 @@ func Validate_HTTPGetAction(
 	return errs
 }
 
-// Validate_HostnameRule validates an instance of HostnameRule according
+// Validate_HTTPRule validates an instance of HTTPRule according
 // to declarative validation rules in the API schema.
-func Validate_HostnameRule(
+func Validate_HTTPRule(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.HostnameRule) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.HTTPRule) (errs field.ErrorList) {
 
-	{ // field ateapipb.HostnameRule.Patterns
+	{ // field ateapipb.HTTPRule.HostPatterns
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []string,
@@ -4085,7 +3978,7 @@ func Validate_HostnameRule(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_HostnameRule_Patterns(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_HTTPRule_HostPatterns(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// lists with set semantics require unique values
@@ -4095,16 +3988,56 @@ func Validate_HostnameRule(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.HostnameRule) []string {
-				return oldObj.Patterns
+			func(oldObj *ateapipb.HTTPRule) []string {
+				return oldObj.HostPatterns
 			})
-		errs = append(errs, fn(fldPath.Child("patterns"), obj.Patterns, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("host_patterns"), obj.HostPatterns, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.HostnameRule.Effects
+	{ // field ateapipb.HTTPRule.Ports
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.EgressRuleEffects,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_HTTPRule_Ports(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.HTTPRule) []string {
+				return oldObj.Ports
+			})
+		errs = append(errs, fn(fldPath.Child("ports"), obj.Ports, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.HTTPRule.Effects
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.HttpRuleEffects,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -4121,14 +4054,196 @@ func Validate_HostnameRule(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_EgressRuleEffects(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_HttpRuleEffects(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.HostnameRule) *ateapipb.EgressRuleEffects {
+			func(oldObj *ateapipb.HTTPRule) *ateapipb.HttpRuleEffects {
 				return oldObj.Effects
 			})
 		errs = append(errs, fn(fldPath.Child("effects"), obj.Effects, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_HTTPSRule validates an instance of HTTPSRule according
+// to declarative validation rules in the API schema.
+func Validate_HTTPSRule(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.HTTPSRule) (errs field.ErrorList) {
+
+	{ // field ateapipb.HTTPSRule.HostPatterns
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_HTTPSRule_HostPatterns(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.HTTPSRule) []string {
+				return oldObj.HostPatterns
+			})
+		errs = append(errs, fn(fldPath.Child("host_patterns"), obj.HostPatterns, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.HTTPSRule.Ports
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_HTTPSRule_Ports(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.HTTPSRule) []string {
+				return oldObj.Ports
+			})
+		errs = append(errs, fn(fldPath.Child("ports"), obj.Ports, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.HTTPSRule.Effects
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.HttpRuleEffects,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_HttpRuleEffects(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.HTTPSRule) *ateapipb.HttpRuleEffects {
+				return oldObj.Effects
+			})
+		errs = append(errs, fn(fldPath.Child("effects"), obj.Effects, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_HttpRuleEffects validates an instance of HttpRuleEffects according
+// to declarative validation rules in the API schema.
+func Validate_HttpRuleEffects(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.HttpRuleEffects) (errs field.ErrorList) {
+
+	// custom validation
+	if e := ValidateCustom_HttpRuleEffects(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
+	{ // field ateapipb.HttpRuleEffects.ReplaceHeaders
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateapipb.CredentialHeaderInjection,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// Uniqueness validation is implemented via custom, handwritten validation
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateapipb.CredentialHeaderInjection](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_HttpRuleEffects_ReplaceHeaders(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.CredentialHeaderInjection, b *ateapipb.CredentialHeaderInjection) bool {
+					return a.Header == b.Header
+				}, ateDeepEqual, Validate_CredentialHeaderInjection); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.HttpRuleEffects) []*ateapipb.CredentialHeaderInjection {
+				return oldObj.ReplaceHeaders
+			})
+		errs = append(errs, fn(fldPath.Child("replace_headers"), obj.ReplaceHeaders, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -6612,6 +6727,100 @@ func Validate_SystemInfoVolumeSource(
 				return oldObj.DataSources
 			})
 		errs = append(errs, fn(fldPath.Child("data_sources"), obj.DataSources, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_TLSPassthroughRule validates an instance of TLSPassthroughRule according
+// to declarative validation rules in the API schema.
+func Validate_TLSPassthroughRule(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.TLSPassthroughRule) (errs field.ErrorList) {
+
+	{ // field ateapipb.TLSPassthroughRule.SniPatterns
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_TLSPassthroughRule_SniPatterns(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.TLSPassthroughRule) []string {
+				return oldObj.SniPatterns
+			})
+		errs = append(errs, fn(fldPath.Child("sni_patterns"), obj.SniPatterns, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.TLSPassthroughRule.Ports
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_TLSPassthroughRule_Ports(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MinItems(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.TLSPassthroughRule) []string {
+				return oldObj.Ports
+			})
+		errs = append(errs, fn(fldPath.Child("ports"), obj.Ports, oldVal, oldObj != nil)...)
 	}
 
 	return errs

@@ -18,21 +18,23 @@ import (
 	"net/netip"
 	"testing"
 
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func hostnameRule(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Hostnames: &ateapipb.HostnameRule{Patterns: patterns}}
+func httpRule(patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{HostPatterns: patterns}}
 }
 
-func ipBlockRule(cidrs ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{Cidrs: cidrs}}
+func httpRuleOnPorts(ports []string, patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{HostPatterns: patterns, Ports: ports}}
 }
 
-func allRule() *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{All: &emptypb.Empty{}}
+func httpsRule(patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{HostPatterns: patterns}}
+}
+
+func passthroughRule(ports []string, patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TLSPassthroughRule{SniPatterns: patterns, Ports: ports}}
 }
 
 func policy(rules ...*ateapipb.EgressRule) *ateapipb.EgressPolicy {
@@ -58,20 +60,26 @@ func TestParseHostnamePattern(t *testing.T) {
 		"api.example.com",
 		"*.example.com",
 		"*.com",
+		"*",
 		"a-b.example.com",
 		"1.example.com",
 		"xn--bcher-kva.example",
 	}
 	for _, raw := range valid {
-		if _, err := ParseHostnamePattern(raw); err != nil {
+		pattern, err := ParseHostnamePattern(raw)
+		if err != nil {
 			t.Errorf("ParseHostnamePattern(%q) = %v, want ok", raw, err)
+			continue
+		}
+		if pattern.String() != raw {
+			t.Errorf("ParseHostnamePattern(%q).String() = %q", raw, pattern.String())
 		}
 	}
 
 	invalid := []string{
 		"",
-		"*",
 		"*.",
+		"**",
 		"API.EXAMPLE.COM",
 		"example.com.",
 		"192.0.2.1",
@@ -111,6 +119,9 @@ func TestHostnamePatternMatches(t *testing.T) {
 		{"*.example.com", ".example.com", false},
 		{"*.com", "example.com", true},
 		{"*.com", "com", false},
+		{"*", "example.com", true},
+		{"*", "a.b.example.com", true},
+		{"*", "", false},
 	}
 	for _, tc := range tests {
 		pattern, err := ParseHostnamePattern(tc.pattern)
@@ -120,43 +131,18 @@ func TestHostnamePatternMatches(t *testing.T) {
 		if got := pattern.Matches(tc.hostname); got != tc.want {
 			t.Errorf("%q.Matches(%q) = %v, want %v", tc.pattern, tc.hostname, got, tc.want)
 		}
-		if pattern.String() != tc.pattern {
-			t.Errorf("String() = %q, want %q", pattern.String(), tc.pattern)
-		}
 	}
 }
 
-func TestParseCIDR(t *testing.T) {
-	valid := []string{
-		"192.0.2.0/24",
-		"192.0.2.1/32",
-		"0.0.0.0/0",
-		"2001:db8::/32",
-		"2001:db8::1/128",
-		"::/0",
-	}
-	for _, raw := range valid {
-		if _, err := ParseCIDR(raw); err != nil {
-			t.Errorf("ParseCIDR(%q) = %v, want ok", raw, err)
+func TestParsePort(t *testing.T) {
+	for raw, want := range map[string]uint16{"1": 1, "80": 80, "8443": 8443, "65535": 65535} {
+		if got, err := ParsePort(raw); err != nil || got != want {
+			t.Errorf("ParsePort(%q) = %d, %v; want %d", raw, got, err, want)
 		}
 	}
-
-	invalid := []string{
-		"",
-		"192.0.2.1",
-		"192.0.2.1/24",
-		"192.0.2.0/33",
-		"192.0.02.0/24",
-		"192.0.2.0/024",
-		"2001:DB8::/32",
-		"2001:0db8::/32",
-		"::ffff:192.0.2.0/120",
-		"fe80::%eth0/64",
-		"example.com/24",
-	}
-	for _, raw := range invalid {
-		if _, err := ParseCIDR(raw); err == nil {
-			t.Errorf("ParseCIDR(%q) = ok, want error", raw)
+	for _, raw := range []string{"", "0", "65536", "080", "+80", "-1", " 80", "80 ", "http", "*", "8_0", "0x50"} {
+		if got, err := ParsePort(raw); err == nil {
+			t.Errorf("ParsePort(%q) = %d, want error", raw, got)
 		}
 	}
 }
@@ -210,44 +196,43 @@ func TestNormalizeAuthority(t *testing.T) {
 
 func TestCompileReportsAndDropsInvalidEntries(t *testing.T) {
 	compiled, errs := Compile(policy(
-		hostnameRule("good.example.com", "BAD.example.com"),
-		ipBlockRule("192.0.2.0/24", "192.0.2.1/24"),
+		httpRule("good.example.com", "BAD.example.com"),
+		passthroughRule([]string{"443", "eighty"}, "*"),
+		passthroughRule(nil, "*"),
 	))
-	if len(errs) != 2 {
-		t.Fatalf("Compile errors = %v, want 2", errs)
+	if len(errs) != 3 {
+		t.Fatalf("Compile errors = %v, want 3", errs)
 	}
-	if compiled.RuleCount() != 2 {
-		t.Errorf("RuleCount = %d, want 2", compiled.RuleCount())
+	if compiled.RuleCount() != 3 {
+		t.Errorf("RuleCount = %d, want 3", compiled.RuleCount())
 	}
-	if d := compiled.Evaluate(host("good.example.com")); !d.Allowed || d.RuleIndex != 0 {
+	if d := compiled.EvaluateRequest(host("good.example.com"), false); !d.Allowed || d.RuleIndex != 0 {
 		t.Errorf("valid pattern of a partly invalid rule should still match, got %+v", d)
 	}
-	if d := compiled.Evaluate(host("bad.example.com")); d.Allowed {
+	if d := compiled.EvaluateRequest(host("bad.example.com"), false); d.Allowed {
 		t.Errorf("dropped pattern must not match, got %+v", d)
-	}
-	if d := compiled.Evaluate(addr("192.0.2.7")); !d.Allowed || d.RuleIndex != 1 {
-		t.Errorf("valid cidr of a partly invalid rule should still match, got %+v", d)
 	}
 }
 
-func TestEvaluate(t *testing.T) {
-	effects := &ateapipb.EgressRuleEffects{
-		InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
+func TestEvaluateRequest(t *testing.T) {
+	effects := &ateapipb.HttpRuleEffects{
+		ReplaceHeaders: []*ateapipb.CredentialHeaderInjection{{
 			Header:        "authorization",
 			Prefix:        "Bearer ",
 			CredentialUri: "ate-secret://k8s/default/token",
 		}},
 	}
-	withEffects := &ateapipb.EgressRule{Hostnames: &ateapipb.HostnameRule{
-		Patterns: []string{"api.example.com"},
-		Effects:  effects,
+	withEffects := &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{
+		HostPatterns: []string{"api.example.com"},
+		Effects:      effects,
 	}}
 
 	tests := []struct {
-		name   string
-		policy *ateapipb.EgressPolicy
-		dest   Destination
-		want   Decision
+		name      string
+		policy    *ateapipb.EgressPolicy
+		dest      Destination
+		decrypted bool
+		want      Decision
 	}{
 		{
 			name:   "no rules denies",
@@ -257,156 +242,153 @@ func TestEvaluate(t *testing.T) {
 		},
 		{
 			name:   "exact hostname",
-			policy: policy(hostnameRule("example.com")),
+			policy: policy(httpRule("example.com")),
 			dest:   host("example.com"),
-			want:   Decision{Allowed: true, RuleIndex: 0, ByName: true},
+			want:   Decision{Allowed: true, RuleIndex: 0},
 		},
 		{
-			name:   "hostname rule does not match another name",
-			policy: policy(hostnameRule("example.com")),
+			name:   "http rule does not match another name",
+			policy: policy(httpRule("example.com")),
 			dest:   host("example.org"),
 			want:   Decision{RuleIndex: -1},
 		},
 		{
 			name:   "wildcard hostname",
-			policy: policy(hostnameRule("*.example.com")),
+			policy: policy(httpRule("*.example.com")),
 			dest:   host("api.example.com"),
-			want:   Decision{Allowed: true, RuleIndex: 0, ByName: true},
+			want:   Decision{Allowed: true, RuleIndex: 0},
+		},
+		{
+			name:   "star matches every name",
+			policy: policy(httpRule("*")),
+			dest:   host("anything.example"),
+			want:   Decision{Allowed: true, RuleIndex: 0},
 		},
 		{
 			name:   "any pattern in the rule matches",
-			policy: policy(hostnameRule("other.example", "example.com")),
-			dest:   host("example.com"),
-			want:   Decision{Allowed: true, RuleIndex: 0, ByName: true},
-		},
-		{
-			name:   "hostname rule never matches a destination with no hostname",
-			policy: policy(hostnameRule("*.example.com")),
-			dest:   addr("192.0.2.1"),
-			want:   Decision{RuleIndex: -1},
-		},
-		{
-			name:   "cidr matches the address",
-			policy: policy(ipBlockRule("192.0.2.0/24")),
-			dest:   addr("192.0.2.200"),
-			want:   Decision{Allowed: true, RuleIndex: 0},
-		},
-		{
-			name:   "cidr does not match outside the prefix",
-			policy: policy(ipBlockRule("192.0.2.0/24")),
-			dest:   addr("192.0.3.1"),
-			want:   Decision{RuleIndex: -1},
-		},
-		{
-			name:   "cidr never matches a destination with no address",
-			policy: policy(ipBlockRule("0.0.0.0/0")),
-			dest:   host("example.com"),
-			want:   Decision{RuleIndex: -1},
-		},
-		{
-			name:   "ipv6 cidr",
-			policy: policy(ipBlockRule("2001:db8::/32")),
-			dest:   addr("2001:db8:1::1"),
-			want:   Decision{Allowed: true, RuleIndex: 0},
-		},
-		{
-			name:   "ipv4 cidr matches a mapped address",
-			policy: policy(ipBlockRule("192.0.2.0/24")),
-			dest:   addr("::ffff:192.0.2.1"),
-			want:   Decision{Allowed: true, RuleIndex: 0},
-		},
-		{
-			name:   "ipv4 cidr does not match ipv6",
-			policy: policy(ipBlockRule("0.0.0.0/0")),
-			dest:   addr("2001:db8::1"),
-			want:   Decision{RuleIndex: -1},
-		},
-		{
-			name:   "all matches a hostname",
-			policy: policy(allRule()),
+			policy: policy(httpRule("other.example", "example.com")),
 			dest:   host("example.com"),
 			want:   Decision{Allowed: true, RuleIndex: 0},
 		},
 		{
-			name:   "all matches an address",
-			policy: policy(allRule()),
-			dest:   addr("192.0.2.1"),
+			name:   "star matches an ip literal",
+			policy: policy(httpRule("*")),
+			dest:   Destination{IP: netip.MustParseAddr("192.0.2.1"), Port: 80},
 			want:   Decision{Allowed: true, RuleIndex: 0},
 		},
 		{
-			name:   "all matches an empty destination",
-			policy: policy(allRule()),
-			dest:   Destination{},
-			want:   Decision{Allowed: true, RuleIndex: 0},
+			name:   "a name does not match an ip literal",
+			policy: policy(httpRule("example.com", "*.example.com")),
+			dest:   Destination{IP: netip.MustParseAddr("192.0.2.1"), Port: 80},
+			want:   Decision{RuleIndex: -1},
 		},
 		{
-			name:   "first matching rule wins and carries its effects",
-			policy: policy(hostnameRule("other.example"), withEffects, allRule()),
+			name:   "an empty destination matches nothing",
+			policy: policy(httpRule("*")),
+			dest:   Destination{Port: 80},
+			want:   Decision{RuleIndex: -1},
+		},
+		{
+			name:   "http rule does not decide a decrypted request",
+			policy: policy(httpRule("api.example.com")),
+			dest:   host("api.example.com"), decrypted: true,
+			want: Decision{RuleIndex: -1},
+		},
+		{
+			name:   "https rule does not decide a cleartext request",
+			policy: policy(httpsRule("api.example.com")),
 			dest:   host("api.example.com"),
-			want:   Decision{Allowed: true, RuleIndex: 1, Effects: effects, ByName: true},
+			want:   Decision{RuleIndex: -1},
 		},
 		{
-			name:   "a later all rule does not lend effects to an earlier match",
-			policy: policy(hostnameRule("api.example.com"), withEffects),
+			name:   "https rule decides a decrypted request and carries its effects",
+			policy: policy(httpRule("api.example.com"), withEffects),
+			dest:   host("api.example.com"), decrypted: true,
+			want: Decision{Allowed: true, RuleIndex: 1, Effects: effects},
+		},
+		{
+			name:   "passthrough rule never decides a request",
+			policy: policy(passthroughRule([]string{"*"}, "*")),
+			dest:   host("api.example.com"), decrypted: true,
+			want: Decision{RuleIndex: -1},
+		},
+		{
+			name:   "dialed port outside the rule",
+			policy: policy(httpRuleOnPorts([]string{"8080"}, "api.example.com")),
+			dest:   Destination{Hostname: "api.example.com", Port: 80},
+			want:   Decision{RuleIndex: -1},
+		},
+		{
+			name:   "dialed port in the rule",
+			policy: policy(httpRuleOnPorts([]string{"8080"}, "api.example.com")),
+			dest:   Destination{Hostname: "api.example.com", Port: 8080},
+			want:   Decision{Allowed: true, RuleIndex: 0},
+		},
+		{
+			name:   "default http port",
+			policy: policy(httpRule("api.example.com")),
+			dest:   Destination{Hostname: "api.example.com", Port: 80},
+			want:   Decision{Allowed: true, RuleIndex: 0},
+		},
+		{
+			name:   "default https port",
+			policy: policy(httpsRule("api.example.com")),
+			dest:   Destination{Hostname: "api.example.com", Port: 443}, decrypted: true,
+			want: Decision{Allowed: true, RuleIndex: 0},
+		},
+		{
+			name:   "any port",
+			policy: policy(httpRuleOnPorts([]string{"*"}, "api.example.com")),
+			dest:   Destination{Hostname: "api.example.com", Port: 8080},
+			want:   Decision{Allowed: true, RuleIndex: 0},
+		},
+		{
+			name:   "unknown dialed port is not enforced",
+			policy: policy(httpRuleOnPorts([]string{"8080"}, "api.example.com")),
 			dest:   host("api.example.com"),
-			want:   Decision{Allowed: true, RuleIndex: 0, ByName: true},
+			want:   Decision{Allowed: true, RuleIndex: 0},
 		},
 		{
-			name:   "hostname and dialed address are evaluated together",
-			policy: policy(hostnameRule("api.example.com"), ipBlockRule("10.0.0.0/8")),
-			dest:   Destination{Hostname: "api.example.com", IP: netip.MustParseAddr("203.0.113.5"), Port: 443},
-			want:   Decision{Allowed: true, RuleIndex: 0, ByName: true},
-		},
-		{
-			name:   "address rule authorizes a request whose hostname no rule names",
-			policy: policy(hostnameRule("api.example.com"), ipBlockRule("10.0.0.0/8")),
-			dest:   Destination{Hostname: "other.example", IP: netip.MustParseAddr("10.1.2.3"), Port: 443},
+			name:   "exact pattern beats an earlier wildcard",
+			policy: policy(httpRule("*.example.com"), httpRule("api.example.com")),
+			dest:   host("api.example.com"),
 			want:   Decision{Allowed: true, RuleIndex: 1},
 		},
 		{
-			name:   "an earlier address rule wins over a matching hostname rule",
-			policy: policy(ipBlockRule("10.0.0.0/8"), withEffects),
-			dest:   Destination{Hostname: "api.example.com", IP: netip.MustParseAddr("10.1.2.3"), Port: 443},
+			name:   "labeled wildcard beats an earlier star",
+			policy: policy(httpRule("*"), httpRule("*.example.com")),
+			dest:   host("api.example.com"),
+			want:   Decision{Allowed: true, RuleIndex: 1},
+		},
+		{
+			name:   "named port beats an earlier any port on the same pattern",
+			policy: policy(httpRuleOnPorts([]string{"*"}, "api.example.com"), httpRuleOnPorts([]string{"80"}, "api.example.com")),
+			dest:   host("api.example.com"),
+			want:   Decision{Allowed: true, RuleIndex: 1},
+		},
+		{
+			name:   "name specificity outranks port specificity",
+			policy: policy(httpRuleOnPorts([]string{"80"}, "*.example.com"), httpRuleOnPorts([]string{"*"}, "api.example.com")),
+			dest:   host("api.example.com"),
+			want:   Decision{Allowed: true, RuleIndex: 1},
+		},
+		{
+			name:   "a full tie keeps policy order",
+			policy: policy(httpRule("*.example.com"), httpRule("*.example.com")),
+			dest:   host("api.example.com"),
 			want:   Decision{Allowed: true, RuleIndex: 0},
 		},
 		{
 			name:   "empty rule matches nothing",
-			policy: policy(&ateapipb.EgressRule{}, allRule()),
+			policy: policy(&ateapipb.EgressRule{}, httpRule("example.com")),
 			dest:   host("example.com"),
 			want:   Decision{Allowed: true, RuleIndex: 1},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := mustCompile(t, tc.policy).Evaluate(tc.dest); got != tc.want {
-				t.Errorf("Evaluate(%+v) = %+v, want %+v", tc.dest, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestHasHostnameRules(t *testing.T) {
-	tests := []struct {
-		name   string
-		policy *ateapipb.EgressPolicy
-		want   bool
-	}{
-		{name: "no rules", policy: &ateapipb.EgressPolicy{}},
-		{name: "cidrs only", policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"10.0.0.0/8"}}}}}},
-		{name: "all only", policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}}},
-		{name: "hostnames", policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}}}, want: true},
-		{name: "hostnames after a cidr", policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
-			{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"10.0.0.0/8"}}},
-			{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"*.example.com"}}},
-		}}, want: true},
-		// Every pattern was dropped at compile time, so the rule can match nothing.
-		{name: "hostnames that did not compile", policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"not a hostname"}}}}}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			policy, _ := Compile(tc.policy)
-			if got := policy.HasHostnameRules(); got != tc.want {
-				t.Errorf("HasHostnameRules() = %v, want %v", got, tc.want)
+			if got := mustCompile(t, tc.policy).EvaluateRequest(tc.dest, tc.decrypted); got != tc.want {
+				t.Errorf("EvaluateRequest(%+v, %v) = %+v, want %+v", tc.dest, tc.decrypted, got, tc.want)
 			}
 		})
 	}

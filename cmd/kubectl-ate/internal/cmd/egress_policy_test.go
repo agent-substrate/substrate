@@ -29,7 +29,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -37,9 +36,9 @@ func TestEgressPolicyFromManifest(t *testing.T) {
 	t.Parallel()
 
 	fullMetadata := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}
-	hostnames := []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}}
-	cidrs := []*ateapipb.EgressRule{{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"10.64.0.0/16"}}}}
-	all := []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
+	httpRules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}}}}
+	tlsRules := []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{SniPatterns: []string{"*.example.com"}, Ports: []string{"443"}}}}
+	anyRules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{HostPatterns: []string{"*"}}}}
 
 	tests := []struct {
 		name     string
@@ -50,39 +49,39 @@ func TestEgressPolicyFromManifest(t *testing.T) {
 		wantErrContains string
 	}{
 		{
-			name: "camel case hostnames",
+			name: "camel case http",
 			manifest: `metadata:
   atespace: team-a
   name: default
 rules:
-- hostnames:
-    patterns:
+- http:
+    hostPatterns:
     - api.example.com
 `,
-			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: hostnames},
+			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: httpRules},
 		},
 		{
-			name: "snake case cidrs",
+			name: "snake case tls_passthrough",
 			manifest: `metadata: {atespace: team-a, name: default}
 rules:
-- cidrs: {cidrs: ["10.64.0.0/16"]}
+- tls_passthrough: {sni_patterns: ["*.example.com"], ports: ["443"]}
 `,
-			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: cidrs},
+			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
 		},
 		{
-			name: "all rule",
+			name: "star pattern",
 			manifest: `metadata: {atespace: team-a, name: default}
 rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 `,
-			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}},
+			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: anyRules},
 		},
 		{
 			name: "metadata omitted is left nil",
 			manifest: `rules:
-- hostnames: {patterns: [api.example.com]}
+- http: {hostPatterns: [api.example.com]}
 `,
-			want: &ateapipb.EgressPolicy{Rules: hostnames},
+			want: &ateapipb.EgressPolicy{Rules: httpRules},
 		},
 		{
 			name: "uid version and timestamps preserved",
@@ -93,7 +92,7 @@ rules:
   version: "2"
   createTime: "2026-01-01T11:55:00Z"
 rules:
-- hostnames: {patterns: [api.example.com]}
+- http: {hostPatterns: [api.example.com]}
 `,
 			want: &ateapipb.EgressPolicy{
 				Metadata: &ateapipb.ResourceMetadata{
@@ -103,17 +102,17 @@ rules:
 					Version:    2,
 					CreateTime: timestamppb.New(time.Date(2026, 1, 1, 11, 55, 0, 0, time.UTC)),
 				},
-				Rules: hostnames,
+				Rules: httpRules,
 			},
 		},
 		{
 			name:     "json input",
-			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"cidrs": {"cidrs": ["10.64.0.0/16"]}}]}`,
-			want:     &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: cidrs},
+			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"tls_passthrough": {"sni_patterns": ["*.example.com"], "ports": ["443"]}}]}`,
+			want:     &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
 		},
 		{name: "empty", manifest: "", wantErr: true, wantErrContains: "manifest is empty"},
 		{name: "unknown field", manifest: "rulez: []", wantErr: true, wantErrContains: "invalid EgressPolicy"},
-		{name: "rules not a list", manifest: "rules: {all: {}}", wantErr: true},
+		{name: "rules not a list", manifest: "rules: {http: {}}", wantErr: true},
 		{
 			name: "crd shape",
 			manifest: `apiVersion: ate.dev/v1alpha1
@@ -127,22 +126,22 @@ metadata: {name: default}
 			name: "leading document separator",
 			manifest: `---
 rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 `,
-			want: &ateapipb.EgressPolicy{Rules: all},
+			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "document end marker",
 			manifest: `rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 ...
 `,
-			want: &ateapipb.EgressPolicy{Rules: all},
+			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "trailing document separator",
 			manifest: `rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 ---
 `,
 			wantErr:         true,
@@ -151,7 +150,7 @@ rules:
 		{
 			name: "empty second document",
 			manifest: `rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 ---
 # nothing here
 `,
@@ -164,7 +163,7 @@ rules:
 # nothing
 ---
 rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 `,
 			wantErr:         true,
 			wantErrContains: "manifest holds more than one document",
@@ -174,7 +173,7 @@ rules:
 			manifest: `---
 ---
 rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 `,
 			wantErr:         true,
 			wantErrContains: "manifest holds more than one document",
@@ -182,7 +181,7 @@ rules:
 		{
 			name: "document end marker then separator",
 			manifest: `rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 ...
 ---
 `,
@@ -195,17 +194,19 @@ rules:
   atespace: team-a
   name: default
 rules:
-- hostnames:
-    patterns:
+- http:
+    hostPatterns:
     - api.example.com
 ---
 metadata:
   atespace: team-b
   name: default
 rules:
-- cidrs:
-    cidrs:
-    - 10.64.0.0/16
+- tls_passthrough:
+    sni_patterns:
+    - "*.example.com"
+    ports:
+    - "443"
 `,
 			wantErr:         true,
 			wantErrContains: "manifest holds more than one document",
@@ -214,15 +215,15 @@ rules:
 			name: "three egress policies separated by ---",
 			manifest: `metadata: {atespace: team-a, name: default}
 rules:
-- hostnames: {patterns: [api.example.com]}
+- http: {hostPatterns: [api.example.com]}
 ---
 metadata: {atespace: team-b, name: default}
 rules:
-- cidrs: {cidrs: ["10.64.0.0/16"]}
+- tls_passthrough: {sni_patterns: ["*.example.com"], ports: ["443"]}
 ---
 metadata: {atespace: team-c, name: default}
 rules:
-- all: {}
+- http: {hostPatterns: ["*"]}
 `,
 			wantErr:         true,
 			wantErrContains: "manifest holds more than one document",
@@ -231,22 +232,22 @@ rules:
 			name: "two policies with an empty document between",
 			manifest: `metadata: {atespace: team-a, name: default}
 rules:
-- hostnames: {patterns: [api.example.com]}
+- http: {hostPatterns: [api.example.com]}
 ---
 # just a comment
 ---
 metadata: {atespace: team-b, name: default}
 rules:
-- cidrs: {cidrs: ["10.64.0.0/16"]}
+- tls_passthrough: {sni_patterns: ["*.example.com"], ports: ["443"]}
 `,
 			wantErr:         true,
 			wantErrContains: "manifest holds more than one document",
 		},
 		{
 			name: `two json documents separated by ---`,
-			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"all": {}}]}
+			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"http": {"hostPatterns": ["*"]}}]}
 ---
-{"metadata": {"atespace": "team-b", "name": "default"}, "rules": [{"all": {}}]}
+{"metadata": {"atespace": "team-b", "name": "default"}, "rules": [{"http": {"hostPatterns": ["*"]}}]}
 `,
 			wantErr:         true,
 			wantErrContains: "manifest holds more than one document",
@@ -278,7 +279,7 @@ rules:
 func TestOverrideEgressPolicyMetadata(t *testing.T) {
 	t.Parallel()
 
-	rules := []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
+	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{HostPatterns: []string{"*"}}}}
 	filled := &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}, Rules: rules}
 	pinned := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d", Version: 2}
 
@@ -360,9 +361,11 @@ func TestEgressPolicyManifest_RoundTrip(t *testing.T) {
 			UpdateTime: timestamppb.New(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
 		},
 		Rules: []*ateapipb.EgressRule{
-			{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"*.example.com"}}},
-			{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"10.64.0.0/16"}}},
-			{All: &emptypb.Empty{}},
+			{Http: &ateapipb.HTTPRule{HostPatterns: []string{"*.example.com"}, Ports: []string{"80", "8080"}}},
+			{Https: &ateapipb.HTTPSRule{HostPatterns: []string{"api.example.com"}, Effects: &ateapipb.HttpRuleEffects{
+				ReplaceHeaders: []*ateapipb.CredentialHeaderInjection{{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"}},
+			}}},
+			{TlsPassthrough: &ateapipb.TLSPassthroughRule{SniPatterns: []string{"*"}, Ports: []string{"*"}}},
 		},
 	}
 
@@ -438,7 +441,7 @@ func TestGetEgressPolicyRunner_Run(t *testing.T) {
 			Version:    1,
 			CreateTime: timestamppb.New(now.Add(-5 * time.Minute)), // table row prints AGE 5m
 		},
-		Rules: []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}},
+		Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}}}},
 	}
 
 	tests := []struct {
@@ -472,8 +475,8 @@ team-a     c1      1       1         5m
   uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
   version: "1"
 rules:
-- hostnames:
-    patterns:
+- http:
+    hostPatterns:
     - api.example.com
 `,
 		},
@@ -565,7 +568,7 @@ func TestCreateEgressPolicyRunner_Run(t *testing.T) {
 	pinTime(t, now)
 
 	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
-	rules := []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}}}
+	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}}}}
 	// A manifest cloned from another actor still carries that actor's
 	// server-managed fields; the CLI sends them as is and the server scrubs them.
 	manifest := &ateapipb.EgressPolicy{
@@ -610,8 +613,8 @@ team-a     c1      1       1         0s
   uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
   version: "1"
 rules:
-- hostnames:
-    patterns:
+- http:
+    hostPatterns:
     - api.example.com
 `,
 		},
@@ -691,8 +694,8 @@ func TestUpdateEgressPolicyRunner_Run(t *testing.T) {
 	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
 	const uid = "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d"
 	rules := []*ateapipb.EgressRule{
-		{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}}},
-		{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{"10.64.0.0/16"}}},
+		{Http: &ateapipb.HTTPRule{HostPatterns: []string{"api.example.com"}}},
+		{Https: &ateapipb.HTTPSRule{HostPatterns: []string{"www.example.com"}}},
 	}
 	// The manifest is what `get -o yaml` printed, edited: it still carries the
 	// uid, version, and timestamps of the policy being replaced.
@@ -747,12 +750,12 @@ team-a     c1      2       2         60s
   updateTime: "2026-01-01T12:00:00Z"
   version: "2"
 rules:
-- hostnames:
-    patterns:
+- http:
+    hostPatterns:
     - api.example.com
-- cidrs:
-    cidrs:
-    - 10.64.0.0/16
+- https:
+    hostPatterns:
+    - www.example.com
 `,
 		},
 		{

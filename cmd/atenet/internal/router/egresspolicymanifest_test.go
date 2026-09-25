@@ -209,8 +209,8 @@ func extProcOf(chain node) (node, int, []node) {
 func TestEgressManifestsExtProcFilters(t *testing.T) {
 	required := map[string][]string{
 		extproc.EgressFilterChainName:          {extproc.FilterChainNameAttribute},
-		extproc.EgressCleartextFilterChainName: {extproc.FilterChainNameAttribute, extproc.ActorIdentityFilterStateAttribute, extproc.OriginalDstIPAttribute, extproc.OriginalDstPortAttribute},
-		extproc.EgressTLSMITMFilterChainName:   {extproc.FilterChainNameAttribute, extproc.ActorIdentityFilterStateAttribute, extproc.OriginalDstIPAttribute, extproc.OriginalDstPortAttribute},
+		extproc.EgressCleartextFilterChainName: {extproc.FilterChainNameAttribute, extproc.ActorIdentityFilterStateAttribute, extproc.ConnectAuthorityFilterStateAttribute, extproc.OriginalDstIPAttribute, extproc.OriginalDstPortAttribute},
+		extproc.EgressTLSMITMFilterChainName:   {extproc.FilterChainNameAttribute, extproc.ActorIdentityFilterStateAttribute, extproc.ConnectAuthorityFilterStateAttribute, extproc.OriginalDstIPAttribute, extproc.OriginalDstPortAttribute},
 	}
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
@@ -476,7 +476,7 @@ func TestEgressManifestsClaimEveryTransportProtocol(t *testing.T) {
 func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
-			var identity, poolKey node
+			var identity, authority, poolKey node
 			for _, f := range list(hcm(outerChain(t, bootstrapTree(t, path))), "http_filters") {
 				if str(f, "name") != setFilterStateFilter {
 					continue
@@ -485,6 +485,8 @@ func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
 					switch str(v, "object_key") {
 					case extproc.ActorIdentityFilterStateKey:
 						identity = v
+					case extproc.ConnectAuthorityFilterStateKey:
+						authority = v
 					case "envoy.network.upstream_server_name":
 						poolKey = v
 					}
@@ -495,6 +497,14 @@ func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
 			}
 			if got := str(identity, "shared_with_upstream"); got == "" {
 				t.Errorf("%s is not shared with upstream; the inner legs would see no actor", extproc.ActorIdentityFilterStateKey)
+			}
+			// The dialed port rides along the same way; without it the request
+			// legs cannot enforce a rule's ports.
+			if authority == nil {
+				t.Fatalf("the egress chain never sets %s", extproc.ConnectAuthorityFilterStateKey)
+			}
+			if got := str(authority, "shared_with_upstream"); got == "" {
+				t.Errorf("%s is not shared with upstream; the inner legs would see no dialed port", extproc.ConnectAuthorityFilterStateKey)
 			}
 			if poolKey == nil {
 				t.Fatal("the egress chain does not key the inner pool per actor (no envoy.network.upstream_server_name entry)")
