@@ -39,6 +39,12 @@ const (
 
 	SandboxClassGvisor  = "gvisor"
 	SandboxClassMicrovm = "microvm"
+
+	// Cluster size profiles. size0 is the shipped footprint; size10 assumes a
+	// dedicated node for PostgreSQL and raises the store, its client pool, and
+	// the podcertificate controller's API rate limits to match.
+	ClusterSizeSize0  = "size0"
+	ClusterSizeSize10 = "size10"
 )
 
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
@@ -149,6 +155,16 @@ type Config struct {
 	// PodcertWorkersPerSigner overrides WORKERS_PER_SIGNER on podcertificate-controller.
 	PodcertWorkersPerSigner int
 
+	// ClusterSize is the footprint profile (ATE_INSTALL_CLUSTER_SIZE): size0
+	// or size10.
+	ClusterSize string
+
+	// CordonControlPlane pins each control plane workload to its own node
+	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a node pool labeled and
+	// tainted ate.dev/workloadType=ate-control-plane:NoSchedule with one node
+	// per pod plus a spare for rollout surges.
+	CordonControlPlane bool
+
 	// ExperimentalUseSDSMint enables per-SNI dynamic cert minting on atenet-egress.
 	ExperimentalUseSDSMint bool
 
@@ -219,6 +235,8 @@ type Options struct {
 	Router                                string
 	RolloutTimeout                        string
 	PodcertWorkersPerSigner               int
+	ClusterSize                           string
+	CordonControlPlane                    bool
 	ExperimentalUseSDSMint                bool
 	AdditionalEgressExtprocService        string
 	ExperimentalEgressCredentialInjection bool
@@ -300,6 +318,7 @@ func Load(opts Options) (*Config, error) {
 	sdsmint := opts.ExperimentalUseSDSMint || env["ATE_EXPERIMENTAL_USE_SDSMINT"] == "true"
 	extproc := firstNonEmpty(opts.AdditionalEgressExtprocService, env["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"])
 	injection := opts.ExperimentalEgressCredentialInjection || env["ATE_CREDENTIAL_INJECTION_ENABLED"] == "true"
+	cordon := opts.CordonControlPlane || env["ATE_INSTALL_CORDON_CONTROL_PLANE"] == "true"
 
 	// Read with the two-value form: an exported but empty
 	// ATE_API_POSTGRES_CLOUDSQL_INSTANCE means "remove Cloud SQL", which an
@@ -343,6 +362,8 @@ func Load(opts Options) (*Config, error) {
 		RolloutTimeout:                        rolloutTimeout,
 		rolloutTimeoutSet:                     timeoutStr != "",
 		PodcertWorkersPerSigner:               podcertWorkers,
+		ClusterSize:                           firstNonEmpty(opts.ClusterSize, env["ATE_INSTALL_CLUSTER_SIZE"], ClusterSizeSize0),
+		CordonControlPlane:                    cordon,
 		ExperimentalUseSDSMint:                sdsmint,
 		AdditionalEgressExtprocService:        extproc,
 		ExperimentalEgressCredentialInjection: injection,
@@ -425,6 +446,11 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE must be %s, %s, or %s, got %q",
 			CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC, cfg.CloudSQL.IPType)
 	}
+	switch cfg.ClusterSize {
+	case ClusterSizeSize0, ClusterSizeSize10:
+	default:
+		return fmt.Errorf("--cluster-size must be %s or %s, got %q", ClusterSizeSize0, ClusterSizeSize10, cfg.ClusterSize)
+	}
 	if cfg.AdditionalEgressExtprocService != "" {
 		if err := validateExtprocService(cfg.AdditionalEgressExtprocService); err != nil {
 			return err
@@ -467,6 +493,11 @@ func validateExtprocService(spec string) error {
 		return fmt.Errorf("--experimental-additional-egress-extproc-service port must be 1-65535, got %q", portStr)
 	}
 	return nil
+}
+
+// Size10 reports whether the size10 footprint profile is selected.
+func (c *Config) Size10() bool {
+	return c.ClusterSize == ClusterSizeSize10
 }
 
 // PostgresSchemaName returns the configured schema, falling back to the
@@ -564,6 +595,16 @@ func (c *Config) ScriptEnv() []string {
 	}
 	if c.PodcertWorkersPerSigner > 0 {
 		merged["ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER"] = strconv.Itoa(c.PodcertWorkersPerSigner)
+	}
+	// Resolved values again, so a flag overrides whatever the environment
+	// carried rather than layering under it.
+	delete(merged, "ATE_INSTALL_CLUSTER_SIZE")
+	if c.ClusterSize != "" && c.ClusterSize != ClusterSizeSize0 {
+		merged["ATE_INSTALL_CLUSTER_SIZE"] = c.ClusterSize
+	}
+	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
+	if c.CordonControlPlane {
+		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
 	}
 	if c.ExperimentalUseSDSMint {
 		merged["ATE_EXPERIMENTAL_USE_SDSMINT"] = "true"

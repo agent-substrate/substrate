@@ -101,7 +101,7 @@ func (d *demo) Delete(ctx context.Context, e *steps.Env) error {
 // renderValues builds the workload image and returns the placeholder values
 // the agent templates need.
 func (d *demo) renderValues(ctx context.Context, e *steps.Env) (map[string]string, error) {
-	image, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, imageName, e.Cfg.Path(workload))
+	image, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, imageName, e.Cfg.Path(workload), e.Cfg.KODefaultPlatforms)
 	if err != nil {
 		return nil, err
 	}

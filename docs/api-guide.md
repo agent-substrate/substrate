@@ -61,9 +61,10 @@ moves. A pinned pool cannot put those pods back on a moved node, so the old
 version drains away node by node. An unpinned pool breaks this constraints.
 #### Worker Capacity (`spec.template.resources`)
 
-Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope available to host an actor sandbox, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).
+Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope its actor sandboxes share, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose remaining capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).
 
-- Size a pool's `limits` to the largest actor it should host. An actor occupies its whole worker, so worker capacity is the per-actor ceiling, not a shared budget.
+- Worker capacity is a shared budget: each actor placed on a worker subtracts its declared limits from what is left. Size a pool's `limits` for the actors it should host together.
+- A worker also has an actor limit, set by the ateom's `--max-actors` flag (default 1000). Placement stops at whichever runs out first.
 - Capacity is advisory for placement only: a worker that declares no CPU/memory limit reports zero capacity for that dimension, which the scheduler treats as **unconstrained** (placement is never blocked by missing data). The actual sandbox size still comes from the `ActorTemplate`.
 
 ### Example

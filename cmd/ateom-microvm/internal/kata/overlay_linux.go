@@ -36,6 +36,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
@@ -100,6 +101,8 @@ type VirtiofsdOptions struct {
 	SocketPath string // vhost-user socket CH connects to (VirtiofsdSocketPath)
 	SharedDir  string // directory to serve (SharedDir(id))
 	Log        io.Writer
+	// SysProcAttr, when set, is applied to the virtiofsd process.
+	SysProcAttr *syscall.SysProcAttr
 }
 
 // virtiofsdArgs builds the virtiofsd command line for o.
@@ -130,6 +133,7 @@ func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*exec.Cmd, error) 
 	cmd := exec.Command(bin, virtiofsdArgs(o)...)
 	cmd.Stdout = o.Log
 	cmd.Stderr = o.Log
+	cmd.SysProcAttr = o.SysProcAttr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting virtiofsd: %w", err)
 	}

@@ -31,7 +31,10 @@ RUN cargo build --release --locked
 
 # Stage 2: Create the runtime image containing Envoy and the built dynamic module shared library
 # When changing Envoy version, the version of SDK in the Cargo.toml files SHOULD match.
-FROM envoyproxy/envoy:v1.39.1@sha256:be87c8b52663c1164a5bdf3c5419017a269cb3d8c74be1ec93638a71f1ffbd4b
+# Pin the multi-platform image index, not one platform's manifest, so that the
+# --platform the installer passes (the host architecture on kind, linux/amd64
+# otherwise) selects a matching Envoy binary.
+FROM envoyproxy/envoy:v1.39.1@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
 
 # Copy the built dynamic module shared library from the builder stage
 COPY --from=builder /usr/src/dynamic-modules/egress-policy/target/release/libenvoy_substrate_egress_policy.so /usr/local/lib/libenvoy_substrate_egress_policy.so

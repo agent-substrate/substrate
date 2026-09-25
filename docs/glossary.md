@@ -46,8 +46,8 @@ for etcd.
   status and snapshot references.
 
 - **Worker**: a record representing one worker pod in a `WorkerPool`. A Worker
-  hosts at most one Actor at a time; many Actors are multiplexed across a pool
-  over time.
+  hosts several Actors at once, each in its own sandbox, up to its actor limit
+  and its compute capacity; many more are multiplexed across a pool over time.
 
 ## Components
 

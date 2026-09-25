@@ -366,6 +366,15 @@ Handles actor-aware routing and automatic re-animation.
 
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
+### Control Plane Isolation
+
+Control plane components can be kept on nodes of their own,
+away from the workers. Those nodes carry the label
+`ate.dev/workloadType=ate-control-plane` and the taint
+`ate.dev/workloadType=ate-control-plane:NoSchedule`; when
+configured via the installer, the control plane
+workloads select the label and tolerate the taint.
+
 ## Actor Lifecycle
 
 The lifecycle of an actor follows a state-driven sequence. A request reaches an
