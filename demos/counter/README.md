@@ -163,12 +163,15 @@ Run it and follow the printed next steps:
 KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
 ```
 
-On a cluster that already has the micro-VM deps (`hack/install-microvm-deps.sh`),
-deploy directly instead:
+To deploy onto an existing cluster instead, install the micro-VM deps and then
+the demo:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-microvm
+go run ./cmd/ate-setup deploy microvm-deps
+go run ./cmd/ate-setup deploy demo counter-microvm
 ```
+
+The first is a no-op on a cluster that already has them.
 
 Then create an actor (`--template counter-microvm`, in the
 `ate-demo-counter-microvm` atespace), increment the counter, suspend
