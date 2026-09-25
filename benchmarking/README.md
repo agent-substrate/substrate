@@ -13,6 +13,10 @@ scenario ladder, read [observability.md](observability.md).
 > [!IMPORTANT]
 > Source the environment configuration file (e.g., `source .ate-dev-env.sh`)
 > first so `PROJECT_ID`, `BUCKET_NAME`, etc. are set.
+>
+> The deploy scripts also source `.ate-dev-env.sh` themselves, which overrides
+> anything set in the shell. When driving a cluster other than the one that file
+> describes, set `NO_DEV_ENV=1` and export every setting explicitly instead.
 
 Note that deploying the benchmarks does not run them. You must visit Locust's
 web UI to start a test.
