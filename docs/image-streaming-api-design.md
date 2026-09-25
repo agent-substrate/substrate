@@ -101,10 +101,10 @@ By standardizing on the CNCF Remote Snapshotter interface, Google Riptide and AW
 #### Special Characteristics and Encapsulation Boundaries
 
 1. **Riptide Snapshotter Encapsulation & CNCF gRPC Standard:**
-   Substrate communicates directly with the **Riptide Snapshotter** (`containerd-gcfs-grpc`) over its local UNIX domain socket. Substrate does not manage, monitor, or communicate with any underlying or low-level FUSE daemon; all layer virtualization, chunk demand-paging, and mount lifecycles are entirely encapsulated within the Riptide Snapshotter. While the Riptide Snapshotter implements the CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, it possesses Google-specific optimizations and out-of-band mechanisms (such as internal FUSE mounting engines and specialized metadata indexing for Google Cloud Artifact Registry) that are not part of the upstream CNCF remote snapshotter specification. From Substrate's perspective, `cmd/atelet` interfaces with the Riptide Snapshotter strictly through the standard CNCF `Snapshots.v1` gRPC contract.
+   Substrate communicates directly with the **Riptide Snapshotter** (`containerd-gcfs-grpc`) over its local UNIX domain socket. Substrate does not manage, monitor, or communicate with any underlying or low-level FUSE daemon; all layer virtualization, chunk demand-paging, and mount lifecycles are entirely encapsulated within the Riptide Snapshotter. While the Riptide Snapshotter implements the CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, it possesses Google-specific optimizations and out-of-band mechanisms (such as internal FUSE mounting engines and specialized metadata indexing for Google Cloud Artifact Registry) that are not part of the upstream CNCF remote snapshotter specification. From Substrate's perspective, `cmd/atelet` interfaces with the Riptide Snapshotter strictly through the standard CNCF `Snapshots.v1` gRPC contract (Section 3.4).
 
 2. **Registry Scope: Google Artifact Registry (GAR) Exclusivity:**
-   Google Riptide is exclusively designed to stream container images hosted in Google Artifact Registry (GAR) or Google Container Registry (GCR). Riptide acceleration relies on server-side streaming manifests and layer transformations generated within Google Cloud. External registries (such as Docker Hub, Quay.io, or AWS ECR) do not contain Riptide streaming metadata. When an image from an external registry is targeted on GKE, Riptide cannot stream it. Substrate detects this during `CanStream` and automatically falls back to traditional non-streaming local caching (`imagecache.EnsureImage`).
+   Google Riptide is exclusively designed to stream container images hosted in Google Artifact Registry (GAR) or Google Container Registry (GCR). Riptide acceleration relies on server-side streaming manifests and layer transformations generated within Google Cloud. External registries (such as Docker Hub, Quay.io, or AWS ECR) do not contain Riptide streaming metadata. When an image from an external registry is targeted on GKE, the Riptide Snapshotter declines each layer's `Prepare` (Section 3.4), and Substrate falls back to traditional non-streaming local caching (`imagecache.EnsureImage`).
 
 ### 3.3. Architecture Flow Diagram
 
@@ -135,6 +135,31 @@ flowchart TD
         OverlayFS --> Workload["Agent Workload<br/>(Lazy Demand Paged)"]
     end
 ```
+
+### 3.4. The Snapshotter Contract
+
+The generic driver (`internal/imagestreaming/drivers/remotesnapshotter`) depends on exactly two things:
+
+1. **The `containerd.services.snapshots.v1.Snapshots` gRPC API.** The driver calls `Stat`, `Prepare`, `View`, and `Remove`. It never calls `Commit`.
+2. **containerd's [remote snapshotter protocol](https://github.com/containerd/containerd/blob/main/docs/snapshotters/remote-snapshotter.md).** The driver labels each `Prepare` with the layer's chain ID (`containerd.io/snapshot.ref`) and the `containerd.io/snapshot/cri.*` labels (image reference, manifest digest, layer digest, and image layers). It reads the result the way containerd's unpacker does.
+
+Nothing else is part of the contract. The driver doesn't read provider-specific labels (such as the Riptide Snapshotter's streaming labels on `Stat`), match provider-specific errors, or use side channels such as credential sockets or CRI proxies. Any snapshotter that follows the protocol, including the Riptide Snapshotter, SOCI, eStargz, and Nydus, works with the same driver.
+
+The driver handles each layer, bottom to top, as follows:
+
+| Call | Result | Driver Action |
+| :--- | :--- | :--- |
+| `Stat(chainID)` | Found | The layer is already on the node. Create a read-only `View` with the chain ID as its parent. |
+| `Stat(chainID)` | `NotFound` | Call `Prepare` with a unique key, the parent layer's chain ID, and the labels above. |
+| `Prepare` | `AlreadyExists` | The snapshotter provided the layer and committed it under the chain ID. Confirm with `Stat(chainID)`, then create a `View`. The snapshotter has consumed the prepare key, so the driver leaves it alone. |
+| `Prepare` | Mounts with a nil error | **Declined.** The snapshotter can't provide the layer and expects the caller to unpack it into the mounts and commit it. The driver removes the prepared snapshot without committing it and returns `imagestreaming.ErrNotStreamable`. |
+| Any call | Any other error | The driver removes the prepared snapshot, if it created one, and returns the error. |
+
+If any layer is declined or fails, the driver removes the views it created for the image, and atelet pulls the whole image with `imagecache.EnsureImage` (Section 5.6). Layers committed under their chain IDs stay on the node for later pulls.
+
+The contract has two limits:
+- **`AlreadyExists` means the layer is on the node, not that it is streamed.** A snapshotter may also provide a layer from local content, such as a GKE secondary boot disk. The driver treats both the same because the content is valid.
+- **The contract carries no credentials.** See Section 5.5.3.
 
 ---
 
@@ -178,7 +203,7 @@ type ImageStreamer interface {
 // StreamRequest holds the image reference and optional credentials.
 type StreamRequest struct {
     ImageRef   string       // Fully-qualified OCI reference (e.g. us-docker.pkg.dev/...:tag)
-    AuthConfig *AuthConfig // Optional pull secrets for private registries
+    AuthConfig *AuthConfig // Optional credentials for resolving the manifest; never sent to the snapshotter
 }
 
 // ActiveLease describes an active image lease restored during startup reconciliation.
@@ -384,9 +409,9 @@ flowchart TD
 A fundamental architectural question is how Agent Substrate handles Kubernetes `imagePullSecrets` for private registries in the image streaming path.
 
 ##### The Core Architectural Rule:
-**Any workload requiring explicit `imagePullSecrets` cannot use image streaming (on either Google Riptide or external OSS streaming solutions like AWS SOCI) and always falls back to traditional non-streaming mode (`imagecache.EnsureImage`).**
+**Under the snapshotter contract (Section 3.4), workloads that require explicit `imagePullSecrets` never stream, on either Google Riptide or external OSS streaming solutions like AWS SOCI. They always fall back to traditional non-streaming mode (`imagecache.EnsureImage`).**
 
-Image streaming in Substrate is strictly scoped to **ambient Node Identity** (GCE VM Service Account on GKE, EC2 Instance Profile on EKS).
+Image streaming in Substrate is strictly scoped to **ambient Node Identity** (GCE VM Service Account on GKE, EC2 Instance Profile on EKS). This holds at GA and after the next step below; only the future work in Section 5.5.4 would change it.
 
 ##### Why `imagePullSecrets` Cannot Be Used with Image Streaming:
 
@@ -403,14 +428,27 @@ Image streaming in Substrate is strictly scoped to **ambient Node Identity** (GC
    As noted in Section 3.2, Google Riptide exclusively supports Google Artifact Registry (GAR/GCR). GAR access is authenticated ambiently via the node's GCE VM Service Account through the link-local metadata server (`http://169.254.169.254`), making `imagePullSecrets` unnecessary for GAR images that the node's service account can read.
 
 ##### Fallback Behavior for Workloads with `imagePullSecrets`:
-When an actor definition requires explicit `imagePullSecrets` (or when private registry access cannot be authenticated through the node's ambient IAM identity):
-1. `cmd/atelet` detects that streaming cannot proceed with ambient node credentials.
-2. The request automatically and transparently routes to Substrate's traditional image caching pipeline: `imagecache.EnsureImage`.
-3. `imagecache.EnsureImage` uses the provided credentials to authenticate against the private registry, downloads and verifies the complete layers, untars them into the node's local cache directory, and composes the overlay lowerdir as usual.
+When the node's identity can't read an image:
+1. The snapshotter can't fetch the image's layers, so it declines each layer's `Prepare` (Section 3.4), and the driver returns `imagestreaming.ErrNotStreamable`.
+2. `cmd/atelet` falls back to Substrate's traditional image caching pipeline: `imagecache.EnsureImage`.
+3. `imagecache.EnsureImage` authenticates with atelet's node-level keychain (the kubelet credential provider, Section 5.5.1), downloads and verifies the complete layers, untars them into the node's local cache directory, and composes the overlay lowerdir as usual.
+
+Substrate doesn't support per-workload pull secrets yet. Until it does, a private image works only if the node-level keychain can read it.
+
+##### Roadmap and Alternatives:
+
+| Approach | Status | Description |
+| :--- | :--- | :--- |
+| **Fall back to non-streaming** | GA | Images that the node identity can't read use `imagecache.EnsureImage`, as described above. |
+| **Authorize with workload credentials, stream with node identity** | Next step after GA | Add per-workload pull secrets to Substrate. atelet resolves the manifest with the workload's credentials, which proves the workload may read the image, and the snapshotter streams with node identity. If the node identity can't read the image, the snapshotter declines and atelet falls back to `imagecache.EnsureImage` with the workload's credentials. Streamed layers are shared node-wide, so atelet must authorize every `PrepareLayers` call, including calls that reuse an existing lease. Needs nothing beyond the snapshotter contract. |
+| **Register credentials through the snapshotter's CRI proxy** | Future work | Would stream images that only the workload can read, but depends on conventions outside the contract. See Section 5.5.4. |
+| **Add a credential RPC to each snapshotter** | Rejected | No standard defines one. Every provider would have to add and maintain a Substrate-specific API. |
+| **Call a provider's internal credential interface directly** | Rejected | Reaches below the snapshotter's public API, breaks the encapsulation boundary in Section 3.2, and works with only one provider. |
+| **Pass credentials in snapshot labels** | Rejected | Leaks credentials (item 2 above). |
 
 #### 5.5.4. Future Work: Per-Workload Pull Secrets via the Snapshotter CRI Credential Proxy
 
-Streaming images that need per-workload `imagePullSecrets` is deferred past GA. The next step is to evaluate the CRI credential proxy that several streaming snapshotters already ship. This section records how the proxy works, where it stands relative to the standards Substrate depends on, and what adopting it would require.
+Streaming images that only a workload's `imagePullSecrets` can read is future work. The step after GA (Section 5.5.3) authorizes with workload credentials but still streams with node identity. The candidate mechanism for going further is the CRI credential proxy that several streaming snapshotters already ship. This section records how the proxy works, where it stands relative to the standards Substrate depends on, and what adopting it would require.
 
 ##### How the Proxy Works in Standard Kubernetes:
 1. Kubelet's `--image-service-endpoint` points at the snapshotter's socket instead of containerd's.
@@ -446,12 +484,13 @@ A clear contract specifies when `atelet` falls back to traditional download mode
 | Error Category | Triggering Condition | Behavior |
 | :--- | :--- | :--- |
 | **Daemon Unavailable** | Socket connection refused, ENOENT, or `codes.Unavailable` | **Fallback:** Daemon is not running or node is unconfigured; fall back to `imagecache.EnsureImage`. |
-| **Unsupported Image** | Remote snapshotter returns `codes.InvalidArgument` (e.g. image does not have SOCI index or stargz format) | **Fallback:** Image cannot be streamed; fall back to standard download. |
-| **External Registry (Riptide)** | Image is hosted outside Google Artifact Registry (e.g. Docker Hub, Quay) on GKE | **Fallback:** Riptide exclusively accelerates Google Artifact Registry (GAR/GCR); fall back to standard download. |
-| **`imagePullSecrets` Required** | Workload requires explicit `imagePullSecrets` (private registry not authenticated via ambient Node IAM) | **Fallback:** CNCF `Snapshots.v1` does not support credential passing; fall back to `imagecache.EnsureImage`. |
+| **Unsupported Image** | The snapshotter declines a layer: `Prepare` returns mounts with a nil error instead of `AlreadyExists` (e.g. the image has no SOCI index or Riptide streaming metadata) | **Fallback:** The driver removes the prepared snapshot without committing it and returns `imagestreaming.ErrNotStreamable`; fall back to standard download. |
+| **External Registry (Riptide)** | Image is hosted outside Google Artifact Registry (e.g. Docker Hub, Quay) on GKE | **Fallback:** The Riptide Snapshotter declines the layers, as for an unsupported image; fall back to standard download. |
+| **`imagePullSecrets` Required** | The image is readable only with a workload's pull secret, not with the node identity | **Fallback:** `Snapshots.v1` can't carry credentials, so the snapshotter declines the layers; fall back to `imagecache.EnsureImage` (Section 5.5.3). |
 | **Listable Timeout** | Daemon mounts FUSE, but directory listing fails or times out (`DefaultListableTimeout`) | **Fallback:** Daemon hung or unhealthy; unmount and fall back to standard download. |
-| **Control Plane Auth (`atelet`)** | Credential provider returns 401 Unauthorized for metadata resolution | **Terminal Error / No Fallback:** If `atelet` cannot authenticate to the registry to read the manifest, standard pull will also fail with 401. |
-| **Data Plane Auth (daemon)** | Daemon returns `codes.PermissionDenied` during Prepare | **Fallback:** The daemon's node identity may lack registry permissions, while `atelet`'s credentials might differ. |
+| **Control Plane Auth (`atelet`)** | Credential provider returns 401 Unauthorized for metadata resolution | **Terminal Error:** `atelet` tries the fallback, but `imagecache.EnsureImage` uses the same node-level keychain and also fails with 401. |
+| **Data Plane Auth (daemon)** | The snapshotter's node identity can't read the image, but `atelet`'s keychain can | **Fallback:** The snapshotter declines the layers; `imagecache.EnsureImage` pulls with `atelet`'s keychain. |
+| **Snapshotter Error** | `Stat`, `Prepare`, or `View` fails with any other error (e.g. `codes.PermissionDenied`, or a failed internal commit) | **Fallback:** The driver removes the prepared snapshot, if any, and the image's views; fall back to standard download. |
 
 ---
 
