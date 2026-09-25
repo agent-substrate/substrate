@@ -662,10 +662,10 @@ func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
-			{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
-			{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
-			{Name: "scratch", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
-			{Name: "system-info", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "cache", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "scratch", External: &ateletpb.ExternalVolumeSource{}},
+			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolume{}},
 		},
 		Containers: []*ateletpb.Container{
 			{
@@ -731,7 +731,7 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 			name: "missing volume definition",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -759,14 +759,14 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 					},
 				},
 			},
-			wantErr: `container "ctr" mounts volume "data" with unsupported source <nil>`,
+			wantErr: `container "ctr" mounts volume "data" with no source set`,
 		},
 		{
 			name: "duplicate volume names",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
-					{Name: "data", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+					{Name: "data", External: &ateletpb.ExternalVolumeSource{}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -1119,9 +1119,9 @@ func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
 func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	spec := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
-			{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
-			{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
-			{Name: "ext", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+			{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "ext", External: &ateletpb.ExternalVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{{
 			Name: "app",
@@ -1500,7 +1500,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
 			},
@@ -1512,7 +1512,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
 					},
 				},
 			},
@@ -1524,8 +1524,8 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
-						{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
+						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
 					},
 				},
 			},

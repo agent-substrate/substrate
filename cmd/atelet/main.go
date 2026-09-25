@@ -768,7 +768,7 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 	}
 
 	for _, vol := range req.GetSpec().GetVolumes() {
-		if _, ok := vol.GetSource().(*ateletpb.Volume_DurableDir); ok {
+		if vol.GetDurableDir() != nil {
 			return true
 		}
 	}
@@ -1406,8 +1406,7 @@ func (s *AteomHerder) prepareOCIBundles(
 ) error {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
-		switch vol.GetSource().(type) {
-		case *ateletpb.Volume_DurableDir:
+		if vol.GetDurableDir() != nil {
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
@@ -1506,29 +1505,29 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) (*ateompb.WorkloadSpec,
 				return nil, fmt.Errorf("container %q mounts volume %q which is not defined in workload volumes", ctr.GetName(), volName)
 			}
 
-			switch vol.GetSource().(type) {
-			case *ateletpb.Volume_DurableDir:
+			switch {
+			case vol.GetDurableDir() != nil:
 				ddMounts = append(ddMounts, &ateompb.DurableDirVolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case *ateletpb.Volume_External:
+			case vol.GetExternal() != nil:
 				csiMounts = append(csiMounts, &ateompb.VolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case *ateletpb.Volume_SystemInfo:
+			case vol.GetSystemInfo() != nil:
 				siMounts = append(siMounts, &ateompb.SystemInfoVolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case *ateletpb.Volume_Image:
+			case vol.GetImage() != nil:
 				imgMounts = append(imgMounts, &ateompb.ImageVolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
 			default:
-				return nil, fmt.Errorf("container %q mounts volume %q with unsupported source %T", ctr.GetName(), volName, vol.GetSource())
+				return nil, fmt.Errorf("container %q mounts volume %q with no source set", ctr.GetName(), volName)
 			}
 		}
 		out.Containers = append(out.Containers, &ateompb.Container{

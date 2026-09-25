@@ -175,12 +175,10 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			if vol.GetStorageVolumeId() != "" {
 				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 					Name: vol.GetVolumeName(),
-					Source: &ateletpb.Volume_External{
-						External: &ateletpb.ExternalVolumeSource{
-							StorageVolumeId: vol.GetStorageVolumeId(),
-							VolumeType:      vol.GetVolumeType(),
-							VolumeContext:   vol.GetVolumeContext(),
-						},
+					External: &ateletpb.ExternalVolumeSource{
+						StorageVolumeId: vol.GetStorageVolumeId(),
+						VolumeType:      vol.GetVolumeType(),
+						VolumeContext:   vol.GetVolumeContext(),
 					},
 				})
 			}

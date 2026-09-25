@@ -104,8 +104,8 @@ func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	pushTestImage(t, ref, singleFileLayer(t, "payload-binary", "binary"))
 
 	volumes := []*ateletpb.Volume{{
-		Name:   "agent",
-		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: ref}},
+		Name:  "agent",
+		Image: &ateletpb.ImageVolumeSource{Reference: ref},
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
@@ -138,8 +138,8 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 	)
 
 	volumes := []*ateletpb.Volume{{
-		Name:   "agent",
-		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: ref}},
+		Name:  "agent",
+		Image: &ateletpb.ImageVolumeSource{Reference: ref},
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
@@ -161,8 +161,8 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 // unused volume cannot fail the actor.
 func TestResolveImageVolumes_UnmountedVolumeNotPulled(t *testing.T) {
 	volumes := []*ateletpb.Volume{{
-		Name:   "agent",
-		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"}},
+		Name:  "agent",
+		Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"},
 	}}
 
 	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, nil)

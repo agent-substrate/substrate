@@ -38,16 +38,16 @@ func mountFor(t *testing.T, spec *specs.Spec, dest string) specs.Mount {
 }
 
 func durableVolume(name string) *ateletpb.Volume {
-	return &ateletpb.Volume{Name: name, Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}}
+	return &ateletpb.Volume{Name: name, DurableDir: &ateletpb.DurableDirVolume{}}
 }
 
 // Each volume mount becomes a bind of its host directory, rw or ro by kind.
 func TestBuild_VolumeMounts(t *testing.T) {
 	volumes := []*ateletpb.Volume{
 		durableVolume("data"),
-		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
-		{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
-		{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
+		{Name: "sysinfo", SystemInfo: &ateletpb.SystemInfoVolume{}},
+		{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
+		{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
 	}
 	spec := Build(Options{
 		ActorUID:      testActorUID,
