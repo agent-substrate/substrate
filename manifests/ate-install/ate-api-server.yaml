@@ -100,7 +100,7 @@ spec:
           # Run/Restore, ateom hands it to atunnel, and actor TCP egress is
           # transparently redirected (nftables) into atunnel, which wraps it in
           # mTLS + HTTP CONNECT to the egress gateway.
-          - --egress-gateway-address=atenet-egress.ate-system.svc:443
+          - --experimental-to-be-removed-egress-gateway-address=atenet-egress.ate-system.svc:443
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
           - --drain-delay=13s
           - --drain-timeout=15s

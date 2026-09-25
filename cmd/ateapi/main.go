@@ -76,8 +76,9 @@ var (
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 
-	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
+	actorIDJWTPoolFile                          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	experimentalToBeRemovedEgressGatewayAddress = pflag.String("experimental-to-be-removed-egress-gateway-address", "", "Address of the egress PEP. Temporary flag to be removed once per-actor egress gateway configuration is supported. Empty disables tunneled egress.")
+	egressGatewayAddress                        = pflag.String("egress-gateway-address", "", "Deprecated: use --experimental-to-be-removed-egress-gateway-address.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -249,6 +250,11 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
+	resolvedEgressGatewayAddress := *experimentalToBeRemovedEgressGatewayAddress
+	if resolvedEgressGatewayAddress == "" {
+		resolvedEgressGatewayAddress = *egressGatewayAddress
+	}
+
 	controlSrv := controlapi.NewRPCService(
 		persistence,
 		workerCache,
@@ -257,7 +263,7 @@ func main() {
 		storageClassLister,
 		ateletDialer,
 		instruments,
-		*egressGatewayAddress,
+		resolvedEgressGatewayAddress,
 		volPlugins,
 		objectStore,
 		actorIdentityJWTIssuer,
