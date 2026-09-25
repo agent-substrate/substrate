@@ -1388,6 +1388,20 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 	return nil
 }
 
+// prepareDurableDirVolume creates a durable-dir volume's host directory. One
+// actor's containers can run as different users, so no single owner works:
+// 0777, as Kubernetes gives an emptyDir. Chmod because MkdirAll applies the
+// umask and skips an existing directory.
+func prepareDurableDirVolume(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return fmt.Errorf("while creating %q: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o777); err != nil {
+		return fmt.Errorf("while setting mode of %q: %w", path, err)
+	}
+	return nil
+}
+
 // prepareOCIBundles pulls images and assembles OCI bundles for the pause
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
@@ -1405,9 +1419,8 @@ func (s *AteomHerder) prepareOCIBundles(
 	for _, vol := range spec.GetVolumes() {
 		switch vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
-			volPath := ateletpath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
-			if err := os.MkdirAll(volPath, 0o700); err != nil {
-				return fmt.Errorf("while creating %q: %w", volPath, err)
+			if err := prepareDurableDirVolume(ateletpath.DurableDirVolumeMountPoint(actorUID, vol.GetName())); err != nil {
+				return err
 			}
 		}
 	}
