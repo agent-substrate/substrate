@@ -25,6 +25,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 
@@ -339,12 +340,6 @@ func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns
 	return closers, serve, nil
 }
 
-// closerFunc adapts a cancel function to io.Closer, so a caller takes a
-// sandbox's sockets and the work behind them down as one list.
-type closerFunc func() error
-
-func (f closerFunc) Close() error { return f() }
-
 // SandboxSession owns a sandbox's network and serving sockets.
 type SandboxSession struct {
 	Network *SandboxNetwork
@@ -358,7 +353,7 @@ type SandboxSession struct {
 
 // ServeSandbox builds a sandbox's network and serves egress and DNS from its
 // gateway namespace. A nil server leaves that unserved, which fails closed.
-func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, dns dnsServer) (_ *SandboxSession, retErr error) {
+func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, resolver dns.Server) (_ *SandboxSession, retErr error) {
 	network, err := SetupSandboxNetwork(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -371,8 +366,8 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	}()
 
 	var serve []func()
-	if dns != nil {
-		closers, serveDNS, err := serveSandboxDNS(ctx, dns, network.GatewayNetNS, cfg.DNSPort)
+	if resolver != nil {
+		closers, serveDNS, err := dns.Serve(ctx, resolver, network.GatewayNetNS, cfg.DNSPort)
 		if err != nil {
 			return nil, err
 		}

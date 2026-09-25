@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateomnet
+package dns
 
 import (
 	"context"
@@ -27,15 +27,15 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 )
 
-// dnsServer answers an actor's DNS. Satisfied by atunnel.DNSRelay; an interface
+// Server answers an actor's DNS. Satisfied by atunnel.DNSRelay; an interface
 // so this package does not depend on it.
-type dnsServer interface {
+type Server interface {
 	ServePacket(ctx context.Context, pc net.PacketConn) error
 	Serve(ctx context.Context, listener net.Listener) error
 }
 
-// serveSandboxDNS serves UDP and TCP DNS in the sandbox's local gateway namespace.
-func serveSandboxDNS(ctx context.Context, relay dnsServer, ns netns.Handle, port uint16) (_ []io.Closer, _ []func(), retErr error) {
+// Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.
+func Serve(ctx context.Context, relay Server, ns netns.Handle, port uint16) ([]io.Closer, []func(), error) {
 	// Bind the wildcard because the microVM tap's gateway address is added later.
 	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(int(port)))
 
@@ -78,3 +78,9 @@ func serveSandboxDNS(ctx context.Context, relay dnsServer, ns netns.Handle, port
 	closers := []io.Closer{closerFunc(func() error { stopServing(); return nil }), packet, stream}
 	return closers, serve, nil
 }
+
+// closerFunc adapts a cancel function to io.Closer, so a caller takes a
+// sandbox's sockets and the work behind them down as one list.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
