@@ -201,20 +201,6 @@ func TestControllerRetriesUnappliedDeltaAfterAdjustError(t *testing.T) {
 	wantTracked(t, c, resources.CPUMemory(500, 0))
 }
 
-// Until a real strategy exists, the Controller must leave the full limits
-// booked rather than act on no prediction.
-func TestControllerSkipsWhenPredictorNotImplemented(t *testing.T) {
-	sampler := &fakeSampler{samples: []*ateworkerpb.WorkloadStatsSample{pending("uid-a", 2000, 4<<30)}}
-	adjuster := &fakeAdjuster{}
-	c := NewController(sampler.sample, predictor.NewWindowedMaxPredictor(DefaultMaturationWindow, DefaultHistoryWindow), adjuster, time.Second)
-
-	step(t, c, time.Now())
-	if len(adjuster.subtracted)+len(adjuster.added) != 0 {
-		t.Errorf("adjusted without a prediction: subtracted %v, added %v", adjuster.subtracted, adjuster.added)
-	}
-	wantTracked(t, c, resources.CPUMemory(2000, 4<<30))
-}
-
 func TestControllerStepFailures(t *testing.T) {
 	now := time.Now()
 	t.Run("sampler", func(t *testing.T) {
@@ -243,8 +229,10 @@ func TestControllerStepFailures(t *testing.T) {
 // An actor is booked once, at the limits of the first sample that shows it,
 // however many samples follow and whatever they declare.
 func TestControllerBooksEachActorOnce(t *testing.T) {
-	c, sampler, strategy, _ := newTestController()
-	strategy.err = predictor.ErrNotImplemented
+	// The windowed-max predictor keeps actors without measurements at their
+	// booked limits, so nothing is adjusted.
+	sampler := &fakeSampler{}
+	c := NewController(sampler.sample, predictor.NewWindowedMaxPredictor(DefaultMaturationWindow, DefaultHistoryWindow), &fakeAdjuster{}, time.Second)
 	now := time.Now()
 
 	sampler.samples = []*ateworkerpb.WorkloadStatsSample{pending("uid-a", 1000, 1<<30)}
@@ -397,4 +385,40 @@ func TestRunStopsWithContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after its context ended")
 	}
+}
+
+// With the real predictor, an actor keeps its full limits booked until it
+// matures, then the Worker hands back what it has not been seen to use, and
+// the rest once it leaves.
+func TestControllerWithWindowedMaxPredictor(t *testing.T) {
+	sampler := &fakeSampler{}
+	adjuster := &fakeAdjuster{}
+	c := NewController(sampler.sample, predictor.NewWindowedMaxPredictor(30*time.Second, 5*time.Minute), adjuster, time.Second)
+	t0 := time.Now()
+
+	// First sample: booked at 2 CPUs and 1Gi, no CPU rate yet.
+	sampler.samples = []*ateworkerpb.WorkloadStatsSample{measured("uid-a", 0, 256<<20, t0)}
+	step(t, c, t0)
+	// 1s of CPU over 10s is 100m, but the actor has not matured.
+	sampler.samples = []*ateworkerpb.WorkloadStatsSample{measured("uid-a", 1_000_000, 256<<20, t0.Add(10*time.Second))}
+	step(t, c, t0.Add(10*time.Second))
+	if len(adjuster.subtracted) != 0 || len(adjuster.added) != 0 {
+		t.Fatalf("adjusted an immature actor: subtracted %v, added %v", adjuster.subtracted, adjuster.added)
+	}
+	wantTracked(t, c, resources.CPUMemory(2000, 1<<30))
+
+	// 3s of CPU over 30s is 100m again, and the actor has matured.
+	sampler.samples = []*ateworkerpb.WorkloadStatsSample{measured("uid-a", 4_000_000, 256<<20, t0.Add(40*time.Second))}
+	step(t, c, t0.Add(40*time.Second))
+	wantCalls(t, "SubtractWorkerAllocated", []*ateapi.Resources{resources.CPUMemory(1900, 768<<20)}, adjuster.subtracted)
+	wantTracked(t, c, resources.CPUMemory(100, 256<<20))
+
+	sampler.samples = nil
+	step(t, c, t0.Add(50*time.Second))
+	wantCalls(t, "SubtractWorkerAllocated", []*ateapi.Resources{
+		resources.CPUMemory(1900, 768<<20),
+		resources.CPUMemory(100, 256<<20),
+	}, adjuster.subtracted)
+	wantCalls(t, "AddWorkerAllocated", nil, adjuster.added)
+	wantTracked(t, c, nil)
 }

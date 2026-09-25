@@ -139,9 +139,6 @@ func (c *Controller) Step(ctx context.Context, now time.Time) error {
 	snapshot := c.observe(now, stats.GetSamples())
 
 	predictedAllocated, err := c.predictor.Predict(now, snapshot)
-	if errors.Is(err, predictor.ErrNotImplemented) {
-		return nil
-	}
 	if err != nil {
 		return fmt.Errorf("predicting with %s: %w", c.predictor.Name(), err)
 	}
