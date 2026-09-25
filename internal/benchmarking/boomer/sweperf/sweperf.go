@@ -529,19 +529,23 @@ type executeResponse struct {
 
 // jobStatusResponse is the /status?job_id= reply. ExitCode is a pointer
 // because a job that has not finished reports none, which is distinct from an
-// exit code of 0.
+// exit code of 0. ExecutionDurationMs is the time replay.py spent running the
+// job's trace steps inside the sandbox, excluding any trace sleeps; it is a
+// pointer because servers built before sweperf c30c0d6 do not report it.
 type jobStatusResponse struct {
-	JobID         string `json:"job_id"`
-	Status        string `json:"status"`
-	ExitCode      *int   `json:"exit_code"`
-	CompletedStep int    `json:"completed_step"`
-	Error         string `json:"error"`
+	JobID               string   `json:"job_id"`
+	Status              string   `json:"status"`
+	ExitCode            *int     `json:"exit_code"`
+	CompletedStep       int      `json:"completed_step"`
+	Error               string   `json:"error"`
+	ExecutionDurationMs *float64 `json:"execution_duration_ms"`
 }
 
 // pollJobCompletion waits for an asynchronous /execute job to reach a terminal
-// state, for up to two minutes. It returns an error when the job fails, when
-// it completes with a non-zero exit code, or when that budget runs out.
-func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycleNum int) error {
+// state, for up to two minutes, and returns the final status of a job that
+// completed successfully. It returns an error when the job fails, when it
+// completes with a non-zero exit code, or when that budget runs out.
+func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycleNum int) (*jobStatusResponse, error) {
 	const maxRetries = 600
 	const retryInterval = 200 * time.Millisecond
 
@@ -549,7 +553,7 @@ func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycle
 		url := fmt.Sprintf("%s/status?job_id=%s", u.cfg.RouterURL, jobID)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		u.setActorRouting(req)
 
@@ -562,16 +566,16 @@ func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycle
 				if err := json.Unmarshal(body, &jobResp); err == nil {
 					if strings.EqualFold(jobResp.Status, "COMPLETED") {
 						if jobResp.ExitCode != nil && *jobResp.ExitCode != 0 {
-							return fmt.Errorf("cycle %d job %s failed with exit code %d", cycleNum, jobID, *jobResp.ExitCode)
+							return nil, fmt.Errorf("cycle %d job %s failed with exit code %d", cycleNum, jobID, *jobResp.ExitCode)
 						}
-						return nil
+						return &jobResp, nil
 					}
 					if strings.EqualFold(jobResp.Status, "FAILED") {
 						exitCode := -1
 						if jobResp.ExitCode != nil {
 							exitCode = *jobResp.ExitCode
 						}
-						return fmt.Errorf("cycle %d job %s failed with exit code %d: %s", cycleNum, jobID, exitCode, jobResp.Error)
+						return nil, fmt.Errorf("cycle %d job %s failed with exit code %d: %s", cycleNum, jobID, exitCode, jobResp.Error)
 					}
 				}
 			}
@@ -579,17 +583,46 @@ func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycle
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(retryInterval):
 		}
 	}
-	return fmt.Errorf("timed out waiting for job %s to complete in cycle %d", jobID, cycleNum)
+	return nil, fmt.Errorf("timed out waiting for job %s to complete in cycle %d", jobID, cycleNum)
+}
+
+// innerMethod is the request type under which the in-sandbox execution time
+// of a cycle is reported, next to the "http" entry for the same cycle that
+// holds the client-observed time. The two share a name so that locust shows
+// them side by side; the gap between them is harness overhead (routing,
+// request handling and the /status polling interval).
+const innerMethod = "replay"
+
+// recordInnerDuration reports the in-sandbox execution time of a completed
+// cycle, when the server supplied one.
+func (u *sweperfUser) recordInnerDuration(metricName string, jobResp *jobStatusResponse) {
+	d, ok := innerDuration(jobResp)
+	if !ok {
+		return
+	}
+	bmetrics.RecordSuccess(innerMethod, metricName, u.userClass, d, 0)
+}
+
+// innerDuration converts a job's reported execution_duration_ms to a
+// Duration. It reports false when there is nothing usable to record: no
+// status, no field (an older server), or a negative value.
+func innerDuration(jobResp *jobStatusResponse) (time.Duration, bool) {
+	if jobResp == nil || jobResp.ExecutionDurationMs == nil || *jobResp.ExecutionDurationMs < 0 {
+		return 0, false
+	}
+	return time.Duration(*jobResp.ExecutionDurationMs * float64(time.Millisecond)), true
 }
 
 // execute runs the trace steps of one cycle inside the actor's sandbox and
 // times them as Workload_Cycle_<cycleNum>. The server may answer either way:
 // a job ID means the run is asynchronous and pollJobCompletion waits it out,
-// while an exit code alone means it already finished.
+// while an exit code alone means it already finished. For an asynchronous run
+// that reports its execution time, that time is also recorded under the same
+// name as an innerMethod request.
 func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, endIdx int) error {
 	metricName := fmt.Sprintf("Workload_Cycle_%d", cycleNum)
 
@@ -610,7 +643,12 @@ func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, e
 			return fmt.Errorf("unmarshal executeResponse: %w", err)
 		}
 		if resp.JobID != "" {
-			return u.pollJobCompletion(ctx, resp.JobID, cycleNum)
+			jobResp, err := u.pollJobCompletion(ctx, resp.JobID, cycleNum)
+			if err != nil {
+				return err
+			}
+			u.recordInnerDuration(metricName, jobResp)
+			return nil
 		}
 		if resp.ExitCode != 0 {
 			return fmt.Errorf("cycle %d failed: exit code %d, stderr: %s", cycleNum, resp.ExitCode, resp.Stderr)
