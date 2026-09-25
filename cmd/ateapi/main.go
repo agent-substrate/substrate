@@ -80,7 +80,7 @@ var (
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresMaxConnLifetime           = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
-	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in each read/write PostgreSQL pool (store and OpenFGA). Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
+	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
 	postgresBootstrap                 = pflag.Bool("postgres-bootstrap", false, "Create missing fixed PostgreSQL identities before migrations.")
 	postgresAdminUsernameFile         = pflag.String("postgres-admin-username-file", "", "File that contains the PostgreSQL administrator username.")
 	postgresAdminPasswordFile         = pflag.String("postgres-admin-password-file", "", "File that contains the PostgreSQL administrator password.")

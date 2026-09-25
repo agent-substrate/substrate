@@ -35,9 +35,10 @@ Set with `--storage-size` at create time; it only grows afterwards.
 
 ## Connection sizing for a target throughput
 
-Set each read/write pool limit with `ATE_API_POSTGRES_POOL_MAX_CONNS` at deploy
-time. Ateapi has two such pools: its store and OpenFGA. Target active
-connections equal throughput multiplied by average query latency:
+Set the shared read/write pool limit with `ATE_API_POSTGRES_POOL_MAX_CONNS` at
+deploy time. Substrate and the embedded OpenFGA server use the same pool.
+Target active connections equal throughput multiplied by average query
+latency:
 
 ```
 connections ≈ QPS × mean latency in seconds
@@ -46,14 +47,14 @@ connections ≈ QPS × mean latency in seconds
 
 Provision ~2× headroom for bursts. This setting does not affect the owner and
 watch pools; their fixed limits add up to 5 connections per replica beyond the
-two read/write pool limits (e.g. 4 replicas with
+read/write pool limit (e.g. 4 replicas with
 `ATE_API_POSTGRES_POOL_MAX_CONNS=32` can open up to
-4 × (32 + 32 + 2 + 3) = 276 connections).
+4 × (32 + 2 + 3) = 148 connections).
 An undersized pool causes client-side queuing inside `pgx` rather than database errors.
 Ensure total connections across all replicas stay within Cloud SQL's limit:
 
 ```
-replicas × (2 × pool_max_conns + 5)  ≤  max_connections − slack (superuser, maintenance)
+replicas × (pool_max_conns + 5)  ≤  max_connections − slack (superuser, maintenance)
 ```
 
 Exceeding
