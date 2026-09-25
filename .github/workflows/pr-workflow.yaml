@@ -38,6 +38,10 @@ jobs:
     # A bound well clear of the observed runtime. Without one the platform
     # default applies, and a wedged step burns a free-tier slot for six hours.
     timeout-minutes: 45
+    env:
+      # Where each runner writes its JUnit. Every invocation needs its own file;
+      # a shared path means the last writer wins.
+      ARTIFACTS: ${{ github.workspace }}/_artifacts
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -51,16 +55,39 @@ jobs:
     # this guards, and that happens on the push to main, not on the PR.
     - name: Verify immutable PostgreSQL migrations
       run: hack/verify/postgresql-migrations.sh
-    - run: go test -race -v ./...
+    # gotestsum wraps go test to emit JUnit; the go test arguments are unchanged.
+    - name: unit tests
+      run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml"
+        --jsonfile "${ARTIFACTS}/unit.json" --format standard-verbose
+        -- -race -v ./...
     # tools/apitool has its own module so we need to run it explicitly.
+    # run-tool.sh resolves the repo root itself, so it works from the subdir.
     - name: apitool tests
       working-directory: tools/apitool
-      run: go test -race -v ./...
+      run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml"
+        --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose
+        -- -race -v ./...
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
     - name: root-gated tests
+      env:
+        ROOT_JUNIT_FILE: ${{ github.workspace }}/_artifacts/root.xml
       run: hack/run-root-tests.sh -race -v
+    # An exit code cannot distinguish "all passed" from "none ran". A registered
+    # file that was never written fails too.
+    - name: Require tests to have run
+      if: always()
+      run: |
+        make build-junittool
+        bin/junittool verify -manifest "${ARTIFACTS}/expected-junit.txt"
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: test-results-unit
+        path: ${{ env.ARTIFACTS }}
+        if-no-files-found: error
     - name: verify
       run: hack/verify-all.sh
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
@@ -83,6 +110,9 @@ jobs:
           experimental: true
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      # E2E_JUNIT_FILE is set per step, not here: the six lanes below share this
+      # job, so one job-level path would have each overwrite the last.
+      ARTIFACTS: ${{ github.workspace }}/_artifacts
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -139,6 +169,8 @@ jobs:
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
     - name: Run E2E tests (gVisor)
+      env:
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor.xml
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Run E2E tests (micro-VM)
       # The same suites again, with every fixture repointed at its micro-VM
@@ -148,6 +180,7 @@ jobs:
       # two runs do not contend for the one kind node.
       env:
         E2E_SANDBOX_CLASS: microvm
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm.xml
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Deploy MITM egress (sdsmint)
       # Swap the passthrough egress gateway for the sdsmint variant, which
@@ -165,6 +198,7 @@ jobs:
       # internal/e2e/suites/egressmitm).
       env:
         E2E_EGRESS_MITM: "1"
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-mitm.xml
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
     - name: Run E2E tests (egress MITM trust, micro-VM)
       # The same proof with the probe on the micro-VM runtime. Trust DELIVERY
@@ -174,6 +208,7 @@ jobs:
       env:
         E2E_EGRESS_MITM: "1"
         E2E_SANDBOX_CLASS: microvm
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-mitm-microvm.xml
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
     - name: Deploy MITM egress demo
       # The networking suite's egress tests need a fixture that trusts the
@@ -184,12 +219,30 @@ jobs:
     - name: Run E2E tests (networking, MITM egress)
       env:
         E2E_EGRESS_MITM: "1"
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-networking-mitm.xml
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
     - name: Run E2E tests (networking, MITM egress, micro-VM)
       env:
         E2E_EGRESS_MITM: "1"
         E2E_SANDBOX_CLASS: microvm
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-networking-mitm-microvm.xml
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
+    # Every lane must have reported tests; a `-run` filter that stops matching
+    # otherwise leaves its lane green and empty. The set comes from the manifest
+    # each lane registers itself in, so adding a lane needs no change here, and
+    # run-e2e.sh refuses to run in CI without E2E_JUNIT_FILE.
+    - name: Require every lane to have run tests
+      if: always()
+      run: |
+        make build-junittool
+        bin/junittool verify -manifest "${ARTIFACTS}/expected-junit.txt"
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: test-results-e2e-${{ matrix.dataplane }}
+        path: ${{ env.ARTIFACTS }}
+        if-no-files-found: error
     - name: Dump diagnostics on failure
       if: failure()
       run: |
