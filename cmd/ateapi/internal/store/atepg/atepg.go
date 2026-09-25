@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -55,6 +56,7 @@ type Persistence struct {
 	// and the partition-maintenance loop.
 	watchPool             *pgxpool.Pool
 	ownsWatchPool         bool
+	policyManager         *authz.PolicyManager
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
@@ -258,6 +260,12 @@ func (p *Persistence) Close() {
 // Pool returns the underlying PostgreSQL connection pool.
 func (p *Persistence) Pool() *pgxpool.Pool {
 	return p.pool
+}
+
+// SetPolicyManager configures the authorization policy manager used to clean up
+// OpenFGA tuples in the same transaction as resource deletions.
+func (p *Persistence) SetPolicyManager(pm *authz.PolicyManager) {
+	p.policyManager = pm
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers

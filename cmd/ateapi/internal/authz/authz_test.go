@@ -30,6 +30,10 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/agent-substrate/substrate/internal/principal"
 )
 
 func configureDockerEnv(ctx context.Context) error {
@@ -393,5 +397,135 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	}
 	if checkAllowed() {
 		t.Fatalf("expected bob denied after committed delete on single-connection pool")
+	}
+}
+
+func writeTestTuple(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pm *PolicyManager, user, relation, object string) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := pm.fgaServer.Write(ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+		StoreId:              pm.storeID,
+		AuthorizationModelId: pm.modelID,
+		Writes: &openfgav1.WriteRequestWrites{
+			TupleKeys: []*openfgav1.TupleKey{
+				{
+					User:     formatUser(user),
+					Relation: relation,
+					Object:   object,
+				},
+			},
+			OnDuplicate: "ignore",
+		},
+	}); err != nil {
+		t.Fatalf("writeTestTuple(%s, %s, %s) failed: %v", user, relation, object, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("tx.Commit failed: %v", err)
+	}
+}
+
+func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
+	pool := startPostgres(t)
+	ctx := context.Background()
+
+	fgaSrv, err := NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaSrv.Close)
+
+	authorizer, policyManager, err := New(ctx, pool, fgaSrv)
+	if err != nil {
+		t.Fatalf("authz.New failed: %v", err)
+	}
+
+	// 1. Seed global owners (including a Kubernetes ServiceAccount ID with colons).
+	writeTestTuple(t, ctx, pool, policyManager, "alice", "owner", GlobalRootObject)
+	writeTestTuple(t, ctx, pool, policyManager, "system:serviceaccount:default:default", "owner", GlobalRootObject)
+
+	// 1b. A nil Authorizer fails closed with codes.Internal unless explicitly bypassed.
+	var nilAuthorizer *Authorizer
+	if err := nilAuthorizer.Check(ctx, RelationCanCreateAtespace, GlobalRootObject); status.Code(err) != codes.Internal {
+		t.Errorf("expected Internal for nil Authorizer, got %v", err)
+	}
+	if err := nilAuthorizer.Check(WithBypass(ctx), RelationCanCreateAtespace, GlobalRootObject); err != nil {
+		t.Errorf("expected bypass context on nil Authorizer to succeed, got %v", err)
+	}
+
+	// 2. Unauthenticated request (no PrincipalInfo) fails with Unauthenticated unless bypassed.
+	if err := authorizer.Check(ctx, RelationCanCreateAtespace, GlobalRootObject); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated for empty context, got %v", err)
+	}
+	if err := authorizer.Check(WithBypass(ctx), RelationCanCreateAtespace, GlobalRootObject); err != nil {
+		t.Errorf("expected bypass context to succeed, got %v", err)
+	}
+
+	aliceCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "alice", Kind: principal.KindJWT})
+	saCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "system:serviceaccount:default:default", Kind: principal.KindJWT})
+	bobCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "bob", Kind: principal.KindJWT})
+
+	// 3. Alice and SA (global owners) can create and list atespaces; Bob cannot.
+	for _, c := range []context.Context{aliceCtx, saCtx} {
+		if err := authorizer.Check(c, RelationCanCreateAtespace, GlobalRootObject); err != nil {
+			t.Errorf("expected global owner to be allowed can_create_atespace, got %v", err)
+		}
+		if err := authorizer.Check(c, RelationCanListAtespaces, GlobalRootObject); err != nil {
+			t.Errorf("expected global owner to be allowed can_list_atespaces, got %v", err)
+		}
+	}
+	if err := authorizer.Check(bobCtx, RelationCanCreateAtespace, GlobalRootObject); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected bob to be denied can_create_atespace, got %v", err)
+	}
+	if err := authorizer.Check(bobCtx, RelationCanListAtespaces, GlobalRootObject); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected bob to be denied can_list_atespaces, got %v", err)
+	}
+
+	// 4. ContextualTuples links parent_global dynamically at Check time:
+	// - Global owner (alice) inherits can_get, can_delete, can_create_actor on atespace:team-x.
+	// - Unprivileged user (bob) is denied on all of them.
+	for _, rel := range []string{RelationCanGet, RelationCanDelete, "can_create_actor"} {
+		if err := authorizer.Check(aliceCtx, rel, AtespaceObject("team-x")); err != nil {
+			t.Errorf("expected global owner alice allowed %s on team-x via contextual tuples, got %v", rel, err)
+		}
+		if err := authorizer.Check(bobCtx, rel, AtespaceObject("team-x")); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("expected bob denied %s on team-x, got %v", rel, err)
+		}
+	}
+
+	// 5. Grant bob direct editor access on atespace:team-x.
+	writeTestTuple(t, ctx, pool, policyManager, "bob", "editor", AtespaceObject("team-x"))
+	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); err != nil {
+		t.Errorf("expected bob allowed can_get on team-x, got %v", err)
+	}
+
+	// 6. PolicyManager.DeleteAtespacePolicies requires an active transaction in ctx,
+	// and removes all tuples on team-x when committed.
+	if err := policyManager.DeleteAtespacePolicies(ctx, "team-x"); err == nil {
+		t.Fatalf("expected DeleteAtespacePolicies without ContextWithTx to fail, got nil")
+	}
+	txDel, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	if err := policyManager.DeleteAtespacePolicies(ContextWithTx(ctx, txDel), "team-x"); err != nil {
+		t.Fatalf("DeleteAtespacePolicies failed: %v", err)
+	}
+	if err := txDel.Commit(ctx); err != nil {
+		t.Fatalf("txDel.Commit failed: %v", err)
+	}
+	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected bob's direct tuple removed after DeleteAtespacePolicies, got %v", err)
+	}
+}
+
+func TestFormatUser_NoCollision(t *testing.T) {
+	u1 := formatUser("alice")
+	u2 := formatUser("user:alice")
+	if u1 == u2 {
+		t.Fatalf("formatUser(\"alice\") and formatUser(\"user:alice\") collided on %q", u1)
 	}
 }

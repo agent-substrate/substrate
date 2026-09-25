@@ -19,6 +19,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -33,7 +34,52 @@ import (
 const (
 	// defaultStoreName is the name of the OpenFGA store managed by Substrate.
 	defaultStoreName = "substrate"
+
+	// GlobalRootObject is the singleton global scope object identifier in OpenFGA.
+	GlobalRootObject = "global:root"
+
+	RelationCanCreateAtespace = "can_create_atespace"
+	RelationCanListAtespaces  = "can_list_atespaces"
+	RelationCanGet            = "can_get"
+	RelationCanDelete         = "can_delete"
+
+	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
+	maxTuplesPerWrite = 100
 )
+
+type bypassKey struct{}
+
+// WithBypass returns a context that bypasses runtime authorization checks (for internal system reconcilers).
+func WithBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bypassKey{}, true)
+}
+
+// IsBypassed reports whether ctx has authorization checks bypassed.
+func IsBypassed(ctx context.Context) bool {
+	v, _ := ctx.Value(bypassKey{}).(bool)
+	return v
+}
+
+var tupleReplacer = strings.NewReplacer(
+	"%", "%25",
+	":", "%3A",
+	"#", "%23",
+	" ", "%20",
+	"*", "%2A",
+)
+
+// AtespaceObject formats an atespace name as an OpenFGA object string.
+func AtespaceObject(name string) string {
+	return "atespace:" + tupleReplacer.Replace(name)
+}
+
+// formatUser formats a principal ID as a valid OpenFGA user string.
+// OpenFGA disallows ':', '#', whitespace, and treats '*' as a public wildcard;
+// these characters (plus '%') are percent-encoded to prevent collisions and
+// wildcard injection while preserving '/', '@', '.', '-', and '_'.
+func formatUser(id string) string {
+	return "user:" + tupleReplacer.Replace(id)
+}
 
 //go:embed model.fga
 var modelDSL string
@@ -86,6 +132,27 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 	)
 
 	return storeID, modelID, nil
+}
+
+// New provisions the default OpenFGA store and authorization model via
+// EnsureStoreAndModel and returns the read-path Authorizer and write-path
+// PolicyManager.
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server) (*Authorizer, *PolicyManager, error) {
+	storeID, modelID, err := EnsureStoreAndModel(ctx, pool, fgaServer)
+	if err != nil {
+		return nil, nil, err
+	}
+	authorizer := &Authorizer{
+		fgaServer: fgaServer,
+		storeID:   storeID,
+		modelID:   modelID,
+	}
+	policyManager := &PolicyManager{
+		fgaServer: fgaServer,
+		storeID:   storeID,
+		modelID:   modelID,
+	}
+	return authorizer, policyManager, nil
 }
 
 // ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing

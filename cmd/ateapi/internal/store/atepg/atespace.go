@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -118,8 +119,14 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 }
 
 func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Atespace, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning atespace delete: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		DELETE FROM atespaces
 		WHERE name = $1
 		  AND ($2::text = '' OR uid = $2::text)
@@ -132,10 +139,18 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 		if errors.Is(err, pgx.ErrNoRows) {
 			var uid string
 			var version int64
-			err := p.pool.QueryRow(ctx, `SELECT uid, version FROM atespaces WHERE name = $1`, name).Scan(&uid, &version)
+			err := tx.QueryRow(ctx, `SELECT uid, version FROM atespaces WHERE name = $1`, name).Scan(&uid, &version)
 			return nil, mapDeleteError(err, uid, version, precondition)
 		}
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
+	}
+	if p.policyManager != nil {
+		if err := p.policyManager.DeleteAtespacePolicies(authz.ContextWithTx(ctx, tx), name); err != nil {
+			return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)
 	}
 	out := &ateapipb.Atespace{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
