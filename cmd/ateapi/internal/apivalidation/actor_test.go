@@ -997,3 +997,37 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 		}
 	}
 }
+
+func TestValidateMintActorJWTRequest(t *testing.T) {
+	valid := func() *ateapipb.MintActorJWTRequest {
+		return &ateapipb.MintActorJWTRequest{
+			Actor:    &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			ActorUid: "0f8fad5b-d9cb-469f-a165-70867728950e",
+			Audience: []string{"https://example.com"},
+		}
+	}
+	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
+		req := valid()
+		req.ExpirationSeconds = seconds
+		return req
+	}
+	tests := []struct {
+		name string
+		req  *ateapipb.MintActorJWTRequest
+		want field.ErrorList
+	}{
+		{name: "default expiration", req: valid()},
+		{name: "expiration below the clamp", req: withExpiration(1)},
+		{name: "expiration above the clamp", req: withExpiration(86400)},
+		{
+			name: "negative expiration",
+			req:  withExpiration(-1),
+			want: field.ErrorList{field.Invalid(field.NewPath("expiration_seconds"), int64(-1), "").WithOrigin("minimum")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateMintActorJWTRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
