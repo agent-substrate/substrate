@@ -379,6 +379,8 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 			return http.ErrUseLastResponse
 		},
 	}
+	// The transport is per request, so don't leave its connection idle.
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
 	if err != nil {
 		resp["error"] = err.Error()
