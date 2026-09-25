@@ -139,7 +139,8 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	if err := s.authorize(ctx, req.GetActorSpiffeId(), ref.Namespace); err != nil {
+	atespace, decision, err := s.authorize(ctx, req.GetActorSpiffeId(), ref.Namespace, ref.Name)
+	if err != nil {
 		return nil, err
 	}
 
@@ -153,12 +154,36 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 	secret, err := s.client.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
+			// On a grant narrowed by label the caller is not entitled to know
+			// which Secrets exist: it has not been admitted to this name, only
+			// to names that carry the labels. NotFound would separate "absent"
+			// from "present but not yours", and a caller could walk a list of
+			// names and learn the contents of the namespace. Refuse both the
+			// same way. A grant that is not narrowed by label has already been
+			// admitted to every name here, so NotFound tells it nothing new.
+			if decision == DecisionCheckLabels {
+				return nil, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secret %s/%s", atespace, ref.Namespace, ref.Name)
+			}
 			return nil, status.Errorf(codes.NotFound, "secret %s/%s not found", ref.Namespace, ref.Name)
 		}
 		if k8serrors.IsForbidden(err) {
 			return nil, status.Errorf(codes.PermissionDenied, "not permitted to read secret %s/%s", ref.Namespace, ref.Name)
 		}
 		return nil, status.Errorf(codes.Unavailable, "reading secret %s/%s: %v", ref.Namespace, ref.Name, err)
+	}
+
+	// A grant narrowed by label can only be settled with the Secret in hand. It
+	// is read and discarded here, never returned. This refusal and the NotFound
+	// above give the same code and the same message, so a caller learns nothing
+	// from the difference between a Secret that is absent and one whose labels
+	// do not match.
+	if decision == DecisionCheckLabels && !s.nsAuth.AllowedLabels(atespace, ref.Namespace, ref.Name, secret.GetLabels()) {
+		slog.WarnContext(ctx, "credential request denied: secret does not match the grant",
+			slog.String("atespace", atespace),
+			slog.String("namespace", ref.Namespace),
+			slog.String("secret", ref.Name),
+		)
+		return nil, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secret %s/%s", atespace, ref.Namespace, ref.Name)
 	}
 
 	value, err := selectKey(secret.Data, ref.Key)
@@ -168,24 +193,35 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 	return &credproviderpb.FetchSecretResponse{OpaqueBytes: value}, nil
 }
 
-// authorize enforces the atespace→namespace policy. It derives the atespace from
-// the attested actor SPIFFE ID and denies unless the URI's namespace is in that
-// atespace's allowed list.
-func (s *Server) authorize(ctx context.Context, actorSpiffeID, namespace string) error {
+// authorize enforces the policy as far as it can without reading anything: it
+// derives the atespace from the attested actor SPIFFE ID, denies unless the
+// URI's namespace is granted, and denies a Secret the grant does not name. It
+// returns the atespace and what is left to decide -- DecisionCheckLabels when
+// the grant is narrowed by label, which needs the Secret itself.
+func (s *Server) authorize(ctx context.Context, actorSpiffeID, namespace, name string) (string, Decision, error) {
 	if s.nsAuth == nil {
-		return nil
+		return "", DecisionAllow, nil
 	}
 	actor, err := resources.ActorRefFromSPIFFEID(actorSpiffeID)
 	if err != nil {
 		slog.WarnContext(ctx, "credential request denied: unusable actor identity", slog.Any("err", err))
-		return status.Error(codes.PermissionDenied, "actor identity is required and must be a valid actor SPIFFE URI")
+		return "", DecisionDeny, status.Error(codes.PermissionDenied, "actor identity is required and must be a valid actor SPIFFE URI")
 	}
 	if !s.nsAuth.Allowed(actor.Atespace, namespace) {
 		slog.WarnContext(ctx, "credential request denied: atespace not permitted for namespace",
 			slog.String("atespace", actor.Atespace), slog.String("namespace", namespace))
-		return status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secrets in namespace %q", actor.Atespace, namespace)
+		return "", DecisionDeny, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secrets in namespace %q", actor.Atespace, namespace)
 	}
-	return nil
+	decision := s.nsAuth.Authorize(actor.Atespace, namespace, name)
+	if decision == DecisionDeny {
+		slog.WarnContext(ctx, "credential request denied: secret is not named by the grant",
+			slog.String("atespace", actor.Atespace),
+			slog.String("namespace", namespace),
+			slog.String("secret", name),
+		)
+		return "", DecisionDeny, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secret %s/%s", actor.Atespace, namespace, name)
+	}
+	return actor.Atespace, decision, nil
 }
 
 // selectKey returns the named data entry, or an error when the Secret has no
