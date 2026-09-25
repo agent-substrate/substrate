@@ -281,26 +281,17 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 		for _, line := range lines {
 			switch line.container {
 			case "envoy":
-				if !strings.Contains(line.text, actorName) {
-					t.Logf("Log line does not contain %s, discarding", actorName)
-					continue
-				}
-				t.Logf("Considering log line: %s", line.text)
 				authority, ok := accessLogField(line.text, "authority")
 				if !ok {
-					t.Logf("Log line does not have an authority field, discarding")
 					continue
 				}
 				if !strings.HasSuffix(authority, ":"+port) {
-					t.Logf("Authority does not contain %s, discarding", ":"+port)
 					continue
 				}
 				spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
 				if !strings.Contains(line.text, spiffeSlug) {
-					t.Logf("Log line does not contain %q, discarding", spiffeSlug)
 					continue
 				}
-				t.Logf("Log line matches")
 				return true
 			case "agentgateway":
 				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
