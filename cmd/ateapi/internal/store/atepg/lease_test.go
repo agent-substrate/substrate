@@ -24,13 +24,25 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 )
 
-func TestAcquireLease_CleansExpiredLeases(t *testing.T) {
+// countLeases returns how many lease rows exist for key.
+func countLeases(t *testing.T, s *Persistence, key string) int {
+	t.Helper()
+	var n int
+	if err := s.pool.QueryRow(context.Background(), `SELECT count(*) FROM leases WHERE key = $1`, key).Scan(&n); err != nil {
+		t.Fatalf("counting leases for %q: %v", key, err)
+	}
+	return n
+}
+
+// TestAcquireLease_LeavesOtherKeysExpiredRows pins the acquisition path down
+// to its own key: an expired row for some other key is the maintenance
+// loop's to remove, not one more DELETE on every workflow's critical path.
+func TestAcquireLease_LeavesOtherKeysExpiredRows(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO leases (key, token, expires_at) VALUES
-		('expired', 'old', clock_timestamp() - interval '1 minute'),
-		('active', 'live', clock_timestamp() + interval '1 hour')`); err != nil {
+		('expired', 'old', clock_timestamp() - interval '1 minute')`); err != nil {
 		t.Fatalf("seeding leases: %v", err)
 	}
 	lease, err := s.AcquireLease(ctx, "new")
@@ -39,15 +51,106 @@ func TestAcquireLease_CleansExpiredLeases(t *testing.T) {
 	}
 	defer lease.Close()
 
-	var expired, active int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases WHERE key = 'expired'`).Scan(&expired); err != nil {
-		t.Fatalf("counting expired lease: %v", err)
+	if got := countLeases(t, s, "expired"); got != 1 {
+		t.Errorf("expired row for another key after AcquireLease: got %d, want 1 (left for cleanupExpiredLeases)", got)
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases WHERE key = 'active'`).Scan(&active); err != nil {
-		t.Fatalf("counting active lease: %v", err)
+}
+
+func TestCleanupExpiredLeases_RemovesOnlyExpiredRows(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO leases (key, token, expires_at) VALUES
+		('expired', 'old', clock_timestamp() - interval '1 minute'),
+		('active', 'live', clock_timestamp() + interval '1 hour')`); err != nil {
+		t.Fatalf("seeding leases: %v", err)
 	}
-	if expired != 0 || active != 1 {
+
+	deleted, err := s.cleanupExpiredLeases(ctx)
+	if err != nil {
+		t.Fatalf("cleanupExpiredLeases: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1", deleted)
+	}
+	if expired, active := countLeases(t, s, "expired"), countLeases(t, s, "active"); expired != 0 || active != 1 {
 		t.Errorf("lease counts = expired:%d active:%d, want 0 and 1", expired, active)
+	}
+}
+
+// TestCleanupExpiredLeases_DrainsAcrossBatches seeds more expired rows than
+// one batch holds and checks a single pass keeps going until they are gone.
+func TestCleanupExpiredLeases_DrainsAcrossBatches(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	const seeded = leaseCleanupBatch*2 + 7
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO leases (key, token, expires_at)
+		SELECT 'expired-' || i, 'old', clock_timestamp() - interval '1 minute'
+		FROM generate_series(1, $1) AS i`, seeded); err != nil {
+		t.Fatalf("seeding leases: %v", err)
+	}
+
+	deleted, err := s.cleanupExpiredLeases(ctx)
+	if err != nil {
+		t.Fatalf("cleanupExpiredLeases: %v", err)
+	}
+	if deleted != seeded {
+		t.Errorf("deleted = %d, want %d", deleted, seeded)
+	}
+	var remaining int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases`).Scan(&remaining); err != nil {
+		t.Fatalf("counting leases: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("rows left after a full pass: %d, want 0", remaining)
+	}
+}
+
+// TestCleanupExpiredLeases_SkipsLockedRows holds a row lock on one expired
+// lease, as a concurrent acquire reclaiming it or another replica's pass
+// would, and checks the pass returns without waiting on it and takes the
+// row on the next pass once the lock is gone.
+func TestCleanupExpiredLeases_SkipsLockedRows(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO leases (key, token, expires_at) VALUES
+		('locked', 'old', clock_timestamp() - interval '1 minute'),
+		('free', 'old', clock_timestamp() - interval '1 minute')`); err != nil {
+		t.Fatalf("seeding leases: %v", err)
+	}
+	holder, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("beginning holder transaction: %v", err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck // no-op once committed
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM leases WHERE key = 'locked' FOR UPDATE`); err != nil {
+		t.Fatalf("locking row: %v", err)
+	}
+
+	passCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	deleted, err := s.cleanupExpiredLeases(passCtx)
+	if err != nil {
+		t.Fatalf("cleanupExpiredLeases with a locked row: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted with one row locked = %d, want 1", deleted)
+	}
+	if locked, free := countLeases(t, s, "locked"), countLeases(t, s, "free"); locked != 1 || free != 0 {
+		t.Errorf("lease counts = locked:%d free:%d, want 1 and 0", locked, free)
+	}
+
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("releasing row lock: %v", err)
+	}
+	deleted, err = s.cleanupExpiredLeases(ctx)
+	if err != nil {
+		t.Fatalf("cleanupExpiredLeases after unlock: %v", err)
+	}
+	if deleted != 1 || countLeases(t, s, "locked") != 0 {
+		t.Errorf("after unlock: deleted = %d and %d rows left, want 1 and 0", deleted, countLeases(t, s, "locked"))
 	}
 }
 
