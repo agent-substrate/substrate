@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/internal/dsnredact"
 )
 
 // envHashAnnotation carries a digest of the apiserver's environment on the pod
@@ -75,7 +76,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		}
 	}
 	dsn = withPoolMaxConns(dsn, e.Cfg.PostgresPoolMaxConns, dsnFromOperator)
-	log.Infof("POSTGRES_CONNECTION_STRING: %s", redactDSN(dsn))
+	log.Infof("POSTGRES_CONNECTION_STRING: %s", dsnredact.Redact(dsn))
 
 	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, cloudSQLEnvVars(cloudsql)); err != nil {
 		return err
@@ -163,19 +164,6 @@ func withPoolMaxConns(dsn, maxConns string, dsnFromOperator bool) string {
 	default:
 		return dsn + " pool_max_conns=" + maxConns
 	}
-}
-
-var (
-	// dsnURIPassword matches the password in a URI userinfo section.
-	dsnURIPassword = regexp.MustCompile(`(://[^:/@]*):[^@]*@`)
-	// dsnKeywordPassword matches a keyword/value or query parameter password.
-	dsnKeywordPassword = regexp.MustCompile(`(password=)[^ &]*`)
-)
-
-// redactDSN masks any password before the connection string is logged.
-func redactDSN(dsn string) string {
-	redacted := dsnURIPassword.ReplaceAllString(dsn, "$1:***@")
-	return dsnKeywordPassword.ReplaceAllString(redacted, "$1***")
 }
 
 // EnsureEnvVarsSafeStandalone guards `ate-setup create api-server-env-vars` on
