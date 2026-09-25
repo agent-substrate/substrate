@@ -64,13 +64,6 @@ func ActorSandboxAssetsFile(actorUID string) string {
 	)
 }
 
-func RunSCStateDir(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"runsc-state",
-	)
-}
-
 func OCIBundleDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -168,13 +161,6 @@ func RestoreStateDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"restore-state",
-	)
-}
-
-func PIDFileDir(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"pidfiles",
 	)
 }
 

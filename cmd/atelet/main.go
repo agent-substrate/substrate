@@ -1857,22 +1857,6 @@ func resetActorDirs(actorUID string) error {
 		return wrapFileSystemErr("while creating bundle dir: %w", err)
 	}
 
-	runscDir := ateletpath.RunSCStateDir(actorUID)
-	if err := os.RemoveAll(runscDir); err != nil {
-		return wrapFileSystemErr("while deleting runsc state dir: %w", err)
-	}
-	if err := os.MkdirAll(runscDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating runsc state dir: %w", err)
-	}
-
-	pidFileDir := ateletpath.PIDFileDir(actorUID)
-	if err := os.RemoveAll(pidFileDir); err != nil {
-		return wrapFileSystemErr("while deleting PID file dir: %w", err)
-	}
-	if err := os.MkdirAll(pidFileDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating PID file dir: %w", err)
-	}
-
 	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
 	if err := os.RemoveAll(checkpointDir); err != nil {
 		return wrapFileSystemErr("while deleting checkpoint-state dir: %w", err)

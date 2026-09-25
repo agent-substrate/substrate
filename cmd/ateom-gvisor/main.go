@@ -40,7 +40,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/childreap"
@@ -62,6 +61,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 var (
@@ -602,7 +602,18 @@ func containerNames(containers []*ateompb.Container) []string {
 	return names
 }
 
+// validateActorDirs rejects a request whose actor directories are unusable.
+func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
+	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+	return nil
+}
+
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -614,6 +625,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 	defer release()
+	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 
 	if err := s.deactivateActorNetworking(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
@@ -632,12 +646,13 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution); err != nil {
+	if _, err := s.hostActor(ctx, attribution, req.GetActorDirs()); err != nil {
 		return nil, err
 	}
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
 		actorUID:       req.GetActorUid(),
+		actorDirs:      req.GetActorDirs(),
 		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
@@ -654,7 +669,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			// mounted, mirroring the post-checkpoint cleanup — otherwise they
 			// linger in this namespace until atelet wipes the bundle dirs.
 			// Run before the network cleanup.
-			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
+			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
@@ -668,7 +683,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// upper — because mounting is ateom's job (atelet runs with no
 	// capabilities); runsc's gofer resolves the mount in this pod's mount
 	// namespace.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ocispec.PauseContainer)); err != nil {
+	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
@@ -687,7 +702,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
+		if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		containersToDelete = append(containersToDelete, ac.GetName())
@@ -716,6 +731,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -740,11 +758,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Checkpoint only saves state; no sizing is applied, so size is left zero.
 	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
+		path:      req.GetRunscPath(),
+		actorUID:  req.GetActorUid(),
+		actorDirs: req.GetActorDirs(),
 	}
 
-	checkpointPath := ateompath.CheckpointStateDir(req.GetActorUid())
+	checkpointPath := req.GetActorDirs().GetCheckpointDir()
 	if err := os.MkdirAll(checkpointPath, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
@@ -759,7 +778,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if err := rcmd.cmdPause(ctx, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while pausing pause container: %w", err)
 		}
-		tarErr := tarDurableVolumes(ctx, ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointPath)
+		tarErr := tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath)
 		// Undoing our own pause must not depend on the caller's context:
 		// tarutil does not check ctx, so a deadline expiring mid-tar would
 		// fail the resume instantly and leave the sandbox paused forever.
@@ -778,7 +797,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
 		if hasDurableVolumes(req.GetSpec().GetContainers()) {
-			if err := tarDurableVolumes(ctx, ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointPath); err != nil {
+			if err := tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath); err != nil {
 				return nil, fmt.Errorf("while archiving durable-dir volumes: %w", err)
 			}
 		}
@@ -789,7 +808,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// Cleanup the containers after checkpointing. This also unhosts the actor,
 	// before the snapshot listing below can fail.
 	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
 		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
 			slog.String("actor", attribution.Ref.String()),
 			slog.String("actorUID", attribution.UID),
@@ -883,6 +902,9 @@ func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name str
 }
 
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -894,6 +916,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	defer release()
+	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 
 	if err := s.deactivateActorNetworking(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
@@ -912,12 +937,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.hostActor(ctx, attribution); err != nil {
+	if _, err := s.hostActor(ctx, attribution, req.GetActorDirs()); err != nil {
 		return nil, err
 	}
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
 		actorUID:       req.GetActorUid(),
+		actorDirs:      req.GetActorDirs(),
 		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
@@ -931,7 +957,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			}
 			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Restore")
 			// Same overlay detach as the Run-failure path above.
-			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
+			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
@@ -940,17 +966,17 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			}
 		}
 	}()
-	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
+	checkpointDir := req.GetActorDirs().GetRestoreDir()
 
 	if hasDurableVolumes(req.GetSpec().GetContainers()) {
-		if err := untarDurableVolumes(ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointDir); err != nil {
+		if err := untarDurableVolumes(req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointDir); err != nil {
 			return nil, fmt.Errorf("while restoring durable-dir volumes: %w", err)
 		}
 	}
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ocispec.PauseContainer)); err != nil {
+	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
@@ -985,7 +1011,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
+		if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		switch req.GetScope() {
@@ -1074,6 +1100,9 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, ac
 }
 
 func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -1081,7 +1110,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
@@ -1090,15 +1119,16 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, containers []*ateompb.Container) error {
+func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) error {
 	var errs []error
 	if err := s.deactivateActorNetworking(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 
 	rcmd := &runsc{
-		path:     runscPath,
-		actorUID: actorUID,
+		path:      runscPath,
+		actorUID:  actorUID,
+		actorDirs: actorDirs,
 	}
 
 	// Detached from the caller: a deadline mid-`runsc delete` would leave the
@@ -1109,9 +1139,9 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 	// with no bundle on disk. Best-effort: if they are already stopped, the
 	// delete succeeds anyway.
 	stopContainers(cleanupCtx, rcmd, containers)
-	// Keep this as best-effort cleanup:
-	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
-	// directories after uploading the snapshot.
+	// Keep this as best-effort cleanup: atelet resets the bundle and checkpoint
+	// directories after uploading the snapshot, and the next Run or Restore
+	// resets the runsc state and pid file directories by gvisor.
 	if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
@@ -1120,7 +1150,7 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 	// (deleting a bundle out from under a live mount in this namespace would
 	// leave the mount orphaned until the pod restarts). Best-effort, same as
 	// the container cleanup above.
-	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
 		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 	}
 
