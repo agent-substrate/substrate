@@ -292,6 +292,9 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
 				slog.Any("err", err))
 		} else if !canStream {
 			instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
+			slog.DebugContext(ctx, "Image streaming unavailable; falling back to cache",
+				slog.String("image", ref),
+				slog.String("streamer", streamer.Name()))
 		} else {
 			res, err := streamer.PrepareLayers(ctx, req)
 			if err != nil {
@@ -329,6 +332,11 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
 					cfg = c
 				}
 				instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeSuccess, time.Since(t0))
+				slog.DebugContext(ctx, "Image streamed",
+					slog.String("image", ref),
+					slog.String("streamer", streamer.Name()),
+					slog.Int("layers", len(res.LayerDirs)),
+					slog.Duration("duration", time.Since(t0)))
 				return &imagecache.Image{
 					Digest:    digest,
 					Config:    cfg,

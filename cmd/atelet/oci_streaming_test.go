@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -260,14 +261,21 @@ func TestInitImageStreamer_ExplicitProvider(t *testing.T) {
 	dummyStreamer := mock.New()
 	dummyStreamer.NameVal = "custom-test"
 
+	sock := filepath.Join(t.TempDir(), "custom.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("net.Listen(%q): %v", sock, err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
 	imagestreaming.Register("custom-test", func(ctx context.Context, cfg imagestreaming.Config) (imagestreaming.ImageStreamer, error) {
-		if cfg[imagestreaming.SocketPathKey] != "/run/custom.sock" {
+		if cfg[imagestreaming.SocketPathKey] != sock {
 			return nil, fmt.Errorf("unexpected socket: %v", cfg[imagestreaming.SocketPathKey])
 		}
 		return dummyStreamer, nil
 	})
 
-	s, err := initImageStreamer(ctx, "custom-test", "/run/custom.sock")
+	s, err := initImageStreamer(ctx, "custom-test", sock)
 	if err != nil {
 		t.Fatalf("initImageStreamer: %v", err)
 	}

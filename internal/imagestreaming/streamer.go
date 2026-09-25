@@ -106,8 +106,9 @@ type ImageStreamer interface {
 	// Name returns the identifier of the streaming provider (e.g. "riptide", "soci").
 	Name() string
 
-	// CanStream checks if the provider can stream the requested image
-	// (e.g., streaming index exists and registry is supported).
+	// CanStream is a cheap check that the provider is available, such as
+	// whether its daemon answers. It need not inspect the image: PrepareLayers
+	// returns ErrNotStreamable if the provider declines the image.
 	CanStream(ctx context.Context, req *StreamRequest) (bool, error)
 
 	// PrepareLayers prepares and mounts the virtual layer directories on the node

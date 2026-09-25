@@ -46,8 +46,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/imagestreaming"
 	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/remotesnapshotter"
-	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/riptide"
-	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/soci"
+	"github.com/agent-substrate/substrate/internal/imagestreaming/drivers/riptide"
+	"github.com/agent-substrate/substrate/internal/imagestreaming/drivers/soci"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -106,8 +106,8 @@ var (
 
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 	imageCacheDir                = pflag.String("image-cache-dir", ateompath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
-	imageStreamer                = pflag.String("image-streamer", "none", "Image acceleration / streaming provider: none, auto, riptide, soci, remotesnapshotter, or registered provider name.")
-	imageStreamerSocket          = pflag.String("image-streamer-socket", "", "Unix domain socket path for the image streaming daemon (e.g. /run/containerd-gcfs-grpc or /run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock). If empty, the driver default or auto-detected socket is used.")
+	imageStreamer                = pflag.String("image-streamer", "none", "Image streaming provider: none; auto, which uses the first remote snapshotter socket found (Riptide Snapshotter, then SOCI); or a registered provider name such as riptide, soci, or remotesnapshotter.")
+	imageStreamerSocket          = pflag.String("image-streamer-socket", "", "Unix socket of the remote snapshotter. Required when --image-streamer names a provider, and must exist at startup; ignored for none and auto.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -470,59 +470,128 @@ type AteomHerder struct {
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
 
-// initImageStreamer resolves and instantiates the ImageStreamer according to flags.
-func initImageStreamer(ctx context.Context, provider, socket string) (imagestreaming.ImageStreamer, error) {
-	if provider == "" || provider == "none" {
-		return nil, nil
-	}
+// streamerSocket is a remote snapshotter socket that auto mode looks for.
+type streamerSocket struct {
+	provider string
+	path     string
+}
 
-	if provider == "auto" {
-		// Auto-detection checks for well-known streaming daemon sockets on the host.
-		// Priority order: Riptide remote snapshotter socket, then AWS SOCI socket.
-		sockCandidates := []struct {
-			name string
-			sock string
-		}{
-			{"riptide", "/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock"},
-			{"riptide", "/run/containerd-gcfs-grpc"},
-			{"soci", "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"},
-			{"riptide", "/run/gcfsd/grpc.sock"},
-		}
+// autoStreamerSockets lists the sockets auto mode looks for, in priority order.
+var autoStreamerSockets = []streamerSocket{
+	{provider: riptide.ProviderName, path: riptide.DefaultGCFSSocket},
+	{provider: soci.ProviderName, path: soci.DefaultSOCISocket},
+}
+
+// streamerProbeTimeout bounds the startup check of whether the snapshotter
+// answers.
+const streamerProbeTimeout = 2 * time.Second
+
+// initImageStreamer returns the ImageStreamer selected by --image-streamer
+// (mode) and --image-streamer-socket, or nil if streaming is off. It logs
+// the result.
+func initImageStreamer(ctx context.Context, mode, socket string) (imagestreaming.ImageStreamer, error) {
+	if mode == "" {
+		mode = "none"
+	}
+	if mode == "none" || mode == "auto" {
 		if socket != "" {
-			for _, c := range sockCandidates {
-				if c.sock == socket {
-					return imagestreaming.Get(ctx, c.name, imagestreaming.Config{imagestreaming.SocketPathKey: socket})
-				}
-			}
+			slog.WarnContext(ctx, "Ignoring --image-streamer-socket; it applies only to a named provider",
+				slog.String("mode", mode),
+				slog.String("socket", socket))
 		}
-		for _, c := range sockCandidates {
-			if _, err := os.Stat(c.sock); err == nil {
-				slog.InfoContext(ctx, "Auto-detected image streaming daemon",
-					slog.String("provider", c.name),
-					slog.String("socket", c.sock))
-				streamer, err := imagestreaming.Get(ctx, c.name, imagestreaming.Config{imagestreaming.SocketPathKey: c.sock})
-				if err != nil {
-					slog.WarnContext(ctx, "Failed to initialize auto-detected image streamer",
-						slog.String("provider", c.name),
-						slog.Any("err", err))
-					continue
-				}
-				return streamer, nil
-			}
+		if mode == "auto" {
+			return detectImageStreamer(ctx, autoStreamerSockets), nil
 		}
-		slog.InfoContext(ctx, "No supported image streaming daemon socket found; image streaming disabled")
+		slog.InfoContext(ctx, "Image streaming disabled",
+			slog.String("mode", mode),
+			slog.String("reason", "disabled by flag"))
 		return nil, nil
 	}
 
-	cfg := imagestreaming.Config{}
-	if socket != "" {
-		cfg[imagestreaming.SocketPathKey] = socket
+	if !slices.Contains(imagestreaming.Providers(), mode) {
+		return nil, fmt.Errorf("unknown --image-streamer %q: want none, auto, or one of %v", mode, imagestreaming.Providers())
 	}
-	streamer, err := imagestreaming.Get(ctx, provider, cfg)
+	if socket == "" {
+		return nil, fmt.Errorf("--image-streamer=%s requires --image-streamer-socket", mode)
+	}
+	if err := checkUnixSocket(socket); err != nil {
+		return nil, fmt.Errorf("--image-streamer-socket: %w", err)
+	}
+	streamer, err := imagestreaming.Get(ctx, mode, imagestreaming.Config{imagestreaming.SocketPathKey: socket})
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize image streamer %q: %w", provider, err)
+		return nil, fmt.Errorf("initializing image streamer %q: %w", mode, err)
 	}
+	logImageStreamerEnabled(ctx, mode, streamer, socket)
 	return streamer, nil
+}
+
+// detectImageStreamer returns a streamer for the first of sockets that
+// exists as a Unix socket, or nil if none does.
+func detectImageStreamer(ctx context.Context, sockets []streamerSocket) imagestreaming.ImageStreamer {
+	paths := make([]string, 0, len(sockets))
+	for _, s := range sockets {
+		paths = append(paths, s.path)
+		if checkUnixSocket(s.path) != nil {
+			continue
+		}
+		streamer, err := imagestreaming.Get(ctx, s.provider, imagestreaming.Config{imagestreaming.SocketPathKey: s.path})
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to initialize auto-detected image streamer",
+				slog.String("provider", s.provider),
+				slog.String("socket", s.path),
+				slog.Any("err", err))
+			continue
+		}
+		logImageStreamerEnabled(ctx, "auto", streamer, s.path)
+		return streamer
+	}
+	slog.InfoContext(ctx, "Image streaming disabled",
+		slog.String("mode", "auto"),
+		slog.String("reason", "no remote snapshotter socket found"),
+		slog.Any("sockets", paths))
+	return nil
+}
+
+// checkUnixSocket returns an error unless path exists and is a Unix socket.
+func checkUnixSocket(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if fi.Mode().Type() != os.ModeSocket {
+		return fmt.Errorf("%s is not a Unix socket", path)
+	}
+	return nil
+}
+
+// streamerProber is implemented by streamers that can check whether their
+// provider answers requests.
+type streamerProber interface {
+	Probe(ctx context.Context) error
+}
+
+// logImageStreamerEnabled logs the selected streamer and, if it can tell,
+// whether its provider answers. A socket file alone doesn't prove that: it
+// can outlive the daemon. The check is informational, because images fall
+// back to the image cache while the provider is down.
+func logImageStreamerEnabled(ctx context.Context, mode string, streamer imagestreaming.ImageStreamer, socket string) {
+	attrs := []any{
+		slog.String("mode", mode),
+		slog.String("provider", streamer.Name()),
+		slog.String("socket", socket),
+	}
+	level := slog.LevelInfo
+	if p, ok := streamer.(streamerProber); ok {
+		probeCtx, cancel := context.WithTimeout(ctx, streamerProbeTimeout)
+		err := p.Probe(probeCtx)
+		cancel()
+		attrs = append(attrs, slog.Bool("reachable", err == nil))
+		if err != nil {
+			level = slog.LevelWarn
+			attrs = append(attrs, slog.Any("err", err))
+		}
+	}
+	slog.Log(ctx, level, "Image streaming enabled", attrs...)
 }
 
 // NewService creates a new WorkersManagerService.

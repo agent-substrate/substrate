@@ -365,6 +365,42 @@ func (d *Driver) CanStream(ctx context.Context, req *imagestreaming.StreamReques
 	return true, nil
 }
 
+// probeKey names a snapshot that Probe expects not to exist.
+const probeKey = "ate-streaming-probe"
+
+// Probe reports whether the snapshotter answers Snapshots.v1 requests. It
+// calls Stat on a key that doesn't exist and expects NotFound. If the driver
+// has no client yet, Probe uses a temporary connection rather than caching
+// one, because CanStream skips its socket check once a client is cached.
+func (d *Driver) Probe(ctx context.Context) error {
+	d.mu.Lock()
+	client := d.snapshotsClient
+	d.mu.Unlock()
+	if client == nil {
+		conn, err := grpc.NewClient("unix://"+d.getSocketPath(),
+			grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("creating client: %w", err)
+		}
+		defer func() { _ = conn.Close() }()
+		client = snapshots.NewSnapshotsClient(conn)
+	}
+	snapshotter := d.snapshotterName
+	if snapshotter == "" {
+		snapshotter = d.name
+	}
+	_, err := client.Stat(d.withNamespace(ctx), &snapshots.StatSnapshotRequest{
+		Snapshotter: snapshotter,
+		Key:         probeKey,
+	})
+	switch status.Code(err) {
+	case codes.OK, codes.NotFound:
+		return nil
+	default:
+		return fmt.Errorf("stat probe snapshot: %w", err)
+	}
+}
+
 // PrepareLayers asks the remote snapshotter to provide each layer in the image
 // and returns read-only views of them. If the snapshotter declines any layer,
 // it returns an error wrapping imagestreaming.ErrNotStreamable.

@@ -150,6 +150,9 @@ spec:
         # terminationGracePeriodSeconds above.
         - --drain-delay=0s
         - --drain-timeout=5m
+        # auto streams through the first remote snapshotter socket it finds in
+        # the socket directories mounted below, and otherwise pulls without
+        # streaming.
         - --image-streamer=auto
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
@@ -232,8 +235,6 @@ spec:
           readOnly: true
         - name: run-containerd-gcfs
           mountPath: /run/containerd-gcfs-grpc
-        - name: run-gcfsd
-          mountPath: /run/gcfsd
         - name: run-soci
           mountPath: /run/soci-snapshotter-grpc
         - name: image-credential-provider-bin
@@ -250,10 +251,6 @@ spec:
       - name: run-containerd-gcfs
         hostPath:
           path: /run/containerd-gcfs-grpc
-      - name: run-gcfsd
-        hostPath:
-          path: /run/gcfsd
-          type: DirectoryOrCreate
       - name: run-soci
         hostPath:
           path: /run/soci-snapshotter-grpc
