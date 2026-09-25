@@ -332,7 +332,7 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 
 // TestSchedulerAssignmentShapeAndOutcomes asserts the assignment histogram stamps
 // the pool pair only when a worker was assigned and error.type only for the error
-// outcome, so no_free_worker (a capacity signal) carries neither.
+// outcome, so no_capacity (a capacity signal) carries neither.
 func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -354,8 +354,8 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			wantKeys:      []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey},
 		},
 		{
-			name:     "no_free_worker carries class but neither pool key nor error.type",
-			outcome:  ateattr.SchedulerOutcomeNoFreeWorker,
+			name:     "no_capacity carries class but neither pool key nor error.type",
+			outcome:  ateattr.SchedulerOutcomeNoCapacity,
 			pool:     "",
 			class:    "gvisor",
 			err:      status.Error(codes.FailedPrecondition, "no free workers available"),

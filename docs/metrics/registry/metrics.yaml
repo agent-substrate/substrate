@@ -385,12 +385,15 @@ groups:
               stability: development
               value: assigned
               brief: The scheduler assigned a worker.
-            - id: no_free_worker
+            - id: no_capacity
               stability: development
-              value: no_free_worker
+              value: no_capacity
               brief: >
-                No free worker was available. This shows the capacity. It is not
-                a failure. Thus it has no error.type key.
+                No worker that meets the constraints of the actor had room. It is
+                not a failure. Thus it has no error.type key. The cause can be
+                full workers, or no worker that meets the constraints, such as a
+                wrong sandbox class or a required node that is gone. Only the
+                first cause needs more workers.
             - id: error
               stability: development
               value: error
@@ -459,8 +462,10 @@ groups:
               stability: development
               value: no_capacity
               brief: >
-                The fleet had no free worker. This is a capacity problem and not
-                a defect. It shows the capacity pressure at the request edge.
+                No worker that meets the constraints of the actor had room. It
+                shows the pressure at the request edge. The scheduler reports
+                the same condition as no_capacity on
+                ate.scheduler.assignment.duration.
             - id: failed_precondition
               stability: development
               value: failed_precondition
@@ -818,14 +823,14 @@ groups:
         requirement_level: required
       - ref: ate.workerpool.namespace
         requirement_level:
-          conditionally_required: The scheduler assigned a worker. The no_free_worker outcome names no pool.
+          conditionally_required: The scheduler assigned a worker. The no_capacity outcome names no pool.
       - ref: ate.workerpool.name
         requirement_level:
           conditionally_required: The scheduler assigned a worker.
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: >
-            The class is known. ateapi sets this key also on the no_free_worker
+            The class is known. ateapi sets this key also on the no_capacity
             outcome. Thus the outcome names the capacity that ended.
       - ref: error.type
         requirement_level:
