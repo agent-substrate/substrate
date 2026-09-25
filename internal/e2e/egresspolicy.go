@@ -37,6 +37,23 @@ func EgressAllowHostnames(patterns ...string) *ateapipb.EgressRule {
 	return &ateapipb.EgressRule{Hostnames: &ateapipb.HostnameRule{Patterns: patterns}}
 }
 
+// EgressInjectHeader is a hostname rule (see EgressAllowHostnames) that also
+// carries an inject_static_headers effect: on a match, the gateway resolves
+// credentialURI through its credential provider and sets header to prefix
+// plus the credential.
+func EgressInjectHeader(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{Hostnames: &ateapipb.HostnameRule{
+		Patterns: patterns,
+		Effects: &ateapipb.EgressRuleEffects{
+			InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
+				Header:        header,
+				Prefix:        prefix,
+				CredentialUri: credentialURI,
+			}},
+		},
+	}}
+}
+
 // EgressAllowCIDRs is a rule that lets an actor reach the addresses in cidrs.
 func EgressAllowCIDRs(cidrs ...string) *ateapipb.EgressRule {
 	return &ateapipb.EgressRule{Cidrs: &ateapipb.CIDRRule{Cidrs: cidrs}}

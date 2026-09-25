@@ -190,6 +190,19 @@ jobs:
         E2E_EGRESS_MITM: "1"
         E2E_SANDBOX_CLASS: microvm
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
+    - name: Deploy MITM egress with credential injection
+      # Envoy lane only: the injection flag requires the envoy dataplane.
+      # TODO: support agent gateway as dataplane.
+      if: matrix.dataplane == 'envoy'
+      run: hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=envoy --experimental-use-sdsmint --experimental-egress-credential-injection
+    - name: Run E2E tests (egress credential injection)
+      # Injection happens entirely inside the gateway, so the sandbox class
+      # does not change the path — per-class trust delivery is already the
+      # egressmitm steps' job. One (gVisor) run suffices.
+      if: matrix.dataplane == 'envoy'
+      env:
+        E2E_EGRESS_CREDINJECT: "1"
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
       run: |
