@@ -23,17 +23,18 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 // Re-admitting an actor that is already hosted keeps its slot, so it succeeds
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
-	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, false)
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, false)
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{}, false)
 	if err != nil {
 		t.Fatalf("re-admitting a hosted actor on a full worker: %v", err)
 	}
@@ -41,10 +42,30 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, false); apierror.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, sizing.SandboxSize{}, false); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {
 		t.Errorf("hosting %d actors, want 1", got)
+	}
+}
+
+// The declared limits come from the request that hosted the actor, including
+// a re-admission, whose request may carry a changed template's limits.
+func TestAdmitActorRecordsDeclaredLimits(t *testing.T) {
+	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 1 << 30}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 1 << 30}); first.size != want {
+		t.Errorf("size = %v, want %v", first.size, want)
+	}
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{MilliCPU: 2000}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (sizing.SandboxSize{MilliCPU: 2000}); again.size != want {
+		t.Errorf("re-admission size = %v, want %v", again.size, want)
 	}
 }

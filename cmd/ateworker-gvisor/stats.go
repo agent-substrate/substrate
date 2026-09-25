@@ -143,7 +143,7 @@ func (s *AteWorkerService) GetActiveWorkloadStats(ctx context.Context, req *atew
 	for _, h := range hosted {
 		sample := h.usage.Latest()
 		if sample == nil {
-			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
+			sample = h.usage.WithEpoch(h.describe(pendingSample(&h.attribution)))
 		}
 		samples = append(samples, sample)
 	}
@@ -170,7 +170,7 @@ func (s *AteWorkerService) sweepUsage(ctx context.Context) {
 				attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Any("err", err))
 				slog.LogAttrs(ctx, slog.LevelWarn, "Failed to read sandbox cgroup", attrs...)
 			}
-			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
+			sample = h.usage.WithEpoch(h.describe(pendingSample(&h.attribution)))
 		}
 		// The read holds no lifecycle lock, and the cgroup is found by UID
 		// alone. If the actor was re-hosted meanwhile, perhaps on another
@@ -218,7 +218,7 @@ func (s *AteWorkerService) recordFinalIfEnded(ctx context.Context, h *hostedActo
 // recordFinal writes the final record of an activation that a checkpoint or a
 // terminate ended, from its newest measured sample.
 func (s *AteWorkerService) recordFinal(ctx context.Context, h *hostedActor) {
-	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
+	pending := h.usage.WithEpoch(h.describe(pendingSample(&h.attribution)))
 	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample) {
 		if measured == nil {
 			measured = pending
@@ -252,7 +252,7 @@ func (s *AteWorkerService) measure(ctx context.Context, h *hostedActor) (*atewor
 	sample, err := h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 		sample, r, err := s.sampleSandbox(&h.attribution)
 		raw = r
-		return sample, nil, err
+		return h.describe(sample), nil, err
 	})
 	return sample, raw, err
 }

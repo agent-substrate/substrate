@@ -28,6 +28,7 @@ import (
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
@@ -43,7 +44,7 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)})
+			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)}, sizing.SandboxSize{})
 		}()
 	}
 	wg.Wait()
@@ -57,11 +58,11 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
-	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"})
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"})
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{})
 	if err != nil {
 		t.Fatalf("re-admitting a hosted actor on a full worker: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}); apierror.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, sizing.SandboxSize{}); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {
@@ -85,7 +86,7 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 		maxActors: 1,
 		draining:  1,
 	}
-	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil); err == nil {
+	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil, sizing.SandboxSize{}); err == nil {
 		t.Error("admitted an actor while a draining one still held the only place")
 	}
 }
@@ -163,5 +164,25 @@ func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 	}
 	if got := s.inFlight.Names(); len(got) != 0 {
 		t.Errorf("a refused RPC stayed registered: %v", got)
+	}
+}
+
+// The declared limits come from the request that hosted the actor, including
+// a re-admission, whose request may carry a changed template's limits.
+func TestAdmitActorRecordsDeclaredLimits(t *testing.T) {
+	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 1 << 30}); first.size != want {
+		t.Errorf("size = %v, want %v", first.size, want)
+	}
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, sizing.SandboxSize{MilliCPU: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (sizing.SandboxSize{MilliCPU: 2000}); again.size != want {
+		t.Errorf("re-admission size = %v, want %v", again.size, want)
 	}
 }

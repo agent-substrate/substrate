@@ -29,7 +29,9 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
 
@@ -37,6 +39,8 @@ import (
 type hostedActor struct {
 	// Immutable after admission.
 	attribution resources.ActorAttribution
+	// size is the actor's declared limits, from the request that hosted it.
+	size sizing.SandboxSize
 
 	// Mutable fields are guarded by actorsMu.
 	network *actornet.SandboxSession
@@ -54,7 +58,7 @@ type hostedActor struct {
 // hosted keeps its slot; its old network is returned for the caller to close.
 // resumesGuest is true when the activation resumes a guest from a snapshot,
 // whose CPU counters come back with it.
-func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, *actornet.SandboxSession, error) {
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, size sizing.SandboxSize, resumesGuest bool) (*hostedActor, *actornet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *actornet.SandboxSession
@@ -63,17 +67,17 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, re
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
-	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), resumesGuest)}
+	hosted := &hostedActor{attribution: attribution, size: size, usage: workerstats.NewActivation(time.Now(), resumesGuest)}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
 
 // hostActor sets up the actor's network, replacing any stale one. resumesGuest
 // is as for admitActor.
-func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, size sizing.SandboxSize, resumesGuest bool) (*hostedActor, error) {
 	uid := attribution.UID
 
-	hosted, stale, err := s.admitActor(attribution, resumesGuest)
+	hosted, stale, err := s.admitActor(attribution, size, resumesGuest)
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +151,18 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		return err
 	}
 	return nil
+}
+
+// describe sets the actor's declared limits on a freshly built sample, which
+// every sample carries whether or not it holds measurements. A nil sample is
+// returned as is.
+func (h *hostedActor) describe(sample *ateworkerpb.WorkloadStatsSample) *ateworkerpb.WorkloadStatsSample {
+	if sample == nil {
+		return nil
+	}
+	sample.CpuLimitMilli = h.size.MilliCPU
+	sample.MemoryLimitBytes = h.size.MemoryBytes
+	return sample
 }
 
 // lookupActor returns the actor or nil without taking its lifecycle lock.

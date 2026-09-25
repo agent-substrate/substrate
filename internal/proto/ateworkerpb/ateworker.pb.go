@@ -1788,8 +1788,14 @@ type WorkloadStatsSample struct {
 	// The activation this sample belongs to, as the unix-nano time it began. A
 	// Run or Restore starts one.
 	EpochUnixNano int64 `protobuf:"varint,13,opt,name=epoch_unix_nano,json=epochUnixNano,proto3" json:"epoch_unix_nano,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The actor's declared limits, from the RunWorkloadRequest /
+	// RestoreWorkloadRequest that hosted it: CPU in millicores, memory in bytes.
+	// Zero when the request declared none. Unlike the measurements above, these
+	// are set on every sample, pending ones included.
+	CpuLimitMilli    int64 `protobuf:"varint,14,opt,name=cpu_limit_milli,json=cpuLimitMilli,proto3" json:"cpu_limit_milli,omitempty"`
+	MemoryLimitBytes int64 `protobuf:"varint,15,opt,name=memory_limit_bytes,json=memoryLimitBytes,proto3" json:"memory_limit_bytes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *WorkloadStatsSample) Reset() {
@@ -1909,6 +1915,20 @@ func (x *WorkloadStatsSample) GetObservedAtUnixNano() int64 {
 func (x *WorkloadStatsSample) GetEpochUnixNano() int64 {
 	if x != nil {
 		return x.EpochUnixNano
+	}
+	return 0
+}
+
+func (x *WorkloadStatsSample) GetCpuLimitMilli() int64 {
+	if x != nil {
+		return x.CpuLimitMilli
+	}
+	return 0
+}
+
+func (x *WorkloadStatsSample) GetMemoryLimitBytes() int64 {
+	if x != nil {
+		return x.MemoryLimitBytes
 	}
 	return 0
 }
@@ -2170,7 +2190,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x17RestoreWorkloadResponse\x12!\n" +
 	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"6\n" +
 	"\x17GetWorkloadStatsRequest\x12\x1b\n" +
-	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xc2\x04\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\x98\x05\n" +
 	"\x13WorkloadStatsSample\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2186,7 +2206,9 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	" \x01(\x04R\x15memoryWorkingSetBytes\x12$\n" +
 	"\x0ecpu_usage_usec\x18\v \x01(\x04R\fcpuUsageUsec\x121\n" +
 	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\x12&\n" +
-	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\"R\n" +
+	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\x12&\n" +
+	"\x0fcpu_limit_milli\x18\x0e \x01(\x03R\rcpuLimitMilli\x12,\n" +
+	"\x12memory_limit_bytes\x18\x0f \x01(\x03R\x10memoryLimitBytes\"R\n" +
 	"\x18GetWorkloadStatsResponse\x126\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1e.ateworker.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"Z\n" +

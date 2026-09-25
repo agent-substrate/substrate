@@ -37,6 +37,7 @@ import (
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
 
@@ -685,4 +686,51 @@ func TestDrainNeverKillsTheSandbox(t *testing.T) {
 			t.Fatalf("containerNames(%v) includes %q", spec, ocispec.SandboxID)
 		}
 	}
+}
+
+// Every sample carries the actor's declared limits, measured or pending, so a
+// caller can account for the actor without its own record of the request that
+// hosted it.
+func TestWorkloadStatsCarryLimits(t *testing.T) {
+	want := func(sample *ateworkerpb.WorkloadStatsSample) {
+		t.Helper()
+		if sample.GetCpuLimitMilli() != 1500 || sample.GetMemoryLimitBytes() != 2<<30 {
+			t.Errorf("sample limits = (%d, %d), want (1500, %d)",
+				sample.GetCpuLimitMilli(), sample.GetMemoryLimitBytes(), int64(2<<30))
+		}
+	}
+	host := func(s *AteWorkerService) {
+		s.actors = map[string]*hostedActor{testActor.UID: {
+			attribution: testActor,
+			usage:       testActivation(),
+			size:        sizing.SandboxSize{MilliCPU: 1500, MemoryBytes: 2 << 30},
+		}}
+	}
+
+	t.Run("measured", func(t *testing.T) {
+		s := newStatsService(t, healthyCgroup)
+		host(s)
+		keyed, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
+		if err != nil {
+			t.Fatalf("GetWorkloadStats() error = %v", err)
+		}
+		want(keyed.GetSample())
+		active, err := sweepAndList(s)
+		if err != nil || len(active.GetSamples()) != 1 {
+			t.Fatalf("GetActiveWorkloadStats() = %v, %v; want one sample", active, err)
+		}
+		want(active.GetSamples()[0])
+	})
+	t.Run("pending", func(t *testing.T) {
+		s := newStatsService(t, nil)
+		host(s)
+		active, err := s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
+		if err != nil || len(active.GetSamples()) != 1 {
+			t.Fatalf("GetActiveWorkloadStats() = %v, %v; want one pending entry", active, err)
+		}
+		if got := active.GetSamples()[0].GetSource(); got != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+			t.Fatalf("source = %v, want pending", got)
+		}
+		want(active.GetSamples()[0])
+	})
 }

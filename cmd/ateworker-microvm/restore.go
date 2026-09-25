@@ -175,7 +175,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// so only it counts from the first reading; the lower fidelities cold-boot
 	// a fresh guest whose CPU counts from zero.
 	resumesGuest := includesMemory(req.GetFidelity())
-	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
+	if _, err := s.hostActor(ctx, attribution, p.size, resumesGuest); err != nil {
 		return nil, err
 	}
 	defer func() {

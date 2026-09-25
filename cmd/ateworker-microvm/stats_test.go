@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
 
@@ -779,4 +780,52 @@ func testActivation() *workerstats.Activation {
 func sweepAndList(s *AteWorkerService) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	s.sweepUsage(context.Background())
 	return s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
+}
+
+// Every sample carries the actor's declared limits, measured or pending, so a
+// caller can account for the actor without its own record of the request that
+// hosted it.
+func TestWorkloadStatsCarryLimits(t *testing.T) {
+	want := func(sample *ateworkerpb.WorkloadStatsSample) {
+		t.Helper()
+		if sample.GetCpuLimitMilli() != 1500 || sample.GetMemoryLimitBytes() != 2<<30 {
+			t.Errorf("sample limits = (%d, %d), want (1500, %d)",
+				sample.GetCpuLimitMilli(), sample.GetMemoryLimitBytes(), int64(2<<30))
+		}
+	}
+	describeTestActor := func(s *AteWorkerService) {
+		hosted := s.lookupActor(testActor.UID)
+		hosted.size = sizing.SandboxSize{MilliCPU: 1500, MemoryBytes: 2 << 30}
+	}
+
+	t.Run("measured", func(t *testing.T) {
+		agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
+			"app_ovl": containerStats(157286400, 209715200, 20971520, 1234567000),
+		}}
+		s := newStatsService(agent, "app_ovl")
+		describeTestActor(s)
+		keyed, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
+		if err != nil {
+			t.Fatalf("GetWorkloadStats() error = %v", err)
+		}
+		want(keyed.GetSample())
+		active, err := sweepAndList(s)
+		if err != nil || len(active.GetSamples()) != 1 {
+			t.Fatalf("GetActiveWorkloadStats() = %v, %v; want one sample", active, err)
+		}
+		want(active.GetSamples()[0])
+	})
+	t.Run("pending", func(t *testing.T) {
+		s := &AteWorkerService{}
+		hostTestActor(s, testActor, nil)
+		describeTestActor(s)
+		active, err := s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
+		if err != nil || len(active.GetSamples()) != 1 {
+			t.Fatalf("GetActiveWorkloadStats() = %v, %v; want one pending entry", active, err)
+		}
+		if got := active.GetSamples()[0].GetSource(); got != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+			t.Fatalf("source = %v, want pending", got)
+		}
+		want(active.GetSamples()[0])
+	})
 }

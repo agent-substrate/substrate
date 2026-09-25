@@ -643,6 +643,13 @@ message WorkloadStatsSample {
   // The activation this sample belongs to, as the unix-nano time it began. A
   // Run or Restore starts one.
   int64 epoch_unix_nano = 13;
+
+  // The actor's declared limits, from the RunWorkloadRequest /
+  // RestoreWorkloadRequest that hosted it: CPU in millicores, memory in bytes.
+  // Zero when the request declared none. Unlike the measurements above, these
+  // are set on every sample, pending ones included.
+  int64 cpu_limit_milli = 14;
+  int64 memory_limit_bytes = 15;
 }
 
 message GetWorkloadStatsResponse {

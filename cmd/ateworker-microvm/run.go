@@ -278,7 +278,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false); err != nil {
+	if _, err := s.hostActor(ctx, attribution, p.size, false); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -369,7 +369,7 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), p.size, false); err != nil {
 			return err
 		}
 	}

@@ -30,6 +30,7 @@ import (
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 // Hosting an actor that is already hosted replaces its network rather than
@@ -53,7 +54,7 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 		}
 	})
 	for range 2 {
-		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, false); err != nil {
+		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, sizing.SandboxSize{}, false); err != nil {
 			t.Fatal(err)
 		}
 	}
