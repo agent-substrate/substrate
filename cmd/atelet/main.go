@@ -1188,6 +1188,17 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
+	// Record the sandbox binaries actually running the guest on-node so a
+	// subsequent Checkpoint of this restored actor can re-pin the same version
+	// (Checkpoint overwrites the identity fields from its own request).
+	// Write the sandbox record before calling ateom.RestoreWorkload: a
+	// restore that fails partway can leave a sandbox behind, and Terminate
+	// needs the record to clean the sandbox up.
+	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
+		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
+		return nil, err
+	}
+
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
 		return nil, err
@@ -1227,60 +1238,33 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
 
-	// Record the sandbox binaries actually running the guest on-node so a
-	// subsequent Checkpoint of this restored actor can re-pin the same version
-	// (Checkpoint overwrites the identity fields from its own request).
-	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
-		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
-		return nil, err
-	}
-
 	return &ateletpb.RestoreResponse{}, nil
 }
 
 // Terminate terminates any running workload on ateom, unmounts external volumes,
-// and resets actor directories on the node.
+// and resets actor directories on the node. Idempotent.
 func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	if err := validateTerminateRequest(req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	spec, err := buildAteomWorkloadSpec(req.GetSpec())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
 	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	var assetPaths map[string]string
 	sandboxRec, err := readSandboxRecord(actorUID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	assetPaths = paths
-
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-
-	spec, err := buildAteomWorkloadSpec(req.GetSpec())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
-	}
-	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
-		Atespace:              req.GetAtespace(),
-		ActorName:             req.GetActorName(),
-		ActorUid:              req.GetActorUid(),
-		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-		ActorTemplateName:     req.GetActorTemplateName(),
-		RunscPath:             runscPathFor(assetPaths),
-		Spec:                  spec,
-	}); err != nil {
-		if status.Code(err) == codes.NotFound {
-			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
-		} else {
-			return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		slog.InfoContext(ctx, "no sandbox record exists during Terminate, skipping ateom", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+	case err != nil:
+		return nil, fmt.Errorf("failed to read sandbox record during Terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	default:
+		// Sandbox exists, ask ateom to terminate workload.
+		if err := s.terminateWorkload(ctx, req, spec, sandboxRec); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1307,6 +1291,40 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 
 	return &ateletpb.TerminateResponse{}, nil
+}
+
+// terminateWorkload tells ateom to tear down the actor's workload, driving it
+// with the sandbox binaries in rec. A workload ateom no longer has is not an
+// error.
+func (s *AteomHerder) terminateWorkload(ctx context.Context, req *ateletpb.TerminateRequest, spec *ateompb.WorkloadSpec, rec *sandboxAssetsRecord) error {
+	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	actorUID := req.GetActorUid()
+
+	assetPaths, err := s.ensureSandboxAssets(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	if err != nil {
+		return fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
+		Atespace:              req.GetAtespace(),
+		ActorName:             req.GetActorName(),
+		ActorUid:              req.GetActorUid(),
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+		RunscPath:             runscPathFor(assetPaths),
+		Spec:                  spec,
+	}); err != nil {
+		if status.Code(err) != codes.NotFound {
+			return fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+	}
+	return nil
 }
 
 func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName string, srcDir, dstDir string, files []string) error {
