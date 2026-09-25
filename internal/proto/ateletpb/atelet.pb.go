@@ -2604,13 +2604,11 @@ type RestoreRequest struct {
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
 	// What content to restore from the checkpoint.
 	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
-	// The object storage URI of the ActorTemplate's golden snapshot.
-	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
-	// the golden snapshot (memory + full fs delta) with the durable data in
-	// the snapshot referenced by `config`. A top-level field rather than part
-	// of the `config` oneof: the actor's snapshot may be local (a pause
-	// checkpoint) while the golden snapshot is always external.
-	GoldenSnapshotUri string `protobuf:"bytes,12,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
+	// The base guest state (memory + rootfs delta) combined with `config`'s
+	// durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
+	// field rather than part of the `config` oneof: the actor's snapshot may
+	// be local (a pause checkpoint) while the base is always external.
+	BaseConfig *ExternalRestoreConfiguration `protobuf:"bytes,12,opt,name=base_config,json=baseConfig,proto3" json:"base_config,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
@@ -2622,9 +2620,6 @@ type RestoreRequest struct {
 	// The sandbox binaries and pause image to restore with, resolved from the
 	// ActorTemplate's SandboxConfig. Required.
 	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
-	// The base guest state (memory + rootfs delta) combined with `config`'s
-	// durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN.
-	BaseConfig    *ExternalRestoreConfiguration `protobuf:"bytes,17,opt,name=base_config,json=baseConfig,proto3" json:"base_config,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2747,11 +2742,11 @@ func (x *RestoreRequest) GetScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
-func (x *RestoreRequest) GetGoldenSnapshotUri() string {
+func (x *RestoreRequest) GetBaseConfig() *ExternalRestoreConfiguration {
 	if x != nil {
-		return x.GoldenSnapshotUri
+		return x.BaseConfig
 	}
-	return ""
+	return nil
 }
 
 func (x *RestoreRequest) GetEgressGateway() *EgressGateway {
@@ -2778,13 +2773,6 @@ func (x *RestoreRequest) GetMemoryBytes() int64 {
 func (x *RestoreRequest) GetSandboxAssets() *SandboxAssets {
 	if x != nil {
 		return x.SandboxAssets
-	}
-	return nil
-}
-
-func (x *RestoreRequest) GetBaseConfig() *ExternalRestoreConfiguration {
-	if x != nil {
-		return x.BaseConfig
 	}
 	return nil
 }
@@ -3013,7 +3001,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xee\x06\n" +
+	"\x1eUploadPausedCheckpointResponse\"\xbe\x06\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3027,14 +3015,13 @@ const file_atelet_proto_rawDesc = "" +
 	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12O\n" +
 	"\x0fexternal_config\x18\n" +
 	" \x01(\v2$.atelet.ExternalRestoreConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12.\n" +
-	"\x13golden_snapshot_uri\x18\f \x01(\tR\x11goldenSnapshotUri\x12A\n" +
+	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12E\n" +
+	"\vbase_config\x18\f \x01(\v2$.atelet.ExternalRestoreConfigurationR\n" +
+	"baseConfig\x12A\n" +
 	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
-	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12E\n" +
-	"\vbase_config\x18\x11 \x01(\v2$.atelet.ExternalRestoreConfigurationR\n" +
-	"baseConfigB\b\n" +
+	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*\x9a\x01\n" +
@@ -3166,9 +3153,9 @@ var file_atelet_proto_depIdxs = []int32{
 	35, // 34: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
 	37, // 35: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalRestoreConfiguration
 	2,  // 36: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
-	12, // 37: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	15, // 38: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
-	37, // 39: atelet.RestoreRequest.base_config:type_name -> atelet.ExternalRestoreConfiguration
+	37, // 37: atelet.RestoreRequest.base_config:type_name -> atelet.ExternalRestoreConfiguration
+	12, // 38: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
+	15, // 39: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
 	13, // 40: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
 	14, // 41: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
 	7,  // 42: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest

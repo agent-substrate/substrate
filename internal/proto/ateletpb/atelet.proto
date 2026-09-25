@@ -472,13 +472,11 @@ message RestoreRequest {
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
 
-  // The object storage URI of the ActorTemplate's golden snapshot.
-  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
-  // the golden snapshot (memory + full fs delta) with the durable data in
-  // the snapshot referenced by `config`. A top-level field rather than part
-  // of the `config` oneof: the actor's snapshot may be local (a pause
-  // checkpoint) while the golden snapshot is always external.
-  string golden_snapshot_uri = 12;
+  // The base guest state (memory + rootfs delta) combined with `config`'s
+  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
+  // field rather than part of the `config` oneof: the actor's snapshot may
+  // be local (a pause checkpoint) while the base is always external.
+  ExternalRestoreConfiguration base_config = 12;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 13;
@@ -493,10 +491,6 @@ message RestoreRequest {
   // The sandbox binaries and pause image to restore with, resolved from the
   // ActorTemplate's SandboxConfig. Required.
   SandboxAssets sandbox_assets = 16;
-
-  // The base guest state (memory + rootfs delta) combined with `config`'s
-  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN.
-  ExternalRestoreConfiguration base_config = 17;
 }
 
 message RestoreResponse {
