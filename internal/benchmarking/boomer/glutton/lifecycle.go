@@ -55,6 +55,7 @@ const (
 	pingPath         = "/ping"
 	writeRAMPath     = "/writeram"
 	readRAMPath      = "/readram"
+	useCPUPath       = "/usecpu"
 	memLoadKey       = "memload"
 	memReadAll       = "all"
 
@@ -172,6 +173,9 @@ func (r *taskRuntime) iterate() {
 	// carries the full working set; glutton keeps the allocations across
 	// suspend/resume, so this runs once per actor (retried if it fails).
 	actor.ensureRAMFilled(ctx)
+	// Start the CPU load once per actor for the same reason: glutton's
+	// spinning goroutines survive suspend/resume with the rest of the process.
+	actor.ensureCPULoad(ctx)
 	// Walk the working set right after resume, before churn dirties it:
 	// under a demand-paged restore every touched page must be paged back
 	// in before the walk returns, so its latency measures the true cost
@@ -346,6 +350,7 @@ type gluttonActor struct {
 	firstResume  bool
 	actorRunning bool
 	ramFilled    bool
+	cpuLoaded    bool
 	// crashed is set the first time ResumeActor reports the actor as
 	// ACTOR_STATE_CRASHED (codes.Aborted with "crashed" in the message).
 	// ateapi never rehabilitates one, so iterate() replaces it.
@@ -704,6 +709,40 @@ func (u *gluttonActor) ensureRAMFilled(ctx context.Context) {
 	}
 	u.ramFilled = true
 	bmetrics.RecordSuccess("http", "GluttonFillRAM", userClass, clientLatency, 0)
+}
+
+// ensureCPULoad starts cpu_cores goroutines in the actor, each burning
+// cpu_duty_cycle of one core, through the glutton UseCPU API. Like
+// ensureRAMFilled it runs once per actor: the goroutines live in the
+// glutton process, so they resume with it and the actor draws the load
+// whenever it is running. A failure leaves cpuLoaded unset so the next
+// iteration retries. Reports as its own GluttonUseCPU stats row.
+func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
+	if u.cpuLoaded {
+		return
+	}
+	dyn := u.cfg.Dyn.Load()
+	if dyn.CPUCores == 0 {
+		u.cpuLoaded = true
+		return
+	}
+
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonUseCPU")
+	defer span.End()
+	start := time.Now()
+
+	err := u.postProto(ctx, useCPUPath, &gluttonpb.UseCPURequest{
+		NumCores:  int32(dyn.CPUCores),
+		DutyCycle: dyn.CPUDutyCycle,
+	}, &gluttonpb.UseCPUResponse{})
+	clientLatency := time.Since(start)
+	boomerutil.LogSampledTrace(span, "GluttonUseCPU", clientLatency, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonUseCPU", userClass, clientLatency, err.Error())
+		return
+	}
+	u.cpuLoaded = true
+	bmetrics.RecordSuccess("http", "GluttonUseCPU", userClass, clientLatency, 0)
 }
 
 // churnRAM re-randomizes mem_churn bytes of the working set in place

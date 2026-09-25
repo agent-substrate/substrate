@@ -50,6 +50,11 @@ service Glutton {
   // Tells the glutton to send network traffic to a peer glutton.
   // messages will be sent on regular intervals separated by delay_ms.
   rpc Gossip(GossipRequest) returns (GossipResponse) {}
+
+  // Tells the glutton to consume CPU. The request sets the current CPU
+  // load; calling again replaces it, and num_cores=0 stops it. See
+  // UseCPURequest for the (goroutines x duty cycle) shape.
+  rpc UseCPU(UseCPURequest) returns (UseCPUResponse) {}
 }
 
 enum WriteMode {
@@ -168,4 +173,30 @@ message GossipResponse {}
 message Peer {
   string host = 1;
   int32 delay_ms = 2;
+}
+
+message UseCPURequest {
+  // Number of parallel goroutines to spin, each targeting duty_cycle
+  // fraction of one CPU core. Set to 0 to stop all CPU load.
+  int32 num_cores = 1;
+
+  // Fraction of CPU time each goroutine should consume, in [0.0, 1.0].
+  double duty_cycle = 2;
+
+  // Per-goroutine work/sleep cycle length in milliseconds. Defaults to
+  // 100 when 0 or unset. Smaller values give smoother load at the cost
+  // of scheduler and timer-wheel overhead.
+  int32 cycle_length_ms = 3;
+
+  // Whether num_cores should be capped at GOMAXPROCS. Defaults to true
+  // when unset. Uncapped (false) lets the caller force oversubscription
+  // to test scheduler pressure, at the cost of goroutines running below
+  // their target duty cycle.
+  optional bool cap_at_gomaxprocs = 4;
+}
+
+message UseCPUResponse {
+  // The number of goroutines actually spun. Equals the request's
+  // num_cores unless it was capped at GOMAXPROCS.
+  int32 num_cores = 1;
 }

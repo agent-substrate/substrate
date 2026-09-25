@@ -40,6 +40,7 @@ const (
 	Glutton_OpenFD_FullMethodName    = "/glutton.Glutton/OpenFD"
 	Glutton_Ping_FullMethodName      = "/glutton.Glutton/Ping"
 	Glutton_Gossip_FullMethodName    = "/glutton.Glutton/Gossip"
+	Glutton_UseCPU_FullMethodName    = "/glutton.Glutton/UseCPU"
 )
 
 // GluttonClient is the client API for Glutton service.
@@ -72,6 +73,10 @@ type GluttonClient interface {
 	// Tells the glutton to send network traffic to a peer glutton.
 	// messages will be sent on regular intervals separated by delay_ms.
 	Gossip(ctx context.Context, in *GossipRequest, opts ...grpc.CallOption) (*GossipResponse, error)
+	// Tells the glutton to consume CPU. The request sets the current CPU
+	// load; calling again replaces it, and num_cores=0 stops it. See
+	// UseCPURequest for the (goroutines x duty cycle) shape.
+	UseCPU(ctx context.Context, in *UseCPURequest, opts ...grpc.CallOption) (*UseCPUResponse, error)
 }
 
 type gluttonClient struct {
@@ -152,6 +157,16 @@ func (c *gluttonClient) Gossip(ctx context.Context, in *GossipRequest, opts ...g
 	return out, nil
 }
 
+func (c *gluttonClient) UseCPU(ctx context.Context, in *UseCPURequest, opts ...grpc.CallOption) (*UseCPUResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UseCPUResponse)
+	err := c.cc.Invoke(ctx, Glutton_UseCPU_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GluttonServer is the server API for Glutton service.
 // All implementations must embed UnimplementedGluttonServer
 // for forward compatibility.
@@ -182,6 +197,10 @@ type GluttonServer interface {
 	// Tells the glutton to send network traffic to a peer glutton.
 	// messages will be sent on regular intervals separated by delay_ms.
 	Gossip(context.Context, *GossipRequest) (*GossipResponse, error)
+	// Tells the glutton to consume CPU. The request sets the current CPU
+	// load; calling again replaces it, and num_cores=0 stops it. See
+	// UseCPURequest for the (goroutines x duty cycle) shape.
+	UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error)
 	mustEmbedUnimplementedGluttonServer()
 }
 
@@ -212,6 +231,9 @@ func (UnimplementedGluttonServer) Ping(context.Context, *PingRequest) (*PingResp
 }
 func (UnimplementedGluttonServer) Gossip(context.Context, *GossipRequest) (*GossipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Gossip not implemented")
+}
+func (UnimplementedGluttonServer) UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UseCPU not implemented")
 }
 func (UnimplementedGluttonServer) mustEmbedUnimplementedGluttonServer() {}
 func (UnimplementedGluttonServer) testEmbeddedByValue()                 {}
@@ -360,6 +382,24 @@ func _Glutton_Gossip_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Glutton_UseCPU_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UseCPURequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).UseCPU(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_UseCPU_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).UseCPU(ctx, req.(*UseCPURequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Glutton_ServiceDesc is the grpc.ServiceDesc for Glutton service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -394,6 +434,10 @@ var Glutton_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Gossip",
 			Handler:    _Glutton_Gossip_Handler,
+		},
+		{
+			MethodName: "UseCPU",
+			Handler:    _Glutton_UseCPU_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

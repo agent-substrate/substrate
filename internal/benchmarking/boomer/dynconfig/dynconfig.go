@@ -55,18 +55,20 @@ type Config struct {
 	MinLive           time.Duration // time a GluttonUser actor stays resumed between its first ping and suspend, lower bound
 	MaxLive           time.Duration // upper bound of the live window; zero (the default) suspends right after the ping
 	TraceProbability  float64
-	DurDirFileSize    int64  // bytes
-	ResumeMode        string // ResumeModeExplicit | ResumeModeImplicit
-	LifecycleMode     string // LifecycleModeSuspend | LifecycleModePause
-	DurDirReadMode    string // ReadModeData | ReadModeDigest
-	DurDirTemplate    string // ActorTemplate name
-	MemTarget         string // resident RAM the GluttonUser fills via WriteRAM, suffixed (e.g. "2Gi"); "" disables
-	MemChurn          string // RAM re-randomized in place each cycle via WriteRAM rotate, suffixed (e.g. "64Mi"); "" disables
-	MemRead           string // RAM walked (one byte per page) via ReadRAM after each resume, suffixed (e.g. "1Gi") or "all"; "" disables
-	MaxPingsPerWake   int    // cap on pings a GluttonUser sends during one resume/suspend cycle; values < 1 read as 1
-	SweperfTemplate   string // ActorTemplate name for the sweperf workload; "" falls back to default
-	SweperfTotalSteps int    // total steps in trace; 0 falls back to default
-	SweperfNumCycles  int    // number of cycles to partition steps into; 0 falls back to default
+	DurDirFileSize    int64   // bytes
+	ResumeMode        string  // ResumeModeExplicit | ResumeModeImplicit
+	LifecycleMode     string  // LifecycleModeSuspend | LifecycleModePause
+	DurDirReadMode    string  // ReadModeData | ReadModeDigest
+	DurDirTemplate    string  // ActorTemplate name
+	MemTarget         string  // resident RAM the GluttonUser fills via WriteRAM, suffixed (e.g. "2Gi"); "" disables
+	MemChurn          string  // RAM re-randomized in place each cycle via WriteRAM rotate, suffixed (e.g. "64Mi"); "" disables
+	MemRead           string  // RAM walked (one byte per page) via ReadRAM after each resume, suffixed (e.g. "1Gi") or "all"; "" disables
+	CPUCores          int     // goroutines each GluttonUser's actor spins via UseCPU; 0 disables
+	CPUDutyCycle      float64 // fraction of one core each of those goroutines consumes, in [0, 1]
+	MaxPingsPerWake   int     // cap on pings a GluttonUser sends during one resume/suspend cycle; values < 1 read as 1
+	SweperfTemplate   string  // ActorTemplate name for the sweperf workload; "" falls back to default
+	SweperfTotalSteps int     // total steps in trace; 0 falls back to default
+	SweperfNumCycles  int     // number of cycles to partition steps into; 0 falls back to default
 }
 
 // Holder lets readers Load() the current Config and writers Store() a new
@@ -110,6 +112,8 @@ type payload struct {
 	MemTarget         *string  `json:"mem_target"`
 	MemChurn          *string  `json:"mem_churn"`
 	MemRead           *string  `json:"mem_read"`
+	CPUCores          *float64 `json:"cpu_cores"`
+	CPUDutyCycle      *float64 `json:"cpu_duty_cycle"`
 	MaxPingsPerWake   *float64 `json:"max_pings_per_wake"`
 	SweperfTemplate   *string  `json:"sweperf_template"`
 	SweperfTotalSteps *float64 `json:"sweperf_total_steps"`
@@ -198,6 +202,12 @@ func (c Config) Validate() error {
 	if c.DurDirReadMode != "" && c.DurDirReadMode != ReadModeData && c.DurDirReadMode != ReadModeDigest {
 		return fmt.Errorf("invalid durdir_read_mode %q: must be %q or %q", c.DurDirReadMode, ReadModeData, ReadModeDigest)
 	}
+	if c.CPUCores < 0 {
+		return fmt.Errorf("cpu_cores cannot be negative: %d", c.CPUCores)
+	}
+	if c.CPUDutyCycle < 0 || c.CPUDutyCycle > 1 {
+		return fmt.Errorf("cpu_duty_cycle must be between 0.0 and 1.0, got: %f", c.CPUDutyCycle)
+	}
 	if c.SweperfTotalSteps < 0 {
 		return fmt.Errorf("sweperf_total_steps cannot be negative: %d", c.SweperfTotalSteps)
 	}
@@ -257,6 +267,12 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.MemRead != nil {
 		out.MemRead = *p.MemRead
+	}
+	if p.CPUCores != nil {
+		out.CPUCores = int(*p.CPUCores)
+	}
+	if p.CPUDutyCycle != nil {
+		out.CPUDutyCycle = *p.CPUDutyCycle
 	}
 	if p.MaxPingsPerWake != nil {
 		out.MaxPingsPerWake = int(*p.MaxPingsPerWake)
@@ -341,6 +357,8 @@ func StartPoll(
 					slog.String("mem_target", next.MemTarget),
 					slog.String("mem_churn", next.MemChurn),
 					slog.String("mem_read", next.MemRead),
+					slog.Int("cpu_cores", next.CPUCores),
+					slog.Float64("cpu_duty_cycle", next.CPUDutyCycle),
 					slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
 					slog.String("sweperf_template", next.SweperfTemplate),
 					slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
@@ -387,6 +405,8 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.String("mem_target", next.MemTarget),
 			slog.String("mem_churn", next.MemChurn),
 			slog.String("mem_read", next.MemRead),
+			slog.Int("cpu_cores", next.CPUCores),
+			slog.Float64("cpu_duty_cycle", next.CPUDutyCycle),
 			slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
 			slog.String("sweperf_template", next.SweperfTemplate),
 			slog.Int("sweperf_total_steps", next.SweperfTotalSteps),

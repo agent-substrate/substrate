@@ -22,6 +22,7 @@ Flag registration lives in the modules that own each flag:
   * --lifecycle-mode                → common.lifecycle_mode.add_lifecycle_mode_arguments
   * --durdir-*                      → common.durdir_config.add_durdir_arguments
   * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
+  * --cpu-cores / --cpu-duty-cycle  → common.cpuload_config.add_cpuload_arguments
   * --max-pings-per-wake            → common.ping_config.add_ping_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
@@ -62,6 +63,8 @@ _FLAGS = {
     "--mem-target": str,
     "--mem-churn": str,
     "--mem-read": str,
+    "--cpu-cores": int,
+    "--cpu-duty-cycle": float,
     "--max-pings-per-wake": int,
     "--sweperf-template": str,
     "--sweperf-total-steps": int,
@@ -141,6 +144,7 @@ def init_boomer_config() -> None:
     from locust.argument_parser import LocustArgumentParser
     from locust.env import Environment
 
+    from common.cpuload_config import add_cpuload_arguments
     from common.durdir_config import add_durdir_arguments
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments
