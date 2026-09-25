@@ -79,6 +79,22 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 }
 
 func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	return s.createActor(ctx, inActor, nil)
+}
+
+// CreateActorWithEgressPolicy creates the actor with the given "default"
+// egress policy instead of the one its template carries.
+func (s *ServiceImpl) CreateActorWithEgressPolicy(ctx context.Context, inActor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error) {
+	if policy == nil {
+		return nil, status.Error(codes.InvalidArgument, "egress policy is required")
+	}
+	return s.createActor(ctx, inActor, policy)
+}
+
+// createActor records the actor and, when the template carries a
+// default_egress_policy or the caller passes one, the actor's "default"
+// egress policy in the same write. A passed policy wins over the template's.
+func (s *ServiceImpl) createActor(ctx context.Context, inActor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error) {
 	// Check that the referenced ActorTemplate exists.
 	// FIXME: This is not atomic and it is not a guarantee that the template
 	// will still exist later.  Checking it here produces a nice error UX, but
@@ -149,8 +165,22 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		return nil, toGRPCInternalError(errs)
 	}
 
+	if policy == nil {
+		policy = egressPolicyFromTemplate(template, atespace)
+	}
+	if policy != nil {
+		if errs := Validate_EgressPolicy(ctx, operation.Operation{Type: operation.Create}, field.NewPath("egress_policy"), policy, nil); len(errs) > 0 {
+			return nil, toGRPCStatusError(errs)
+		}
+	}
+
 	// Save the data in the storage layer.
-	stored, err := s.store.CreateActor(ctx, outActor)
+	var stored *ateapipb.Actor
+	if policy != nil {
+		stored, err = s.store.CreateActorWithEgressPolicy(ctx, outActor, policy)
+	} else {
+		stored, err = s.store.CreateActor(ctx, outActor)
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
@@ -166,6 +196,19 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	logActorStateChanged(ctx, stored, ateattr.OperationCreate)
 
 	return stored, nil
+}
+
+// egressPolicyFromTemplate returns the "default" EgressPolicy an actor in
+// atespace gets from its template, or nil when the template carries none.
+func egressPolicyFromTemplate(template *ateapipb.ActorTemplate, atespace string) *ateapipb.EgressPolicy {
+	defaultPolicy := template.GetDefaultEgressPolicy()
+	if defaultPolicy == nil {
+		return nil
+	}
+	return &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "default"},
+		Rules:    proto.CloneOf(defaultPolicy).GetRules(),
+	}
 }
 
 // resolveTagSource resolves a CreateActor request's source tag

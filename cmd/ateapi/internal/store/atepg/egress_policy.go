@@ -27,13 +27,17 @@ import (
 )
 
 func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+	return insertEgressPolicy(ctx, p.pool, actorRef, policy)
+}
+
+func insertEgressPolicy(ctx context.Context, q querier, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.EgressPolicy)
 	dbPolicy.Metadata = newCreateMetadata(actorRef.Atespace, "default")
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling egress policy: %w", err)
 	}
-	_, err = p.pool.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO actor_egress_policies (atespace, actor_name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`, actorRef.Atespace, actorRef.Name, dbPolicy.GetMetadata().GetUid(), dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
