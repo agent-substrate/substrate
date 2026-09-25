@@ -501,8 +501,19 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfgPath, out, 0o600); err != nil {
+	// Not os.WriteFile: config.json may be hard-linked to the actor's cached pause
+	// snapshot, and truncating it would rewrite the snapshot too.
+	tmp, err := os.CreateTemp(snapshotDir, ".config.json.tmp-*")
+	if err != nil {
 		return err
 	}
-	return nil
+	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), cfgPath)
 }

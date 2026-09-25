@@ -254,7 +254,8 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 		tMerge := time.Now()
 		// Reuse base's on-disk working set (rename + overlay) instead of copying it —
 		// CH is paused and about to be torn down, and base is discarded after. See
-		// MergeDeltaIntoBase. (Falls back to the copying merge across filesystems.)
+		// MergeDeltaIntoBase. (Falls back to the copying merge across filesystems or
+		// when base is hard-linked to a cached snapshot.)
 		if err := ch.MergeDeltaIntoBase(ctx, base, delta); err != nil {
 			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}

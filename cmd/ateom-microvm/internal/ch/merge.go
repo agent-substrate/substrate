@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"syscall"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"golang.org/x/sys/unix"
@@ -112,7 +113,8 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 // baseFile and deltaFile are siblings under the actor dir (restore-state/ and
 // checkpoint-state/), so the renames are same-filesystem (metadata-only). If they
 // straddle a mount boundary (EXDEV) it falls back to the copying MergeSparseOverlay
-// (baseFile is untouched until the first rename succeeds).
+// (baseFile is untouched until the first rename succeeds), as it does when baseFile
+// has a second link.
 func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {
 	bi, err := os.Stat(baseFile)
 	if err != nil {
@@ -126,6 +128,12 @@ func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {
 		// Same guest => identical memory-ranges length; a mismatch would misalign the
 		// overlay offsets, so refuse rather than corrupt.
 		return fmt.Errorf("MergeDeltaIntoBase: size mismatch base=%d delta=%d", bi.Size(), di.Size())
+	}
+
+	// The fast path rewrites baseFile's inode in place. A second link means atelet
+	// staged it from the actor's cached pause snapshot, which must not change.
+	if st, ok := bi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+		return MergeSparseOverlay(ctx, baseFile, deltaFile, deltaFile)
 	}
 
 	// Move baseFile (with its already-on-disk working set) next to deltaFile. If this

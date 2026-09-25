@@ -67,6 +67,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -681,6 +682,10 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// all: the actor's current state was just captured by CheckpointWorkload,
 	// and the control plane tracks only a single local snapshot, which this
 	// checkpoint either overwrites (pause) or clears (suspend).
+	//
+	// Keep this after CheckpointWorkload. Pruning earlier would let
+	// MergeDeltaIntoBase merge in place, but a crash mid-checkpoint would then
+	// strand the actor on this node with no local snapshot to resume from.
 	//
 	// Best-effort: if this fail, the actor's terminate prunes again.
 	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
@@ -1316,6 +1321,18 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 		}
 		src := filepath.Join(srcDir, snapshotName, fileName)
 		dst := filepath.Join(dstDir, fileName)
+		// The staged files share inodes with the cached snapshot, so nothing may
+		// write them in place (see rewriteSnapshotSocketPaths, MergeDeltaIntoBase).
+		// Only EXDEV falls back: CopyFile on a dst already linked to src would
+		// truncate both.
+		switch err := linkFile(src, dst); {
+		case err == nil:
+			continue
+		case !errors.Is(err, unix.EXDEV):
+			return fmt.Errorf("failed to link %s to %s: %w", src, dst, err)
+		}
+		slog.WarnContext(ctx, "local checkpoint and restore dir are on different filesystems; copying instead of linking",
+			slog.String("src", src), slog.String("dst", dst))
 		if _, err := sparsefile.CopyFile(src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
@@ -1323,6 +1340,9 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 
 	return nil
 }
+
+// linkFile is replaced in tests to force the EXDEV fallback.
+var linkFile = os.Link
 
 // goldenOnlyFiles returns the golden snapshot files not shadowed by the
 // actor's own snapshot: on a DATA_ON_GOLDEN restore the actor's files (the

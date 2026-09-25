@@ -183,6 +183,48 @@ func TestMergeSparseOverlayNewOutFile(t *testing.T) {
 	}
 }
 
+func TestMergeDeltaIntoBaseHardlinkedBase(t *testing.T) {
+	const size = 8 << 20 // 8 MiB logical
+	baseRegions := []region{{off: 0, data: fill(1, 4096)}}
+	deltaRegions := []region{{off: 4 << 20, data: fill(42, 12345)}}
+	want := make([]byte, size)
+	copy(want[baseRegions[0].off:], baseRegions[0].data)
+	copy(want[deltaRegions[0].off:], deltaRegions[0].data)
+	baseOnly := make([]byte, size)
+	copy(baseOnly[baseRegions[0].off:], baseRegions[0].data)
+
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base")
+	delta := filepath.Join(dir, "delta")
+	cached := filepath.Join(dir, "cached-snapshot")
+	writeSparse(t, base, size, baseRegions)
+	writeSparse(t, delta, size, deltaRegions)
+	if err := os.Link(base, cached); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MergeDeltaIntoBase(context.Background(), base, delta); err != nil {
+		t.Fatalf("MergeDeltaIntoBase: %v", err)
+	}
+	got, err := os.ReadFile(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("merged result != expected (len got=%d want=%d)", len(got), len(want))
+	}
+	shared, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(shared, baseOnly) {
+		t.Error("the hardlinked base was mutated; the cached snapshot behind it is now corrupt")
+	}
+	if _, err := os.Stat(base); err != nil {
+		t.Errorf("base should survive a copying merge: %v", err)
+	}
+}
+
 // TestMergeDeltaIntoBaseSizeMismatch verifies a base/delta size mismatch is
 // refused (misaligned overlay would corrupt the image) rather than silently
 // producing garbage.
