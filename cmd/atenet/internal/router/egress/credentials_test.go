@@ -88,8 +88,9 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 	if got := provider.got.GetUri(); got != "ate-secret://k8s/default/token" {
 		t.Errorf("provider URI = %q", got)
 	}
-	if got := provider.got.GetActorSpiffeId(); got != testActorSPIFFEID {
-		t.Errorf("actor identity = %q, want %q", got, testActorSPIFFEID)
+	wantActorSPIFFEID := "spiffe://substrate-actor.local/actor/default/my-actor"
+	if got := provider.got.GetActorSpiffeId(); got != wantActorSPIFFEID {
+		t.Errorf("actor identity = %q, want %q", got, wantActorSPIFFEID)
 	}
 }
 
