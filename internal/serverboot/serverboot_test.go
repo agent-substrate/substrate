@@ -18,12 +18,15 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -261,6 +264,112 @@ func TestInitMetricsPushOnlyHasNoPrometheusSurface(t *testing.T) {
 	}
 }
 
+// otlpTarget points OTEL_EXPORTER_OTLP_ENDPOINT at a local listener and
+// returns how many connections it has accepted. No OTLP is spoken: a dial is
+// the evidence that a periodic reader tried to export.
+func otlpTarget(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			_ = c.Close()
+		}
+	}()
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+ln.Addr().String())
+	return &accepted
+}
+
+func flushAndShutdown(t *testing.T, mp *sdkmetric.MeterProvider) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = mp.ForceFlush(ctx)
+	_ = mp.Shutdown(ctx)
+}
+
+func TestMetricsExportDisabled(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "otlp": false, "none": true, " None ": true, "prometheus": false} {
+		t.Setenv(metricsExporterEnv, value)
+		if got := MetricsExportDisabled(); got != want {
+			t.Errorf("%s=%q: MetricsExportDisabled() = %t, want %t", metricsExporterEnv, value, got, want)
+		}
+	}
+}
+
+func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
+	accepted := otlpTarget(t)
+	t.Setenv(metricsExporterEnv, "")
+	mp, err := InitMetrics(context.Background(), "test-default", prometheus.NewRegistry())
+	if err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+	ctr, err := mp.Meter("test").Int64Counter("ate.test.default.count")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	ctr.Add(context.Background(), 1)
+	flushAndShutdown(t, mp)
+	if accepted.Load() == 0 {
+		t.Error("the OTLP reader never dialed OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+}
+
+// With OTEL_METRICS_EXPORTER=none the instruments are still served for a
+// scrape and nothing is pushed, so a scraped component reaches the backend
+// once.
+func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
+	accepted := otlpTarget(t)
+	t.Setenv(metricsExporterEnv, "none")
+	reg := prometheus.NewRegistry()
+	mp, err := InitMetrics(context.Background(), "test-none", reg)
+	if err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+	ctr, err := mp.Meter("test").Int64Counter("ate.test.none.count")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	ctr.Add(context.Background(), 1)
+
+	rec := httptest.NewRecorder()
+	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), "ate_test_none_count_total") {
+		t.Errorf("the registry passed to InitMetrics does not serve the instrument:\n%s", rec.Body.String())
+	}
+	flushAndShutdown(t, mp)
+	if n := accepted.Load(); n != 0 {
+		t.Errorf("OTEL_METRICS_EXPORTER=none still dialed the OTLP endpoint %d time(s)", n)
+	}
+}
+
+func TestInitMetricsPushOnlyExporterNoneExportsNothing(t *testing.T) {
+	accepted := otlpTarget(t)
+	t.Setenv(metricsExporterEnv, "none")
+	mp, err := InitMetricsPushOnly(context.Background(), "test-pushonly-none")
+	if err != nil {
+		t.Fatalf("InitMetricsPushOnly: %v", err)
+	}
+	ctr, err := mp.Meter("test").Int64Counter("ate.test.pushonlynone.count")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	ctr.Add(context.Background(), 1)
+	flushAndShutdown(t, mp)
+	if n := accepted.Load(); n != 0 {
+		t.Errorf("OTEL_METRICS_EXPORTER=none still dialed the OTLP endpoint %d time(s)", n)
+	}
+}
+
 func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
 	if _, err := InitMetricsPushOnly(context.Background(), ""); err == nil {
 		t.Error("InitMetricsPushOnly(\"\") must return an error")
@@ -268,7 +377,7 @@ func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
 }
 
 func TestInitMetricsRequiresServiceName(t *testing.T) {
-	if _, err := InitMetrics(context.Background(), ""); err == nil {
+	if _, err := InitMetrics(context.Background(), "", nil); err == nil {
 		t.Error("InitMetrics(\"\") must return an error")
 	}
 }

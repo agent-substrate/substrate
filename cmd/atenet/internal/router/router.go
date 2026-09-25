@@ -148,7 +148,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, extproc.ServiceName)
+	mp, err := serverboot.InitMetrics(ctx, extproc.ServiceName, nil)
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
 	}

@@ -26,11 +26,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/google/uuid"
+	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -198,15 +200,34 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	return tp, nil
 }
 
+// metricsExporterEnv follows the OpenTelemetry SDK environment variable spec.
+// Only "none" is acted on: it drops the OTLP periodic reader, so a component
+// whose metrics are also scraped does not reach the backend twice. Any other
+// value, or none at all, keeps the OTLP export.
+const metricsExporterEnv = "OTEL_METRICS_EXPORTER"
+
+// MetricsExportDisabled reports whether OTEL_METRICS_EXPORTER is "none".
+func MetricsExportDisabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(metricsExporterEnv)), "none")
+}
+
 // InitMetrics registers a global MeterProvider with both a Prometheus
 // reader (exposed via StartMetricsServer's /metrics handler) and an
-// OTLP periodic reader. No Producer option, unlike InitMetricsPushOnly: a bridged
-// registry would be served twice, here and on its own endpoint.
-func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
+// OTLP periodic reader, the latter unless OTEL_METRICS_EXPORTER is "none".
+// The Prometheus reader registers on reg, or on the default registry when reg
+// is nil; a binary whose scraped endpoint serves a registry of its own passes
+// that one (atecontroller: controller-runtime's). No Producer option, unlike
+// InitMetricsPushOnly: a bridged registry would be served twice, here and on
+// its own endpoint.
+func InitMetrics(ctx context.Context, serviceName string, reg promclient.Registerer) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
-	promExporter, err := prometheus.New()
+	var promOpts []prometheus.Option
+	if reg != nil {
+		promOpts = append(promOpts, prometheus.WithRegisterer(reg))
+	}
+	promExporter, err := prometheus.New(promOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
@@ -244,30 +265,30 @@ func newMeterProvider(ctx context.Context, serviceName string, relayCapable bool
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
-	expOpts := []otlpmetricgrpc.Option{
-		// GKE managed metrics doesn't support validating the TLS certs of the collector.
-		otlpmetricgrpc.WithInsecure(),
-	}
-	if conn != nil {
-		// WithGRPCConn takes precedence over endpoint/credential options, so
-		// WithInsecure above is inert on this path.
-		expOpts = append(expOpts, otlpmetricgrpc.WithGRPCConn(conn))
-	}
-	otlpExporter, err := otlpmetricgrpc.New(ctx, expOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
-	}
 	res, err := newResource(ctx, serviceName, relayAttrs(relayCapable, conn)...)
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
-	readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
-	for _, p := range producers {
-		readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
-	}
-	opts := []sdkmetric.Option{
-		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)),
+	opts := []sdkmetric.Option{sdkmetric.WithResource(res)}
+	if !MetricsExportDisabled() {
+		expOpts := []otlpmetricgrpc.Option{
+			// GKE managed metrics doesn't support validating the TLS certs of the collector.
+			otlpmetricgrpc.WithInsecure(),
+		}
+		if conn != nil {
+			// WithGRPCConn takes precedence over endpoint/credential options, so
+			// WithInsecure above is inert on this path.
+			expOpts = append(expOpts, otlpmetricgrpc.WithGRPCConn(conn))
+		}
+		otlpExporter, err := otlpmetricgrpc.New(ctx, expOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
+		}
+		readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
+		for _, p := range producers {
+			readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
+		}
+		opts = append(opts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)))
 	}
 	for _, r := range extraReaders {
 		opts = append(opts, sdkmetric.WithReader(r))

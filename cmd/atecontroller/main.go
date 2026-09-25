@@ -33,6 +33,7 @@ import (
 	"github.com/spf13/pflag"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -122,10 +123,17 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry, which the manager serves on a port nothing scrapes.
-	// Bridging it as a Producer puts them on the OTLP path instead.
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
-		prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+	// own Prometheus registry, which the manager serves. Bridging it as a Producer
+	// puts them on the OTLP path. With OTEL_METRICS_EXPORTER=none there is no OTLP
+	// path: the OTel instruments go into that registry instead, so the manager's
+	// endpoint serves both.
+	var mp *sdkmetric.MeterProvider
+	if serverboot.MetricsExportDisabled() {
+		mp, err = serverboot.InitMetrics(ctx, serviceName, ctrlmetrics.Registry)
+	} else {
+		mp, err = serverboot.InitMetricsPushOnly(ctx, serviceName,
+			prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+	}
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}

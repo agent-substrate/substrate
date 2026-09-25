@@ -63,7 +63,7 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, glutton.Name)
+	mp, err := serverboot.InitMetrics(ctx, glutton.Name, nil)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
