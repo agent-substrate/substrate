@@ -345,3 +345,108 @@ func TestHealthStartStopsWhenK8sCheckIsCanceled(t *testing.T) {
 		t.Fatal("router health loop did not stop after cancellation")
 	}
 }
+
+func TestUpdateComponentHealthRequiresConsecutiveFailures(t *testing.T) {
+	var health ComponentHealth
+	now := time.Now()
+
+	updateComponentHealth(&health, true, "LIVE", now)
+	if !health.Healthy {
+		t.Fatal("component not healthy after a successful check")
+	}
+
+	for i := 1; i < componentUnhealthyThreshold; i++ {
+		updateComponentHealth(&health, false, "blip", now)
+		if !health.Healthy {
+			t.Fatalf("component flipped unhealthy after %d failures, want %d before flipping", i, componentUnhealthyThreshold)
+		}
+	}
+	if health.FailureCount != int64(componentUnhealthyThreshold-1) {
+		t.Errorf("FailureCount = %d, want %d", health.FailureCount, componentUnhealthyThreshold-1)
+	}
+
+	updateComponentHealth(&health, false, "down", now)
+	if health.Healthy {
+		t.Fatalf("component still healthy after %d consecutive failures", componentUnhealthyThreshold)
+	}
+
+	updateComponentHealth(&health, true, "LIVE", now)
+	if !health.Healthy {
+		t.Fatal("component not healthy after recovery")
+	}
+
+	updateComponentHealth(&health, false, "blip", now)
+	if !health.Healthy {
+		t.Fatal("single failure after recovery flipped status, want failure streak reset on success")
+	}
+}
+
+func TestUpdateComponentHealthNeverHealthyStaysUnhealthy(t *testing.T) {
+	var health ComponentHealth
+
+	updateComponentHealth(&health, false, "down", time.Now())
+	if health.Healthy {
+		t.Fatal("component reported healthy despite never having a successful check")
+	}
+}
+
+func TestCheckToleratesTransientEnvoyBlip(t *testing.T) {
+	var mu sync.Mutex
+	envoyHealthy := true
+	setEnvoyHealthy := func(healthy bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		envoyHealthy = healthy
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"gitVersion":"v1.36.1"}`)
+	}))
+	defer server.Close()
+
+	apiClient := &healthControlClient{
+		listActorsFn: func(context.Context, *ateapipb.ListActorsRequest, ...grpc.CallOption) (*ateapipb.ListActorsResponse, error) {
+			return &ateapipb.ListActorsResponse{}, nil
+		},
+	}
+	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), apiClient, routerConfig{})
+	rh.dataplaneClient = &http.Client{Transport: healthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !envoyHealthy {
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("LIVE")),
+		}, nil
+	})}
+
+	ctx := context.Background()
+	rh.check(ctx)
+	if report := rh.Report(); !report.Dataplane.Healthy {
+		t.Fatal("dataplane not healthy after a successful check")
+	}
+
+	setEnvoyHealthy(false)
+	for i := 1; i < componentUnhealthyThreshold; i++ {
+		rh.check(ctx)
+		if report := rh.Report(); !report.Dataplane.Healthy {
+			t.Fatalf("dataplane reported unhealthy after %d transient failures, want threshold of %d", i, componentUnhealthyThreshold)
+		}
+	}
+	rh.check(ctx)
+	if report := rh.Report(); report.Dataplane.Healthy {
+		t.Fatalf("dataplane still healthy after %d consecutive failures", componentUnhealthyThreshold)
+	}
+
+	setEnvoyHealthy(true)
+	rh.check(ctx)
+	if report := rh.Report(); !report.Dataplane.Healthy {
+		t.Fatal("dataplane not healthy after recovery")
+	}
+}
