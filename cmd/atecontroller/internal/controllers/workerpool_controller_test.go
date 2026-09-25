@@ -137,11 +137,14 @@ func TestWorkerPoolCreatesDeployment(t *testing.T) {
 		if len(dep.OwnerReferences) == 0 || dep.OwnerReferences[0].Name != wp.Name {
 			return false, nil
 		}
-		return len(dep.Spec.Template.Spec.Volumes) == 4 &&
+		return len(dep.Spec.Template.Spec.Volumes) == 7 &&
 			dep.Spec.Template.Spec.Volumes[0].Name == ateomCapacityVolume &&
 			dep.Spec.Template.Spec.Volumes[1].Name == "run-ateom" &&
 			dep.Spec.Template.Spec.Volumes[2].Name == atunnelIdentityVolume &&
-			dep.Spec.Template.Spec.Volumes[3].Name == atunnelEgressTrustVolume, nil
+			dep.Spec.Template.Spec.Volumes[3].Name == atunnelEgressTrustVolume &&
+			dep.Spec.Template.Spec.Volumes[4].Name == riptideSnapshotterVolume &&
+			dep.Spec.Template.Spec.Volumes[5].Name == riptideFUSEVolume &&
+			dep.Spec.Template.Spec.Volumes[6].Name == sociSnapshotterVolume, nil
 	})
 }
 

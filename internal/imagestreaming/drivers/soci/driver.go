@@ -31,7 +31,7 @@ const (
 	DefaultSOCISocket = remotesnapshotter.DefaultSOCISocket
 
 	// DefaultWorkDir is the default base path where streamed layer mounts are wrapped.
-	DefaultWorkDir = "/run/ate/streaming/soci"
+	DefaultWorkDir = "/var/lib/ateom-gvisor/streaming/soci"
 )
 
 func init() {

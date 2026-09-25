@@ -62,8 +62,10 @@ const (
 	// DefaultSOCISocket is the default UNIX socket path for soci-snapshotter.
 	DefaultSOCISocket = "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"
 
-	// DefaultBaseWorkDir is the default root path where streamed layer mounts are wrapped.
-	DefaultBaseWorkDir = "/run/ate/streaming"
+	// DefaultBaseWorkDir is the default root path where streamed layer mounts
+	// are wrapped. It lives under ateompath.BasePath so wrapper directories are
+	// visible at the same path in both atelet and ateom.
+	DefaultBaseWorkDir = "/var/lib/ateom-gvisor/streaming"
 
 	// DefaultNamespace is the default containerd namespace passed to the snapshotter.
 	DefaultNamespace = "default"

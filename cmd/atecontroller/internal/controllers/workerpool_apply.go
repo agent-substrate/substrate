@@ -70,6 +70,9 @@ const (
 	atunnelEgressTrustVolume    = "atunnel-egress-trust"
 	atunnelEgressTrustMountPath = "/run/servicedns.podcert.ate.dev"
 	ateomCapacityVolume         = "ateom-capacity"
+	riptideSnapshotterVolume    = "var-lib-containerd-gcfs"
+	riptideFUSEVolume           = "run-gcfsd"
+	sociSnapshotterVolume       = "var-lib-soci"
 )
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
@@ -136,6 +139,21 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithName(atunnelEgressTrustVolume).
 				WithMountPath(atunnelEgressTrustMountPath).
 				WithReadOnly(true),
+			corev1ac.VolumeMount().
+				WithName(riptideSnapshotterVolume).
+				WithMountPath(ateompath.RiptideSnapshotterRoot).
+				WithMountPropagation(corev1.MountPropagationHostToContainer).
+				WithReadOnly(true),
+			corev1ac.VolumeMount().
+				WithName(riptideFUSEVolume).
+				WithMountPath(ateompath.RiptideFUSERoot).
+				WithMountPropagation(corev1.MountPropagationHostToContainer).
+				WithReadOnly(true),
+			corev1ac.VolumeMount().
+				WithName(sociSnapshotterVolume).
+				WithMountPath(ateompath.SOCISnapshotterRoot).
+				WithMountPropagation(corev1.MountPropagationHostToContainer).
+				WithReadOnly(true),
 		)
 
 	podSpecAC := corev1ac.PodSpec().
@@ -184,6 +202,21 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 								WithPath("trust-bundle.pem")),
 					),
 				),
+			corev1ac.Volume().
+				WithName(riptideSnapshotterVolume).
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.RiptideSnapshotterRoot).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(riptideFUSEVolume).
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.RiptideFUSERoot).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(sociSnapshotterVolume).
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.SOCISnapshotterRoot).
+					WithType(corev1.HostPathDirectoryOrCreate)),
 		)
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)

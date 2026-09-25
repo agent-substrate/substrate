@@ -92,7 +92,7 @@ By standardizing on the CNCF Remote Snapshotter interface, Google Riptide and AW
 | **Daemon Endpoint** | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` (Riptide Snapshotter) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` (SOCI Snapshotter) |
 | **Interface Protocol** | `containerd.services.snapshots.v1.Snapshots` | `containerd.services.snapshots.v1.Snapshots` |
 | **Runtime Interaction** | **Bypasses containerd CRI:** speaks direct snapshotter gRPC | **Bypasses containerd CRI:** speaks direct snapshotter gRPC |
-| **FUSE Mount Location** | `/run/containerd-gcfs/...` | `/var/lib/soci-snapshotter-grpc/snapshots/...` |
+| **FUSE Mount Location** | `/var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/<id>/fs` $\to$ `/run/gcfsd/mnt/views/<diffID>/fs` | `/var/lib/soci-snapshotter-grpc/snapshotter/snapshots/<id>/fs` |
 | **Layer View RPC** | `Prepare` / `View` with remote labels | `Prepare` / `View` with remote labels |
 | **Metadata Index** | Google Cloud Artifact Registry (GAR) Streaming Manifests | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) |
 | **Registry Scope** | **GAR / GCR exclusively** (external registries fall back to non-streaming) | Any OCI registry supporting SOCI index artifacts (ECR, etc.) |
@@ -123,7 +123,7 @@ flowchart TD
         
         StreamerMux -.->|Fallback on error| ImgCache["internal/imagecache<br/>(Full Download & Untar)"]
         
-        GCFS -->|FUSE Mount| LayerView1["/run/containerd-gcfs/.../fs"]
+        GCFS -->|FUSE Mount| LayerView1["/var/lib/containerd/.../snapshots/<id>/fs<br/>-> /run/gcfsd/mnt/views/<diffID>/fs"]
         SOCI -->|FUSE Mount| LayerView2["/var/lib/soci-.../snapshots/<id>/fs"]
     end
 
@@ -251,20 +251,21 @@ func Providers() []string
 ## 5. Runtime Integration & Contract with `atelet`
 
 ### 5.1. The Layer Wrapper Contract
-`cmd/atelet` runs without elevated privileges (no `CAP_SYS_ADMIN`), and `ateom` constructs the final overlay mount. To maintain this clean separation, `ImageStreamer` produces a standard layer wrapper directory for each layer in `LayerDirs`:
+`cmd/atelet` runs without elevated privileges (no `CAP_SYS_ADMIN`), and `ateom` constructs the final overlay mount. To maintain this clean separation, `ImageStreamer` produces a standard layer wrapper directory under `/var/lib/ateom-gvisor/streaming/<driver>` (shared with `ateom` via the `run-ateom` hostPath volume) for each layer in `LayerDirs`:
 
 ```
-<work_dir>/<sanitized_image_key>/
+/var/lib/ateom-gvisor/streaming/<driver>/<sanitized_image_key>/
 ├── layer-0/
-│   ├── fs -> /run/containerd-gcfs/.../fs   # Symlink to the daemon's FUSE mount
+│   ├── fs -> /var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/<id>/fs
+│   │         (which for Riptide symlinks to /run/gcfsd/mnt/views/<diffID>/fs)
 │   └── finalized                             # Sentinel marker
 ├── layer-1/
-│   ├── fs -> /run/containerd-gcfs/.../fs
+│   ├── fs -> /var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/<id>/fs
 │   └── finalized
 └── ...
 ```
 
-- **`fs` Symlink:** Exposes the virtual layer filesystem tree to `ateom`'s overlay lowerdir.
+- **`fs` Symlink:** Exposes the virtual layer filesystem tree to `ateom`'s overlay lowerdir. Both `/var/lib/containerd/io.containerd.snapshotter.v1.gcfs` (`RiptideSnapshotterRoot`), `/run/gcfsd` (`RiptideFUSERoot`), and `/var/lib/soci-snapshotter-grpc` (`SOCISnapshotterRoot`) are mounted into `atelet` and `ateom` with `HostToContainer` mount propagation so both pods can resolve the full symlink chain.
 - **`finalized` Marker:** Notifies `ateom` that the layer is immutable, instructing it to bypass whiteout materialization loops and mount directly.
 
 ### 5.2. Pluggable Resolution with Automatic Fallback

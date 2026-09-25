@@ -718,6 +718,21 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 								WithPath("trust-bundle.pem")),
 					),
 				),
+			corev1ac.Volume().
+				WithName(riptideSnapshotterVolume).
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.RiptideSnapshotterRoot).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(riptideFUSEVolume).
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.RiptideFUSERoot).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(sociSnapshotterVolume).
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.SOCISnapshotterRoot).
+					WithType(corev1.HostPathDirectoryOrCreate)),
 		).
 		WithContainers(corev1ac.Container().
 			WithName("ateom").
@@ -781,6 +796,21 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				corev1ac.VolumeMount().
 					WithName(atunnelEgressTrustVolume).
 					WithMountPath(atunnelEgressTrustMountPath).
+					WithReadOnly(true),
+				corev1ac.VolumeMount().
+					WithName(riptideSnapshotterVolume).
+					WithMountPath(ateompath.RiptideSnapshotterRoot).
+					WithMountPropagation(corev1.MountPropagationHostToContainer).
+					WithReadOnly(true),
+				corev1ac.VolumeMount().
+					WithName(riptideFUSEVolume).
+					WithMountPath(ateompath.RiptideFUSERoot).
+					WithMountPropagation(corev1.MountPropagationHostToContainer).
+					WithReadOnly(true),
+				corev1ac.VolumeMount().
+					WithName(sociSnapshotterVolume).
+					WithMountPath(ateompath.SOCISnapshotterRoot).
+					WithMountPropagation(corev1.MountPropagationHostToContainer).
 					WithReadOnly(true),
 			).
 			WithResources(corev1ac.ResourceRequirements()))

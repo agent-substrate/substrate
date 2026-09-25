@@ -31,7 +31,7 @@ const (
 	DefaultGCFSSocket = remotesnapshotter.DefaultRiptideSocket
 
 	// DefaultWorkDir is the default base path where streamed layer mounts are wrapped.
-	DefaultWorkDir = "/run/ate/streaming/riptide"
+	DefaultWorkDir = "/var/lib/ateom-gvisor/streaming/riptide"
 )
 
 func init() {
