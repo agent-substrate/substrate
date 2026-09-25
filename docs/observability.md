@@ -257,6 +257,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
+* The router and the scheduler both report `no_capacity` for one condition, but they count different events. The scheduler records one sample on `ate.scheduler.assignment.duration` for each assignment attempt. The router records one sample for each request. Many requests can join one resume, and one parked request can cause more than one attempt. Thus do not compare the two counts directly.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (the resume found the actor already running), `triggered` (this request completed a cold activation), `joined` (this request waited on another request's resume, which activated the actor), or `unknown` (the resume did not complete, so whether an activation ran is unknown). `ate.template.atespace` and `ate.template.name` hold `unknown` when the router has no template to name.
 
 For `ate.imagecache.requests`:
