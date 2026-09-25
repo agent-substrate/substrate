@@ -43,7 +43,7 @@ func TestResolveActorJWTIssuer(t *testing.T) {
 	}{
 		{name: "unset uses the namespace's idp Service", namespace: "ate-system", want: "https://idp.ate-system.svc"},
 		{name: "unset in a relocated install", namespace: "team-a", want: "https://idp.team-a.svc"},
-		{name: "set", flagValue: "https://idp.example.com/prod/", namespace: "ate-system", want: "https://idp.example.com/prod"},
+		{name: "set is used as given", flagValue: "https://idp.example.com/prod/", namespace: "ate-system", want: "https://idp.example.com/prod/"},
 		{name: "set but invalid", flagValue: "http://idp.example.com", namespace: "ate-system", wantErr: true},
 	}
 	for _, tt := range tests {

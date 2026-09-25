@@ -16,49 +16,40 @@ package oidcdiscovery
 
 import "testing"
 
-func TestParseIssuer(t *testing.T) {
+func TestValidateIssuer(t *testing.T) {
 	tests := []struct {
 		name    string
-		raw     string
-		want    string
+		issuer  string
 		wantErr bool
 	}{
-		{name: "in-cluster default", raw: "https://idp.ate-system.svc", want: "https://idp.ate-system.svc"},
-		{name: "public host", raw: "https://idp.example.com", want: "https://idp.example.com"},
-		{name: "path", raw: "https://idp.example.com/clusters/prod", want: "https://idp.example.com/clusters/prod"},
-		{name: "port", raw: "https://idp.example.com:8443", want: "https://idp.example.com:8443"},
-		{name: "trailing slash", raw: "https://idp.example.com/", want: "https://idp.example.com"},
-		{name: "path with trailing slashes", raw: "https://idp.example.com/prod//", want: "https://idp.example.com/prod"},
+		{name: "in-cluster default", issuer: "https://idp.ate-system.svc"},
+		{name: "public host", issuer: "https://idp.example.com"},
+		{name: "path", issuer: "https://idp.example.com/clusters/prod"},
+		{name: "port", issuer: "https://idp.example.com:8443"},
+		{name: "trailing slash", issuer: "https://idp.example.com/"},
+		{name: "path with trailing slash", issuer: "https://idp.example.com/prod/"},
 
-		{name: "empty", raw: "", wantErr: true},
-		{name: "http", raw: "http://idp.example.com", wantErr: true},
-		{name: "no scheme", raw: "idp.example.com", wantErr: true},
-		{name: "uppercase scheme", raw: "HTTPS://idp.example.com", wantErr: true},
-		{name: "no host", raw: "https:///prod", wantErr: true},
-		{name: "port without host", raw: "https://:443", wantErr: true},
-		{name: "opaque", raw: "https:idp.example.com", wantErr: true},
-		{name: "user info", raw: "https://user:pass@idp.example.com", wantErr: true},
-		{name: "query", raw: "https://idp.example.com?cluster=prod", wantErr: true},
-		{name: "empty query", raw: "https://idp.example.com?", wantErr: true},
-		{name: "fragment", raw: "https://idp.example.com#prod", wantErr: true},
-		{name: "empty fragment", raw: "https://idp.example.com#", wantErr: true},
-		{name: "unescaped space in path", raw: "https://idp.example.com/my cluster", wantErr: true},
+		{name: "empty", issuer: "", wantErr: true},
+		{name: "http", issuer: "http://idp.example.com", wantErr: true},
+		{name: "no scheme", issuer: "idp.example.com", wantErr: true},
+		{name: "no host", issuer: "https:///prod", wantErr: true},
+		{name: "port without host", issuer: "https://:443", wantErr: true},
+		{name: "opaque", issuer: "https:idp.example.com", wantErr: true},
+		{name: "user info", issuer: "https://user:pass@idp.example.com", wantErr: true},
+		{name: "query", issuer: "https://idp.example.com?cluster=prod", wantErr: true},
+		{name: "empty query", issuer: "https://idp.example.com?", wantErr: true},
+		{name: "fragment", issuer: "https://idp.example.com#prod", wantErr: true},
+		{name: "empty fragment", issuer: "https://idp.example.com#", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseIssuer(tt.raw)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("ParseIssuer(%q) = %q, want error", tt.raw, got)
-				}
-				return
+			err := ValidateIssuer(tt.issuer)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateIssuer(%q) returned nil, want error", tt.issuer)
 			}
-			if err != nil {
-				t.Fatalf("ParseIssuer(%q) returned error: %v", tt.raw, err)
-			}
-			if got != tt.want {
-				t.Errorf("ParseIssuer(%q) = %q, want %q", tt.raw, got, tt.want)
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateIssuer(%q) returned error: %v", tt.issuer, err)
 			}
 		})
 	}

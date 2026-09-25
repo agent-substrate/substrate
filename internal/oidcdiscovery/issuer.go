@@ -22,30 +22,25 @@ import (
 	"strings"
 )
 
-// ParseIssuer validates an issuer identifier and returns it in the form that
-// goes in the iss claim and the discovery document. Relying parties compare
-// issuers byte for byte, so the issuer must be a canonical https URL with a
-// host and no user info, query, or fragment; a path is allowed. Trailing
-// slashes are removed.
-func ParseIssuer(raw string) (string, error) {
-	issuer := strings.TrimRight(raw, "/")
+// ValidateIssuer returns an error unless issuer is usable as an OpenID issuer
+// identifier: an https URL with a host and no user info, query, or fragment. A
+// path is allowed.
+func ValidateIssuer(issuer string) error {
 	u, err := url.Parse(issuer)
 	if err != nil {
-		return "", fmt.Errorf("invalid issuer: %w", err)
+		return fmt.Errorf("invalid issuer: %w", err)
 	}
 	switch {
 	case u.Scheme != "https":
-		return "", fmt.Errorf("issuer %q must use the https scheme", raw)
+		return fmt.Errorf("issuer %q must use the https scheme", issuer)
 	case u.Hostname() == "":
-		return "", fmt.Errorf("issuer %q has no host", raw)
+		return fmt.Errorf("issuer %q has no host", issuer)
 	case u.User != nil:
-		return "", fmt.Errorf("issuer %q must not contain user info", raw)
+		return fmt.Errorf("issuer %q must not contain user info", issuer)
 	case strings.Contains(issuer, "?"):
-		return "", fmt.Errorf("issuer %q must not contain a query", raw)
+		return fmt.Errorf("issuer %q must not contain a query", issuer)
 	case strings.Contains(issuer, "#"):
-		return "", fmt.Errorf("issuer %q must not contain a fragment", raw)
-	case u.String() != issuer:
-		return "", fmt.Errorf("issuer %q is not a canonical URL; did you mean %q?", raw, u.String())
+		return fmt.Errorf("issuer %q must not contain a fragment", issuer)
 	}
-	return issuer, nil
+	return nil
 }

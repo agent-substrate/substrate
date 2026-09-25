@@ -533,8 +533,12 @@ func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig
 // resolveActorJWTIssuer applies the install default to an empty
 // --actor-jwt-issuer and validates the result.
 func resolveActorJWTIssuer(flagValue, namespace string) (string, error) {
-	if flagValue == "" {
-		flagValue = installdefaults.ActorJWTIssuer(namespace)
+	issuer := flagValue
+	if issuer == "" {
+		issuer = installdefaults.ActorJWTIssuer(namespace)
 	}
-	return oidcdiscovery.ParseIssuer(flagValue)
+	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
+		return "", err
+	}
+	return issuer, nil
 }
