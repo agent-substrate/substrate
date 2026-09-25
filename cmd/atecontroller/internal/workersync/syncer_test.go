@@ -29,11 +29,14 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -126,7 +129,7 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, workerInformer, workerPoolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -138,12 +141,22 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 // factories or worker goroutines. It returns those caches alongside the syncer.
 func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer) {
 	t.Helper()
+	s, pods, pools, _ := setupReconcileTestWithK8s(t, api, initPools...)
+	return s, pods, pools
+}
+
+// setupReconcileTestWithK8s is setupReconcileTest that also returns the fake
+// Kubernetes the syncer deletes pods through. The informer cache is seeded
+// separately, so a test that expects a delete creates the pod here as well.
+func setupReconcileTestWithK8s(t *testing.T, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer, *fake.Clientset) {
+	t.Helper()
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
-	_, workerInformer := WorkerPodInformer(fake.NewSimpleClientset())
+	fakeK8s := fake.NewSimpleClientset()
+	_, workerInformer := WorkerPodInformer(fakeK8s)
 	workerPoolInformer, poolIndexer := newWorkerPoolInformer(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer, fakeK8s
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -853,6 +866,204 @@ func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
 	}
 	if got.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker marked DRAINING on a readiness flap, want it left ACTIVE")
+	}
+}
+
+// withAteomRestarts gives pod an ateom container status that has restarted
+// restarts times, the last time for reason.
+func withAteomRestarts(pod *corev1.Pod, restarts int32, reason string) *corev1.Pod {
+	status := corev1.ContainerStatus{Name: ateomContainerName, RestartCount: restarts}
+	if restarts > 0 {
+		status.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: reason, ExitCode: 137}
+	}
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, status)
+	return pod
+}
+
+// podDeletes returns the pod deletes the syncer sent through fakeK8s.
+func podDeletes(fakeK8s *fake.Clientset) []k8stesting.DeleteActionImpl {
+	var deletes []k8stesting.DeleteActionImpl
+	for _, action := range fakeK8s.Actions() {
+		if d, ok := action.(k8stesting.DeleteActionImpl); ok && d.GetResource().Resource == "pods" {
+			deletes = append(deletes, d)
+		}
+	}
+	return deletes
+}
+
+// TestSyncer_DeletesDeadPod pins which pods the syncer deletes: one whose
+// ateom has restarted, registered or not, and one in a terminal phase. The
+// Worker is left to the pod's Deleted event, and the delete is guarded on the
+// pod UID so it can only ever hit this incarnation.
+func TestSyncer_DeletesDeadPod(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName, ip := "ns-syncer-dead", "worker-dead-1", "pool1", "10.0.0.9"
+
+	for _, tc := range []struct {
+		name       string
+		registered bool
+		mutate     func(*corev1.Pod)
+	}{
+		{name: "ateom restarted and Ready again", registered: true, mutate: func(p *corev1.Pod) {
+			withAteomRestarts(p, 1, "OOMKilled")
+		}},
+		{name: "ateom restarted before it was registered", mutate: func(p *corev1.Pod) {
+			withAteomRestarts(p, 2, "Error")
+		}},
+		{name: "evicted by kubelet", registered: true, mutate: func(p *corev1.Pod) {
+			p.Status.Phase = corev1.PodFailed
+			p.Status.Reason = "Evicted"
+			p.Status.Conditions = nil
+		}},
+		{name: "terminated by graceful node shutdown", registered: true, mutate: func(p *corev1.Pod) {
+			p.Status.Phase = corev1.PodFailed
+			p.Status.Reason = "Terminated"
+			p.Status.Conditions = nil
+		}},
+		{name: "succeeded", registered: true, mutate: func(p *corev1.Pod) {
+			p.Status.Phase = corev1.PodSucceeded
+			p.Status.Conditions = nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeControl()
+			if tc.registered {
+				api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+			}
+			s, pods, _, fakeK8s := setupReconcileTestWithK8s(t, api, workerPool(ns, poolName, "gvisor", nil))
+			pod := workerPod(ns, podName, poolName, testPodUID, ip)
+			tc.mutate(pod)
+			if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+				t.Fatalf("create pod: %v", err)
+			}
+
+			mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+			deletes := podDeletes(fakeK8s)
+			if len(deletes) != 1 {
+				t.Fatalf("pod deletes = %d, want 1", len(deletes))
+			}
+			if d := deletes[0]; d.GetNamespace() != ns || d.GetName() != podName {
+				t.Errorf("deleted pod %s/%s, want %s/%s", d.GetNamespace(), d.GetName(), ns, podName)
+			}
+			if uid := deletes[0].DeleteOptions.Preconditions; uid == nil || uid.UID == nil || *uid.UID != types.UID(testPodUID) {
+				t.Errorf("delete preconditions = %+v, want UID %s", uid, testPodUID)
+			}
+			// The Worker is the Deleted event's to deregister, not this
+			// reconcile's, and a dead pod is never registered.
+			if tc.registered {
+				if api.get(testPodUID) == nil {
+					t.Errorf("worker deregistered before its pod was deleted")
+				}
+			} else if got := api.names(); len(got) != 0 {
+				t.Errorf("registry holds %v for a dead pod, want it empty", got)
+			}
+		})
+	}
+}
+
+// TestSyncer_KeepsLivePod pins what does not make a pod dead: a restart of a
+// container other than ateom, and an ateom that has never restarted.
+func TestSyncer_KeepsLivePod(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName, ip := "ns-syncer-live", "worker-live-1", "pool1", "10.0.0.9"
+
+	api := newFakeControl()
+	s, pods, _, fakeK8s := setupReconcileTestWithK8s(t, api, workerPool(ns, poolName, "gvisor", nil))
+	pod := withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, ip), 0, "")
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, corev1.ContainerStatus{Name: "sidecar", RestartCount: 3})
+
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	if deletes := podDeletes(fakeK8s); len(deletes) != 0 {
+		t.Errorf("pod deletes = %d, want none", len(deletes))
+	}
+	if api.get(testPodUID) == nil {
+		t.Errorf("worker not registered for a live pod; registry holds %v", api.names())
+	}
+}
+
+// A dead pod that is already Terminating is on its way out: it is drained like
+// any other, and not deleted a second time.
+func TestSyncer_DeadPodAlreadyTerminatingIsDrainedNotDeleted(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName, ip := "ns-syncer-dead-terminating", "worker-dead-1", "pool1", "10.0.0.9"
+
+	api := newFakeControl()
+	api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+	s, pods, _, fakeK8s := setupReconcileTestWithK8s(t, api)
+	pod := withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, ip), 1, "Error")
+	pod.DeletionTimestamp = &metav1.Time{Time: time.Unix(1, 0)}
+
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	if deletes := podDeletes(fakeK8s); len(deletes) != 0 {
+		t.Errorf("pod deletes = %d, want none", len(deletes))
+	}
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING", got)
+	}
+}
+
+// TestDeleteDeadPod covers deleteDeadPod's return contract: a pod already gone,
+// or replaced under its name by a new UID, is success, while any other failure
+// is returned so the key requeues.
+func TestDeleteDeadPod(t *testing.T) {
+	ctx := context.Background()
+	key := workerKey{namespace: "ns-delete-dead", name: "worker-dead-1", uid: testPodUID}
+
+	for _, tc := range []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{name: "pod not found", err: apierrors.NewNotFound(corev1.Resource("pods"), key.name)},
+		{name: "pod replaced under its name", err: apierrors.NewConflict(corev1.Resource("pods"), key.name, errors.New("uid mismatch"))},
+		{name: "other failure", err: apierrors.NewForbidden(corev1.Resource("pods"), key.name, errors.New("denied")), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			//nolint:staticcheck // NewSimpleClientset is the fake the syncer's tests use throughout.
+			fakeK8s := fake.NewSimpleClientset()
+			fakeK8s.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+			s := &WorkerPoolSyncer{pods: fakeK8s.CoreV1()}
+
+			err := s.deleteDeadPod(ctx, key, nil)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Errorf("deleteDeadPod = %v, want error %t", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestSyncer_RestartedPodDeregisteredViaInformer drives a restart end to end:
+// the restarted pod is deleted, and its Deleted event deregisters the Worker.
+func TestSyncer_RestartedPodDeregisteredViaInformer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ns, podName, poolName, ip := "ns-syncer-restart", "worker-restart-1", "pool1", "10.0.0.9"
+
+	api := newFakeControl()
+	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "gvisor", nil))
+
+	pod := withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, ip), 0, "")
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
+
+	restarted := pod.DeepCopy()
+	restarted.Status.ContainerStatuses = nil
+	withAteomRestarts(restarted, 1, "Error")
+	if _, err := fakeK8s.CoreV1().Pods(ns).UpdateStatus(ctx, restarted, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w == nil })
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("get restarted pod = %v, want NotFound", err)
 	}
 }
 
