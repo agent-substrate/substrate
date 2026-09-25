@@ -79,12 +79,17 @@ not a local entry point. See [automation/README.md](automation/README.md).
 python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
 ```
 
-One flag controls the optional post-run measurements described in
+Three flags control the optional post-run measurements described in
 [Benchmark output files](#benchmark-output-files):
 
 * `--cluster-facts` / `--no-cluster-facts`: read node capacity and worker pod
   count from the Kubernetes API once the run ends, to derive density frontiers.
   On by default. Pass `--no-cluster-facts` to skip Kubernetes API discovery.
+* `--prometheus-url`: the Prometheus to harvest server-side telemetry from.
+  Defaults to the in-cluster service installed by
+  [Optional: Prometheus + Grafana](#optional-prometheus--grafana).
+* `--atelet-lag-s`: how long to wait after the run before reading the
+  atelet's snapshot metrics. Defaults to 15.
 
 Test-specific flags are appended to the same command; see the sections below.
 
@@ -135,6 +140,8 @@ them are checked into the repository.
 * `stats.jsonl`: one JSON object per line, one per metric. Every row carries
   the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
   `measurements` map holding that metric's numbers.
+* `server_summary.json`: server-side telemetry harvested from Prometheus,
+  including the per-sample bin-packing timeseries.
 
 ### Density frontiers
 
@@ -176,9 +183,46 @@ comparing numbers across runs:
   and deletes actors as it goes never holds them all at the same time, so its
   real density is lower than reported.
 
-The Kubernetes API is not required. If it is unreachable, or discovery was
-skipped, the affected fields are written as `null` and the run still
-succeeds. A `null` means the value was not measured. It never means zero.
+### Server ground truth
+
+With a reachable Prometheus, `server_summary.json` records what the server
+actually did, independent of what the load generator reported.
+
+* `cluster_packing`: assigned workers over total workers, as a percentile
+  `summary` plus the per-sample `timeseries` it was computed from.
+* `node_psi.cpu_stall_pct`, `mem_stall_pct`, `io_stall_pct`: kernel pressure
+  stall percentages on the nodes under test.
+* `pod_psi.cpu_stall_pct`, `mem_stall_pct`, `io_stall_pct`: the same for each
+  worker pod's cgroup slice, which also holds its gVisor sandbox, with every
+  pod's samples pooled. `pod_psi.pods` is how many pods were seen.
+* `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
+* `snapshots.size_avg_mb`: mean memory image size.
+* `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
+  same for `checkpoint_*`: atelet restore and checkpoint latency.
+* `snapshots.checkpoints_in_window`, `checkpoints_cumulative`: checkpoint
+  volume over the steady-state window, and since the atelet started.
+* `snapshots.checkpoint_mb_s`: bytes written per second spent checkpointing,
+  not per second of wall clock.
+
+Every distribution reports p50, p90, p95 and p99 over the steady-state window.
+Counts, means and `checkpoint_mb_s` come from the growth of the histogram's sum
+and count across the window, and the size, restore and checkpoint percentiles
+are interpolated inside its buckets. PSI is a one-minute rolling average read
+every 10s.
+
+The atelet exports before Prometheus scrapes it, so the harvest waits
+`--atelet-lag-s` seconds (default 15, enough for a 5s export and a 10s scrape)
+and reads the snapshot window half that late. The window ends at the last
+full-load sample, so teardown suspends are left out.
+
+`metadata.start_ts` and `end_ts` bound the whole run, which the packing
+`timeseries` covers. `steady_start_ts` and `steady_end_ts` bound the
+steady-state window. A flat subset of the numbers also goes into a
+`server_summary` row in `stats.jsonl`.
+
+Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
+or discovery was skipped, the affected fields are written as `null` and the run
+still succeeds. A `null` means the value was not measured. It never means zero.
 
 ## Optional: Prometheus + Grafana
 

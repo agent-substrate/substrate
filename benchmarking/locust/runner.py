@@ -49,6 +49,7 @@ from cluster_facts import (
     get_cluster_hardware_facts,
 )
 from common.boomer_config import build_config_json
+from server_telemetry import extract_and_record_server_telemetry
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
@@ -58,6 +59,10 @@ BOOMER_BINARY = "/app/boomer-worker"
 # gives boomer the values that change while a run continues. Locust already
 # holds 5557 (master) and 8089 (web UI) in this container.
 BOOMER_CONFIG_PORT = 5560
+
+# In-cluster Prometheus that benchmarking/monitoring.yaml deploys. Override
+# with --prometheus-url, for example when port-forwarding to a local run.
+DEFAULT_PROMETHEUS_URL = "http://prometheus.benchmarking.svc.cluster.local:9090"
 
 # Tab-separated columns written to traces.txt. Order matters — readers split
 # on \t and index positionally.
@@ -121,6 +126,26 @@ def parse_args() -> argparse.Namespace:
             "Read node capacity and worker pod count from the Kubernetes API "
             "after the run to derive density frontiers. Pass "
             "--no-cluster-facts to skip Kubernetes API discovery"
+        ),
+    )
+    p.add_argument(
+        "--prometheus-url",
+        default=DEFAULT_PROMETHEUS_URL,
+        help=(
+            "Prometheus to harvest server-side telemetry from after the run. "
+            "An unreachable Prometheus is not an error: the affected fields "
+            "are recorded as null"
+        ),
+    )
+    p.add_argument(
+        "--atelet-lag-s",
+        type=int,
+        default=15,
+        help=(
+            "Seconds to wait after the run, and to shift the snapshot window "
+            "by, so the atelet's last export is scraped. Must cover the "
+            "atelet's OTEL_METRIC_EXPORT_INTERVAL plus one Prometheus scrape; "
+            "the default fits a 5s export and a 10s scrape"
         ),
     )
     args, extra = p.parse_known_args()
@@ -450,6 +475,7 @@ def main() -> None:
     logs_path = work_dir / f"{args.name}_logs.txt"
     traces_path = work_dir / f"{args.name}_traces.txt"
     status_path = work_dir / f"{args.name}_status.json"
+    server_summary_json = work_dir / f"{args.name}_server_summary.json"
 
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
@@ -461,6 +487,7 @@ def main() -> None:
         traces.flush()
         log_run_config(args, prefix, work_dir, logs)
         exit_code = run_test(args, csv_prefix, logs, traces)
+        run_end_ts = int(datetime.now(timezone.utc).timestamp())
 
         stats_generated = False
         if stats_csv.exists():
@@ -485,12 +512,12 @@ def main() -> None:
         else:
             tee(logs, f"Stats CSV {stats_csv} not produced; skipping JSONL")
 
-        # The density frontiers are additive. They are kept out of the block
-        # above so that a failure here cannot discard the measurements the
-        # trial actually came for.
+        # Density frontiers and server-side telemetry are additive. They are
+        # kept out of the block above so that a failure here cannot discard
+        # the measurements the trial actually came for.
         stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
-        # Seeded up front so that a discovery failure still leaves a usable
-        # value for the summary below.
+        # Seeded up front so that a later failure still leaves a usable
+        # value for the telemetry call below.
         facts = dict(EMPTY_FACTS)
         try:
             facts = collect_cluster_facts(args, logs)
@@ -512,6 +539,27 @@ def main() -> None:
             except Exception as e:
                 tee(logs, f"Warning: Failed to record cluster facts: {e}")
 
+        # Server telemetry is a Prometheus time-window query, so it runs
+        # either way. A run too loaded to write a CSV is the one its
+        # bin-packing, PSI and snapshot numbers matter most for.
+        try:
+            extract_and_record_server_telemetry(
+                prom_url=args.prometheus_url,
+                start_ts=run_ts,
+                end_ts=run_end_ts,
+                stats_history_csv=stats_history_csv,
+                worker_pod_count=facts.get("worker_pod_count"),
+                output_json_path=server_summary_json,
+                jsonl_path=jsonl_path,
+                data_ts=data_ts,
+                tag=args.tag,
+                test_name=args.name,
+                logs=logs,
+                lag_s=args.atelet_lag_s,
+            )
+        except Exception as e:
+            tee(logs, f"Warning: Failed to harvest server telemetry: {e}")
+
     status_path.write_text(
         json.dumps(
             {"locust_exit_code": exit_code, "stats_generated": stats_generated}
@@ -527,6 +575,7 @@ def main() -> None:
         (work_dir / f"{args.name}_exceptions.csv", "exceptions.csv"),
         (work_dir / f"{args.name}_failures.csv", "failures.csv"),
         (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
+        (server_summary_json, "server_summary.json"),
         # TODO: remove after data migration
         (jsonl_path, f"{args.name}.jsonl"),
     ]
