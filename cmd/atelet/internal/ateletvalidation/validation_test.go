@@ -225,6 +225,37 @@ func TestValidateTerminateRequest(t *testing.T) {
 		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorUid = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
 	}, {
+		name: "invalid target_ateom_uid: not a label",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid atespace: uppercase",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.Atespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid actor_uid: not a uuid",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorUid = "not-a-uuid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid actor_template_name: trailing dash",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorTemplateName = "tmpl-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "reserved container name inside the spec",
+		obj: valid(func(r *ateletpb.TerminateRequest) {
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
+				Name:  "pause",
+				Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			}}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "")},
+	}, {
+		name: "volume with no source inside the spec",
+		obj: valid(func(r *ateletpb.TerminateRequest) {
+			r.Spec = &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{{Name: "data"}}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("spec", "volumes").Index(0), nil, "").WithOrigin("union")},
+	}, {
 		name: "unset template identity is allowed",
 		obj: valid(func(r *ateletpb.TerminateRequest) {
 			r.ActorTemplateAtespace = ""

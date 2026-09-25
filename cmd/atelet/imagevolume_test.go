@@ -72,7 +72,9 @@ func singleFileLayer(t *testing.T, path, body string) v1.Layer {
 	return l
 }
 
-func pushTestImage(t *testing.T, ref string, layers ...v1.Layer) {
+// pushTestImage pushes the image and returns its digest-pinned reference,
+// which is what validated workload specs carry.
+func pushTestImage(t *testing.T, ref string, layers ...v1.Layer) string {
 	t.Helper()
 	img, err := mutate.AppendLayers(empty.Image, layers...)
 	if err != nil {
@@ -85,6 +87,12 @@ func pushTestImage(t *testing.T, ref string, layers ...v1.Layer) {
 	if err := remote.Write(tag, img); err != nil {
 		t.Fatalf("remote.Write(%q): %v", ref, err)
 	}
+	digest, err := img.Digest()
+	if err != nil {
+		t.Fatalf("computing digest of %q: %v", ref, err)
+	}
+	pinned := tag.Context().Name() + "@" + digest.String()
+	return pinned
 }
 
 func newImageVolumeStore(t *testing.T) *imagecache.Store {

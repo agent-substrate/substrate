@@ -144,30 +144,35 @@ service AteomHerder {
 
 message TerminateRequest {
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string target_ateom_uid = 1;
 
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 2;
 
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 3;
 
   // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 4;
 
-  // The template identity is carried for metrics attribution and is not
-  // validated today.
+  // The template identity is carried for metrics attribution.
   //
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 5;
 
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 6;
 
-  // A nil spec is tolerated today; parity with the hand-written validation.
+  // A nil spec is tolerated: the delete flow terminates template-less
+  // actors with a fallback spec.
   //
   // +k8s:optional
-  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 }
 

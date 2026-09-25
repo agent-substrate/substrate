@@ -531,24 +531,29 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 type TerminateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// The template identity is carried for metrics attribution and is not
-	// validated today.
+	// The template identity is carried for metrics attribution.
 	//
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// A nil spec is tolerated today; parity with the hand-written validation.
+	// A nil spec is tolerated: the delete flow terminates template-less
+	// actors with a fallback spec.
 	//
 	// +k8s:optional
-	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
 	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

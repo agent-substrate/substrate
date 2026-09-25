@@ -568,7 +568,10 @@ func TestRPCBoundariesReject(t *testing.T) {
 	ctx := context.Background()
 	badUID := "../escape" // valid actor ref, invalid ateom UID
 	const okAtespace, okID, okActorUID = "ate-demo", "counter-1", "123e4567-e89b-12d3-a456-426614174000"
-	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}}
+	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
+		Name:  "worker",
+		Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}}}
 
 	wantInvalidArgument := func(t *testing.T, rpc string, err error) {
 		t.Helper()

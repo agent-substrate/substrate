@@ -38,6 +38,13 @@ func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.Mint
 	return toInvalidArgument(Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
 }
 
+// ValidateTerminateRequest validates req at the RPC edge, including the full
+// workload spec. A non-nil return is the InvalidArgument error the handler
+// responds with.
+func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateRequest) error {
+	return toInvalidArgument(Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
+}
+
 func toInvalidArgument(errs field.ErrorList) error {
 	if len(errs) == 0 {
 		return nil
