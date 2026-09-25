@@ -28,7 +28,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -46,6 +50,10 @@ const workerPodLabel = "ate.dev/worker-pool"
 // workerPoolIndex maps a WorkerPool namespace/name to the worker Pods labeled
 // as members of that pool.
 const workerPoolIndex = "worker-pool"
+
+// ateomContainerName is the worker pod container that runs ateom, as named by
+// the WorkerPool controller's pod template.
+const ateomContainerName = "ateom"
 
 // workerKey identifies the pod incarnation a queued event concerns. namespace
 // and name locate the pod in the informer, which is indexed by namespace/name
@@ -94,7 +102,9 @@ func (k workerKey) logAttrs() []any {
 // key against the current informer cache state, requeuing with rate-limited
 // backoff on transient failures such as a lost version precondition.
 type WorkerPoolSyncer struct {
-	client             ateapipb.ControlClient
+	client ateapipb.ControlClient
+	// pods deletes worker pods that can no longer host actors.
+	pods               corev1client.PodsGetter
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
@@ -107,9 +117,10 @@ type WorkerPoolSyncer struct {
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
+		pods:               pods,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
@@ -269,6 +280,12 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
 	}
+	// Checked before eligibility: a restarted ateom is usually Ready again, and
+	// a pod in a terminal phase never will be, so the eligibility gate would
+	// either treat the pod as healthy or ignore it for good.
+	if cause := deadPodCause(pod); cause != nil {
+		return s.deleteDeadPod(ctx, key, cause)
+	}
 	if !isWorkerEligible(pod) {
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues it.
 		return nil
@@ -373,6 +390,64 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// deadPodCause reports why pod can no longer host actors, as log attributes, or
+// nil if it still can.
+//
+// A pod in a terminal phase never runs again. kubelet puts a pod there on
+// node-pressure eviction, on graceful node shutdown, and when it rejects the
+// pod on readmission after a reboot, and none of these delete the pod object.
+//
+// A restarted ateom container comes back without the actors it was hosting:
+// their sandboxes died with it, while the registry still binds them to this
+// Worker. A node reboot restarts it too, and usually gives the pod a new IP,
+// which the registered Worker cannot take.
+func deadPodCause(pod *corev1.Pod) []any {
+	switch pod.Status.Phase {
+	case corev1.PodFailed, corev1.PodSucceeded:
+		return []any{
+			slog.String("phase", string(pod.Status.Phase)),
+			slog.String("reason", pod.Status.Reason),
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != ateomContainerName || cs.RestartCount == 0 {
+			continue
+		}
+		cause := []any{slog.Int("restart_count", int(cs.RestartCount))}
+		if last := cs.LastTerminationState.Terminated; last != nil {
+			cause = append(cause,
+				slog.String("last_termination_reason", last.Reason),
+				slog.Int("last_exit_code", int(last.ExitCode)))
+		}
+		return cause
+	}
+	return nil
+}
+
+// deleteDeadPod deletes a worker pod that can no longer host actors, so its
+// Worker takes the path every deleted pod does: the DeletionTimestamp drains
+// it, and the Deleted event deregisters it and crashes the actors bound to it.
+// The pod's ReplicaSet replaces it under a new UID, and so a new Worker.
+//
+// The pod's own grace period applies, so kubelet still confirms its containers
+// are gone.
+//
+// The delete is guarded on the pod UID, so a stale key can never delete a
+// same-named successor. A UID conflict and an absent pod both mean this
+// incarnation is already gone, which is success.
+func (s *WorkerPoolSyncer) deleteDeadPod(ctx context.Context, key workerKey, cause []any) error {
+	slog.WarnContext(ctx, "Syncer: deleting worker pod that can no longer host actors",
+		append(key.logAttrs(), cause...)...)
+	uid := types.UID(key.uid)
+	err := s.pods.Pods(key.namespace).Delete(ctx, key.name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid},
+	})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
+	}
+	return err
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler
