@@ -35,8 +35,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 )
@@ -79,7 +79,7 @@ func validateImageCacheGCFlags() error {
 	if imageCacheDirOutsideBasePath(*imageCacheDir) {
 		slog.Warn("Image cache dir is outside the ateom base path; its volume watermarks are measured separately from actor state",
 			slog.String("image_cache_dir", *imageCacheDir),
-			slog.String("actors_dir", ateompath.ActorsDir))
+			slog.String("actors_dir", nodepath.ActorsDir))
 	}
 	return nil
 }
@@ -93,7 +93,7 @@ func imageCacheDirOutsideBasePath(dir string) bool {
 	if err != nil {
 		abs = filepath.Clean(dir)
 	}
-	return !strings.HasPrefix(abs, ateompath.BasePath+string(os.PathSeparator))
+	return !strings.HasPrefix(abs, nodepath.BasePath+string(os.PathSeparator))
 }
 
 // imageCacheGCTarget computes the bytes a pass should free: the larger

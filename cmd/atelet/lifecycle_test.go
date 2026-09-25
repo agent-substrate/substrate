@@ -24,10 +24,12 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // useTempNodeDirs roots atelet's on-node state in temp directories so a test
@@ -36,33 +38,45 @@ import (
 func useTempNodeDirs(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	origActors, origStatic := ateompath.ActorsDir, ateompath.StaticFilesDir
-	ateompath.ActorsDir = filepath.Join(root, "actors")
-	ateompath.StaticFilesDir = filepath.Join(root, "static-files")
+	origActors, origStatic := nodepath.ActorsDir, nodepath.StaticFilesDir
+	nodepath.ActorsDir = filepath.Join(root, "actors")
+	nodepath.StaticFilesDir = filepath.Join(root, "static-files")
 	t.Cleanup(func() {
-		ateompath.ActorsDir, ateompath.StaticFilesDir = origActors, origStatic
+		nodepath.ActorsDir, nodepath.StaticFilesDir = origActors, origStatic
 	})
 }
 
 // fakeAteom is a fake ateom in a worker pod. It writes the files a
-// real checkpoint would leave in the checkpoint-state dir, and reads back
-// what a restore was handed.
+// real checkpoint would leave in the checkpoint dir, and reads back what a
+// restore was handed. Like a real ateom it takes every actor directory from
+// the request, never derived from the actor UID.
 type fakeAteom struct {
 	ateompb.UnimplementedAteomServer
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
-	// restored holds the file contents staged into the restore-state dir by
-	// the most recent RestoreWorkload.
+	// restored holds the file contents staged into the restore dir by the
+	// most recent RestoreWorkload.
 	restored map[string]string
+	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
+	actorDirs map[string]*ateompb.ActorDirs
 }
 
-func (f *fakeAteom) RunWorkload(context.Context, *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
+func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
+	if f.actorDirs == nil {
+		f.actorDirs = map[string]*ateompb.ActorDirs{}
+	}
+	f.actorDirs[rpc] = actorDirs
+}
+
+func (f *fakeAteom) RunWorkload(_ context.Context, req *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
+	f.recordActorDirs("RunWorkload", req.GetActorDirs())
 	return &ateompb.RunWorkloadResponse{}, nil
 }
 
 func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
-	dir := ateompath.CheckpointStateDir(req.GetActorUid())
+	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
+	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
@@ -74,7 +88,8 @@ func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.Checkpoin
 }
 
 func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
-	dir := ateompath.RestoreStateDir(req.GetActorUid())
+	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
+	dir := req.GetActorDirs().GetRestoreDir()
 	f.restored = map[string]string{}
 	for name := range f.snapshotFiles {
 		body, err := os.ReadFile(filepath.Join(dir, name))
@@ -86,7 +101,8 @@ func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkl
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
-func (f *fakeAteom) TerminateWorkload(context.Context, *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
 
@@ -192,7 +208,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	snapshotFile := filepath.Join(ateompath.LocalSnapshotDir(actorUID, snapshotName), "checkpoint.img")
+	snapshotFile := filepath.Join(ateletpath.LocalSnapshotDir(actorUID, snapshotName), "checkpoint.img")
 	if _, err := os.Stat(snapshotFile); err != nil {
 		t.Fatalf("pause did not write the local snapshot: %v", err)
 	}
@@ -231,7 +247,16 @@ func TestLocalSnapshotGC(t *testing.T) {
 		t.Fatalf("Terminate: %v", err)
 	}
 
-	localDir := ateompath.LocalCheckpointsDir(actorUID)
+	// Every RPC hands ateom the same directory set; the fake already relied
+	// on checkpoint_dir and restore_dir above to place and find the snapshot.
+	want := ateletpath.ActorDirs(actorUID)
+	for _, rpc := range []string{"RunWorkload", "CheckpointWorkload", "RestoreWorkload", "TerminateWorkload"} {
+		if got := ateom.actorDirs[rpc]; !proto.Equal(got, want) {
+			t.Errorf("%s carried actor actorDirs %v, want %v", rpc, got, want)
+		}
+	}
+
+	localDir := ateletpath.LocalCheckpointsDir(actorUID)
 	if _, err := os.Stat(localDir); !os.IsNotExist(err) {
 		leaked, _ := filepath.Glob(filepath.Join(localDir, "*", "*"))
 		t.Errorf("local checkpoint dir survived terminate (stat err = %v), leaked files: %v", err, leaked)
@@ -239,7 +264,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 
 	// Terminate is the only chance to reclaim the actor's directory: nothing
 	// else on the node deletes it.
-	actorDir := ateompath.ActorPath(actorUID)
+	actorDir := ateletpath.ActorPath(actorUID)
 	if entries, err := os.ReadDir(actorDir); err == nil {
 		left := make([]string, 0, len(entries))
 		for _, e := range entries {

@@ -36,7 +36,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -175,11 +174,13 @@ func workloadIDs(ctrs []actorContainer) []string {
 }
 
 // actorContainer is one of the actor's containers prepared for the shared micro-VM:
-// its name (also the kata containerID + the merged rootfs's find-paths subdir), the
-// host OCI bundle rootfs that backs the overlay lower, and its OCI spec. The writable
-// upper is a host directory (see rootfsupper.go); the host kernel merges the two.
+// its name (also the kata containerID + the merged rootfs's find-paths subdir), its
+// host OCI bundle and the bundle rootfs that backs the overlay lower, and its OCI
+// spec. The writable upper is a host directory (see rootfsupper.go); the host kernel
+// merges the two.
 type actorContainer struct {
 	name         string
+	bundle       string
 	bundleRootfs string
 	// spec is the container's OCI spec shaped for micro-VM execution.
 	spec *specs.Spec
@@ -227,6 +228,9 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 //     are on disk and passed as runtime asset paths.
 //   - The OCI bundle (config.json + populated rootfs/) is prepared per container.
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -247,6 +251,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	p := actorBootParams{
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
+		actorDirs:        req.GetActorDirs(),
 		templateAtespace: req.GetActorTemplateAtespace(),
 		templateName:     req.GetActorTemplateName(),
 		containers:       req.GetSpec().GetContainers(),
@@ -261,7 +266,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// A VM still running for this actor would be dropped from tracking by the
 	// re-host below and left running, so stop it first.
 	if s.runningVM(attribution.UID) != nil {
-		if err := s.stopActorVM(ctx, attribution.UID); err != nil {
+		if err := s.stopActorVM(ctx, attribution.UID, req.GetActorDirs()); err != nil {
 			return nil, fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
 		}
 	}
@@ -292,6 +297,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 type actorBootParams struct {
 	actorRef         resources.ActorRef
 	actorUID         string
+	actorDirs        *ateompb.ActorDirs
 	templateAtespace string
 	templateName     string
 	containers       []*ateompb.Container
@@ -401,7 +407,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
-			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure", slog.Any("err", err))
 			}
 		}
@@ -429,7 +435,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay
 	// lower the host merges under the container's writable upper).
-	ctrs, err := s.buildActorContainers(actorUID, containers)
+	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
 	if err != nil {
 		return err
 	}
@@ -455,7 +461,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// A cold boot starts from the bare image: give it a pristine host upper dir
 	// (atelet's actor-dir reset does not know this directory; see rootfsupper.go).
-	if err := resetRootfsUpperDir(actorUID); err != nil {
+	if err := resetRootfsUpperDir(p.actorDirs); err != nil {
 		return err
 	}
 
@@ -468,7 +474,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return err
 	}
 	defer leaf.Close()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, ctrs, containers, leaf.SysProcAttr())
+	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
 	if err != nil {
 		return err
 	}
@@ -612,16 +618,16 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteomService) buildActorContainers(actorUID string, containers []*ateompb.Container) ([]actorContainer, error) {
+func (s *AteomService) buildActorContainers(actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) ([]actorContainer, error) {
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
-		bundle := ateompath.OCIBundlePath(actorUID, cn)
+		bundle := ociBundlePath(actorDirs, cn)
 		spec, err := ocispec.Load(bundle)
 		if err != nil {
 			return nil, fmt.Errorf("while reading the OCI spec for %q: %w", cn, err)
 		}
-		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorUID: actorUID, ContainerID: cn}); err != nil {
+		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerID: cn}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
@@ -640,6 +646,7 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 		}
 		ctrs[i] = actorContainer{
 			name:         cn,
+			bundle:       bundle,
 			bundleRootfs: bundleRootfs,
 			spec:         spec,
 			imageMounts:  c.GetImageVolumeMounts(),
@@ -658,31 +665,31 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 // upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
-func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, ctrs []actorContainer, containers []*ateompb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
-	upperBase := rootfsUpperDir(id)
+func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateompb.ActorDirs, ctrs []actorContainer, containers []*ateompb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
+	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
-			src := ateompath.ImageVolumeMountPath(id, c.name, vm.GetVolumeName())
+			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetVolumeName())
 			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
 				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
 			}
 		}
 	}
 	if hasDurableVolumes(containers) {
-		if err := s.stageDurableVolumes(ctx, id); err != nil {
+		if err := s.stageDurableVolumes(ctx, id, actorDirs.GetDurableDirVolumeMountsDir()); err != nil {
 			return nil, fmt.Errorf("while staging durable-dir volumes: %w", err)
 		}
 	}
 	if hasCsiVolumes(containers) {
-		if err := s.stageCsiVolumes(ctx, id); err != nil {
+		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetVolumesDir()); err != nil {
 			return nil, fmt.Errorf("while staging CSI volumes: %w", err)
 		}
 	}
 	if hasSystemInfoVolumes(containers) {
-		if err := s.stageSystemInfoVolumes(ctx, id); err != nil {
+		if err := s.stageSystemInfoVolumes(ctx, id, actorDirs.GetSystemInfoVolumeRootsDir()); err != nil {
 			return nil, fmt.Errorf("while staging system-info volumes: %w", err)
 		}
 	}

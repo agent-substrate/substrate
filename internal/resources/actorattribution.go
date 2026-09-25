@@ -22,7 +22,7 @@ import "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 // ateom's usage sampling so those producers cannot drift apart.
 //
 // Unrelated to the credential sense of "actor identity" elsewhere in the repo
-// (ateapi's ActorIdentity service, substratex509, ateompath.ActorIdentityDirPath)
+// (ateapi's ActorIdentity service, substratex509)
 // — nothing here is a secret or is presented as proof of anything.
 type ActorAttribution struct {
 	Ref              ActorRef

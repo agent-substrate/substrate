@@ -27,7 +27,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
 // CleanupSandboxState removes leftover host-side state for a sandbox id (the
@@ -134,7 +134,7 @@ func isSandboxProcess(id, cmdline, exe string) bool {
 	if !strings.Contains(cmdline, id) {
 		return false
 	}
-	if strings.HasPrefix(exe, ateompath.StaticFilesDir+"/") {
+	if strings.HasPrefix(exe, nodepath.StaticFilesDir+"/") {
 		return true
 	}
 	argv0 := strings.SplitN(cmdline, "\x00", 2)[0]

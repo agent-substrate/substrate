@@ -22,7 +22,7 @@ package main
 // state: it survives suspend/resume and, under the Data snapshot scope, is the
 // ONLY thing captured (the workload cold-starts on restore). The host side is
 // owned by atelet, which creates one directory per volume under
-// ateompath.DurableDirVolumeMountsDir(actorUID) and wipes them when the actor's
+// ActorDirs.durable_dir_volume_mounts_dir and wipes them when the actor's
 // directories are reset.
 //
 // ateom exposes that host directory to the guest under the single kataShared
@@ -42,18 +42,18 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
 // durableTarFile is the snapshot file holding the tar of the actor's durable-dir
 // volumes. Its entries are <volumeName>/... relative to
-// ateompath.DurableDirVolumeMountsDir, so extraction restores the same layout.
+// ActorDirs.durable_dir_volume_mounts_dir, so extraction restores the same layout.
 // The name is shared with atelet, which uses it to carve durable data out of a
 // FULL snapshot's file set when uploading a paused checkpoint as DATA.
-const durableTarFile = ateompath.DurableDirTarFile
+const durableTarFile = resources.DurableDirTarFile
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {
@@ -65,10 +65,9 @@ func hasDurableVolumes(containers []*ateompb.Container) bool {
 	return false
 }
 
-// stageDurableVolumes bind-mounts the actor's host durable-dir directory
+// stageDurableVolumes bind-mounts src, the actor's host durable-dir directory,
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/durable.
-func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID string) error {
-	src := ateompath.DurableDirVolumeMountsDir(actorUID)
+func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID, src string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking durable-dir volumes dir %q: %w", src, err)
 	}

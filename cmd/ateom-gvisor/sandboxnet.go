@@ -26,17 +26,17 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
 // actorResolvConf writes the resolver bind source outside the actor's rootfs.
-func actorResolvConf(actorUID string) (string, error) {
+func actorResolvConf(actorDirs *ateompb.ActorDirs) (string, error) {
 	pod, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return "", fmt.Errorf("reading the worker pod resolv.conf: %w", err)
 	}
-	path := ateompath.ActorResolvConfPath(actorUID)
+	path := resolvConfPath(actorDirs)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("creating the actor directory: %w", err)
 	}
@@ -48,8 +48,11 @@ func actorResolvConf(actorUID string) (string, error) {
 
 // removeActorResolvConf drops the file with the actor's network; atelet's
 // per-activation reset clears directories under the actor's path, not files.
-func removeActorResolvConf(ctx context.Context, actorUID string) {
-	if err := os.Remove(ateompath.ActorResolvConfPath(actorUID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+func removeActorResolvConf(ctx context.Context, path string) {
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		slog.WarnContext(ctx, "Failed to remove the actor resolv.conf", slog.Any("err", err))
 	}
 }

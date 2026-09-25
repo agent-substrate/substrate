@@ -28,8 +28,6 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
 // SetupBundleRootfs composes the bundle's rootfs from cached layers per the
@@ -113,7 +111,7 @@ func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 			}
 		}
 
-		mountpoint := ateompath.ImageVolumeMountPathInBundle(bundlePath, vol.Name)
+		mountpoint := ImageVolumeMountPath(bundlePath, vol.Name)
 		if err := os.MkdirAll(mountpoint, 0o700); err != nil {
 			return fmt.Errorf("while creating image volume mount point %q: %w", mountpoint, err)
 		}

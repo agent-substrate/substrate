@@ -106,6 +106,27 @@ service Ateom {
   rpc TerminateWorkload(TerminateWorkloadRequest) returns (TerminateWorkloadResponse) {}
 }
 
+// ActorDirs is the set of per-actor directories atelet prepares on the volume
+// it shares with ateom. ateom takes them from the RPC instead of deriving
+// them from the actor UID.
+// Every directory is under root_dir.
+message ActorDirs {
+  // The actor's own directory.
+  string root_dir = 1;
+  // Holds one OCI bundle per container, named after the container.
+  string oci_bundle_dir = 2;
+  // Where CheckpointWorkload writes the snapshot files.
+  string checkpoint_dir = 3;
+  // Where the snapshot files RestoreWorkload reads have been downloaded to.
+  string restore_dir = 4;
+  // Holds one subdirectory per durable-dir volume.
+  string durable_dir_volume_mounts_dir = 5;
+  // Holds one subdirectory per system-info volume.
+  string system_info_volume_roots_dir = 6;
+  // Holds one mount point per CSI volume.
+  string volumes_dir = 7;
+}
+
 message TerminateWorkloadRequest {
   string atespace = 1;
   string actor_name = 2;
@@ -114,6 +135,7 @@ message TerminateWorkloadRequest {
   string actor_template_name = 5;
   string runsc_path = 6;
   WorkloadSpec spec = 7;
+  ActorDirs actor_dirs = 8;
 }
 
 message TerminateWorkloadResponse {
@@ -145,6 +167,7 @@ message RunWorkloadRequest {
   // runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
   int64 cpu_milli = 11;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 12; // Memory limit in bytes.
+  ActorDirs actor_dirs = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -281,6 +304,7 @@ message CheckpointWorkloadRequest {
 
   // What content to include in the checkpoint.
   SnapshotScope scope = 10;
+  ActorDirs actor_dirs = 11;
 }
 
 message CheckpointWorkloadResponse {
@@ -326,6 +350,7 @@ message RestoreWorkloadRequest {
   // these are ignored. Zero means "unset": keep the runtime default.
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.
+  ActorDirs actor_dirs = 16;
 }
 
 message RestoreWorkloadResponse {

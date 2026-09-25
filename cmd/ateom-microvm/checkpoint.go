@@ -29,7 +29,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -46,7 +45,7 @@ import (
 // What the snapshot holds depends on the requested scope:
 //
 //   - FULL: the whole guest. ateom drives the CH REST api-socket: pause -> snapshot
-//     file://<CheckpointStateDir> (config.json + state.json + sparse memory-ranges)
+//     file://<checkpoint_dir> (config.json + state.json + sparse memory-ranges)
 //     -> tear the VMM down. Each container's rootfs is overlay(virtio-fs RO lower +
 //     disk-backed upper): the upper is host-backed like the durable-dir volumes and
 //     ships alongside as its own tar (see rootfsupper.go); process memory persists
@@ -62,6 +61,9 @@ import (
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -77,6 +79,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	actorUID := req.GetActorUid()
+	actorDirs := req.GetActorDirs()
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
@@ -121,7 +124,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 	dPause := time.Since(tPause)
 
-	checkpointDir := ateompath.CheckpointStateDir(actorUID)
+	checkpointDir := actorDirs.GetCheckpointDir()
 	// Start from a clean dir so CH's snapshot files are the only contents.
 	if err := os.RemoveAll(checkpointDir); err != nil {
 		return nil, fmt.Errorf("while clearing checkpoint dir %q: %w", checkpointDir, err)
@@ -158,7 +161,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if durable {
 		g.Go(func() error {
 			t := time.Now()
-			if err := tarDurableVolumes(gctx, ateompath.DurableDirVolumeMountsDir(actorUID), checkpointDir); err != nil {
+			if err := tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir); err != nil {
 				return err
 			}
 			dDurable = time.Since(t)
@@ -168,7 +171,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
 			t := time.Now()
-			if err := tarRootfsUpper(gctx, rootfsUpperDir(actorUID), checkpointDir); err != nil {
+			if err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir); err != nil {
 				return err
 			}
 			dUpper = time.Since(t)
@@ -190,7 +193,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
 	// already on disk for atelet to ship.
 	tTeardown := time.Now()
-	if err := s.terminateWorkload(ctx, attribution); err != nil {
+	if err := s.terminateWorkload(ctx, attribution, actorDirs); err != nil {
 		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
 			slog.String("actor", attribution.Ref.String()),
 			slog.String("actorUID", actorUID),
@@ -284,7 +287,7 @@ func listFiles(dir string) ([]string, error) {
 
 // teardownActor stops the ateom-owned CH VMM for an actor. ra may be
 // nil (e.g. ateom restarted and lost in-memory state).
-func (s *AteomService) teardownActor(ctx context.Context, id string, ra *runningActor, client *ch.Client) error {
+func (s *AteomService) teardownActor(ctx context.Context, id string, actorDirs *ateompb.ActorDirs, ra *runningActor, client *ch.Client) error {
 	// Stop offering the guest to GetWorkloadStats first, before anything below
 	// makes it stop answering. Clearing it here rather than alongside the
 	// attribution is what keeps a poll that lands mid-teardown on the
@@ -340,13 +343,13 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 	// Remove the rootfs upper dir: ateom owns it — atelet's actor-dir reset
 	// doesn't know it — and its absence is what marks a worker as holding no
 	// disk-backed upper. Runs after the checkpoint tar, which is already on disk.
-	if err := os.RemoveAll(rootfsUpperDir(id)); err != nil {
+	if err := os.RemoveAll(rootfsUpperDir(actorDirs)); err != nil {
 		slog.WarnContext(ctx, "Failed to remove rootfs upper dir", slog.String("actorUID", id), slog.Any("err", err))
 	}
 
 	// Detach the bundle rootfs overlays composed in buildActorContainers, so
 	// atelet's bundle wipe doesn't strand live mounts in this namespace.
-	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(id)); err != nil {
+	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 		}
@@ -357,6 +360,9 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 // TerminateWorkload stops the running actor, tears down its VMM, and cleans up
 // networking and overlays.
 func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -364,7 +370,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
-	if err := s.terminateWorkload(ctx, attribution); err != nil {
+	if err := s.terminateWorkload(ctx, attribution, req.GetActorDirs()); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
@@ -374,23 +380,23 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 }
 
 // stopActorVM tears down the actor's micro-VM, if any, keeping it hosted.
-func (s *AteomService) stopActorVM(ctx context.Context, actorUID string) error {
+func (s *AteomService) stopActorVM(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
 	ra := s.runningVM(actorUID)
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket
 	}
-	return s.teardownActor(ctx, actorUID, ra, ch.NewClient(chSocket))
+	return s.teardownActor(ctx, actorUID, actorDirs, ra, ch.NewClient(chSocket))
 }
 
-func (s *AteomService) terminateWorkload(ctx context.Context, actor resources.ActorAttribution) error {
+func (s *AteomService) terminateWorkload(ctx context.Context, actor resources.ActorAttribution, actorDirs *ateompb.ActorDirs) error {
 	var errs []error
 	if err := s.deactivateActorNetworking(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 
 	actorUID := actor.UID
-	if err := s.stopActorVM(ctx, actorUID); err != nil {
+	if err := s.stopActorVM(ctx, actorUID, actorDirs); err != nil {
 		errs = append(errs, fmt.Errorf("while tearing down actor: %w", err))
 	}
 	// Remove attribution after teardown; a failed checkpoint may leave the VM running.

@@ -50,7 +50,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
@@ -62,20 +62,13 @@ import (
 // tarRootfsUpper); StageMergedRootfs recreates it at mount.
 const rootfsUpperTarFile = "rootfs-upper.tar"
 
-// rootfsUpperDir is the host directory backing the actor's rootfs overlay
-// uppers: one subdirectory per container (see kata.UpperWorkDirs). Local to
-// this binary — no other component touches it — hence not in ateompath.
-func rootfsUpperDir(actorUID string) string {
-	return filepath.Join(ateompath.ActorPath(actorUID), "rootfs-upper")
-}
-
 // resetRootfsUpperDir gives a cold boot a pristine upper directory: a cold
 // boot must start from the bare image, and atelet's actor-dir reset does not
 // know about this directory, so ateom wipes any previous activation's contents
 // itself. The per-container fs/work subdirectories are created by the overlay
 // staging (kata.StageMergedRootfs).
-func resetRootfsUpperDir(actorUID string) error {
-	dir := rootfsUpperDir(actorUID)
+func resetRootfsUpperDir(actorDirs *ateompb.ActorDirs) error {
+	dir := rootfsUpperDir(actorDirs)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("while clearing rootfs upper dir %q: %w", dir, err)
 	}
