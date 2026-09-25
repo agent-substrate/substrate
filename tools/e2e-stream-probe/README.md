@@ -1,21 +1,20 @@
 # Image Streaming Live Cluster E2E Probe
 
 `e2e-stream-probe` is a live validation tool for Agent Substrate image streaming acceleration.
-It exercises both the `riptide` (Google GCFS) and `soci` (AWS Seekable OCI) drivers against live snapshotter daemons on a Kubernetes node.
+It exercises the `riptide` (Riptide Snapshotter) and `soci` (SOCI Snapshotter) drivers against live snapshotter daemons on a Kubernetes node.
 
 ## What it exercises
-1. Auto-detects and connects to streaming daemon sockets:
-   - Riptide: `/run/gcfsd/grpc.sock`
-   - SOCI: `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`
+1. Connects to the snapshotter socket given by `--socket`, or to the provider's default:
+   - Riptide Snapshotter: `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`
+   - SOCI Snapshotter: `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`
 2. Validates `CanStream` for the target container image.
 3. Invokes `PrepareLayers` on the live daemon:
    - Queries image manifest, config, diffIDs, and layer digests.
-   - For Riptide: issues sequential `CreateView` RPC calls.
-   - For SOCI: issues `PrepareSnapshot` calls with CRI manifest and layer digest labels, handling cached snapshots via `ViewSnapshot`.
+   - For each layer, calls `Stat`, `Prepare`, and `View` over the `Snapshots.v1` API, following the snapshotter contract in Section 3.4 of the [design doc](../../docs/image-streaming-api-design.md).
    - Verifies layer directories, `fs` symlinks, and pre-materialized `finalized` markers.
    - Inspects live rootfs filesystem contents inside the streamed views without pulling full tarballs.
 4. Invokes `ReleaseLayers`:
-   - Issues `DeleteView` (Riptide) or `RemoveSnapshot` (SOCI) for all layers.
+   - Calls `Remove` on each layer's view.
    - Cleans up temporary layer directory wrappers.
 
 ## How to run manually
@@ -32,9 +31,9 @@ gcloud container clusters get-credentials kuiyue-stream-test --zone=us-central1-
 
 ---
 
-### Scenario A: Testing Google Riptide (GCFS)
+### Scenario A: Testing the Riptide Snapshotter
 
-1. Start a runner pod mounting the node's `/run/gcfsd`:
+1. Start a runner pod that mounts the node's Riptide Snapshotter socket directory, `/run/containerd-gcfs-grpc`:
 ```bash
 kubectl run stream-e2e-runner \
   --image=us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/nginx:latest \
@@ -46,19 +45,21 @@ kubectl run stream-e2e-runner \
         "image": "us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/nginx:latest",
         "command": ["sleep", "3600"],
         "volumeMounts": [{
-          "name": "gcfsd",
-          "mountPath": "/run/gcfsd"
+          "name": "riptide-snapshotter",
+          "mountPath": "/run/containerd-gcfs-grpc"
         }]
       }],
       "volumes": [{
-        "name": "gcfsd",
+        "name": "riptide-snapshotter",
         "hostPath": {
-          "path": "/run/gcfsd"
+          "path": "/run/containerd-gcfs-grpc"
         }
       }]
     }
   }'
 ```
+
+Each layer's `fs` symlink points at a mount that the snapshotter creates on the host. The probe prints each target. To list layer contents from the runner pod, also mount the host directory that holds those mounts, with `mountPropagation: HostToContainer`.
 
 2. Copy the binary and execute:
 ```bash
@@ -67,13 +68,13 @@ kubectl cp /tmp/e2e-stream-probe default/stream-e2e-runner:/tmp/e2e-stream-probe
 # Test image-b (cold streaming)
 kubectl exec -n default stream-e2e-runner -- /tmp/e2e-stream-probe \
   --provider=riptide \
-  --socket=/run/gcfsd/grpc.sock \
+  --socket=/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock \
   --image=us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/image-b:latest
 
 # Test image-a (warm streaming)
 kubectl exec -n default stream-e2e-runner -- /tmp/e2e-stream-probe \
   --provider=riptide \
-  --socket=/run/gcfsd/grpc.sock \
+  --socket=/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock \
   --image=us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/image-a:latest
 ```
 
@@ -159,11 +160,11 @@ The `-bench` mode executes a rigorous end-to-end comparative performance evaluat
 
 ### Running the Benchmarks
 
-#### Workload 1: Medium Training Image (1.88 GB, 12 layers) via Google Riptide (GCFS)
+#### Workload 1: Medium Training Image (1.88 GB, 12 layers) via the Riptide Snapshotter
 ```bash
 /usr/local/bin/e2e-stream-probe \
   -provider=riptide \
-  -socket=/run/gcfsd/grpc.sock \
+  -socket=/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock \
   -image=us-docker.pkg.dev/kuiyue-gke-dev/axlearn/tpu:kuiyue-enabled \
   -bench
 ```

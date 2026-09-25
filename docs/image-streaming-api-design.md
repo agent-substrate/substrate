@@ -14,7 +14,7 @@ Agent Substrate’s goal is sub-500ms agent startup. Profiling shows that contai
 Image streaming addresses this by replacing upfront layer downloads with on-demand demand paging over FUSE: because agent workloads typically touch only 5%–15% of their rootfs during startup, streaming reduces image ready time from **>100s down to <2.5s** (a 38x–94x speedup).
 
 However, Substrate clusters operate across heterogeneous cloud environments, for example:
-- **Google Cloud (GKE):** Riptide Snapshotter (`/run/containerd-gcfs-grpc`).
+- **Google Cloud (GKE):** Riptide Snapshotter (`/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`).
 - **AWS (EKS):** Seekable OCI snapshotter (`/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`).
 - **Bare Metal / Local Dev:** No streaming daemon available (traditional local cache required).
 
@@ -45,7 +45,7 @@ Substrate requires a unified, provider-agnostic Go API that:
 - **Sub-Second Ready Time:** Enable virtual layer mount paths in `<2.5s` cold, and `<5µs` warm.
 - **Overlayfs Drop-In Compatibility:** Deliver layer paths directly consumable by `ateom`'s read-only lowerdir overlay composition (`layerN/fs:...:layer0/fs`).
 - **Zero-Disruption Fallback:** Transparently fall back to standard `imagecache.Store` (full layer untar) on unsupported images or daemon faults.
-- **Automatic Daemon Discovery:** Support `--image-streamer=auto` to auto-detect ambient node daemons.
+- **Automatic Daemon Discovery:** Support `--image-streamer=auto` to auto-detect ambient node daemons (Section 5.7).
 - **Telemetry Integration:** Emit OpenTelemetry Weaver instruments tracking streaming operations, outcomes, and latency.
 
 ### Non-Goals
@@ -89,7 +89,7 @@ By standardizing on the CNCF Remote Snapshotter interface, Google Riptide and AW
 
 | Architectural Dimension | Google Cloud Riptide (`riptide`) | AWS Seekable OCI (`soci`) |
 | :--- | :--- | :--- |
-| **Daemon Endpoint** | `/run/containerd-gcfs-grpc` (Riptide Snapshotter) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` (SOCI Snapshotter) |
+| **Daemon Endpoint** | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` (Riptide Snapshotter) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` (SOCI Snapshotter) |
 | **Interface Protocol** | `containerd.services.snapshots.v1.Snapshots` | `containerd.services.snapshots.v1.Snapshots` |
 | **Runtime Interaction** | **Bypasses containerd CRI:** speaks direct snapshotter gRPC | **Bypasses containerd CRI:** speaks direct snapshotter gRPC |
 | **FUSE Mount Location** | `/run/containerd-gcfs/...` | `/var/lib/soci-snapshotter-grpc/snapshots/...` |
@@ -118,8 +118,8 @@ flowchart TD
     subgraph SubstrateHost["Node Host (Image Streaming Subsystem)"]
         Atelet -->|1. Resolve Image| StreamerMux["imagestreaming.ImageStreamer<br/>(Registry / Auto-Discovery)"]
         
-        StreamerMux -->|Snapshots.v1 gRPC| GCFS["Riptide Snapshotter<br/>/run/containerd-gcfs-grpc"]
-        StreamerMux -->|Snapshots.v1 gRPC| SOCI["SOCI Snapshotter<br/>/run/soci-snapshotter-grpc/..."]
+        StreamerMux -->|Snapshots.v1 gRPC| GCFS["Riptide Snapshotter<br/>/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock"]
+        StreamerMux -->|Snapshots.v1 gRPC| SOCI["SOCI Snapshotter<br/>/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"]
         
         StreamerMux -.->|Fallback on error| ImgCache["internal/imagecache<br/>(Full Download & Untar)"]
         
@@ -155,6 +155,12 @@ The driver handles each layer, bottom to top, as follows:
 | `Prepare` | Mounts with a nil error | **Declined.** The snapshotter can't provide the layer and expects the caller to unpack it into the mounts and commit it. The driver removes the prepared snapshot without committing it and returns `imagestreaming.ErrNotStreamable`. |
 | Any call | Any other error | The driver removes the prepared snapshot, if it created one, and returns the error. |
 
+The driver calls `Stat(chainID)` before `Prepare` for the same reasons containerd's unpacker does:
+- **The layer may already be on the node.** An earlier pull, another image built on the same layers, or a Pod whose image the snapshotter provided to containerd may have committed it under its chain ID. One `Stat` finds it, and the driver skips `Prepare`. `Stat` doesn't find layers that containerd unpacked itself, because containerd commits those under its own snapshot names.
+- **`Prepare` can't report that a layer is already on the node.** It either provides the layer (`AlreadyExists`) or declines it (mounts). A snapshotter that can't stream a layer may decline it even when the layer is already committed locally, and the driver would then pull the whole image unnecessarily.
+
+After `AlreadyExists`, the driver calls `Stat(chainID)` again, because `AlreadyExists` can also mean that the prepare key already exists. The second `Stat` confirms that the layer is under its chain ID before the driver uses it as the parent of a `View`.
+
 If any layer is declined or fails, the driver removes the views it created for the image, and atelet pulls the whole image with `imagecache.EnsureImage` (Section 5.6). Layers committed under their chain IDs stay on the node for later pulls.
 
 The contract has two limits:
@@ -182,7 +188,9 @@ type ImageStreamer interface {
     // Name returns the provider identifier ("riptide", "soci").
     Name() string
 
-    // CanStream checks if the provider can accelerate this image.
+    // CanStream is a cheap check that the provider is available. It need not
+    // inspect the image: PrepareLayers returns ErrNotStreamable if the
+    // provider declines the image.
     CanStream(ctx context.Context, req *StreamRequest) (bool, error)
 
     // PrepareLayers prepares and mounts the virtual layer directories on the node.
@@ -266,7 +274,7 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
     if streamer != nil {
         if canStream, err := streamer.CanStream(ctx, req); err == nil && canStream {
             if res, err := streamer.PrepareLayers(ctx, req); err == nil && len(res.LayerDirs) > 0 {
-                instruments.RecordImageStreaming(ctx, streamer.Name(), "streamed", dur)
+                instruments.RecordImageStreaming(ctx, streamer.Name(), "success", dur)
                 return &imagecache.Image{Digest: res.ImageDigest, Config: res.Config, LayerDirs: res.LayerDirs}, nil
             }
         }
@@ -304,7 +312,7 @@ The generic driver implements reference counting across actors sharing the same 
 - **Substrate Lifecycle Reality:** Substrate intentionally drains/crashes active actor workloads upon a node reboot (it does not attempt live in-memory VM migration).
 - **Startup Recovery in the Driver:** When `atelet` starts up after a reboot or crash, it executes an **Actor-Derived Reconciliation Model** (matching how Kubernetes `kubelet` recovers state and how Substrate's non-streaming image cache GC discovers roots):
   1. `credentialprovider.New(...)` reloads the credential config immediately from the host (`/var/lib/kubelet/credential-provider-config.yaml`).
-  2. The streaming daemon (Riptide Snapshotter `/run/containerd-gcfs-grpc` / SOCI Snapshotter `/run/soci-snapshotter-grpc/...`) is already running as a host service with its fresh metadata access.
+  2. The streaming daemon (Riptide Snapshotter `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` / SOCI Snapshotter `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`) is already running as a host service with its fresh metadata access.
   3. `reconcileStreamingLeases(streamer, actorsDir)` (in `cmd/atelet/streaming_reconcile.go`) scans surviving on-node bundle overlay specs (`ateompath.ActorsDir/*/bundles/*/rootfs-overlay.json`).
   4. It parses each actor's `OverlaySpec.ImageRef` and layer directory mappings across all resident/running actors, aggregating them into `[]*ActiveLease` entries with exact live reference counts, and calls `streamer.ReconcileLeases(ctx, active)`.
   5. Both `riptide` and `soci` drivers inspect live mounts on the host, reconnect to the remote snapshotter daemon socket, and restore their in-memory `d.leases` map with exact live reference counts (`refCount`) and layer paths.
@@ -399,7 +407,7 @@ flowchart TD
 #### 5.5.2. Data Plane: Token Refresh & Expiration
 - **Question:** How does credential refreshing and timeout handling work when a workload runs for a long time or survives a restart?
 - **How It Actually Works Under the Hood:**
-  - The streaming daemon (Riptide Snapshotter `/run/containerd-gcfs-grpc` on GKE, SOCI Snapshotter `/run/soci-snapshotter-grpc/...` on EKS) runs as a node-level daemon with direct access to the VM instance metadata service.
+  - The streaming daemon (Riptide Snapshotter `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` on GKE, SOCI Snapshotter `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` on EKS) runs as a node-level daemon with direct access to the VM instance metadata service.
   - **On GKE (Riptide Snapshotter):** The Riptide Snapshotter fetches Google OAuth2 access tokens directly from `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token` (or `http://169.254.169.254`). The metadata server automatically rotates tokens before they expire (1-hour validity). The snapshotter handles refreshing internally whenever it performs HTTP Range requests against Artifact Registry.
   - **On AWS (SOCI Snapshotter):** The SOCI snapshotter uses the EC2 instance profile or link-local metadata service, which automatically negotiates and refreshes AWS authorization tokens.
 - **Why We Do Not Pass Tokens via Snapshot Labels:** Containerd snapshotters explicitly avoid passing bearer tokens inside `PrepareSnapshotRequest.Labels` because labels are stored persistently in SQLite/bbolt and exposed via `Stat()`/`List()` RPCs, which would leak credentials.
@@ -492,14 +500,40 @@ A clear contract specifies when `atelet` falls back to traditional download mode
 | **Data Plane Auth (daemon)** | The snapshotter's node identity can't read the image, but `atelet`'s keychain can | **Fallback:** The snapshotter declines the layers; `imagecache.EnsureImage` pulls with `atelet`'s keychain. |
 | **Snapshotter Error** | `Stat`, `Prepare`, or `View` fails with any other error (e.g. `codes.PermissionDenied`, or a failed internal commit) | **Fallback:** The driver removes the prepared snapshot, if any, and the image's views; fall back to standard download. |
 
+### 5.7. Provider Selection
+
+Two atelet flags select the provider:
+
+| `--image-streamer` | `--image-streamer-socket` | Behavior |
+| :--- | :--- | :--- |
+| `none` (default) | Ignored, with a warning if set | Streaming is off. Every image uses `imagecache.EnsureImage`. |
+| `auto` (set by `manifests/ate-install/atelet.yaml`) | Ignored, with a warning if set | atelet uses the first socket below that exists as a Unix socket. If none does, streaming is off. |
+| A registered provider: `riptide`, `soci`, or `remotesnapshotter` | Required | atelet fails to start unless the path exists and is a Unix socket. |
+
+A named provider is an explicit choice, so a missing socket is a configuration error. `auto` is the zero-configuration path.
+
+`auto` checks these sockets, in order:
+
+1. `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`: the Riptide Snapshotter (`riptide`).
+2. `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`: the SOCI Snapshotter (`soci`).
+
+`auto` matches socket files, not their directories. The atelet DaemonSet mounts both socket directories from the host, so the directories exist on every node, including nodes where no snapshotter runs.
+
+atelet logs one line at startup:
+
+- `Image streaming enabled`, with `mode`, `provider`, `socket`, and `reachable`.
+- `Image streaming disabled`, with `mode` and `reason`.
+
+A socket file doesn't prove that the snapshotter is running, because the file can outlive the daemon. To set `reachable`, atelet calls `Stat` once on a key that doesn't exist and expects `NotFound`. The check is informational. If the snapshotter doesn't answer, atelet logs the line at Warn and keeps streaming enabled, and images fall back to `imagecache.EnsureImage` (Section 5.6) until the snapshotter answers.
+
 ---
 
 ## 6. Provider Driver Implementations
 
 | Provider | Host Socket | Protocol | Image Indexing & Registry Scope | Control Plane Auth (atelet) | Data Plane Auth (Streaming Daemon) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`riptide`** (Google) | `/run/containerd-gcfs-grpc` (Riptide Snapshotter) | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests (**GAR/GCR only**) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
-| **`soci`** (AWS) | `/run/soci-snapshotter-grpc/...` (SOCI Snapshotter) | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| **`riptide`** (Google) | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` (Riptide Snapshotter) | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests (**GAR/GCR only**) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| **`soci`** (AWS) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` (SOCI Snapshotter) | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
 
 ---
 
@@ -507,12 +541,23 @@ A clear contract specifies when `atelet` falls back to traditional download mode
 
 Image streaming instrumentation is codified in the OpenTelemetry Weaver registry (`docs/metrics/registry/metrics.yaml`):
 
-1. **`atelet.image_streaming.operations` (Counter):**
-   - Tracks total streaming evaluations.
-   - Labels: `streamer` (`riptide`, `soci`), `outcome` (`streamed`, `fallback`, `error`).
-2. **`atelet.image_streaming.duration` (Histogram):**
-   - Measures latency (seconds) of layer preparation and metadata checks.
-   - Labels: `streamer`, `outcome`.
+1. **`ate.imagestreaming.requests` (Counter):**
+   - Counts the images atelet tries to stream.
+   - Labels: `ate.imagestreaming.provider` (`riptide`, `soci`), `ate.imagestreaming.outcome` (`success`, `fallback`, `error`).
+2. **`ate.imagestreaming.duration` (Histogram):**
+   - Measures how long each attempt takes, in seconds.
+   - Labels: `ate.imagestreaming.provider`, `ate.imagestreaming.outcome`.
+
+atelet also logs the outcome for each image, at levels that keep busy nodes quiet:
+
+| Log Message | Level | When |
+| :--- | :--- | :--- |
+| `Image streamed` | Debug | The image was streamed. |
+| `Image streaming unavailable; falling back to cache` | Debug | `CanStream` returned false, for example because the snapshotter doesn't answer. |
+| `Image not streamable; falling back to cache` | Info | The snapshotter declined a layer (`imagestreaming.ErrNotStreamable`). |
+| Other messages ending in `falling back to cache` | Warn | Any other error, for example a failed `PrepareLayers`. |
+
+Use the `ate.imagestreaming.requests` counter to measure streaming across a node, and `--log-level=debug` to trace individual images. The startup log lines are described in Section 5.7.
 
 ---
 

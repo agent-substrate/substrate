@@ -40,7 +40,7 @@ func TestScanActiveStreamedLeases(t *testing.T) {
 
 	streamedImg1 := "us-docker.pkg.dev/test/image:v1"
 	streamedDigest1 := "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-	streamedLayers1 := []string{"/run/gcfsd/views/layer0", "/run/gcfsd/views/layer1"}
+	streamedLayers1 := []string{"/run/ate/streaming/riptide/image-v1/layer-0", "/run/ate/streaming/riptide/image-v1/layer-1"}
 
 	if err := imagecache.WriteSpec(a1Bundle1, &imagecache.OverlaySpec{
 		ImageRef:    streamedImg1,
@@ -136,7 +136,7 @@ func TestReconcileStreamingLeases(t *testing.T) {
 	if err := imagecache.WriteSpec(aBundle, &imagecache.OverlaySpec{
 		ImageRef:    "test.registry/stream/img:v1",
 		ImageDigest: "sha256:abc",
-		Layers:      []string{"/run/gcfsd/view1"},
+		Layers:      []string{"/run/ate/streaming/riptide/img-v1/layer-0"},
 	}); err != nil {
 		t.Fatal(err)
 	}

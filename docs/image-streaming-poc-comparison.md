@@ -20,7 +20,7 @@ This document compares the approaches of both prototypes with the goal of evalua
   An in-worker PoC where the worker pod binary (`ateom-gvisor`) imports containerd’s Go client library and connects to the pre-existing containerd daemon running on the host Kubernetes/GKE node via a mounted Unix domain socket (`/run/containerd/containerd.sock`). It traverses the full containerd hierarchy—delegating to the middleman Riptide snapshotter plugin (`containerd-gcfs-grpc`) to prepare GCFS snapshots and mounting them from within the worker pod.
 
 * **Prototype B (`internal/imagestreaming` — Basis of the One-Pager Design):**  
-  The decoupled, host-side engine that serves as the foundation for the [Image Streaming One-Pager](image-streaming-api-design.md). Embedded directly in the node daemon (`cmd/atelet`), it bypasses containerd entirely, communicating directly with provider-specific streaming daemons (Google Riptide `gcfsd` or AWS `soci-snapshotter-grpc`) via local gRPC sockets. For Google internal streaming, it further **bypasses the middleman Riptide snapshotter (`containerd-gcfs-grpc`)**, dialing the low-level `gcfsd` daemon (`/run/gcfsd/grpc.sock`) directly to mount layer views on the host. It projects these views into the worker pod (`ateom`) as standard, read-only OCI overlay lowerdirs, keeping worker sandboxes unprivileged and strictly isolated.
+  The decoupled, host-side engine that serves as the foundation for the [Image Streaming One-Pager](image-streaming-api-design.md). Embedded directly in the node daemon (`cmd/atelet`), it bypasses the containerd daemon and CRI, talking directly to each provider's remote snapshotter (the Riptide Snapshotter, `containerd-gcfs-grpc`, or the AWS SOCI Snapshotter, `soci-snapshotter-grpc`) over its local socket with the standard CNCF `Snapshots.v1` gRPC API. It projects the resulting layer views into the worker pod (`ateom`) as standard, read-only OCI overlay lowerdirs, keeping worker sandboxes unprivileged and strictly isolated.
 
 ### Key Takeaway
 While Prototype A demonstrated the viability of cold-node resume acceleration using GCFS, its in-worker execution model requires exposing host containerd sockets (violating Substrate’s workload isolation boundary), adds +131,000 lines of vendored containerd code, and couples the system to Google Cloud. 
@@ -35,13 +35,13 @@ Prototype B achieves equivalent sub-2-second resume performance while preserving
 | :--- | :--- | :--- |
 | **Execution Placement** | Inside `ateom-gvisor` worker pod (`cmd/ateom-gvisor/main.go`) | Inside `atelet` node daemon (`cmd/atelet/main.go`) |
 | **Workload Security & Isolation** | ⚠️ **Breached:** Requires injecting 4 `hostPath` mounts (`/run/containerd`, `/var/lib/containerd`, `/run/gcfsd`, `/run/containerd-gcfs-grpc`) into untrusted worker pods | 🔒 **Preserved:** Zero host daemon socket exposure; `ateom` remains capability-less and isolated |
-| **Containerd Middleman** | **Coupled to containerd:** Uses containerd v2 Go client to pull and prepare snapshots | **Bypassed:** Bypasses containerd daemon, communicating directly with provider FUSE daemons |
+| **Containerd Middleman** | **Coupled to containerd:** Uses containerd v2 Go client to pull and prepare snapshots | **Bypassed:** Bypasses containerd daemon, communicating directly with each provider's remote snapshotter over `Snapshots.v1` gRPC |
 | **Codebase Footprint** | ⚠️ **+131,529 lines** of vendored `containerd/v2` packages | 🧼 **Lightweight:** Clean Go implementation (<1,500 lines) using standard protobuf/gRPC and `go-containerregistry` |
-| **Multi-Cloud Portability** | ❌ **Google Riptide only** (hardcoded to `"gcfs"` snapshotter and GCE metadata token) | ✅ **Vendor-Agnostic Dual Adoption:** Unified API supporting both Google Riptide (`gcfsd`) and AWS SOCI (`soci-snapshotter-grpc`) |
+| **Multi-Cloud Portability** | ❌ **Google Riptide only** (hardcoded to `"gcfs"` snapshotter and GCE metadata token) | ✅ **Vendor-Agnostic Dual Adoption:** Unified API supporting both Google Riptide (Riptide Snapshotter, `containerd-gcfs-grpc`) and AWS SOCI (`soci-snapshotter-grpc`) |
 | **Image Config Resolution** | ❌ None: Requires `ActorTemplate` to explicitly declare `command`/`args` (cannot read image `ENTRYPOINT`/`ENV`) | ✅ Native: Resolves OCI config remotely from registry, preserving container `ENTRYPOINT`, `CMD`, and `ENV` |
 | **Pause Container Strategy** | Exempts `pause` image (pulls via local cache; saves ~3.7s cold start) | Exempts `pause` image (pulls via local cache `sandboxRec.PauseImage`) |
 | **GC & Leak Management** | Pins snapshots with `containerd.io/gc.root` label; unpinned snapshots get deleted by containerd GC | **Self-healing Startup Reconciliation** (`cmd/atelet/streaming_reconcile.go`) derived from on-disk `rootfs-overlay.json` specs |
-| **Cold Mount Probing** | Includes retry probe loop for `gcfsd` enumeration warmup | Can adopt host-side metadata warmup probe |
+| **Cold Mount Probing** | Includes a retry probe loop that waits until a cold Riptide layer mount is listable | Can adopt host-side metadata warmup probe |
 
 ---
 
@@ -67,7 +67,7 @@ In Prototype B, `atelet` (the privileged node agent) prepares the layer director
 1. `atelet` mounts the FUSE views from the local daemon into `/run/substrate/imagestreaming/...` and creates standard `layer/fs` symlinks with finalized markers.
 2. `atelet` writes the runtime-neutral `rootfs-overlay.json` into the actor bundle.
 3. `ateom` only receives directory paths and constructs the overlay mount in its own mount namespace.
-4. **Result:** Worker pods have **zero access** to host containerd sockets, GCFS control sockets, or host filesystems.
+4. **Result:** Worker pods have **zero access** to host containerd sockets, remote snapshotter sockets, or host filesystems.
 
 ---
 
@@ -77,13 +77,12 @@ In Prototype B, `atelet` (the privileged node agent) prepares the layer director
 graph TD
     subgraph "Prototype A: Multi-Tier Middleman Chain"
         AteomA["ateom-gvisor (Worker Pod)"] -->|containerd v2 Client| CD["containerd.sock"]
-        CD -->|Snapshot Plugin| Plugin["containerd-gcfs-grpc"]
-        Plugin -->|Daemon IPC| GCFS_A["gcfsd (/run/gcfsd/grpc.sock)"]
-        GCFS_A -->|FUSE Mount| MountA["Bundle Rootfs"]
+        CD -->|Snapshot Plugin| Plugin["Riptide Snapshotter (containerd-gcfs-grpc)"]
+        Plugin -->|FUSE Mount| MountA["Bundle Rootfs"]
     end
 
     subgraph "Prototype B: Direct Daemon Integration"
-        AteletB["atelet (Host Node Daemon)"] -->|Direct gRPC IPC| DaemonB["Provider Daemon (/run/gcfsd or /run/soci...)"]
+        AteletB["atelet (Host Node Daemon)"] -->|Snapshots.v1 gRPC| DaemonB["Remote Snapshotter (Riptide or SOCI)"]
         DaemonB -->|FUSE Views| Lowerdirs["Layer Lowerdirs (/run/substrate/...)"]
         Lowerdirs -->|Standard Overlay Spec| AteomB["ateom-gvisor (Capability-less)"]
     end
@@ -101,7 +100,7 @@ Because Prototype A creates snapshots through containerd without creating a full
 - **The Consequence:** Pinned snapshots are *immune* to containerd collection. If an actor crashes or `ateom` is killed, the pinned snapshot permanently leaks on the host node unless cleaned up by external intervention.
 
 #### The Direct-to-Daemon Advantage in Prototype B
-By bypassing containerd entirely, Prototype B communicates directly with `/run/gcfsd/grpc.sock` (via `gcfs.GCFSDClient`) or `/run/soci-snapshotter-grpc/...` (via containerd's raw `SnapshotService` gRPC protocol):
+By bypassing the containerd daemon, Prototype B talks to each remote snapshotter over its own socket (`/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` for the Riptide Snapshotter, `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` for the SOCI Snapshotter) with the standard CNCF `Snapshots.v1` gRPC API:
 - Substrate is completely decoupled from containerd image garbage collection and CRI daemon locks.
 - Layer views are managed as independent FUSE mount points, allowing sub-microsecond view reuse across multiplexed actors.
 
@@ -120,7 +119,7 @@ Prototype A is hardcoded to Google Cloud GKE:
 
 #### Prototype B: Strategic Dual-Adoption Runtime
 Prototype B implements the extensible `internal/imagestreaming` provider registry:
-1. **Google Internal (Riptide):** First-class support for Google Cloud Artifact Registry streaming manifests and `gcfsd`.
+1. **Google Internal (Riptide):** First-class support for Google Cloud Artifact Registry streaming through the Riptide Snapshotter (`containerd-gcfs-grpc`).
 2. **External Cloud & Industry Standard (AWS SOCI):** Full support for Seekable OCI indices via `soci-snapshotter-grpc`.
 3. **Pluggable Architecture:** Adding support for other snapshotters (such as eStargz or Nydus) requires only implementing the `ImageStreamer` interface without modifying core scheduling or actor lifecycle paths.
 4. **Credential Flexibility:** Uses `google.Keychain` and ambient node credentials, supporting both Google Workload Identity and standard OCI registry authentication.
@@ -178,8 +177,8 @@ Prototype A revealed two valuable operational behaviors of GCFS that validate ou
    - Streaming the tiny single-binary `pause` image costs ~3.7s of cold-start latency due to registry round trips and GCFS layer setup, while pulling it via local cache takes milliseconds.
    - *Status:* Prototype B adopts this principle; `pause` is handled via local caching (`sandboxRec.PauseImage`).
 2. **GCFS Enumeration Warmup Race:**
-   - Prototype A observed that immediately following a cold layer setup, `gcfsd` can answer the initial `readdir` on a layer with `ENOENT` while its directory index is still loading.
-   - *Optimization:* Adding an enumeration probe loop (`os.ReadDir(rootfs)`) and a background host-side inode walker (`warmRootfsMetadata`) pre-populates `gcfsd`'s directory index before guest execution, avoiding Sentry/Gofer latency inside gVisor.
+   - Prototype A observed that immediately following a cold layer setup, a Riptide layer mount can answer the initial `readdir` with `ENOENT` while its directory index is still loading.
+   - *Optimization:* Adding an enumeration probe loop (`os.ReadDir(rootfs)`) and a background host-side inode walker (`warmRootfsMetadata`) pre-populates the directory index before guest execution, avoiding Sentry/Gofer latency inside gVisor.
 
 ---
 

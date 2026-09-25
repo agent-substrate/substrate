@@ -24,8 +24,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/imagestreaming"
 	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/remotesnapshotter"
-	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/riptide"
-	_ "github.com/agent-substrate/substrate/internal/imagestreaming/drivers/soci"
+	"github.com/agent-substrate/substrate/internal/imagestreaming/drivers/riptide"
+	"github.com/agent-substrate/substrate/internal/imagestreaming/drivers/soci"
 )
 
 func main() {
@@ -37,10 +37,10 @@ func main() {
 	flag.Parse()
 
 	if *socket == "" {
-		if *provider == "soci" {
-			*socket = "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"
+		if *provider == soci.ProviderName {
+			*socket = soci.DefaultSOCISocket
 		} else {
-			*socket = "/run/containerd-gcfs-grpc"
+			*socket = riptide.DefaultGCFSSocket
 		}
 	}
 	if *imageRef == "" {
@@ -66,7 +66,7 @@ func main() {
 		"work_dir":                   *workDir,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FAIL: failed to get riptide streamer: %v\n", err)
+		fmt.Fprintf(os.Stderr, "FAIL: failed to get %s streamer: %v\n", *provider, err)
 		os.Exit(1)
 	}
 	fmt.Printf("Initialized streamer provider: %s\n", streamer.Name())
@@ -94,7 +94,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("\nInvoking PrepareLayers on live GCFS daemon...")
+	fmt.Println("\nInvoking PrepareLayers on the live snapshotter...")
 	t0 := time.Now()
 	res, err := streamer.PrepareLayers(ctx, req)
 	dur := time.Since(t0)
