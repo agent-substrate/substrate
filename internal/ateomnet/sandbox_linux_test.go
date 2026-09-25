@@ -32,54 +32,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/vishvananda/netlink"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/roottest"
-	"github.com/vishvananda/netns"
 )
 
 const testEgressPort = 15001
-
-func TestValidateNetNSDialTarget(t *testing.T) {
-	for _, target := range []struct {
-		network, address string
-		wantErr          bool
-	}{
-		{"tcp", "127.0.0.1:80", false},
-		{"tcp4", "127.0.0.1:80", false},
-		{"tcp6", "[::1]:80", false},
-		{"udp", "127.0.0.1:53", false},
-		{"udp4", "127.0.0.1:53", false},
-		{"udp6", "[fe80::1%eth0]:53", false},
-		{"tcp", "localhost:80", true},
-		{"tcp", ":80", true},
-		{"tcp", "127.0.0.1", true},
-		{"unix", "/tmp/socket", true},
-		{"ip", "127.0.0.1:80", true},
-	} {
-		t.Run(target.network+"/"+target.address, func(t *testing.T) {
-			err := validateNetNSDialTarget(target.network, target.address)
-			if (err != nil) != target.wantErr {
-				t.Errorf("validateNetNSDialTarget = %v, want error: %t", err, target.wantErr)
-			}
-		})
-	}
-	if err := validateNetNSDialTarget("unix", "/tmp/socket"); !errors.Is(err, net.UnknownNetworkError("unix")) {
-		t.Errorf("unsupported network: got %v, want UnknownNetworkError", err)
-	}
-}
-
-func TestNetNSDialerRejectsNonIPTargets(t *testing.T) {
-	for _, target := range []struct{ network, address string }{
-		{"tcp", "localhost:80"},
-		{"tcp", ":80"},
-		{"tcp", "127.0.0.1"},
-		{"unix", "/tmp/socket"},
-	} {
-		if conn, err := NetNSDialer(-1)(context.Background(), target.network, target.address); err == nil {
-			_ = conn.Close()
-			t.Errorf("accepted %s %s", target.network, target.address)
-		}
-	}
-}
 
 func TestSandboxSessionDialerAfterClose(t *testing.T) {
 	session := &SandboxSession{}
@@ -128,14 +85,6 @@ func TestSandboxSessionDialerConcurrentClose(t *testing.T) {
 	workers.Wait()
 }
 
-func TestNetNSDialerCanceledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := NetNSDialer(-1)(ctx, "tcp", "127.0.0.1:1"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled dial: got %v, want cancellation", err)
-	}
-}
-
 func TestSetupSandboxNetwork(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
@@ -158,7 +107,7 @@ func TestSetupSandboxNetwork(t *testing.T) {
 
 		// The actor's app, bound where a real one binds, inside its namespace.
 		var lis net.Listener
-		if err := NetNSDo(ctx, n.RuntimeNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
 			l, err := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
 			lis = l
 			return err
@@ -175,7 +124,7 @@ func TestSetupSandboxNetwork(t *testing.T) {
 
 	// Reaching each actor is a matter of which namespace the dial is made from.
 	for uid, a := range actors {
-		client := &http.Client{Transport: &http.Transport{DialContext: NetNSDialer(a.net.RuntimeNetNS)}, Timeout: 5 * time.Second}
+		client := &http.Client{Transport: &http.Transport{DialContext: netns.Dialer(a.net.RuntimeNetNS)}, Timeout: 5 * time.Second}
 		resp, err := client.Get((&url.URL{Scheme: "http", Host: net.JoinHostPort(ActorVethIP, "80")}).String())
 		if err != nil {
 			t.Fatalf("reaching actor %s: %v", uid, err)
@@ -207,7 +156,7 @@ func TestActorEgressIsFailClosedWithoutAtunnel(t *testing.T) {
 	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	for _, destination := range []string{"93.184.216.34:443", "93.184.216.34:8080"} {
-		if err := NetNSDo(ctx, n.RuntimeNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
 			c, err := net.DialTimeout("tcp", destination, 3*time.Second)
 			if err != nil {
 				return err
@@ -231,7 +180,7 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	var app net.Listener
-	if err := NetNSDo(ctx, n.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
 		l, e := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
 		app = l
 		return e
@@ -250,7 +199,7 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 		}
 	}()
 
-	dial := NetNSDialer(n.GatewayNetNS)
+	dial := netns.Dialer(n.GatewayNetNS)
 	c, err := dial(ctx, "tcp", net.JoinHostPort(ActorVethIP, "80"))
 	if err != nil {
 		t.Fatalf("ingress dial: %v", err)
@@ -289,7 +238,7 @@ func TestSetupSandboxNetworkWithoutVeth(t *testing.T) {
 	}
 
 	// No veth was built, so nothing but lo is here until the tap arrives.
-	if err := NetNSDo(ctx, n.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
 		links, err := netlink.LinkList()
 		if err != nil {
 			return err
@@ -332,7 +281,7 @@ func TestSetupSucceedsOverALeftoverNamespace(t *testing.T) {
 	}
 	t.Cleanup(func() { CleanupSandboxNetwork(second) })
 
-	if err := NetNSDo(ctx, second.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, second.RuntimeNetNS, func(context.Context) error {
 		if _, err := netlink.LinkByName(ActorVethName); err != nil {
 			return fmt.Errorf("actor interface missing after reuse: %w", err)
 		}
@@ -356,7 +305,7 @@ func TestActorUDPHasNowhereToGoBeyondTheNamespacePair(t *testing.T) {
 	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	for _, destination := range []string{"93.184.216.34:443", "93.184.216.34:53"} {
-		if err := NetNSDo(ctx, n.GatewayNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
 			c, err := net.Dial("udp", destination)
 			if err != nil {
 				return err
