@@ -84,6 +84,16 @@ func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWo
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateAddWorkerAllocatedRequest runs the generated validation for req.
+func ValidateAddWorkerAllocatedRequest(ctx context.Context, req *ateletpb.AddWorkerAllocatedRequest) field.ErrorList {
+	return Validate_AddWorkerAllocatedRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateSubtractWorkerAllocatedRequest runs the generated validation for req.
+func ValidateSubtractWorkerAllocatedRequest(ctx context.Context, req *ateletpb.SubtractWorkerAllocatedRequest) field.ErrorList {
+	return Validate_SubtractWorkerAllocatedRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHostPort(fldPath, *value)
 }

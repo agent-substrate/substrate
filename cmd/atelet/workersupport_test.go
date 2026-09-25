@@ -94,6 +94,8 @@ type fakeWorkerService struct {
 	epoch       int64
 	mintGot     []*ateapi.MintWorkerActorCertificateRequest
 	mintResp    *ateapi.MintWorkerActorCertificateResponse
+	gotAdd      []*ateapi.AddWorkerAllocatedRequest
+	gotSubtract []*ateapi.SubtractWorkerAllocatedRequest
 	err         error
 }
 
@@ -119,6 +121,22 @@ func (s *fakeWorkerService) SetWorkerSandboxRuntimes(_ context.Context, in *atea
 	}
 	s.runtimesGot = append(s.runtimesGot, in)
 	return &ateapi.SetWorkerSandboxRuntimesResponse{}, nil
+}
+
+func (s *fakeWorkerService) AddWorkerAllocated(_ context.Context, in *ateapi.AddWorkerAllocatedRequest, _ ...grpc.CallOption) (*ateapi.AddWorkerAllocatedResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.gotAdd = append(s.gotAdd, in)
+	return &ateapi.AddWorkerAllocatedResponse{}, nil
+}
+
+func (s *fakeWorkerService) SubtractWorkerAllocated(_ context.Context, in *ateapi.SubtractWorkerAllocatedRequest, _ ...grpc.CallOption) (*ateapi.SubtractWorkerAllocatedResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.gotSubtract = append(s.gotSubtract, in)
+	return &ateapi.SubtractWorkerAllocatedResponse{}, nil
 }
 
 func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *ateapi.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapi.MintWorkerActorCertificateResponse, error) {
@@ -673,6 +691,34 @@ func TestReportActorCrashedNamesTheCallingWorker(t *testing.T) {
 	}
 }
 
+// ateletCPUMemory is a worker-side resource delta of the given quantities.
+func ateletCPUMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
+	return &ateletpb.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}
+}
+
+// ateapiCPUMemory is ateletCPUMemory as the control plane receives it.
+func ateapiCPUMemory(cpuMilli, memoryBytes int64) *ateapi.Resources {
+	return &ateapi.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}
+}
+
+func TestAddWorkerAllocatedForwardsFromCertIdentity(t *testing.T) {
+	workers := &fakeWorkerService{}
+	svc := &workerSupportServer{workers: workers}
+
+	if _, err := svc.AddWorkerAllocated(workerContext(t, "pod-a"), &ateletpb.AddWorkerAllocatedRequest{ResourceDelta: ateletCPUMemory(250, 1<<30)}); err != nil {
+		t.Fatalf("AddWorkerAllocated() failed: %v", err)
+	}
+
+	want := []*ateapi.AddWorkerAllocatedRequest{{
+		// Named after the pod UID in the certificate, not the request.
+		Worker:        &ateapi.ObjectRef{Name: "pod-a"},
+		ResourceDelta: ateapiCPUMemory(250, 1<<30),
+	}}
+	if diff := cmp.Diff(want, workers.gotAdd, protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestReportActorCrashedRequiresACertificate(t *testing.T) {
 	workers := &fakeSuspendService{}
 	svc := &workerSupportServer{workers: workers}
@@ -688,5 +734,78 @@ func TestReportActorCrashedRequiresACertificate(t *testing.T) {
 	}
 	if len(workers.gotCrashed) != 0 {
 		t.Errorf("unauthenticated report was still forwarded: %v", workers.gotCrashed)
+	}
+}
+
+func TestSubtractWorkerAllocatedForwardsFromCertIdentity(t *testing.T) {
+	workers := &fakeWorkerService{}
+	svc := &workerSupportServer{workers: workers}
+
+	if _, err := svc.SubtractWorkerAllocated(workerContext(t, "pod-a"), &ateletpb.SubtractWorkerAllocatedRequest{ResourceDelta: ateletCPUMemory(750, 512<<20)}); err != nil {
+		t.Fatalf("SubtractWorkerAllocated() failed: %v", err)
+	}
+
+	want := []*ateapi.SubtractWorkerAllocatedRequest{{
+		Worker:        &ateapi.ObjectRef{Name: "pod-a"},
+		ResourceDelta: ateapiCPUMemory(750, 512<<20),
+	}}
+	if diff := cmp.Diff(want, workers.gotSubtract, protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestAdjustWorkerAllocatedRequiresACertificate(t *testing.T) {
+	workers := &fakeWorkerService{}
+	svc := &workerSupportServer{workers: workers}
+	delta := ateletCPUMemory(100, 1<<20)
+
+	if _, err := svc.AddWorkerAllocated(context.Background(), &ateletpb.AddWorkerAllocatedRequest{ResourceDelta: delta}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("unauthenticated add returned %v, want Unauthenticated", err)
+	}
+	if _, err := svc.SubtractWorkerAllocated(context.Background(), &ateletpb.SubtractWorkerAllocatedRequest{ResourceDelta: delta}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("unauthenticated subtract returned %v, want Unauthenticated", err)
+	}
+	if len(workers.gotAdd)+len(workers.gotSubtract) != 0 {
+		t.Errorf("unauthenticated requests were still forwarded: add %v, subtract %v", workers.gotAdd, workers.gotSubtract)
+	}
+}
+
+// A malformed delta is refused locally rather than forwarded.
+func TestAdjustWorkerAllocatedRejectsMalformedDelta(t *testing.T) {
+	workers := &fakeWorkerService{}
+	svc := &workerSupportServer{workers: workers}
+	ctx := workerContext(t, "pod-a")
+
+	for name, delta := range map[string]*ateletpb.Resources{
+		"missing":  nil,
+		"negative": ateletCPUMemory(-100, 1<<20),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.AddWorkerAllocated(ctx, &ateletpb.AddWorkerAllocatedRequest{ResourceDelta: delta}); status.Code(err) != codes.InvalidArgument {
+				t.Errorf("add: code = %v (err %v), want InvalidArgument", status.Code(err), err)
+			}
+			if _, err := svc.SubtractWorkerAllocated(ctx, &ateletpb.SubtractWorkerAllocatedRequest{ResourceDelta: delta}); status.Code(err) != codes.InvalidArgument {
+				t.Errorf("subtract: code = %v (err %v), want InvalidArgument", status.Code(err), err)
+			}
+		})
+	}
+	if len(workers.gotAdd)+len(workers.gotSubtract) != 0 {
+		t.Errorf("malformed requests were still forwarded: add %v, subtract %v", workers.gotAdd, workers.gotSubtract)
+	}
+}
+
+// The control plane's code must reach the worker unchanged, so it can tell a
+// refused delta from a transport failure worth retrying.
+func TestAdjustWorkerAllocatedSurfacesRefusal(t *testing.T) {
+	workers := &fakeWorkerService{err: status.Error(codes.NotFound, "Worker not found")}
+	svc := &workerSupportServer{workers: workers}
+	ctx := workerContext(t, "pod-a")
+	delta := ateletCPUMemory(100, 1<<20)
+
+	if _, err := svc.AddWorkerAllocated(ctx, &ateletpb.AddWorkerAllocatedRequest{ResourceDelta: delta}); status.Code(err) != codes.NotFound {
+		t.Errorf("add: code = %v (err %v), want NotFound", status.Code(err), err)
+	}
+	if _, err := svc.SubtractWorkerAllocated(ctx, &ateletpb.SubtractWorkerAllocatedRequest{ResourceDelta: delta}); status.Code(err) != codes.NotFound {
+		t.Errorf("subtract: code = %v (err %v), want NotFound", status.Code(err), err)
 	}
 }
