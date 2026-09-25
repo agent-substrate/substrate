@@ -959,6 +959,16 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
+	// The sandbox (binaries + pause image) that runs the restored workload
+	// comes from the request, resolved by the control plane from the
+	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
+	// files to restore and the actor identity. Resolved before any on-node
+	// work so an invalid request changes nothing.
+	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid sandbox_assets: %v", err)
+	}
+
 	// Per-step timing so we can attribute resume latency between the rustfs
 	// download/decompress, the OCI image unpack, and ateom's own work. Reported on
 	// the way out, so a failed restore still accounts for the phases it completed.
@@ -1079,15 +1089,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// The manifest is what tells a golden restore from a latest one, so the
 	// snapshot kind only becomes knowable here.
 	op.kind = restoreSnapshotKind(req, sandboxRec)
-
-	// The sandbox (binaries + pause image) that runs the restored workload
-	// comes from the request, resolved by the control plane from the
-	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
-	// files to restore and the actor identity.
-	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid sandbox_assets: %v", err)
-	}
 
 	// Undo the Register if the restore fails.
 	defer func() {
