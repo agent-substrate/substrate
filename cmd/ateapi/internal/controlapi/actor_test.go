@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -451,65 +452,65 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "external_snapshot", "actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		"valid actor.status.local_snapshot_info.snapshot_name",
+		"valid actor.status.local_snapshot.snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "snap-1"}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "snap-1"}
 		})),
 		nil,
 	}, {
-		"invalid actor.status.local_snapshot_info.snapshot_name",
+		"invalid actor.status.local_snapshot.snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "SNAP 1"}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "SNAP 1"}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"invalid actor.status.local_snapshot_info.node_vms entry",
+		"invalid actor.status.local_snapshot.node_vms entry",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: []string{"node-1", "NOT A NODE"}}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "NOT A NODE"}}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots").Index(1), nil, "").WithOrigin("format=k8s-long-name")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		"too many actor.status.local_snapshot_info.node_vms entries",
+		"too many actor.status.local_snapshot.node_vms entries",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			nodes := make([]string, 257)
 			for i := range nodes {
 				nodes[i] = fmt.Sprintf("node-%d", i)
 			}
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: nodes}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: nodes}
 		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots"), 257, 256).WithOrigin("maxItems")},
+		field.ErrorList{field.TooMany(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots"), 257, 256).WithOrigin("maxItems")},
 	}, {
-		"duplicate actor.status.local_snapshot_info.node_vms entry",
+		"duplicate actor.status.local_snapshot.node_vms entry",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: []string{"node-1", "node-1"}}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "node-1"}}
 		})),
-		field.ErrorList{field.Duplicate(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots").Index(1), nil)},
+		field.ErrorList{field.Duplicate(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil)},
 	}, {
-		"valid actor.status.local_snapshot_info.content_scope",
+		"valid actor.status.local_snapshot.content_scope",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
 		})),
 		nil,
 	}, {
-		"negative actor.status.local_snapshot_info.content_scope",
+		"negative actor.status.local_snapshot.content_scope",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope(-1)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(-1)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "content_scope"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("minimum")},
 	}, {
-		"invalid actor.status.local_snapshot_info.content_scope",
+		"invalid actor.status.local_snapshot.content_scope",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope(3)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(3)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "content_scope"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("maximum")},
 	}, {
 		"too many actor_volumes",
 		validInput(),
@@ -561,6 +562,89 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressLocalSnapshotName = "BAD NAME" })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_local_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)
+		})
+	}
+}
+
+func TestValidateActorStatusCrash(t *testing.T) {
+	crashPath := field.NewPath("status", "crash")
+	withCrash := func(mutate ...func(*ateapipb.ActorCrash)) func(*ateapipb.Actor) {
+		return withActorStatus(func(s *ateapipb.ActorStatus) {
+			s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+			s.Crash = &ateapipb.ActorCrash{
+				Message:   crashMessageWorkerGone,
+				CrashTime: &timestamppb.Timestamp{Seconds: 867},
+			}
+			for _, m := range mutate {
+				m(s.Crash)
+			}
+		})
+	}
+
+	tests := []struct {
+		name   string
+		oldVal *ateapipb.Actor
+		newVal *ateapipb.Actor
+		want   field.ErrorList
+	}{
+		{
+			name:   "set crash",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash()),
+		},
+		{
+			name:   "set empty crash",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { *c = ateapipb.ActorCrash{} })),
+		},
+		{
+			name:   "clear crash",
+			oldVal: validActor(withCrash()),
+			newVal: validActor(withActorStatus()),
+		},
+		{
+			name:   "replace crash",
+			oldVal: validActor(withCrash()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) {
+				c.Message = crashMessageWorkerDraining
+				c.CrashTime = &timestamppb.Timestamp{Seconds: 5309}
+			})),
+		},
+		{
+			name:   "message at max length",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4096) })),
+		},
+		{
+			name:   "message too long",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+			want:   field.ErrorList{field.TooLong(crashPath.Child("message"), nil, 4096).WithOrigin("maxLength")},
+		},
+		{
+			name:   "truncated crash message fits",
+			oldVal: validActor(withActorStatus()),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) {
+				c.Message = newActorCrash("pause", strings.Repeat("x", 2*maxCrashMessageBytes)).GetMessage()
+			})),
+		},
+		{
+			// Unchanged fields are not revalidated on update, so a crash stored
+			// before a limit was tightened does not block later status writes.
+			name:   "unchanged overlong crash is not revalidated",
+			oldVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+		},
+		{
+			name:   "changed overlong crash is revalidated",
+			oldVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("x", 4097) })),
+			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) { c.Message = strings.Repeat("y", 4097) })),
+			want:   field.ErrorList{field.TooLong(crashPath.Child("message"), nil, 4096).WithOrigin("maxLength")},
+		},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)

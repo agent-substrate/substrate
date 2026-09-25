@@ -27,6 +27,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -210,7 +211,7 @@ func TestMakeCert(t *testing.T) {
 				pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
 
 				kc := fake.NewSimpleClientset(pod, pcr)
-				impl := NewImpl(kc, caPool)
+				impl := NewImpl(kc, caPool, betaClient(t, kc))
 
 				if err := impl.MakeCert(context.Background(), pcr); err != nil {
 					t.Fatalf("MakeCert: %v", err)
@@ -349,7 +350,7 @@ func TestMakeCertErrors(t *testing.T) {
 					return true, nil, errors.New("injected update failure")
 				})
 			}
-			impl := NewImpl(kc, caPool)
+			impl := NewImpl(kc, caPool, betaClient(t, kc))
 
 			if err := impl.MakeCert(context.Background(), pcr); err == nil {
 				t.Fatalf("MakeCert: got nil error, want error")
@@ -376,7 +377,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		t.Fatalf("while generating CA 2: %v", err)
 	}
 	caPool := &localca.ConcretePool{CAs: []*localca.CA{ca1, ca2}}
-	impl := NewImpl(nil, caPool)
+	impl := NewImpl(nil, caPool, nil)
 
 	ctbs, err := impl.DesiredClusterTrustBundles()
 	if err != nil {
@@ -407,4 +408,14 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 	if ctb.Spec.TrustBundle != wantBundle.String() {
 		t.Errorf("got trust bundle:\n%s\nwant:\n%s", ctb.Spec.TrustBundle, wantBundle.String())
 	}
+}
+
+func betaClient(t *testing.T, kc *fake.Clientset) *podcertificate.Client {
+	t.Helper()
+	kc.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/v1beta1", APIResources: []metav1.APIResource{{Name: "podcertificaterequests"}}}}
+	client, err := podcertificate.NewClient(kc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }

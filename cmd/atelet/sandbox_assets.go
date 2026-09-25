@@ -38,7 +38,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -136,7 +137,7 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 // Assets are cached, so re-fetching at Checkpoint/Restore is a no-op once
 // present.
 func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
-	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
+	if err := os.MkdirAll(nodepath.StaticFilesDir, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}
 	paths := make(map[string]string, len(rec.Assets))
@@ -173,7 +174,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 
-	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
+	localPath := ateletpath.RunSCBinaryPath(entry.SHA256)
 	_, err := os.Stat(localPath)
 	if err == nil {
 		slog.DebugContext(ctx, "Sandbox asset cache hit", slog.String("path", localPath))
@@ -210,7 +211,7 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 
-	releaseDir := ateompath.GVisorReleaseDir(entry.SHA256)
+	releaseDir := ateletpath.GVisorReleaseDir(entry.SHA256)
 	runscPath := filepath.Join(releaseDir, "runsc")
 	_, err := os.Stat(releaseDir)
 	if err == nil {
@@ -229,7 +230,7 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 	defer os.Remove(tarball)
 	slog.InfoContext(ctx, "gVisor release download complete", slog.String("url", entry.URL), slog.Duration("duration", time.Since(tDownload)))
 
-	tmpDir, err := os.MkdirTemp(ateompath.StaticFilesDir, filepath.Base(releaseDir)+"-extract-")
+	tmpDir, err := os.MkdirTemp(nodepath.StaticFilesDir, filepath.Base(releaseDir)+"-extract-")
 	if err != nil {
 		return "", wrapFileSystemErr("while creating extraction dir", err)
 	}
@@ -281,7 +282,7 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
 	}
 
-	tmpFile, err := os.CreateTemp(ateompath.StaticFilesDir, tmpPrefix)
+	tmpFile, err := os.CreateTemp(nodepath.StaticFilesDir, tmpPrefix)
 	if err != nil {
 		return "", wrapFileSystemErr("while creating temp file", err)
 	}
@@ -457,7 +458,7 @@ func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
 	if err != nil {
 		return wrapFileSystemErr("while marshaling sandbox record", err)
 	}
-	path := ateompath.ActorSandboxAssetsFile(actorUID)
+	path := ateletpath.ActorSandboxAssetsFile(actorUID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return wrapFileSystemErr("while creating actor dir", err)
 	}
@@ -470,7 +471,7 @@ func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
 // readSandboxRecord loads the actor's on-node sandbox record written at
 // Run/Restore.
 func readSandboxRecord(actorUID string) (*sandboxAssetsRecord, error) {
-	path := ateompath.ActorSandboxAssetsFile(actorUID)
+	path := ateletpath.ActorSandboxAssetsFile(actorUID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, wrapFileSystemErr("while reading sandbox record", err)

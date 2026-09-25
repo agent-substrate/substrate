@@ -74,7 +74,10 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("state = %v, want CRASHED (node name unknown, cannot resume safely)", got.GetStatus().GetState())
 	}
-	for _, n := range got.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots() {
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
+		t.Errorf("crash message = %q, want %q", msg, want)
+	}
+	for _, n := range got.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots() {
 		if n == "" {
 			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, the scheduler's node restriction would never match a real worker")
 		}
@@ -99,7 +102,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 
 // TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
 // records the scope the pause checkpoint captured (the template's onPause) in
-// LocalSnapshotInfo, so a later suspend of the PAUSED actor knows what the
+// LocalSnapshot, so a later suspend of the PAUSED actor knows what the
 // local snapshot contains even if the template's onPause changes while the
 // actor sits PAUSED.
 func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
@@ -161,8 +164,8 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 				t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
 			}
-			if scope := got.GetStatus().GetLocalSnapshotInfo().GetContentScope(); scope != tc.want {
-				t.Errorf("LocalSnapshotInfo.ContentScope = %v, want %v", scope, tc.want)
+			if scope := got.GetStatus().GetLocalSnapshot().GetContentScope(); scope != tc.want {
+				t.Errorf("LocalSnapshot.ContentScope = %v, want %v", scope, tc.want)
 			}
 		})
 	}
@@ -342,6 +345,9 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	}
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageWorkerAssignmentMissing; msg != want {
+		t.Errorf("crash message = %q, want %q", msg, want)
 	}
 }
 

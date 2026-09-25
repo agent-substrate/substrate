@@ -621,10 +621,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	}
 
 	actorClaims := &actoridjwt.Claims{
-		// TODO(identity): This needs to be configurable per-install.  The user
-		// needs to make sure that the OIDC discovery docs are accessible at
-		// this URL, so that relying parties can verify the JWTs.
-		Issuer: "https://api.ate-system.svc",
+		Issuer: s.actorJWTIssuer,
 		// TODO(identity): this format is very likely going to change.
 		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudience(),
@@ -706,9 +703,6 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, status.Errorf(codes.InvalidArgument, "Failed to verify CSR signature")
 	}
 
-	// TODO(identity): Atunnel certificates should probably have a separate RPC,
-	// since different callers will be authorized to get atunnel certificates vs
-	// actor self-identity certificates.
 	var template *x509.Certificate
 	switch req.GetPurpose() {
 	case ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL:

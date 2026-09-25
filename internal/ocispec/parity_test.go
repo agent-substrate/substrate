@@ -20,16 +20,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+const testActorUID = "actor_uid"
+
 // parityOptions mounts one volume of every kind.
 var parityOptions = Options{
-	ActorUID:      testActorUID,
-	ContainerName: "app",
-	Args:          []string{"/app"},
+	Args:                      []string{"/app"},
+	DurableDirVolumeMountsDir: ateompath.DurableDirVolumeMountsDir(testActorUID),
+	VolumesDir:                ateompath.VolumesDir(testActorUID),
+	SystemInfoVolumeRootsDir:  ateompath.SystemInfoVolumeRootsDir(testActorUID),
+	BundlePath:                ateompath.OCIBundlePath(testActorUID, "app"),
 	Volumes: []*ateletpb.Volume{
 		durableVolume("data"),
 		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
@@ -125,7 +130,7 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 
 // ShapeMicroVM errors on a bind that is not staged into the share.
 func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
-	spec := Build(Options{ActorUID: testActorUID, ContainerName: "app", Args: []string{"/app"}})
+	spec := Build(Options{Args: []string{"/app"}})
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")

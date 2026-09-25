@@ -285,7 +285,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 
 		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
 			if dbActor.Status != nil {
-				dbActor.Status.LocalSnapshotInfo = nil
+				dbActor.Status.LocalSnapshot = nil
 				dbActor.Status.WorkerAssignment = nil
 			}
 			return nil

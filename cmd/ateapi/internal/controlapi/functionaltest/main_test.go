@@ -117,6 +117,7 @@ type FakeAteletServer struct {
 
 	CheckpointCalled  bool
 	CheckpointRequest *ateletpb.CheckpointRequest
+	FailCheckpoint    error
 
 	RestoreCalled  bool
 	RestoreRequest *ateletpb.RestoreRequest
@@ -168,6 +169,7 @@ func (f *FakeAteletServer) Reset() {
 
 	f.CheckpointCalled = false
 	f.CheckpointRequest = nil
+	f.FailCheckpoint = nil
 
 	f.RestoreCalled = false
 	f.RestoreRequest = nil
@@ -219,6 +221,9 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 
 	f.CheckpointCalled = true
 	f.CheckpointRequest = proto.Clone(req).(*ateletpb.CheckpointRequest)
+	if f.FailCheckpoint != nil {
+		return nil, f.FailCheckpoint
+	}
 
 	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
 		return nil, err

@@ -43,6 +43,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -86,6 +87,7 @@ var (
 	postgresAdminPasswordFile         = pflag.String("postgres-admin-password-file", "", "File that contains the PostgreSQL administrator password.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
@@ -125,6 +127,11 @@ func main() {
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
 	}
+	resolvedActorJWTIssuer, err := resolveActorJWTIssuer(*actorJWTIssuer, installdefaults.NamespaceFromPodEnv())
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
+	}
+	slog.InfoContext(ctx, "Resolved actor JWT issuer", slog.String("actor-jwt-issuer", resolvedActorJWTIssuer))
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -164,7 +171,7 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to load authentication config", err)
 	}
-	authCfg, actorIdentityJWTIssuer, err := buildJWTProviders(ctx, authenticationConfig)
+	authCfg, err := buildJWTProviders(ctx, authenticationConfig)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
 	}
@@ -276,7 +283,7 @@ func main() {
 		*egressGatewayAddress,
 		volPlugins,
 		objectStore,
-		actorIdentityJWTIssuer,
+		resolvedActorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
 	)
@@ -450,6 +457,7 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("postgres-max-conn-lifetime", *postgresMaxConnLifetime),
 		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
+		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
@@ -580,13 +588,12 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 	}), nil
 }
 
-func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig) (ateapiauth.ServerConfig, string, error) {
+func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig) (ateapiauth.ServerConfig, error) {
 	var serverCfg ateapiauth.ServerConfig
-	var actorIdentityIssuer string
 	for _, providerCfg := range cfg.JWTProviders {
 		httpClient, err := oidcjwt.NewHTTPClient(providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile)
 		if err != nil {
-			return ateapiauth.ServerConfig{}, "", fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
+			return ateapiauth.ServerConfig{}, fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
 		}
 		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
 		serverCfg.JWTProviders = append(serverCfg.JWTProviders, ateapiauth.JWTProvider{
@@ -600,10 +607,20 @@ func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig
 				return claims.Subject, nil
 			},
 		})
-		if providerCfg.Name == cfg.ActorIdentityJWTProvider {
-			actorIdentityIssuer = providerCfg.Issuer
-		}
 		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))
 	}
-	return serverCfg, actorIdentityIssuer, nil
+	return serverCfg, nil
+}
+
+// resolveActorJWTIssuer applies the install default to an empty
+// --actor-jwt-issuer and validates the result.
+func resolveActorJWTIssuer(flagValue, namespace string) (string, error) {
+	issuer := flagValue
+	if issuer == "" {
+		issuer = installdefaults.ActorJWTIssuer(namespace)
+	}
+	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
+		return "", err
+	}
+	return issuer, nil
 }

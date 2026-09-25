@@ -99,7 +99,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: keptURI}
-				s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "local-1"}
+				s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "local-1"}
 				s.InProgressLocalSnapshotName = "local-in-progress"
 			})
 
@@ -116,9 +116,9 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 				t.Errorf("external snapshot = %q, want it untouched at %q", got, keptURI)
 			}
 			// Resume prefers a local snapshot over the external one, so a
-			// surviving LocalSnapshotInfo would restore the execution this
+			// surviving LocalSnapshot would restore the execution this
 			// revert just discarded.
-			if got := gotStatus.GetLocalSnapshotInfo(); got != nil {
+			if got := gotStatus.GetLocalSnapshot(); got != nil {
 				t.Errorf("local snapshot info = %v, want nil", got)
 			}
 			if got := gotStatus.GetInProgressSnapshotUri(); got != "" {
@@ -203,7 +203,9 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_CRASHED, func(a *ateapipb.Actor) {
+		a.Status.Crash = newActorCrash("resume", crashMessageWorkerGone)
+	})
 
 	reverted, err := w.RevertActor(ctx, actorRef)
 	if err != nil {
@@ -211,6 +213,9 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 	}
 	if got := reverted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
+	}
+	if got := reverted.GetStatus().GetCrash(); got != nil {
+		t.Errorf("Crash = %v, want cleared by the revert", got)
 	}
 	if got := reverted.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != "" {
 		t.Errorf("external snapshot = %q, want none", got)
