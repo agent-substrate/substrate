@@ -14,7 +14,7 @@ Agent Substrate’s goal is sub-500ms agent startup. Profiling shows that contai
 Image streaming addresses this by replacing upfront layer downloads with on-demand demand paging over FUSE: because agent workloads typically touch only 5%–15% of their rootfs during startup, streaming reduces image ready time from **>100s down to <2.5s** (a 38x–94x speedup).
 
 However, Substrate clusters operate across heterogeneous cloud environments, for example:
-- **Google Cloud (GKE):** Riptide remote snapshotter (`/run/containerd-gcfs-grpc`).
+- **Google Cloud (GKE):** Riptide image streaming daemon (`/run/containerd-gcfs-grpc`).
 - **AWS (EKS):** Seekable OCI snapshotter (`/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`).
 - **Bare Metal / Local Dev:** No streaming daemon available (traditional local cache required).
 
@@ -23,7 +23,7 @@ However, Substrate clusters operate across heterogeneous cloud environments, for
 A foundational architectural requirement for Agent Substrate is **hybrid and multi-cloud workload portability**. Substrate cannot be coupled exclusively to proprietary Google infrastructure, nor can it sacrifice the deep performance optimizations available within Google Cloud.
 
 The new `internal/imagestreaming` API is intentionally architected to serve as a **dual-adoption bridge**:
-1. **Google Internal Streaming Adoption:** First-class support for Google Cloud / internal GKE streaming infrastructure powered by **Google Riptide (`containerd-gcfs-grpc`)** and Google Cloud Artifact Registry streaming metadata, unlocking sub-second cold starts on GKE TPU/GPU and CPU worker fleets.
+1. **Google Internal Streaming Adoption:** First-class support for Google Cloud / internal GKE streaming infrastructure powered by **Google Riptide** and Google Cloud Artifact Registry streaming metadata, unlocking sub-second cold starts on GKE TPU/GPU and CPU worker fleets.
 2. **External Streaming Product Adoption:** Native adoption of external, industry-standard streaming products, anchored in this design by **AWS Seekable OCI (SOCI)** (`soci-snapshotter-grpc`). The same interface readily accommodates broader open-source OCI streaming standards (such as eStargz, Nydus, or Dragonfly) without modifying Substrate's core scheduling or execution paths.
 
 By standardizing both **internal Google Riptide** and **external AWS SOCI** on the open CNCF Remote Snapshotter standard, we prove that Agent Substrate delivers a vendor-agnostic streaming runtime: workloads achieve equivalent 38x–94x cold boot latency reductions whether deployed on Google Cloud, AWS, or multi-cloud infrastructures.
@@ -101,32 +101,29 @@ By standardizing on the CNCF Remote Snapshotter interface, Google Riptide and AW
 
 ```mermaid
 flowchart TD
-    subgraph K8sStandard["Standard Kubernetes CRI Path (Bypassed)"]
-        Kubelet[Kubelet] -.->|CRI containerd.sock| Containerd[containerd daemon]
-        Containerd -.->|Plugin gRPC| RemotePlugin[Remote Snapshotter Plugin]
-    end
 
     subgraph SubstrateControl["Substrate Control Plane"]
         API[ateapi / Scheduler] -->|RunActor| Atelet[cmd/atelet]
     end
 
     subgraph SubstrateHost["Node Host (Image Streaming Subsystem)"]
-        Atelet -->|1. Resolve Image| StreamerMux["imagestreaming.ImageStreamer\n(Registry / Auto-Discovery)"]
+        Atelet -->|1. Resolve Image| StreamerMux["imagestreaming.ImageStreamer<br/>(Registry / Auto-Discovery)"]
         
-        StreamerMux -->|Snapshots.v1 gRPC| GCFS["Riptide Snapshotter\n/run/containerd-gcfs-grpc"]
-        StreamerMux -->|Snapshots.v1 gRPC| SOCI["SOCI Snapshotter\n/run/soci-snapshotter-grpc/..."]
+        StreamerMux -->|Snapshots.v1 gRPC| GCFS["Riptide Snapshotter<br/>/run/containerd-gcfs-grpc"]
+        StreamerMux -->|Snapshots.v1 gRPC| SOCI["SOCI Snapshotter<br/>/run/soci-snapshotter-grpc/..."]
         
-        StreamerMux -.->|Fallback on error| ImgCache["internal/imagecache\n(Full Download & Untar)"]
+        StreamerMux -.->|Fallback on error| ImgCache["internal/imagecache<br/>(Full Download & Untar)"]
         
         GCFS -->|FUSE Mount| LayerView1["/run/containerd-gcfs/.../fs"]
         SOCI -->|FUSE Mount| LayerView2["/var/lib/soci-.../snapshots/<id>/fs"]
     end
 
-    subgraph ActorSandbox["Actor Sandbox (gVisor / runsc)"]
+    subgraph ActorSandbox["Actor Sandbox"]
         Atelet -->|2. Write Overlay Spec| Ateom[ateom runtime]
-        LayerView1 & LayerView2 -->|lowerdir (ro)| OverlayFS["Merged rootfs"]
-        Ateom -->|upper/work (rw)| OverlayFS
-        OverlayFS --> Workload["Agent Workload\n(Lazy Demand Paged)"]
+        %% Parentheses in labels are wrapped in string quotes below
+        LayerView1 & LayerView2 -- "lowerdir (ro)" --> OverlayFS["Merged rootfs"]
+        Ateom -- "upper/work (rw)" --> OverlayFS
+        OverlayFS --> Workload["Agent Workload<br/>(Lazy Demand Paged)"]
     end
 ```
 
@@ -250,31 +247,35 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
 
 Mounts and open file descriptors consume host kernel resources (VFS dentries, mount table slots, file descriptors). In a high-density actor multiplexing environment where actors may remain idle/sleeping for extended periods, releasing mounts eagerly prevents resource exhaustion while preserving rapid wake-up latency.
 
-#### 5.3.1. Active-Only Leases (Approach 1 - Implemented)
-- **PrepareLayers on Run/Wake:** When an actor starts or resumes from sleep, `PrepareLayers` ensures layer mounts are active and increments the reference count.
-- **Release on Checkpoint / Sleep:** When an actor transitions to Sleep/Paused state via `atelet.Checkpoint`, `atelet` releases its image lease (`ReleaseLayers`).
-  - If no other running actor on the worker references the image (`refCount == 0`), the FUSE mounts are unmounted immediately.
-  - Benchmarks confirm that warm layer re-attachment takes only **~1.8µs to 2ms** (the snapshotter daemon retains compressed chunks and metadata in local cache). Thus, waking actors incur negligible overhead while host mount tables remain clean.
-- **Release on Terminate:** As a safety invariant, actor termination (`atelet.Terminate`) also triggers `ReleaseLayers` if not already released.
+#### 5.3.1. Reference Counting & Garbage Collection
+The generic driver implements reference counting across actors sharing the same base images:
+- **Active-Only Leases in Prototype:** Our prototype's `leases` map tracks `refCount` for each image:
+  - **PrepareLayers on Run/Wake:** When an actor starts or resumes from sleep, `PrepareLayers` ensures layer mounts are active and increments the reference count (`refCount++`).
+  - **Release on Checkpoint / Sleep / Terminate:** When an actor transitions to Sleep/Paused state via `atelet.Checkpoint`, or when an actor terminates (`atelet.Terminate`), `atelet` releases its image lease (`ReleaseLayers`), decrementing `refCount`.
+  - **Unmount on Zero RefCount:** Only when `refCount == 0` (no other running actor on the worker references the image) does the driver issue `RemoveSnapshot` and unmount the virtual directories from the host.
+  - **Microsecond Warm Re-attachment:** Benchmarks confirm that warm layer re-attachment takes only **~1.8µs to 2ms** (the snapshotter daemon retains compressed chunks and metadata in local cache). Thus, waking actors incur negligible overhead while host mount tables remain clean.
 
-#### 5.3.2. Candidate Future Improvements (Evaluated Alternatives)
-- **Approach 2: Idle TTL / LRU Grace Period:**
-  Rather than unmounting immediately upon Checkpoint, hold the lease during a configurable grace window (e.g. 5 minutes). If the actor wakes within the window, layer reuse is instant (zero RPCs). If it stays asleep past TTL, background GC unmounts the views.
-- **Approach 3: Watermark-Driven Mount GC:**
-  Retain warm mounts indefinitely across sleeping actors until host pressure thresholds are reached (e.g., active mount count > 100 or memory pressure), triggering LRU eviction of idle mounts.
+#### 5.3.2. Parallel Layer Preparation vs. OCI Parent Dependency
+- **Can layers be prepared concurrently?**
+- **OCI Parent Dependency:** In containerd snapshotters, layer $N$ requires committed layer $N-1$ as its parent in overlayfs (ChainID dependency: $\text{ChainID}_N = \text{SHA256}(\text{ChainID}_{N-1} + \text{" "} + \text{DiffID}_N)$). Therefore, initial snapshot preparation across the layer stack must proceed sequentially from bottom to top.
+- **Concurrency Opportunity:** However, tag/manifest resolution, container config fetching, and snapshot `Stat` lookups for pre-existing layers can run concurrently across layers. Furthermore, once layers are prepared and mounted, chunk downloads happen completely concurrently and on-demand across all layers during actor startup as the sandbox accesses files.
 
-*Decision:* Approach 1 is adopted for the initial prototype for simplicity, determinism, and zero state-machine complexity, with Approaches 2 and 3 documented for future optimization as workload density demands.
+#### 5.3.3. Candidate Future Improvements (Evaluated Alternatives)
+- **Approach 2: Idle TTL / LRU Grace Period:** Rather than unmounting immediately upon Checkpoint, hold the lease during a configurable grace window (e.g. 5 minutes). If the actor wakes within the window, layer reuse is instant (zero RPCs). If it stays asleep past TTL, background GC unmounts the views.
+- **Approach 3: Watermark-Driven Mount GC:** Retain warm mounts indefinitely across sleeping actors until host pressure thresholds are reached (e.g., active mount count > 100 or memory pressure), triggering LRU eviction of idle mounts.
 
-#### 5.3.3. Persistence & Reboot Recovery: Reconciliation on Startup (Implemented)
-To ensure ref counting cleanly survives `atelet` crashes and node reboots without fragile disk file syncing on every microsecond call, the runtime adopts an **Actor-Derived Reconciliation Model** (matching how Kubernetes `kubelet` recovers state and how Substrate's non-streaming image cache GC discovers roots):
-1. **Reconciliation at Startup (Self-Healing):**
-   - Implemented via `scanActiveStreamedLeases` and `reconcileStreamingLeases` in `cmd/atelet/streaming_reconcile.go`.
-   - On `atelet` startup, `atelet` scans active on-node bundle overlay specs (`ateompath.ActorsDir/*/bundles/*/rootfs-overlay.json`).
-   - It tallies all active image references (`OverlaySpec.ImageRef`) across resident/running actors, passing `[]*ActiveLease` into `streamer.ReconcileLeases(ctx, active)`.
-   - Both `riptide` and `soci` drivers restore their in-memory `d.leases` with exact live reference counts (`refCount`) and layer paths, enabling subsequent container creations to reuse warm mounts immediately.
-   - This is completely self-healing: even if an actor or `atelet` crashed midway, the recovered count reflects ground truth rather than potentially stale persisted counters.
-2. **Orphan View Garbage Collection (Sweeper):**
-   - A periodic or startup background sweep queries the remote snapshotter daemon for mounted views and unmounts any view that has no matching active actor directory on disk.
+*Decision:* Approach 1 (Active-Only Leases with strict reference counting) is adopted for the initial implementation for simplicity, determinism, and zero state-machine complexity, with Approaches 2 and 3 documented for future optimization as workload density demands.
+
+#### 5.3.4. Node Reboot Resiliency & Startup Recovery
+- **Substrate Lifecycle Reality:** Substrate intentionally drains/crashes active actor workloads upon a node reboot (it does not attempt live in-memory VM migration).
+- **Startup Recovery in the Driver:** When `atelet` starts up after a reboot or crash, it executes an **Actor-Derived Reconciliation Model** (matching how Kubernetes `kubelet` recovers state and how Substrate's non-streaming image cache GC discovers roots):
+  1. `credentialprovider.New(...)` reloads the credential config immediately from the host (`/var/lib/kubelet/credential-provider-config.yaml`).
+  2. The streaming daemon (`containerd-gcfs-grpc` / `soci-snapshotter-grpc`) is already running as a host service with its fresh metadata access.
+  3. `reconcileStreamingLeases(streamer, actorsDir)` (in `cmd/atelet/streaming_reconcile.go`) scans surviving on-node bundle overlay specs (`ateompath.ActorsDir/*/bundles/*/rootfs-overlay.json`).
+  4. It parses each actor's `OverlaySpec.ImageRef` and layer directory mappings across all resident/running actors, aggregating them into `[]*ActiveLease` entries with exact live reference counts, and calls `streamer.ReconcileLeases(ctx, active)`.
+  5. Both `riptide` and `soci` drivers inspect live mounts on the host, reconnect to the remote snapshotter daemon socket, and restore their in-memory `d.leases` map with exact live reference counts (`refCount`) and layer paths.
+  6. Subsequent container creations or wakeups can immediately reuse warm mounts without redundant snapshotter RPCs. This approach is completely self-healing: even if an actor or `atelet` crashed midway through execution, the recovered state reflects actual filesystem ground truth rather than stale persisted counters.
+- **Orphan View Garbage Collection (Sweeper):** A periodic or startup background sweep queries the remote snapshotter daemon for mounted snapshot views. Any mounted view that does not correspond to an active actor directory on disk is safely unmounted and released, preventing mount table leakage over long cluster uptimes.
 
 ### 5.4. Cold-Start Reliability & Sandbox Warmup: Host-Side Enumeration Probing & Metadata Prefetch
 
@@ -332,14 +333,63 @@ When streaming container images over FUSE, workloads encounter two distinct cold
   2. **Non-Blocking:** Running in a background goroutine ensures the actor sandbox starts immediately without adding any latency to the critical startup path.
   3. **Amortized Across Multiplexed Actors:** In Substrate, multiplexed actors share underlying container images. Waking the metadata once on the host benefits all subsequent actors scheduled on that node.
 
+### 5.5. Credential Management & Auth Strategy: Two-Layer Decoupled Auth Model
+
+Authentication in the Substrate image streaming runtime is strictly separated into two independent, cloud-agnostic layers: the **Control Plane (Metadata Resolution)** and the **Data Plane (Chunk Streaming)**.
+
+```mermaid
+flowchart TD
+    subgraph ControlPlane["Control Plane: Metadata Resolution (atelet)"]
+        direction TB
+        KubeletConfig["/var/lib/kubelet/credential-provider-config.yaml"] -->|Exec Plugin Protocol| CredProvider["cmd/atelet/internal/credentialprovider<br/>(In-Memory Token Cache, Min 1m TTL Floor)"]
+        CredProvider -->|authn.Keychain| AteletResolver["cmd/atelet & Driver ImageResolver<br/>(remote.Image / fetchImageConfig)"]
+        AteletResolver -->|Fetch Manifest, Config JSON, DiffIDs| Registry[("Container Registry<br/>(GAR / ECR / Docker Hub)")]
+    end
+
+    subgraph DataPlane["Data Plane: On-Demand Chunk Streaming (Node Daemon)"]
+        direction TB
+        NodeIAM["Node Cloud Metadata Service<br/>http://169.254.169.254 (Instance Identity)"] -->|Rotate / Refresh Tokens| StreamingDaemon["Remote Snapshotter Daemon<br/>(containerd-gcfs-grpc / soci-snapshotter-grpc)"]
+        StreamingDaemon -->|FUSE Chunk HTTP Range Requests| Registry
+        StreamingDaemon -->|Direct FUSE Mounts| Ateom["ateom Overlay Manager<br/>(runsc Sandboxes)"]
+    end
+```
+
+#### 5.5.1. Control Plane: Unifying with PR #917
+- **Problem in Current Code:** In our initial prototype branch, `defaultImageResolver` had `google.Keychain` hardcoded, and `fetchImageConfig` pulled anonymously. This breaks on EKS, AKS, or non-GCP registries.
+- **Solution using PR #917:**
+  - PR #917 adds `cmd/atelet/internal/credentialprovider`, which implements `authn.Keychain` by reading `/var/lib/kubelet/credential-provider-config.yaml` and executing the node's local credential binaries over stdio.
+  - We update the `ImageStreamer` interface / `remotesnapshotter` driver to accept `WithKeychain(keychain authn.Keychain)` (propagated ambiently via `WithKeychainContext` and `KeychainFromContext`).
+  - `atelet` passes its initialized `authn.Keychain` directly into `remotesnapshotter` and `fetchImageConfig`.
+  - **Result:** Resolving manifests, configs, and diffIDs for Artifact Registry, AWS ECR, and Azure ACR uses the exact same node-level credential mechanism without compiling any cloud provider SDKs into `atelet`.
+
+#### 5.5.2. Data Plane: Token Refresh & Expiration
+- **Question:** How does credential refreshing and timeout handling work when a workload runs for a long time or survives a restart?
+- **How It Actually Works Under the Hood:**
+  - The streaming daemon (`containerd-gcfs-grpc` on GKE, `soci-snapshotter-grpc` on EKS) runs as a node-level daemon with direct access to the VM instance metadata service.
+  - **On GKE (Riptide/GCFS):** GCFS fetches Google OAuth2 access tokens directly from `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token`. The metadata server automatically rotates tokens before they expire (1-hour validity). GCFS handles refreshing internally whenever it performs HTTP Range requests against Artifact Registry.
+  - **On AWS (SOCI):** The SOCI daemon either uses the EC2 instance profile or invokes the `docker-credential-ecr-login` binary, which automatically negotiates and refreshes AWS authorization tokens.
+- **Why We Do Not Pass Tokens via Snapshot Labels:** Containerd snapshotters explicitly avoid passing bearer tokens inside `PrepareSnapshotRequest.Labels` because labels are stored persistently in SQLite/bbolt and exposed via `Stat()`/`List()` RPCs, which would leak credentials.
+
+### 5.6. Fallback Contract & Error Codes
+
+A clear contract specifies when `atelet` falls back to traditional download mode. Image streaming is an acceleration optimization; it must never become a single point of failure that prevents an actor from booting. When image streaming is enabled (`--image-streamer`), `atelet` adheres to the following contract:
+
+| Error Category | Triggering Condition | Behavior |
+| :--- | :--- | :--- |
+| **Daemon Unavailable** | Socket connection refused, ENOENT, or `codes.Unavailable` | **Fallback:** Daemon is not running or node is unconfigured; fall back to `imagecache.EnsureImage`. |
+| **Unsupported Image** | Remote snapshotter returns `codes.InvalidArgument` (e.g. image does not have SOCI index or stargz format) | **Fallback:** Image cannot be streamed; fall back to standard download. |
+| **Listable Timeout** | Daemon mounts FUSE, but directory listing fails or times out (`DefaultListableTimeout`) | **Fallback:** Daemon hung or unhealthy; unmount and fall back to standard download. |
+| **Control Plane Auth (`atelet`)** | Credential provider returns 401 Unauthorized for metadata resolution | **Terminal Error / No Fallback:** If `atelet` cannot authenticate to the registry to read the manifest, standard pull will also fail with 401. |
+| **Data Plane Auth (daemon)** | Daemon returns `codes.PermissionDenied` during Prepare | **Fallback:** The daemon's node identity may lack registry permissions, while `atelet`'s credentials might differ. |
+
 ---
 
 ## 6. Provider Driver Implementations
 
-| Provider | Host Socket | Protocol | Image Indexing | Credential Resolution |
-| :--- | :--- | :--- | :--- | :--- |
-| **`riptide`** (Google) | `/run/containerd-gcfs-grpc` | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests | GCE Instance Metadata + Google ADC via `google.Keychain` |
-| **`soci`** (AWS) | `/run/soci-snapshotter-grpc/...` | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | containerd registry auth + `google.Keychain` multi-keychain |
+| Provider | Host Socket | Protocol | Image Indexing | Control Plane Auth (atelet) | Data Plane Auth (Streaming Daemon) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`riptide`** (Google) | `/run/containerd-gcfs-grpc` | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| **`soci`** (AWS) | `/run/soci-snapshotter-grpc/...` | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
 
 ---
 
