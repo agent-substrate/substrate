@@ -247,6 +247,46 @@ func Validate_ActorSandboxRuntime(
 	return errs
 }
 
+// Validate_AddWorkerAllocatedRequest validates an instance of AddWorkerAllocatedRequest according
+// to declarative validation rules in the API schema.
+func Validate_AddWorkerAllocatedRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.AddWorkerAllocatedRequest) (errs field.ErrorList) {
+
+	{ // field ateletpb.AddWorkerAllocatedRequest.ResourceDelta
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.AddWorkerAllocatedRequest) *ateletpb.Resources {
+				return oldObj.ResourceDelta
+			})
+		errs = append(errs, fn(fldPath.Child("resource_delta"), obj.ResourceDelta, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_AttributeEntry validates an instance of AttributeEntry according
 // to declarative validation rules in the API schema.
 func Validate_AttributeEntry(
@@ -3497,6 +3537,46 @@ func Validate_Snapshot(
 				return oldObj.Object
 			})
 		errs = append(errs, fn(fldPath.Child("object"), obj.Object, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_SubtractWorkerAllocatedRequest validates an instance of SubtractWorkerAllocatedRequest according
+// to declarative validation rules in the API schema.
+func Validate_SubtractWorkerAllocatedRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.SubtractWorkerAllocatedRequest) (errs field.ErrorList) {
+
+	{ // field ateletpb.SubtractWorkerAllocatedRequest.ResourceDelta
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SubtractWorkerAllocatedRequest) *ateletpb.Resources {
+				return oldObj.ResourceDelta
+			})
+		errs = append(errs, fn(fldPath.Child("resource_delta"), obj.ResourceDelta, oldVal, oldObj != nil)...)
 	}
 
 	return errs

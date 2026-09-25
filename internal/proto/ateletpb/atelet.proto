@@ -47,6 +47,12 @@ service WorkerSupport {
   // can run. Called after RegisterWorker, and again whenever they change.
   rpc SetWorkerSandboxRuntimes(SetWorkerSandboxRuntimesRequest) returns (SetWorkerSandboxRuntimesResponse) {}
 
+  // AddWorkerAllocated and SubtractWorkerAllocated move this worker's
+  // allocated resources by a delta, for atelet to forward to the control
+  // plane's WorkerService, which these mirror.
+  rpc AddWorkerAllocated(AddWorkerAllocatedRequest) returns (AddWorkerAllocatedResponse) {}
+  rpc SubtractWorkerAllocated(SubtractWorkerAllocatedRequest) returns (SubtractWorkerAllocatedResponse) {}
+
   // RequestActorSuspend asks that the actor this worker hosts be suspended,
   // for atelet to forward to the control plane's WorkerService, which this
   // mirrors.
@@ -298,6 +304,28 @@ message Resources {
 }
 
 message RegisterWorkerResponse {
+}
+
+message AddWorkerAllocatedRequest {
+  // See ateapi.AddWorkerAllocatedRequest.resource_delta. The worker is the one
+  // the caller's certificate names, so the request does not say.
+  //
+  // +k8s:required
+  Resources resource_delta = 1;
+}
+
+message AddWorkerAllocatedResponse {
+}
+
+message SubtractWorkerAllocatedRequest {
+  // See ateapi.SubtractWorkerAllocatedRequest.resource_delta. The worker is
+  // the one the caller's certificate names, so the request does not say.
+  //
+  // +k8s:required
+  Resources resource_delta = 1;
+}
+
+message SubtractWorkerAllocatedResponse {
 }
 
 message RequestActorSuspendRequest {

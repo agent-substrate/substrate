@@ -37,6 +37,8 @@ const (
 	WorkerSupport_AcquireWorkerEpoch_FullMethodName       = "/atelet.WorkerSupport/AcquireWorkerEpoch"
 	WorkerSupport_RegisterWorker_FullMethodName           = "/atelet.WorkerSupport/RegisterWorker"
 	WorkerSupport_SetWorkerSandboxRuntimes_FullMethodName = "/atelet.WorkerSupport/SetWorkerSandboxRuntimes"
+	WorkerSupport_AddWorkerAllocated_FullMethodName       = "/atelet.WorkerSupport/AddWorkerAllocated"
+	WorkerSupport_SubtractWorkerAllocated_FullMethodName  = "/atelet.WorkerSupport/SubtractWorkerAllocated"
 	WorkerSupport_RequestActorSuspend_FullMethodName      = "/atelet.WorkerSupport/RequestActorSuspend"
 	WorkerSupport_GetActorEgressPolicy_FullMethodName     = "/atelet.WorkerSupport/GetActorEgressPolicy"
 	WorkerSupport_ReportActorCrashed_FullMethodName       = "/atelet.WorkerSupport/ReportActorCrashed"
@@ -69,6 +71,11 @@ type WorkerSupportClient interface {
 	// SetWorkerSandboxRuntimes records the sandbox runtimes this worker process
 	// can run. Called after RegisterWorker, and again whenever they change.
 	SetWorkerSandboxRuntimes(ctx context.Context, in *SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*SetWorkerSandboxRuntimesResponse, error)
+	// AddWorkerAllocated and SubtractWorkerAllocated move this worker's
+	// allocated resources by a delta, for atelet to forward to the control
+	// plane's WorkerService, which these mirror.
+	AddWorkerAllocated(ctx context.Context, in *AddWorkerAllocatedRequest, opts ...grpc.CallOption) (*AddWorkerAllocatedResponse, error)
+	SubtractWorkerAllocated(ctx context.Context, in *SubtractWorkerAllocatedRequest, opts ...grpc.CallOption) (*SubtractWorkerAllocatedResponse, error)
 	// RequestActorSuspend asks that the actor this worker hosts be suspended,
 	// for atelet to forward to the control plane's WorkerService, which this
 	// mirrors.
@@ -138,6 +145,26 @@ func (c *workerSupportClient) SetWorkerSandboxRuntimes(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *workerSupportClient) AddWorkerAllocated(ctx context.Context, in *AddWorkerAllocatedRequest, opts ...grpc.CallOption) (*AddWorkerAllocatedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddWorkerAllocatedResponse)
+	err := c.cc.Invoke(ctx, WorkerSupport_AddWorkerAllocated_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerSupportClient) SubtractWorkerAllocated(ctx context.Context, in *SubtractWorkerAllocatedRequest, opts ...grpc.CallOption) (*SubtractWorkerAllocatedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubtractWorkerAllocatedResponse)
+	err := c.cc.Invoke(ctx, WorkerSupport_SubtractWorkerAllocated_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerSupportClient) RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RequestActorSuspendResponse)
@@ -195,6 +222,11 @@ type WorkerSupportServer interface {
 	// SetWorkerSandboxRuntimes records the sandbox runtimes this worker process
 	// can run. Called after RegisterWorker, and again whenever they change.
 	SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error)
+	// AddWorkerAllocated and SubtractWorkerAllocated move this worker's
+	// allocated resources by a delta, for atelet to forward to the control
+	// plane's WorkerService, which these mirror.
+	AddWorkerAllocated(context.Context, *AddWorkerAllocatedRequest) (*AddWorkerAllocatedResponse, error)
+	SubtractWorkerAllocated(context.Context, *SubtractWorkerAllocatedRequest) (*SubtractWorkerAllocatedResponse, error)
 	// RequestActorSuspend asks that the actor this worker hosts be suspended,
 	// for atelet to forward to the control plane's WorkerService, which this
 	// mirrors.
@@ -235,6 +267,12 @@ func (UnimplementedWorkerSupportServer) RegisterWorker(context.Context, *Registe
 }
 func (UnimplementedWorkerSupportServer) SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetWorkerSandboxRuntimes not implemented")
+}
+func (UnimplementedWorkerSupportServer) AddWorkerAllocated(context.Context, *AddWorkerAllocatedRequest) (*AddWorkerAllocatedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddWorkerAllocated not implemented")
+}
+func (UnimplementedWorkerSupportServer) SubtractWorkerAllocated(context.Context, *SubtractWorkerAllocatedRequest) (*SubtractWorkerAllocatedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubtractWorkerAllocated not implemented")
 }
 func (UnimplementedWorkerSupportServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
@@ -338,6 +376,42 @@ func _WorkerSupport_SetWorkerSandboxRuntimes_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerSupport_AddWorkerAllocated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddWorkerAllocatedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerSupportServer).AddWorkerAllocated(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerSupport_AddWorkerAllocated_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerSupportServer).AddWorkerAllocated(ctx, req.(*AddWorkerAllocatedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerSupport_SubtractWorkerAllocated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubtractWorkerAllocatedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerSupportServer).SubtractWorkerAllocated(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerSupport_SubtractWorkerAllocated_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerSupportServer).SubtractWorkerAllocated(ctx, req.(*SubtractWorkerAllocatedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerSupport_RequestActorSuspend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RequestActorSuspendRequest)
 	if err := dec(in); err != nil {
@@ -414,6 +488,14 @@ var WorkerSupport_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerSandboxRuntimes",
 			Handler:    _WorkerSupport_SetWorkerSandboxRuntimes_Handler,
+		},
+		{
+			MethodName: "AddWorkerAllocated",
+			Handler:    _WorkerSupport_AddWorkerAllocated_Handler,
+		},
+		{
+			MethodName: "SubtractWorkerAllocated",
+			Handler:    _WorkerSupport_SubtractWorkerAllocated_Handler,
 		},
 		{
 			MethodName: "RequestActorSuspend",

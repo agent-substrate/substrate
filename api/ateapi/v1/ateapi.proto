@@ -2708,6 +2708,25 @@ service WorkerService {
   // runtimes is not a write.
   rpc SetWorkerSandboxRuntimes(SetWorkerSandboxRuntimesRequest) returns (SetWorkerSandboxRuntimesResponse);
 
+  // AddWorkerAllocated increases a Worker's allocated resources by a delta, for
+  // worker-level overcommit: the Worker, which alone observes what its Actors
+  // actually use, books more when usage outgrows what is allocated, shrinking
+  // its headroom.
+  //
+  // atelet calls this with its own client certificate, as it does for
+  // RegisterWorker. Not idempotent: each accepted call moves the total.
+  rpc AddWorkerAllocated(AddWorkerAllocatedRequest) returns (AddWorkerAllocatedResponse);
+
+  // SubtractWorkerAllocated decreases a Worker's allocated resources by a
+  // delta, for worker-level overcommit: placement books an Actor's full
+  // declared limits, and the Worker hands back what it predicts its Actors
+  // will not use, reclaiming headroom. Each dimension is clamped at zero, so
+  // allocation never goes negative.
+  //
+  // atelet calls this with its own client certificate, as it does for
+  // RegisterWorker. Not idempotent: each accepted call moves the total.
+  rpc SubtractWorkerAllocated(SubtractWorkerAllocatedRequest) returns (SubtractWorkerAllocatedResponse);
+
   // Create a Substrate-issued SPIFFE certificate that asserts a worker acting
   // on behalf of a particular actor.
   //
@@ -2861,6 +2880,40 @@ message SetWorkerSandboxRuntimesResponse {
   // The Worker as recorded.
   Worker worker = 1;
 }
+
+message AddWorkerAllocatedRequest {
+  // The Worker whose allocation grows. atespace is always empty; Workers are
+  // global-scoped.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+
+  // Added to the Worker's allocated resources. Every quantity is positive.
+  //
+  // +k8s:required
+  Resources resource_delta = 2;
+}
+
+message AddWorkerAllocatedResponse {}
+
+message SubtractWorkerAllocatedRequest {
+  // The Worker whose allocation shrinks. atespace is always empty; Workers are
+  // global-scoped.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+
+  // Subtracted from the Worker's allocated resources. Every quantity is
+  // positive. Each dimension is clamped at zero, so allocation never goes
+  // negative.
+  //
+  // +k8s:required
+  Resources resource_delta = 2;
+}
+
+message SubtractWorkerAllocatedResponse {}
 
 // Request message for MintWorkerActorCertificate.
 message MintWorkerActorCertificateRequest {

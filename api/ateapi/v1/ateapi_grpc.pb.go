@@ -1890,6 +1890,8 @@ const (
 	WorkerService_AcquireWorkerEpoch_FullMethodName         = "/substrate.ateapi.v1.WorkerService/AcquireWorkerEpoch"
 	WorkerService_RegisterWorker_FullMethodName             = "/substrate.ateapi.v1.WorkerService/RegisterWorker"
 	WorkerService_SetWorkerSandboxRuntimes_FullMethodName   = "/substrate.ateapi.v1.WorkerService/SetWorkerSandboxRuntimes"
+	WorkerService_AddWorkerAllocated_FullMethodName         = "/substrate.ateapi.v1.WorkerService/AddWorkerAllocated"
+	WorkerService_SubtractWorkerAllocated_FullMethodName    = "/substrate.ateapi.v1.WorkerService/SubtractWorkerAllocated"
 	WorkerService_MintWorkerActorCertificate_FullMethodName = "/substrate.ateapi.v1.WorkerService/MintWorkerActorCertificate"
 	WorkerService_MintWorkerActorJwt_FullMethodName         = "/substrate.ateapi.v1.WorkerService/MintWorkerActorJwt"
 	WorkerService_RequestActorSuspend_FullMethodName        = "/substrate.ateapi.v1.WorkerService/RequestActorSuspend"
@@ -1939,6 +1941,23 @@ type WorkerServiceClient interface {
 	// atelet calls this with its own client certificate. Re-sending the same
 	// runtimes is not a write.
 	SetWorkerSandboxRuntimes(ctx context.Context, in *SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*SetWorkerSandboxRuntimesResponse, error)
+	// AddWorkerAllocated increases a Worker's allocated resources by a delta, for
+	// worker-level overcommit: the Worker, which alone observes what its Actors
+	// actually use, books more when usage outgrows what is allocated, shrinking
+	// its headroom.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RegisterWorker. Not idempotent: each accepted call moves the total.
+	AddWorkerAllocated(ctx context.Context, in *AddWorkerAllocatedRequest, opts ...grpc.CallOption) (*AddWorkerAllocatedResponse, error)
+	// SubtractWorkerAllocated decreases a Worker's allocated resources by a
+	// delta, for worker-level overcommit: placement books an Actor's full
+	// declared limits, and the Worker hands back what it predicts its Actors
+	// will not use, reclaiming headroom. Each dimension is clamped at zero, so
+	// allocation never goes negative.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RegisterWorker. Not idempotent: each accepted call moves the total.
+	SubtractWorkerAllocated(ctx context.Context, in *SubtractWorkerAllocatedRequest, opts ...grpc.CallOption) (*SubtractWorkerAllocatedResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
@@ -2045,6 +2064,26 @@ func (c *workerServiceClient) SetWorkerSandboxRuntimes(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *workerServiceClient) AddWorkerAllocated(ctx context.Context, in *AddWorkerAllocatedRequest, opts ...grpc.CallOption) (*AddWorkerAllocatedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddWorkerAllocatedResponse)
+	err := c.cc.Invoke(ctx, WorkerService_AddWorkerAllocated_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) SubtractWorkerAllocated(ctx context.Context, in *SubtractWorkerAllocatedRequest, opts ...grpc.CallOption) (*SubtractWorkerAllocatedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubtractWorkerAllocatedResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SubtractWorkerAllocated_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MintWorkerActorCertificateResponse)
@@ -2137,6 +2176,23 @@ type WorkerServiceServer interface {
 	// atelet calls this with its own client certificate. Re-sending the same
 	// runtimes is not a write.
 	SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error)
+	// AddWorkerAllocated increases a Worker's allocated resources by a delta, for
+	// worker-level overcommit: the Worker, which alone observes what its Actors
+	// actually use, books more when usage outgrows what is allocated, shrinking
+	// its headroom.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RegisterWorker. Not idempotent: each accepted call moves the total.
+	AddWorkerAllocated(context.Context, *AddWorkerAllocatedRequest) (*AddWorkerAllocatedResponse, error)
+	// SubtractWorkerAllocated decreases a Worker's allocated resources by a
+	// delta, for worker-level overcommit: placement books an Actor's full
+	// declared limits, and the Worker hands back what it predicts its Actors
+	// will not use, reclaiming headroom. Each dimension is clamped at zero, so
+	// allocation never goes negative.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RegisterWorker. Not idempotent: each accepted call moves the total.
+	SubtractWorkerAllocated(context.Context, *SubtractWorkerAllocatedRequest) (*SubtractWorkerAllocatedResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
@@ -2221,6 +2277,12 @@ func (UnimplementedWorkerServiceServer) RegisterWorker(context.Context, *Registe
 }
 func (UnimplementedWorkerServiceServer) SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetWorkerSandboxRuntimes not implemented")
+}
+func (UnimplementedWorkerServiceServer) AddWorkerAllocated(context.Context, *AddWorkerAllocatedRequest) (*AddWorkerAllocatedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddWorkerAllocated not implemented")
+}
+func (UnimplementedWorkerServiceServer) SubtractWorkerAllocated(context.Context, *SubtractWorkerAllocatedRequest) (*SubtractWorkerAllocatedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubtractWorkerAllocated not implemented")
 }
 func (UnimplementedWorkerServiceServer) MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintWorkerActorCertificate not implemented")
@@ -2308,6 +2370,42 @@ func _WorkerService_SetWorkerSandboxRuntimes_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).SetWorkerSandboxRuntimes(ctx, req.(*SetWorkerSandboxRuntimesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_AddWorkerAllocated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddWorkerAllocatedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).AddWorkerAllocated(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_AddWorkerAllocated_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).AddWorkerAllocated(ctx, req.(*AddWorkerAllocatedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_SubtractWorkerAllocated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubtractWorkerAllocatedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SubtractWorkerAllocated(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SubtractWorkerAllocated_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SubtractWorkerAllocated(ctx, req.(*SubtractWorkerAllocatedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2420,6 +2518,14 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerSandboxRuntimes",
 			Handler:    _WorkerService_SetWorkerSandboxRuntimes_Handler,
+		},
+		{
+			MethodName: "AddWorkerAllocated",
+			Handler:    _WorkerService_AddWorkerAllocated_Handler,
+		},
+		{
+			MethodName: "SubtractWorkerAllocated",
+			Handler:    _WorkerService_SubtractWorkerAllocated_Handler,
 		},
 		{
 			MethodName: "MintWorkerActorCertificate",
