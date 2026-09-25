@@ -281,11 +281,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.LocalSnapshotInfo",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.PauseActorRequest",
     "message": "message has no doc comment"
   },

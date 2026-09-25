@@ -1539,13 +1539,17 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 const (
 	WorkerService_SetWorkerCapacity_FullMethodName         = "/ateapi.WorkerService/SetWorkerCapacity"
 	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
+	WorkerService_RequestActorSuspend_FullMethodName       = "/ateapi.WorkerService/RequestActorSuspend"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// WorkerService is the RPC service tailored to be called by Atelet.
+// WorkerService is how a Worker tells the control plane what it observes. It is
+// separate from Control because the two have different callers and different
+// authorization: Control is the client-facing API, while these RPCs are served
+// only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
 	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
 	// to report rather than the control plane's to infer: it is what the ateom
@@ -1560,6 +1564,26 @@ type WorkerServiceClient interface {
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
 	MintAteomActorCertificate(ctx context.Context, in *MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*MintAteomActorCertificateResponse, error)
+	// RequestActorSuspend asks the control plane to suspend an Actor that the
+	// calling Worker hosts. Only the Worker can observe what makes an Actor
+	// worth reclaiming -- whether its workload still has anything to do -- and
+	// only the control plane can decide whether to act on that.
+	//
+	// This is a request, not a command. It runs the same suspend workflow
+	// Control.SuspendActor runs, behind the same preconditions, so a proposal
+	// that races a resume, pause, or delete loses to it.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// SetWorkerCapacity, naming the Worker its caller proved itself to be. The
+	// control plane serves it only for an Actor that is assigned to that Worker.
+	//
+	// Not idempotent, unlike Control.SuspendActor, which reports an
+	// already-suspended Actor as the success it is. A suspend releases the
+	// Worker it ran on, so the second request names an Actor the caller no
+	// longer hosts, and is refused as NotFound like any other. A Worker that
+	// retries a suspend it had already been granted therefore sees a failure
+	// rather than a repeat of its success.
+	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
 }
 
 type workerServiceClient struct {
@@ -1590,11 +1614,24 @@ func (c *workerServiceClient) MintAteomActorCertificate(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestActorSuspendResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RequestActorSuspend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
 //
-// WorkerService is the RPC service tailored to be called by Atelet.
+// WorkerService is how a Worker tells the control plane what it observes. It is
+// separate from Control because the two have different callers and different
+// authorization: Control is the client-facing API, while these RPCs are served
+// only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
 	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
 	// to report rather than the control plane's to infer: it is what the ateom
@@ -1609,6 +1646,26 @@ type WorkerServiceServer interface {
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
 	MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error)
+	// RequestActorSuspend asks the control plane to suspend an Actor that the
+	// calling Worker hosts. Only the Worker can observe what makes an Actor
+	// worth reclaiming -- whether its workload still has anything to do -- and
+	// only the control plane can decide whether to act on that.
+	//
+	// This is a request, not a command. It runs the same suspend workflow
+	// Control.SuspendActor runs, behind the same preconditions, so a proposal
+	// that races a resume, pause, or delete loses to it.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// SetWorkerCapacity, naming the Worker its caller proved itself to be. The
+	// control plane serves it only for an Actor that is assigned to that Worker.
+	//
+	// Not idempotent, unlike Control.SuspendActor, which reports an
+	// already-suspended Actor as the success it is. A suspend releases the
+	// Worker it ran on, so the second request names an Actor the caller no
+	// longer hosts, and is refused as NotFound like any other. A Worker that
+	// retries a suspend it had already been granted therefore sees a failure
+	// rather than a repeat of its success.
+	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -1624,6 +1681,9 @@ func (UnimplementedWorkerServiceServer) SetWorkerCapacity(context.Context, *SetW
 }
 func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintAteomActorCertificate not implemented")
+}
+func (UnimplementedWorkerServiceServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -1682,6 +1742,24 @@ func _WorkerService_MintAteomActorCertificate_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_RequestActorSuspend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestActorSuspendRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RequestActorSuspend(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RequestActorSuspend_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RequestActorSuspend(ctx, req.(*RequestActorSuspendRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1696,6 +1774,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MintAteomActorCertificate",
 			Handler:    _WorkerService_MintAteomActorCertificate_Handler,
+		},
+		{
+			MethodName: "RequestActorSuspend",
+			Handler:    _WorkerService_RequestActorSuspend_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

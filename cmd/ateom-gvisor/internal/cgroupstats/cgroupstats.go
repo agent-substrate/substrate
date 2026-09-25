@@ -62,7 +62,7 @@ type Sample struct {
 
 	// CPUUsageUsec is cpu.stat's usage_usec: cumulative CPU time consumed by the
 	// cgroup since it was created. Zero if the cpu controller was not delegated
-	// to this cgroup (see setupCgroupDelegation, which enables controllers
+	// to this cgroup (see ateomcgroup.Delegate, which enables controllers
 	// best-effort and carries on when one cannot be enabled).
 	CPUUsageUsec uint64
 }

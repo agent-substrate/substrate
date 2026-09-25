@@ -17,47 +17,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-
-	"github.com/vishvananda/netns"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
-
-// prepareSandboxNetwork builds the actor's network and starts serving it.
-func (s *AteomService) prepareSandboxNetwork(ctx context.Context, actorUID string) error {
-	if err := s.releaseSandboxNetwork(ctx); err != nil {
-		return err
-	}
-	session, err := ateomnet.ServeSandbox(ctx, ateomnet.SandboxNetworkConfig{
-		ActorUID:   actorUID,
-		EgressPort: s.atunnelEgressPort,
-		DNSPort:    atunnel.DNSPort,
-	}, s.atunnelEgress, s.dnsRelay)
-	if err != nil {
-		return fmt.Errorf("while setting up the sandbox network: %w", err)
-	}
-
-	return s.sandbox.Replace(ctx, session)
-}
-
-// releaseSandboxNetwork stops serving the actor and takes its network down.
-func (s *AteomService) releaseSandboxNetwork(ctx context.Context) error {
-	return s.sandbox.Close(ctx)
-}
-
-// sandboxNetNS is where the actor's tap and atunnel's sockets live, or -1
-// between activations.
-func (s *AteomService) sandboxNetNS() netns.NsHandle {
-	session := s.sandbox.Session()
-	if session == nil {
-		return -1
-	}
-	return session.Network.GatewayNetNS
-}
 
 // writeActorResolvConf points the guest resolver at its fixed gateway address.
 func writeActorResolvConf(rootfs string) error {

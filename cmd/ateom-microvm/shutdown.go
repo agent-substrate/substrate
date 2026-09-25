@@ -63,18 +63,15 @@ const (
 )
 
 // gracefulShutdown propagates SIGTERM into every running actor's guest and waits
-// for the workloads to exit, so the caller can exit cleanly. It holds lock only
-// long enough to snapshot the running actors, and releases it before any blocking
-// signaling or waiting, so it never holds it for the whole grace period and a
-// suspend can still land mid-drain.
+// for the workloads to exit, so the caller can exit cleanly. It takes no actor's
+// lifecycle lock, so a suspend can still land mid-drain.
 func (s *AteomService) gracefulShutdown(ctx context.Context) {
-	// Set this first, before contending for lock, so an RPC that arrives while we
-	// are still waiting is turned away rather than queued behind us.
+	// Set this first so an RPC that arrives while we drain is turned away.
 	s.shuttingDown.Store(true)
 
 	// Cancel an in-flight run or restore. Waiting for a cold boot to finish only to
 	// SIGTERM the guest it just produced is strictly worse than aborting it.
-	s.cancelActiveRestoreOrRunRPC()
+	s.cancelStartups(ctx)
 
 	// One deadline covers the whole drain. Waiting for the lock and waiting out
 	// SIGTERM below both run against it, so the two phases split a single grace
@@ -83,31 +80,23 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	// workloadGracePeriod however the time falls between them.
 	deadline := time.Now().Add(workloadGracePeriod)
 
-	// Wait for whatever still holds lock — a suspend, a resume — to finish, but
-	// not past the deadline. Letting it run that long is the price of not
-	// truncating an RPC that may be saving the actor's state.
-	lockCtx, lockCancel := context.WithDeadline(ctx, deadline)
-	defer lockCancel()
-	if !s.lock.LockContext(lockCtx) {
-		slog.ErrorContext(ctx, "Failed to acquire lock during graceful shutdown; another RPC is still running")
-		return
+	// Let checkpoints finish saving state before stopping guests.
+	waitCtx, waitCancel := context.WithDeadline(ctx, deadline)
+	defer waitCancel()
+	if !s.inFlight.WaitIdle(waitCtx) {
+		slog.ErrorContext(ctx, "Giving up waiting for in-flight RPCs during graceful shutdown",
+			slog.Any("rpcs", s.inFlight.Names()))
 	}
-	// Snapshot by value rather than ranging over s.running directly: we drop the
-	// lock immediately below, and a suspend landing mid-drain deletes from the live
-	// map and writes through the *runningActor it finds there (teardownActor closes
-	// guestAgent and nils the field). Copying the map alone would not help — its
-	// values are pointers into that same mutable state.
-	targets := make([]drainTarget, 0, len(s.running))
-	for id, ra := range s.running {
-		if ra == nil {
+	// Copy VM records under actorsMu; a concurrent teardown clears guestAgent.
+	s.actorsMu.RLock()
+	targets := make([]drainTarget, 0, len(s.actors))
+	for uid, h := range s.actors {
+		if h.vm == nil {
 			continue
 		}
-		targets = append(targets, drainTarget{id: id, agent: ra.guestAgent, workloadIDs: ra.workloadIDs})
+		targets = append(targets, drainTarget{id: uid, agent: h.vm.guestAgent, workloadIDs: h.vm.workloadIDs})
 	}
-
-	// Release lock so the service can answer new RPCs — notably a suspend arriving
-	// mid-drain — while the stop below waits out the grace period.
-	s.lock.Unlock()
+	s.actorsMu.RUnlock()
 
 	if len(targets) == 0 {
 		slog.InfoContext(ctx, "No active actor sessions at shutdown; exiting cleanly")
@@ -132,10 +121,10 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 }
 
 // drainTarget is what gracefulShutdown needs from one runningActor, copied out
-// under lock so the drain below never dereferences the shared struct. workloadIDs
-// is set once before the actor is published to s.running and never mutated, so
+// under actorsMu so the drain below never dereferences the shared struct.
+// workloadIDs is set once before the VM is published and never mutated, so
 // sharing the backing array is safe; guestAgent is the field a concurrent
-// teardownActor writes, and is the reason this snapshot exists.
+// teardownActor clears, and is the reason this snapshot exists.
 //
 // The client the snapshot holds can still be closed under us by that teardown,
 // which is not a problem here: every call on a closed AgentClient fails fast with

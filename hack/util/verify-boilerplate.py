@@ -108,7 +108,7 @@ def main():
         # Skip non-source-code files
         if ext in ['.md', '.txt', '.png', '.jpg', '.jpeg', '.gif', '.mp4', '.json', '.pdf', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.svg']:
             continue
-        if filename in ['LICENSE', 'NOTICE', 'CODEOWNERS', '.gitignore', 'go.mod', 'go.sum']:
+        if filename in ['LICENSE', 'NOTICE', 'CODEOWNERS', '.gitignore', 'go.mod', 'go.sum', 'Cargo.lock']:
             continue
 
         # exclude third_party files, which should have their OWN LICENSE

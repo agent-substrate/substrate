@@ -276,14 +276,14 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			toUpdate.Status.State = newState
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
 			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
-				localInfo := &ateapipb.LocalSnapshotInfo{
+				localSnapshot := &ateapipb.LocalSnapshot{
 					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
 				}
 				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-					localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
+					localSnapshot.NodeVmsWithLocalSnapshots = []string{nodeName}
 				}
-				toUpdate.Status.LocalSnapshotInfo = localInfo
+				toUpdate.Status.LocalSnapshot = localSnapshot
 				toUpdate.Status.InProgressLocalSnapshotName = ""
 			}
 			toUpdate.Status.WorkerAssignment = nil

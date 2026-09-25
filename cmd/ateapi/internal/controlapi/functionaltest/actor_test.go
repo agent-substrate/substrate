@@ -3598,7 +3598,7 @@ func TestPauseActor(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_PAUSED,
-			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
+			LocalSnapshot: &ateapipb.LocalSnapshot{
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			},
@@ -3611,12 +3611,12 @@ func TestPauseActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
-		protocmp.IgnoreFields(&ateapipb.LocalSnapshotInfo{}, "snapshot_name"),
+		protocmp.IgnoreFields(&ateapipb.LocalSnapshot{}, "snapshot_name"),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
-	if getResp.GetStatus().GetLocalSnapshotInfo().GetSnapshotName() == "" {
-		t.Error("LocalSnapshotInfo.SnapshotName is empty, want the name the pause checkpointed under")
+	if getResp.GetStatus().GetLocalSnapshot().GetSnapshotName() == "" {
+		t.Error("LocalSnapshot.SnapshotName is empty, want the name the pause checkpointed under")
 	}
 }
 
@@ -3664,8 +3664,8 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		t.Fatalf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
 	}
-	if getResp.GetStatus().GetLocalSnapshotInfo() == nil {
-		t.Fatal("expected LocalSnapshotInfo to be present on paused actor")
+	if getResp.GetStatus().GetLocalSnapshot() == nil {
+		t.Fatal("expected LocalSnapshot to be present on paused actor")
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
@@ -4287,7 +4287,7 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 		t.Error("atelet Checkpoint called for a paused actor; there is no workload to checkpoint")
 	}
 	upload := tc.fakeAtelet.UploadRequest
-	if got, want := upload.GetLocalSnapshotName(), paused.GetStatus().GetLocalSnapshotInfo().GetSnapshotName(); got != want {
+	if got, want := upload.GetLocalSnapshotName(), paused.GetStatus().GetLocalSnapshot().GetSnapshotName(); got != want {
 		t.Errorf("upload local_snapshot_name = %q, want the pause snapshot %q", got, want)
 	}
 	if got, want := upload.GetAtespace(), testAtespace; got != want {
@@ -4301,8 +4301,8 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", actor.GetStatus().GetState())
 	}
-	if actor.GetStatus().GetLocalSnapshotInfo() != nil {
-		t.Errorf("LocalSnapshotInfo = %v, want cleared (node pinning must not survive suspend)", actor.GetStatus().GetLocalSnapshotInfo())
+	if actor.GetStatus().GetLocalSnapshot() != nil {
+		t.Errorf("LocalSnapshot = %v, want cleared (node pinning must not survive suspend)", actor.GetStatus().GetLocalSnapshot())
 	}
 	if got, want := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(), upload.GetDestinationSnapshotUri(); got != want {
 		t.Errorf("snapshot URI = %q, want the upload destination %q", got, want)
@@ -4412,7 +4412,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	}
 
 	// The actor under test runs on node1's only worker, then pauses — which
-	// frees that worker but pins the actor to node1 via LocalSnapshotInfo.
+	// frees that worker but pins the actor to node1 via LocalSnapshot.
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	}); err != nil {
@@ -4429,7 +4429,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor(%s) failed: %v", pinned, err)
 	}
-	if got := paused.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(); len(got) != 1 || got[0] != "node1" {
+	if got := paused.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots(); len(got) != 1 || got[0] != "node1" {
 		t.Fatalf("paused actor pinned to %v, want [node1]", got)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
@@ -4459,8 +4459,8 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if got := suspended.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("state after suspend = %v, want SUSPENDED", got)
 	}
-	if got := suspended.GetActor().GetStatus().GetLocalSnapshotInfo(); got != nil {
-		t.Fatalf("LocalSnapshotInfo = %v, want cleared so the actor can be scheduled anywhere", got)
+	if got := suspended.GetActor().GetStatus().GetLocalSnapshot(); got != nil {
+		t.Fatalf("LocalSnapshot = %v, want cleared so the actor can be scheduled anywhere", got)
 	}
 
 	// Resume should succeed now and the actor scheduled on node2.
@@ -4821,8 +4821,8 @@ func TestRevertActor_FromPaused(t *testing.T) {
 		t.Errorf("external snapshot = %q, want it untouched at %q", uri, snapshotURI)
 	}
 	assertSnapshotPresent(t, tc, snapshotURI)
-	if got.GetLocalSnapshotInfo() != nil {
-		t.Errorf("local snapshot info = %v, want nil", got.GetLocalSnapshotInfo())
+	if got.GetLocalSnapshot() != nil {
+		t.Errorf("local snapshot info = %v, want nil", got.GetLocalSnapshot())
 	}
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())

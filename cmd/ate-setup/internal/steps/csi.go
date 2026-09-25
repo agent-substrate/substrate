@@ -179,16 +179,7 @@ func (e *Env) ensureCSIPrerequisites(ctx context.Context) error {
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
-	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
-		return err
-	}
-	if err := e.applyPodcertWorkersOverride(ctx); err != nil {
-		return err
-	}
-	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespacePodCert, "podcertificate-controller", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
-		return err
-	}
-	return e.WaitForPodCertificateTrustBundles(ctx)
+	return e.DeployPodCertificateController(ctx)
 }
 
 func (e *Env) setupCSIHostpath(ctx context.Context) error {

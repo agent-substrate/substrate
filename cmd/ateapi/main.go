@@ -28,15 +28,14 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
@@ -158,24 +157,20 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
+	pool := persistence.Pool()
+	defer pool.Close()
 	// Backends may run background maintenance rooted in their own context
-	// (atepg's outbox maintenance loop); stop it on shutdown.
-	if closer, ok := persistence.(interface{ Close() }); ok {
-		defer closer.Close()
-	}
+	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
+	defer persistence.Close()
 
-	if poolProvider, ok := persistence.(interface {
-		NewPool(context.Context) (*pgxpool.Pool, error)
-	}); ok {
-		authzPool, err := poolProvider.NewPool(shutdownCtx)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)
-		}
-		authzSrv, err := authz.NewServer(shutdownCtx, authzPool)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
-		}
-		defer authzSrv.Close()
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+	}
+	defer fgaServer.Close()
+
+	if _, _, err := authz.EnsureStoreAndModel(shutdownCtx, pool, fgaServer); err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize OpenFGA store and model", err)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -306,7 +301,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, ateletSPIFFEID, actorIDCAPool))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
@@ -413,9 +408,9 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 	}
 }
 
-// connectStore builds the PostgreSQL-backed store.Interface. Startup fails if
+// connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
 // its configuration is missing or the database can't be reached.
-func connectStore(ctx context.Context) (store.Interface, error) {
+func connectStore(ctx context.Context) (*atepg.Persistence, error) {
 	if *postgresConnectionString == "" {
 		return nil, fmt.Errorf("--postgres-connection-string is required")
 	}

@@ -121,3 +121,39 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()))
 	return &ateletpb.SetWorkerCapacityResponse{}, nil
 }
+
+// RequestActorSuspend forwards a worker's request to suspend an actor it hosts
+// to the control plane, which owns their lifecycle. The worker observes; the
+// control plane decides.
+//
+// The control plane's error is returned unwrapped: a refusal is a real answer
+// here -- the actor is no longer assigned to this worker, or the suspend lost a
+// race to a resume, pause, or delete -- and the worker needs to tell those from
+// a transport failure it should retry.
+func (s *ateomSupportServer) RequestActorSuspend(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) (*ateletpb.RequestActorSuspendResponse, error) {
+	// Identity comes only from the mTLS certificate, never from the request: a
+	// worker can speak for the actors it hosts and no others. Which those are
+	// is the control plane's to know, so it is checked there against the
+	// worker this names.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.workers.RequestActorSuspend(ctx, &ateapipb.RequestActorSuspendRequest{
+		// Workers are global-scoped and named by their pod UID.
+		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Actor: &ateapipb.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		ActorUid: req.GetActorUid(),
+	}); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "Forwarded an actor suspend request",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.String("actor_atespace", req.GetActorAtespace()),
+		slog.String("actor_name", req.GetActorName()),
+		slog.String("actor_uid", req.GetActorUid()))
+	return &ateletpb.RequestActorSuspendResponse{}, nil
+}

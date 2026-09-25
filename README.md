@@ -2,9 +2,6 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-NOTE: This is not an officially supported Google product. This project is not
-eligible for the [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
-
 ## What is Agent Substrate?
 
 Agent Substrate is a secure-by-default agent execution runtime engineered to run millions of sandboxes with 10x higher density than standard container runtimes. Purpose-built for the era of autonomous agents, Substrate delivers sub-500ms resume operations at over 500 suspend/resume activations per second with native zero-trust kernel and network isolation. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
@@ -48,10 +45,9 @@ Agent Substrate is designed to be **framework and agent harness agnostic**. Beca
 
 ## Status and compatibility
 
-Agent Substrate is currently in early development.  It is not ready for
-production use, and the APIs are almost guaranteed to change.  We are not
-making any guarantees about backward compatibility at this stage, and
-everything in this project may be changed.
+Agent Substrate is pre-1.0.  We are not making any guarantees about backward
+compatibility at this stage, and APIs and behavior may still change
+significantly.
 
 ### Supported Kubernetes Releases
 

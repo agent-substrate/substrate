@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -22,17 +23,34 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// installDir is the manifest root, relative to the repository root.
-const installDir = "manifests/ate-install"
+const (
+	// installDir is the manifest root, relative to the repository root.
+	installDir = "manifests/ate-install"
+	// Envoy dataplane image name
+	envoyDataplaneImage = "envoy-dataplane"
+	// Envoy dataplane Dockerfile path
+	envoyDataplaneDockefile = "cmd/dataplane/envoy"
+)
 
-// SystemOverlay picks the manifest source for a full control plane install.
+// cordonControlPlaneComponent is the kustomize component that pins each
+// control plane workload to its own node, layered over every control plane
+// apply under --cordon-control-plane.
+const cordonControlPlaneComponent = installDir + "/components/cordon-control-plane"
+
+// SystemOverlay picks the kustomization for a full control plane install.
 //
-// The choice is a product of two switches: kind vs GKE, and the atenet router dataplane.
-// An empty return means "no overlay": apply the base manifests/ate-install
-// directory directly, which is what a plain GKE envoy install does.
+// The choice is a product of two switches: kind vs GKE, and the atenet router
+// dataplane. The plain GKE envoy install renders the base kustomization rather
+// than the raw manifests/ate-install directory: the directory would also
+// re-apply pod-certificate-controller.yaml (reverting the size10 flags and the
+// WORKERS_PER_SIGNER value set earlier in the install), both atenet-egress
+// variants, and the sandboxconfig files, all of which have their own apply
+// steps.
 func SystemOverlay(cfg *config.Config) string {
 	switch {
 	case cfg.Router == config.RouterAgentgateway && cfg.Kind:
@@ -42,26 +60,74 @@ func SystemOverlay(cfg *config.Config) string {
 	case cfg.Kind:
 		return installDir + "/kind"
 	default:
-		return ""
+		return installDir + "/base"
 	}
+}
+
+// render emits the manifests at path, an absolute manifest file or
+// kustomization directory, before image resolution. Under
+// --cordon-control-plane it composes path with the cordon-control-plane
+// component, so the same node pinning reaches every control plane workload
+// whichever apply path delivers it. The component's patch has a name-regex
+// target and kustomize leaves a stream alone when nothing in it matches, so
+// wrapping a manifest that carries none of those workloads is harmless.
+func (e *Env) render(path string) ([]byte, error) {
+	if e.Cfg.CordonControlPlane {
+		return kustomize.Compose(path, e.Cfg.Path(cordonControlPlaneComponent))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("while reading %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return kustomize.Build(path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("while reading %s: %w", path, err)
+	}
+	return data, nil
+}
+
+// renderBytes is render for a manifest already held in memory.
+func (e *Env) renderBytes(manifest []byte) ([]byte, error) {
+	if e.Cfg.CordonControlPlane {
+		return kustomize.ComposeBytes(manifest, e.Cfg.Path(cordonControlPlaneComponent))
+	}
+	return manifest, nil
+}
+
+// renderResolve renders path and resolves its image references.
+func (e *Env) renderResolve(ctx context.Context, path string) ([]byte, error) {
+	manifest, err := e.render(path)
+	if err != nil {
+		return nil, err
+	}
+	return e.ResolveManifestBytes(ctx, manifest)
+}
+
+// renderResolveApply renders path, resolves its images, and applies the result.
+func (e *Env) renderResolveApply(ctx context.Context, path string) error {
+	manifest, err := e.renderResolve(ctx, path)
+	if err != nil {
+		return err
+	}
+	return e.Kube.ApplyBytes(ctx, manifest)
 }
 
 // renderSystemManifests produces the full control plane manifest with all
 // image references resolved.
 func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
-	if overlay := SystemOverlay(e.Cfg); overlay != "" {
-		return e.KustomizeResolve(ctx, overlay)
-	}
-	return e.ResolveManifest(ctx, e.Cfg.Manifest())
+	return e.renderResolve(ctx, e.Cfg.Path(SystemOverlay(e.Cfg)))
 }
 
 // renderAtenetRouterManifest produces the atenet router manifest for the
 // selected dataplane.
 func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	if e.Cfg.Router == config.RouterAgentgateway {
-		return e.KustomizeResolve(ctx, installDir+"/agentgateway-router")
+		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-router"))
 	}
-	return e.ResolveManifest(ctx, e.Cfg.Manifest("atenet-router.yaml"))
+	return e.renderResolve(ctx, e.Cfg.Manifest("atenet-router.yaml"))
 }
 
 // atenetEgressManifestPath returns the egress manifest path based on configuration.
@@ -85,19 +151,21 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 			return nil, fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
 		}
 		if e.Cfg.ExperimentalUseSDSMint {
-			return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress-mitm")
+			return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress-mitm"))
 		}
-		return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress")
+		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress"))
 	}
 
-	if !general && !injection {
-		return e.ResolveManifest(ctx, e.atenetEgressManifestPath())
+	imageReference, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, e.Cfg.Path(envoyDataplaneDockefile), e.Cfg.KODefaultPlatforms)
+	if err != nil {
+		return nil, err
 	}
 
 	// The general additional-ext_proc filter and egress credential injection are
-	// independent splices with their own markers, so compose them.
+	// independent splices with their own markers, so compose them. The cordon
+	// render comes last, over the spliced stream, so the node pinning reaches
+	// every variant.
 	var raw []byte
-	var err error
 	if general {
 		raw, err = e.patchAtenetEgressManifest()
 	} else {
@@ -112,7 +180,18 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return e.ResolveManifestBytes(ctx, raw)
+	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
+	rendered, err := e.renderBytes(raw)
+	if err != nil {
+		return nil, err
+	}
+	return e.ResolveManifestBytes(ctx, rendered)
+}
+
+// patchEnvoyDataplaneImage replaces the ${ENVOY_DATAPLANE_IMAGE} placeholder in
+// the manifest with imageRef.
+func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
+	return bytes.ReplaceAll(raw, []byte("${ENVOY_DATAPLANE_IMAGE}"), []byte(imageRef))
 }
 
 // patchAtenetEgressInject splices the credential-provider flags into the egress

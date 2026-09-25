@@ -24,12 +24,152 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+const testActorUID = "actor-uid-1"
+
+type delayedEgressListener struct {
+	net.Listener
+	accepted chan struct{}
+	release  chan struct{}
+}
+
+func (listener *delayedEgressListener) Accept() (net.Conn, error) {
+	conn, err := listener.Listener.Accept()
+	if err == nil {
+		close(listener.accepted)
+		<-listener.release
+	}
+	return conn, err
+}
+
+// A listener bound to an earlier activation never dials with a later one's
+// credentials, whether it was serving at reactivation or starts after it.
+func TestEgressBindingDoesNotOutliveItsActivation(t *testing.T) {
+	for _, lateServe := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lateServe=%t", lateServe), func(t *testing.T) {
+			egress, err := NewEgress(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = egress.Deactivate(context.Background(), testActorUID) })
+			dialed := make(chan string, 2)
+			activate := func(generation string) {
+				t.Helper()
+				if err := egress.Activate(testActorUID, egressDialerFunc(func(context.Context, string) (net.Conn, error) {
+					dialed <- generation
+					return nil, errors.New("test dial")
+				}), fakeActorCertificateSource{}, time.Now().Add(time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bind := func() func(context.Context, net.Listener) error {
+				t.Helper()
+				serve, err := egress.Bind(testActorUID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return serve
+			}
+			listen := func() net.Listener {
+				t.Helper()
+				listener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = listener.Close() })
+				return listener
+			}
+			connect := func(listener net.Listener) net.Conn {
+				t.Helper()
+				conn, err := net.Dial("tcp", listener.Addr().String())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = conn.Close() })
+				return conn
+			}
+			oldServe := bind()
+			activate("old")
+			oldListener := &delayedEgressListener{Listener: listen(), accepted: make(chan struct{}), release: make(chan struct{})}
+			oldDone := make(chan error, 1)
+			var oldConn net.Conn
+			if !lateServe {
+				go func() { oldDone <- oldServe(context.Background(), oldListener) }()
+				oldConn = connect(oldListener)
+				receiveWithin(t, oldListener.accepted, "old socket accepted")
+			}
+			if err := egress.Deactivate(context.Background(), testActorUID); err != nil {
+				t.Fatal(err)
+			}
+			newServe := bind()
+			activate("new")
+			close(oldListener.release)
+			if lateServe {
+				// The listener is still open with a connection waiting, so the
+				// stale binding does get the chance to serve it.
+				oldConn = connect(oldListener)
+				go func() { oldDone <- oldServe(context.Background(), oldListener) }()
+			}
+			_ = oldConn.SetReadDeadline(time.Now().Add(time.Second))
+			if _, err := oldConn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) {
+				t.Fatalf("old connection was not closed: %v", err)
+			}
+			if err := receiveWithin(t, oldDone, "old listener exit"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case generation := <-dialed:
+				t.Fatalf("old listener used %s credentials", generation)
+			default:
+			}
+			newListener := listen()
+			newDone := make(chan error, 1)
+			go func() { newDone <- newServe(context.Background(), newListener) }()
+			_ = connect(newListener)
+			if generation := receiveWithin(t, dialed, "new activation dial"); generation != "new" {
+				t.Fatalf("new listener used %s credentials", generation)
+			}
+			if err := egress.Deactivate(context.Background(), testActorUID); err != nil {
+				t.Fatal(err)
+			}
+			if err := receiveWithin(t, newDone, "new listener exit"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestEgressUnactivatedBindingCloses(t *testing.T) {
+	egress, err := NewEgress(func(net.Conn) (string, error) { return "", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := egress.Bind(""); err == nil {
+		t.Fatal("bound an empty actor UID")
+	}
+	serve, err := egress.Bind(testActorUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = listener.Close()
+	if err := serve(context.Background(), listener); err != nil {
+		t.Fatal(err)
+	}
+	if len(egress.active) != 0 {
+		t.Fatal("closed listener retained an unactivated binding")
+	}
+}
 
 func TestEgressActivationFailsClosed(t *testing.T) {
 	egress, err := NewEgress(func(net.Conn) (string, error) { return "", nil })
@@ -40,7 +180,7 @@ func TestEgressActivationFailsClosed(t *testing.T) {
 		t.Fatal("dialed after failed activation")
 		return nil, nil
 	})
-	if err := egress.Activate(dialer, fakeActorCertificateSource{err: errors.New("renewal failed")}, time.Time{}); err == nil {
+	if err := egress.Activate(testActorUID, dialer, fakeActorCertificateSource{err: errors.New("renewal failed")}, time.Time{}); err == nil {
 		t.Fatal("Activate() succeeded")
 	}
 	actor, proxy := net.Pipe()
@@ -48,7 +188,7 @@ func TestEgressActivationFailsClosed(t *testing.T) {
 	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	egress.handle(proxy)
+	egress.handle(proxy, egress.active[testActorUID])
 	if _, err := actor.Read(make([]byte, 1)); err == nil {
 		t.Fatal("failed activation admitted egress")
 	}
@@ -67,12 +207,12 @@ func TestEgressExpiryRejectsNewButPreservesEstablished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := egress.Activate(dialer, fakeActorCertificateSource{err: errors.New("renewal failed"), calls: &mints}, time.Now().Add(50*time.Millisecond)); err != nil {
+	if err := egress.Activate(testActorUID, dialer, fakeActorCertificateSource{err: errors.New("renewal failed"), calls: &mints}, time.Now().Add(50*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	actor, proxy := net.Pipe()
 	defer actor.Close()
-	egress.handle(proxy)
+	egress.handle(proxy, egress.active[testActorUID])
 	deadline := time.Now().Add(time.Second)
 	for dials.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -92,7 +232,7 @@ func TestEgressExpiryRejectsNewButPreservesEstablished(t *testing.T) {
 	if err := newActor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	egress.handle(newProxy)
+	egress.handle(newProxy, egress.active[testActorUID])
 	if _, err := newActor.Read(make([]byte, 1)); err == nil {
 		t.Fatal("new tunnel admitted after certificate expiry")
 	}
@@ -102,7 +242,7 @@ func TestEgressExpiryRejectsNewButPreservesEstablished(t *testing.T) {
 	if got := mints.Load(); got > 3 {
 		t.Fatalf("mint attempts = %d, retry loop spun near expiry", got)
 	}
-	_ = egress.Deactivate(context.Background())
+	_ = egress.Deactivate(context.Background(), testActorUID)
 }
 
 func TestEgressRenewsBeforeExpiry(t *testing.T) {
@@ -123,7 +263,7 @@ func TestEgressRenewsBeforeExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := egress.Activate(dialer, source, time.Now().Add(80*time.Millisecond)); err != nil {
+	if err := egress.Activate(testActorUID, dialer, source, time.Now().Add(80*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -134,7 +274,7 @@ func TestEgressRenewsBeforeExpiry(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		egress.mu.Lock()
-		expiresAt := egress.active.expiresAt
+		expiresAt := egress.active[testActorUID].expiresAt
 		egress.mu.Unlock()
 		if expiresAt.Equal(renewedExpiry) {
 			break
@@ -146,8 +286,8 @@ func TestEgressRenewsBeforeExpiry(t *testing.T) {
 	}
 	actor, proxy := net.Pipe()
 	defer actor.Close()
-	egress.handle(proxy)
-	_ = egress.Deactivate(context.Background())
+	egress.handle(proxy, egress.active[testActorUID])
+	_ = egress.Deactivate(context.Background(), testActorUID)
 }
 
 func TestEgressRetriesRenewalAfterExpiry(t *testing.T) {
@@ -166,7 +306,7 @@ func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := egress.Activate(egressDialerFunc(func(context.Context, string) (net.Conn, error) {
+			if err := egress.Activate(testActorUID, egressDialerFunc(func(context.Context, string) (net.Conn, error) {
 				t.Fatal("dialed after renewal was denied")
 				return nil, nil
 			}), fakeActorCertificateSource{
@@ -184,7 +324,7 @@ func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
 			deadline := time.Now().Add(time.Second)
 			for {
 				egress.mu.Lock()
-				expiresAt := egress.active.expiresAt
+				expiresAt := egress.active[testActorUID].expiresAt
 				egress.mu.Unlock()
 				if expiresAt.IsZero() {
 					break
@@ -194,7 +334,7 @@ func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond)
 			}
-			_ = egress.Deactivate(context.Background())
+			_ = egress.Deactivate(context.Background(), testActorUID)
 		})
 	}
 }
@@ -207,7 +347,7 @@ func TestEgressDeactivationDropsConcurrentRenewal(t *testing.T) {
 		t.Fatal(err)
 	}
 	dialer := egressDialerFunc(func(context.Context, string) (net.Conn, error) { return nil, nil })
-	if err := egress.Activate(dialer, fakeActorCertificateSource{
+	if err := egress.Activate(testActorUID, dialer, fakeActorCertificateSource{
 		expiresAt: time.Now().Add(time.Hour),
 		called:    started,
 		release:   release,
@@ -215,7 +355,7 @@ func TestEgressDeactivationDropsConcurrentRenewal(t *testing.T) {
 		t.Fatal(err)
 	}
 	egress.mu.Lock()
-	active := egress.active
+	active := egress.active[testActorUID]
 	egress.mu.Unlock()
 	select {
 	case <-started:
@@ -223,7 +363,7 @@ func TestEgressDeactivationDropsConcurrentRenewal(t *testing.T) {
 		t.Fatal("certificate renewal did not start")
 	}
 	done := make(chan error, 1)
-	go func() { done <- egress.Deactivate(context.Background()) }()
+	go func() { done <- egress.Deactivate(context.Background(), testActorUID) }()
 	receiveWithin(t, active.ctx.Done(), "egress cancellation")
 	close(release)
 	if err := receiveWithin(t, done, "egress deactivation"); err != nil {
@@ -276,7 +416,7 @@ func TestEgressEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := egress.Activate(client, fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+	if err := egress.Activate(testActorUID, client, fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -285,7 +425,7 @@ func TestEgressEndToEnd(t *testing.T) {
 		_ = downstreamActor.Close()
 		_ = downstreamProxy.Close()
 	})
-	egress.handle(downstreamProxy)
+	egress.handle(downstreamProxy, egress.active[testActorUID])
 
 	req := receiveWithin(t, requests, "gateway CONNECT request")
 	if req.Method != http.MethodConnect || req.Host != "192.0.2.10:443" {
@@ -315,7 +455,7 @@ func TestEgressEndToEnd(t *testing.T) {
 	}
 	receiveWithin(t, gatewayDone, "gateway completion")
 
-	if err := egress.Deactivate(context.Background()); err != nil {
+	if err := egress.Deactivate(context.Background(), testActorUID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -333,7 +473,7 @@ func TestEgressRejectsInactiveConnection(t *testing.T) {
 	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	egress.handle(proxy)
+	egress.handle(proxy, egress.active[testActorUID])
 	if _, err := actor.Read(make([]byte, 1)); err == nil {
 		t.Fatal("inactive connection remained open")
 	}
@@ -367,4 +507,37 @@ func (s fakeActorCertificateSource) MintAteomCertificate(context.Context) (time.
 		<-s.release
 	}
 	return s.expiresAt, s.err
+}
+
+// Each actor's egress is armed and disarmed on its own: one actor's teardown
+// must not cut off another's tunnels.
+func TestEgressIsArmedPerActor(t *testing.T) {
+	egress, err := NewEgress(func(net.Conn) (string, error) { return "example.com:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}
+	dialer := egressDialerFunc(func(context.Context, string) (net.Conn, error) {
+		return nil, errors.New("not dialed in this test")
+	})
+	for _, uid := range []string{"actor-uid-1", "actor-uid-2"} {
+		if err := egress.Activate(uid, dialer, source, time.Now().Add(time.Hour)); err != nil {
+			t.Fatalf("activating %s: %v", uid, err)
+		}
+	}
+	if err := egress.Activate("actor-uid-1", dialer, source, time.Now().Add(time.Hour)); err == nil {
+		t.Error("activating the same actor twice was allowed")
+	}
+
+	if err := egress.Deactivate(context.Background(), "actor-uid-1"); err != nil {
+		t.Fatal(err)
+	}
+	egress.mu.Lock()
+	defer egress.mu.Unlock()
+	if _, ok := egress.active["actor-uid-1"]; ok {
+		t.Error("actor-uid-1 is still armed after deactivation")
+	}
+	if _, ok := egress.active["actor-uid-2"]; !ok {
+		t.Error("actor-uid-2 lost its egress when another actor was torn down")
+	}
 }

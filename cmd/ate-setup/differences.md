@@ -24,19 +24,22 @@ These were treated as contracts and reproduced exactly:
   `demo-counter_deploy`), so CI log scrapers keep working. Two lines lost a
   parenthesized qualifier; see [`cli-diff.md`](cli-diff.md).
 - **Manifest ordering.** Applying a directory is non-recursive and lexical, as
-  `kubectl apply -f <dir>` was. `deploy_ate_system` depended on that ordering
+  `kubectl apply -f <dir>` was. `delete_ate_system` depends on that ordering
   and the shell comments called out specific filename hazards, so
   `kube.LoadPath` keeps it.
 - **Overlay selection.** `steps.SystemOverlay` is the same product of
   kind × router that `render_ate_system_manifests` computed with
-  nested `if`s.
+  nested `if`s, including the plain GKE install rendering the `base`
+  kustomization rather than the raw directory, which would re-apply the
+  podcertificate-controller and undo its size10 flags and worker count.
 - **Timeouts.** 60s namespace, 60s rollout (`--rollout-timeout` /
   `ATE_INSTALL_ROLLOUT_TIMEOUT`, as in the scripts), 120s for the
-  podcertificate-controller and CSI waits the scripts fixed there, 300s demo.
-  `--rollout-timeout` now reaches the 120s waits too, which it did not in the
-  shell, but only when it is passed: `Config.WaitTimeout` leaves each site at
-  its historical value otherwise, so the 60s default cannot shorten the slow
-  bootstrap paths.
+  podcertificate-controller and CSI waits the scripts fixed there, 300s for the
+  trust bundles (one deadline shared across both), 300s demo.
+  `--rollout-timeout` now reaches the 120s and 300s waits too, which it did not
+  in the shell, but only when it is passed: `Config.WaitTimeout` leaves each
+  site at its historical value otherwise, so the 60s default cannot shorten the
+  slow bootstrap paths.
 - **Rendered bytes.** `authentication.yaml` is trimmed of its trailing newline
   because the shell built it inside `$(...)`, which strips them. Installing
   over a shell-installed cluster must not rewrite the ConfigMap.
@@ -175,7 +178,22 @@ observed status (`3/5 replicas available`) instead of only a timeout.
 
 **Deletes are more precise.** `kubectl delete --ignore-not-found -f` was the
 model, so NotFound is ignored — and so is a kind that no longer resolves, since
-teardown after the CRDs are gone must not fail. Beyond that, deletes are strict.
+teardown after the CRDs are gone must not fail. Beyond that, deletes are
+strict.
+
+**Cluster profiles are new.** `--cluster-size` and `--cordon-control-plane`
+postdate the shell installer, which the shim forwards them to. `size10`
+renders the `podcert-size10` overlay and resizes the bundled PostgreSQL from
+`postgres-size10/postgres-config-patch.yaml`; `--cordon-control-plane`
+composes the `cordon-control-plane` component over every control plane apply
+path. The size10 PostgreSQL changes are made to the decoded objects before the
+one server-side apply, not patched on afterwards: one rollout, the rollout wait
+sees the resized pod, and there is no second field manager for a later apply to
+fight with.
+
+**Timing lines are new.** `ate-setup` prints `(kubectl apply took 1.234s)`
+after each apply, delete, rollout wait, trust bundle wait, `ko` invocation, and
+`gcloud` call, on stdout with the rest of the progress output.
 
 **`|| true` is gone.** The CSI hostpath bundle ships a `VolumeSnapshotClass`
 whose CRD is absent on a stock Kind cluster; the shell script handled that by
@@ -298,4 +316,6 @@ The shell installer had no tests. `cmd/ate-setup` has unit tests for template
 rendering, overlay selection, config resolution, the authentication config, the
 apiserver environment ConfigMap and Secret, Cloud SQL resolution, the OTLP
 endpoint override, delegated script arguments, manifest deletion, per-demo
-rendering, and image reference rewriting.
+rendering, image reference rewriting, kustomize composition, the control plane
+pinning on every apply path, and the size10 PostgreSQL resize against the real
+manifests.

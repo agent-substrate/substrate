@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -51,6 +52,8 @@ type LaunchVMMOptions struct {
 	APISocket string
 	// Stdout/Stderr receive the VMM's output.
 	Stdout, Stderr interface{ Write([]byte) (int, error) }
+	// SysProcAttr, when set, is applied to the VMM process.
+	SysProcAttr *syscall.SysProcAttr
 }
 
 // LaunchVMM starts a cloud-hypervisor process with only an api-socket (no VM)
@@ -70,6 +73,7 @@ func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*exec.Cmd, *Client, err
 	cmd := exec.Command(bin, "--api-socket", o.APISocket)
 	cmd.Stdout = o.Stdout
 	cmd.Stderr = o.Stderr
+	cmd.SysProcAttr = o.SysProcAttr
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("while starting cloud-hypervisor: %w", err)
 	}

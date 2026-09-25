@@ -54,6 +54,8 @@ func loadEnv(t *testing.T) {
 		"ATE_EXPERIMENTAL_USE_SDSMINT",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
+		"ATE_INSTALL_CLUSTER_SIZE",
+		"ATE_INSTALL_CORDON_CONTROL_PLANE",
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
@@ -103,6 +105,109 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.RolloutTimeout != DefaultRolloutTimeout {
 		t.Errorf("RolloutTimeout = %v, want %v", cfg.RolloutTimeout, DefaultRolloutTimeout)
+	}
+	if cfg.ClusterSize != ClusterSizeSize0 {
+		t.Errorf("ClusterSize = %q, want %q", cfg.ClusterSize, ClusterSizeSize0)
+	}
+	if cfg.CordonControlPlane {
+		t.Error("CordonControlPlane = true, want false")
+	}
+}
+
+// --cluster-size=size10 pins the apiserver's pool on the default connection
+// string only. An explicit ATE_API_POSTGRES_CONNECTION_STRING names a database
+// the installer did not size, so it is passed through as written.
+func TestLoadClusterSize(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		opts     Options
+		env      map[string]string
+		wantSize string
+		wantDSN  string
+	}{
+		{
+			name:     "flag",
+			opts:     Options{ClusterSize: ClusterSizeSize10},
+			wantSize: ClusterSizeSize10,
+			wantDSN:  DefaultPostgresConnectionString + Size10PostgresPoolParams,
+		},
+		{
+			name:     "environment",
+			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize10},
+			wantSize: ClusterSizeSize10,
+			wantDSN:  DefaultPostgresConnectionString + Size10PostgresPoolParams,
+		},
+		{
+			name:     "flag beats the environment",
+			opts:     Options{ClusterSize: ClusterSizeSize0},
+			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize10},
+			wantSize: ClusterSizeSize0,
+			wantDSN:  DefaultPostgresConnectionString,
+		},
+		{
+			name:     "explicit connection string is untouched",
+			opts:     Options{ClusterSize: ClusterSizeSize10},
+			env:      map[string]string{"ATE_API_POSTGRES_CONNECTION_STRING": "postgresql://someone@db.example:5432/atepg"},
+			wantSize: ClusterSizeSize10,
+			wantDSN:  "postgresql://someone@db.example:5432/atepg",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ClusterSize != tc.wantSize {
+				t.Errorf("ClusterSize = %q, want %q", cfg.ClusterSize, tc.wantSize)
+			}
+			if cfg.Size10() != (tc.wantSize == ClusterSizeSize10) {
+				t.Errorf("Size10() = %v, want %v", cfg.Size10(), tc.wantSize == ClusterSizeSize10)
+			}
+			if got := cfg.PostgresConnString(); got != tc.wantDSN {
+				t.Errorf("PostgresConnString() = %q, want %q", got, tc.wantDSN)
+			}
+			env := scriptEnvMap(t, cfg)
+			if tc.wantSize == ClusterSizeSize10 {
+				if env["ATE_INSTALL_CLUSTER_SIZE"] != ClusterSizeSize10 {
+					t.Errorf("ScriptEnv()[ATE_INSTALL_CLUSTER_SIZE] = %q, want size10", env["ATE_INSTALL_CLUSTER_SIZE"])
+				}
+			} else if _, ok := env["ATE_INSTALL_CLUSTER_SIZE"]; ok {
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_CLUSTER_SIZE = %q for the default profile, want it absent", env["ATE_INSTALL_CLUSTER_SIZE"])
+			}
+		})
+	}
+}
+
+func TestLoadCordonControlPlane(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		env  string
+		want bool
+	}{
+		{name: "flag", opts: Options{CordonControlPlane: true}, want: true},
+		{name: "environment true", env: "true", want: true},
+		{name: "environment false", env: "false", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_INSTALL_CORDON_CONTROL_PLANE", tc.env)
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.CordonControlPlane != tc.want {
+				t.Errorf("CordonControlPlane = %v, want %v", cfg.CordonControlPlane, tc.want)
+			}
+			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_CONTROL_PLANE"]
+			if exported != tc.want {
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
+			}
+		})
 	}
 }
 
@@ -420,6 +525,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"zero rollout timeout", Options{RolloutTimeout: "0s"}},
 		{"negative rollout timeout", Options{RolloutTimeout: "-30s"}},
 		{"podcert workers", Options{PodcertWorkersPerSigner: -1}},
+		{"cluster size", Options{ClusterSize: "size5"}},
 		{"extproc missing sdsmint", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
 		{"extproc invalid format", Options{ExperimentalUseSDSMint: true, AdditionalEgressExtprocService: "extproc:50051"}},
 		{"extproc agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},

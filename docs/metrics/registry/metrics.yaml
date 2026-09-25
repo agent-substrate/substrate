@@ -203,18 +203,32 @@ groups:
       - id: ate.worker.state
         stability: development
         brief: >
-          The assignment state of a worker. The key starts with worker and not
-          with the name of the pool. Thus you can add related keys later.
+          How full a worker is, by actor slots. The key starts with worker and
+          not with the name of the pool. Thus you can add related keys later.
+        note: >
+          The state compares the allocated actors with the actor capacity. It
+          does not look at CPU or memory: whether those have room depends on
+          the size of the next actor. unschedulable wins over the other states.
         type:
           members:
             - id: idle
               stability: development
               value: idle
-              brief: No actor has this worker.
-            - id: assigned
+              brief: The worker can take actors and holds none.
+            - id: partial
               stability: development
-              value: assigned
-              brief: An actor has this worker.
+              value: partial
+              brief: The worker holds actors and has free actor slots.
+            - id: at_capacity
+              stability: development
+              value: at_capacity
+              brief: The worker has no free actor slot.
+            - id: unschedulable
+              stability: development
+              value: unschedulable
+              brief: >
+                The scheduler places no actor on the worker. It is not active,
+                or it has not reported an actor capacity yet.
 
   - id: registry.ate.sandbox
     type: attribute_group
@@ -645,9 +659,12 @@ groups:
       ateapi reads this value with a callback. You can add the counts together.
       The sum across the states is the size of the pool. The sum across the
       pools is the size of the fleet. Thus this instrument is an UpDownCounter
-      and not a gauge. ateapi sets both states to 0 for each known pool. Thus a
+      and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
+      The states count workers, not actor slots. A worker with 1 of 20 slots
+      used and one with 19 of 20 are both partial. Do not read utilization of
+      the pool from this instrument.
       A worker with the class unknown is not capacity of the pool: the scheduler
       puts no actor on it. Thus a query that asks how much capacity a pool has
       must keep ate.sandbox.class, because a sum across the classes adds that
@@ -985,7 +1002,7 @@ groups:
       atecontroller reads this value with a callback. This is a separate
       instrument and not a state key on a shared instrument. This agrees with
       the Kubernetes conventions (k8s.deployment.desired_pods). The sum of
-      desired and ready has no meaning. But the sum of idle and assigned on
+      desired and ready has no meaning. But the sum across the states of
       ate.workerpool.workers has a meaning.
     annotations:
       substrate:

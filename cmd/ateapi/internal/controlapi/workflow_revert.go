@@ -255,7 +255,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.InProgressSnapshotUri = ""
 		toUpdate.Status.InProgressLocalSnapshotName = ""
-		toUpdate.Status.LocalSnapshotInfo = nil
+		toUpdate.Status.LocalSnapshot = nil
 		return nil
 	})
 	if err != nil {
