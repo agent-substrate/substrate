@@ -39,6 +39,8 @@ func TestParseValid(t *testing.T) {
 		"lifecycle_mode": "pause",
 		"durdir_read_mode": "data",
 		"durdir_template": "glutton-durdir-data",
+		"cpu_cores": 2,
+		"cpu_duty_cycle": 0.1,
 		"sweperf_template": "swebench-astropy-7336",
 		"sweperf_total_steps": 21,
 		"sweperf_num_cycles": 4
@@ -78,6 +80,12 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.DurDirTemplate != "glutton-durdir-data" {
 		t.Errorf("DurDirTemplate: got %q, want glutton-durdir-data", cfg.DurDirTemplate)
+	}
+	if cfg.CPUCores != 2 {
+		t.Errorf("CPUCores: got %d, want 2", cfg.CPUCores)
+	}
+	if cfg.CPUDutyCycle != 0.1 {
+		t.Errorf("CPUDutyCycle: got %f, want 0.1", cfg.CPUDutyCycle)
 	}
 	if cfg.SweperfTemplate != "swebench-astropy-7336" {
 		t.Errorf("SweperfTemplate: got %q, want swebench-astropy-7336", cfg.SweperfTemplate)
@@ -146,6 +154,18 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "invalid read mode",
 			json: `{"durdir_read_mode": "invalid_read"}`,
+		},
+		{
+			name: "negative cpu cores",
+			json: `{"cpu_cores": -1}`,
+		},
+		{
+			name: "negative cpu duty cycle",
+			json: `{"cpu_duty_cycle": -0.1}`,
+		},
+		{
+			name: "cpu duty cycle > 1.0",
+			json: `{"cpu_duty_cycle": 1.5}`,
 		},
 		{
 			name: "negative sweperf total steps",
