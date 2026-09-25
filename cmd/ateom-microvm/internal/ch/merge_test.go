@@ -200,3 +200,64 @@ func TestMergeDeltaIntoBaseSizeMismatch(t *testing.T) {
 		t.Errorf("base should be intact after a refused merge: %v", err)
 	}
 }
+
+// TestCopySparseRegions verifies copySparseRegions directly overwrites dst
+// with only populated regions of src, leaving untouched areas intact.
+func TestCopySparseRegions(t *testing.T) {
+	const size = 16 << 20 // 16 MiB logical
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src")
+	dstPath := filepath.Join(dir, "dst")
+
+	// src has populated extents at 64 KiB and 8 MiB.
+	srcRegions := []region{
+		{off: 64 << 10, data: fill(10, 128<<10)},
+		{off: 8 << 20, data: fill(20, 256<<10)},
+	}
+	// dst starts with preexisting data at 0 and 8 MiB (partially overlapping src).
+	dstRegions := []region{
+		{off: 0, data: fill(30, 4<<10)},
+		{off: 8 << 20, data: fill(40, 256<<10)},
+	}
+	writeSparse(t, srcPath, size, srcRegions)
+	writeSparse(t, dstPath, size, dstRegions)
+
+	want := make([]byte, size)
+	for _, r := range dstRegions {
+		copy(want[r.off:], r.data)
+	}
+	// Overlay src's populated extents over dst
+	for _, r := range srcRegions {
+		copy(want[r.off:], r.data)
+	}
+
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		t.Fatalf("opening src: %v", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.OpenFile(dstPath, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("opening dst: %v", err)
+	}
+	defer dstFile.Close()
+
+	copied, err := copySparseRegions(srcFile, dstFile)
+	if err != nil {
+		t.Fatalf("copySparseRegions: %v", err)
+	}
+
+	expectedCopied := int64((128 << 10) + (256 << 10))
+	if copied != expectedCopied {
+		t.Errorf("copied %d bytes, want %d", copied, expectedCopied)
+	}
+
+	got, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("reading dst: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("overwritten dst bytes do not match expected")
+	}
+}

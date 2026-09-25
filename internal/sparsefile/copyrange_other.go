@@ -16,6 +16,15 @@
 
 package sparsefile
 
+// ErrKernelCopyUnsupported means this platform, kernel or filesystem cannot copy a
+// range in the kernel, so the caller should copy through userspace instead.
+var ErrKernelCopyUnsupported = errKernelCopyUnsupported
+
+// KernelCopyRange has no implementation off Linux.
+func KernelCopyRange(srcFd, dstFd int, off, length int64) (int64, error) {
+	return 0, ErrKernelCopyUnsupported
+}
+
 // kernelCopyRange has no implementation off Linux (atelet runs on Linux; this keeps
 // the package building for local development on other platforms), so callers copy
 // through userspace.
