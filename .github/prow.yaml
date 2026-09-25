@@ -1,0 +1,121 @@
+#  Copyright 2026 Google LLC
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+# Adapted from https://github.com/cncf/prow-github-actions/blob/main/templates/prow.yaml
+
+labels:
+  area:
+    - name: api
+    - name: api-machinery
+    - name: benchmarking
+    - name: cli
+    - name: demos
+    - name: dev-infra
+    - name: gvisor
+    - name: identity
+    - name: microVM
+    - name: network
+    - name: node
+    - name: observability
+    - name: reliability
+    - name: scheduling
+    - name: security
+    - name: storage
+    - name: tests
+
+  kind:
+    - name: bug
+      description: Something isn't working / bugfixes
+    - name: cleanup
+      description: Small fixes that are not bugs
+    - name: design
+      description: Design discussion, investigation, or research
+    - name: docs
+      description: Improvements or additions to documentation
+    - name: feature
+      description: A feature request or implementation
+
+  # exclusive: a later /priority replaces the existing priority/* label
+  priority:
+    values:
+      - name: P0
+        color: e11d21
+        description: Critical, Required for next milestone
+      - name: P1
+        color: eb6420
+        description: Important, but not critical
+      - name: P2
+        color: eb6420
+        description: Real, but not urgent
+    exclusive: true
+
+
+  # the built-in /lifecycle values, spelled out so their labels are created too
+  lifecycle:
+    values:
+      - name: frozen
+        color: d3e2f0
+        description: Indicates that an issue or PR should not be auto-closed due to staleness.
+      - name: stale
+        color: '795548'
+        description: Denotes an issue or PR has remained open with no activity and has become stale.
+      - name: rotten
+        color: '604460'
+        description: Denotes an issue or PR that has aged beyond stale and will be auto-closed.
+    exclusive: true
+
+  # the merge gate's deny list; /hold applies do-not-merge/hold
+  do-not-merge:
+    - name: hold
+      color: e11d21
+      description: Indicates that a PR should not merge because someone has issued a /hold command.
+    - name: work-in-progress
+      color: e11d21
+      description: Indicates that a PR should not merge because it is a work in progress.
+    - name: invalid-owners-file
+      color: e11d21
+      description: Indicates that a PR should not merge because it has an invalid OWNERS file in it.
+
+# needs-* labels until a matching label is applied; needs-* labels are colored ededed
+require_matching_label:
+  - regexp: ^kind/
+    missing_label: needs-kind
+    issues: true
+    prs: true
+    missing_comment: Please add a kind label with /kind <value>.
+  - regexp: ^triage/
+    missing_label: needs-triage
+    issues: true
+    prs: false
+  - regexp: ^area/
+    missing_label: needs-area
+    issues: true
+    prs: true
+
+# the merge gate; these are the defaults
+tide:
+  labels: [lgtm]
+  missing_labels: [do-not-merge/*, needs-rebase, hold]
+  merge_method: merge
+  merge_on_events: true
+
+# the label /hold applies; this is the default
+hold:
+  label: do-not-merge/hold
+
+# reviewers requested from OWNERS files when a pull request opens
+blunderbuss:
+  request_count: 2
+  ignore_drafts: true
+  ignore_authors: ['dependabot[bot]']
