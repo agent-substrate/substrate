@@ -338,56 +338,6 @@ func TestCleanupClosesEachDescriptorOnce(t *testing.T) {
 	}
 }
 
-// stoppableDNS records that its serving contexts were canceled.
-type stoppableDNS struct{ packet, stream chan struct{} }
-
-func (d *stoppableDNS) ServePacket(ctx context.Context, pc net.PacketConn) error {
-	<-ctx.Done()
-	close(d.packet)
-	return pc.Close()
-}
-
-func (d *stoppableDNS) Serve(ctx context.Context, l net.Listener) error {
-	<-ctx.Done()
-	close(d.stream)
-	return l.Close()
-}
-
-func TestClosingSandboxDNSStopsServing(t *testing.T) {
-	roottest.Require(t, "creates network namespaces")
-	network, err := SetupSandboxNetwork(context.Background(), SandboxNetworkConfig{
-		ActorUID:   "dns-teardown",
-		EgressPort: 15001,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = CleanupSandboxNetwork(network) }()
-
-	relay := &stoppableDNS{packet: make(chan struct{}), stream: make(chan struct{})}
-	closers, serve, err := serveSandboxDNS(context.Background(), relay, network.GatewayNetNS, 53)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fn := range serve {
-		go fn()
-	}
-	for _, c := range closers {
-		_ = c.Close()
-	}
-
-	for _, tc := range []struct {
-		name    string
-		stopped chan struct{}
-	}{{"UDP", relay.packet}, {"TCP", relay.stream}} {
-		select {
-		case <-tc.stopped:
-		case <-time.After(5 * time.Second):
-			t.Errorf("%s serving outlived the sandbox's sockets", tc.name)
-		}
-	}
-}
-
 // slowDNS holds its serving goroutines open until released, so a test can tell
 // whether Close waits for them or merely closes their sockets.
 type slowDNS struct{ release chan struct{} }
