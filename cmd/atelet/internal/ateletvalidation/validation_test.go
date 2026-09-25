@@ -265,3 +265,182 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateVolume(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.Volume)) *ateletpb.Volume {
+		v := &ateletpb.Volume{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}
+		for _, m := range mutate {
+			m(v)
+		}
+		return v
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.Volume
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing name",
+		obj:  valid(func(v *ateletpb.Volume) { v.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name: "invalid name: uppercase",
+		obj:  valid(func(v *ateletpb.Volume) { v.Name = "Data" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "no source set",
+		obj:  valid(func(v *ateletpb.Volume) { v.DurableDir = nil }),
+		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+	}, {
+		name: "two sources set",
+		obj: valid(func(v *ateletpb.Volume) {
+			v.External = &ateletpb.ExternalVolumeSource{StorageVolumeId: "vol-1"}
+		}),
+		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+	}, {
+		name: "system-info source alone",
+		obj: valid(func(v *ateletpb.Volume) {
+			v.DurableDir = nil
+			v.SystemInfo = &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
+				{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "trust/bundle.pem"}},
+			}}
+		}),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_Volume(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateSystemInfoDataSource(t *testing.T) {
+	tests := []struct {
+		name string
+		obj  *ateletpb.SystemInfoDataSource
+		want field.ErrorList
+	}{{
+		name: "trust bundle alone",
+		obj:  &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"}},
+	}, {
+		name: "actor metadata alone",
+		obj:  &ateletpb.SystemInfoDataSource{ActorMetadata: &ateletpb.ActorMetadataDataSource{}},
+	}, {
+		name: "neither set",
+		obj:  &ateletpb.SystemInfoDataSource{},
+		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+	}, {
+		name: "both set",
+		obj: &ateletpb.SystemInfoDataSource{
+			ActorMetadata: &ateletpb.ActorMetadataDataSource{},
+			TrustBundle:   &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"},
+		},
+		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_SystemInfoDataSource(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateSystemInfoVolume(t *testing.T) {
+	ds := func(path string) *ateletpb.SystemInfoDataSource {
+		return &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: path}}
+	}
+	tests := []struct {
+		name string
+		obj  *ateletpb.SystemInfoVolume
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj: &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
+			ds("a.pem"), ds("b.pem"),
+			{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+				{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
+			}}},
+		}},
+	}, {
+		name: "duplicate path across trust bundles",
+		obj:  &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{ds("a.pem"), ds("a.pem")}},
+		want: field.ErrorList{field.Duplicate(field.NewPath("data_sources").Index(1).Child("trust_bundle", "path"), nil)},
+	}, {
+		name: "duplicate path between bundle and metadata item",
+		obj: &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
+			ds("name"),
+			{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
+				{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
+			}}},
+		}},
+		want: field.ErrorList{field.Duplicate(field.NewPath("data_sources").Index(1).Child("actor_metadata", "items").Index(0).Child("path"), nil)},
+	}, {
+		name: "too many data sources",
+		obj: &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
+			ds("a"), ds("b"), ds("c"), ds("d"), ds("e"), ds("f"), ds("g"), ds("h"), ds("i"),
+		}},
+		want: field.ErrorList{field.TooMany(field.NewPath("data_sources"), 9, 8).WithOrigin("maxItems")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_SystemInfoVolume(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+// TestValidateWorkloadSpecVolumes exercises the volumes list through the
+// parent, as the control plane's template tests do, so the union and
+// uniqueness errors are asserted at their real field paths.
+func TestValidateWorkloadSpecVolumes(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.WorkloadSpec)) *ateletpb.WorkloadSpec {
+		s := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+		}}
+		for _, m := range mutate {
+			m(s)
+		}
+		return s
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.WorkloadSpec
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "no volumes: the delete flow may send containers only",
+		obj:  &ateletpb.WorkloadSpec{},
+	}, {
+		name: "volume with no source",
+		obj:  valid(func(s *ateletpb.WorkloadSpec) { s.Volumes[0].DurableDir = nil }),
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "one of").WithOrigin("union")},
+	}, {
+		name: "volume with two sources",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Volumes[0].SystemInfo = &ateletpb.SystemInfoVolume{}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "one of").WithOrigin("union")},
+	}, {
+		name: "duplicate volume names",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Volumes = append(s.Volumes, &ateletpb.Volume{Name: "data", SystemInfo: &ateletpb.SystemInfoVolume{}})
+		}),
+		want: field.ErrorList{field.Duplicate(field.NewPath("volumes").Index(1), nil)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_WorkloadSpec(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}

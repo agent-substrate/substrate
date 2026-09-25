@@ -1042,9 +1042,16 @@ func (x *SandboxAssets) GetPauseImage() string {
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 type WorkloadSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Containers    []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
-	Volumes       []*Volume              `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Containers []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	// Tagged ahead of the rest of WorkloadSpec: volumes' type carries
+	// validations, so the generator requires a presence tag here.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=32 # matches the template's volumes bound
+	// +k8s:listType=map
+	// +k8s:listMapKey=name
+	Volumes       []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1394,9 +1401,17 @@ func (x *TrustBundleDataSource) GetName() string {
 // SystemInfoDataSource selects exactly one projection to place in the
 // volume.
 type SystemInfoDataSource struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exactly one of actor_metadata / trust_bundle must be set.
+	//
+	// +k8s:optional
+	// +k8s:unionMember
+	// +k8s:opaqueType # tagged in a follow-up
 	ActorMetadata *ActorMetadataDataSource `protobuf:"bytes,1,opt,name=actor_metadata,json=actorMetadata,proto3" json:"actor_metadata,omitempty"`
-	TrustBundle   *TrustBundleDataSource   `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3" json:"trust_bundle,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	// +k8s:opaqueType # tagged in a follow-up
+	TrustBundle   *TrustBundleDataSource `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3" json:"trust_bundle,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1449,7 +1464,11 @@ func (x *SystemInfoDataSource) GetTrustBundle() *TrustBundleDataSource {
 // on every Run/Restore, so they carry the values of the actor actually being
 // started, whatever checkpointed state it boots from.
 type SystemInfoVolume struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	// +k8s:maxItems=8 # matches the template's data_sources bound
+	// +k8s:listType=atomic
+	// +k8s:customValidation # paths unique across entries
 	DataSources   []*SystemInfoDataSource `protobuf:"bytes,1,rep,name=data_sources,json=dataSources,proto3" json:"data_sources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1493,13 +1512,32 @@ func (x *SystemInfoVolume) GetDataSources() []*SystemInfoDataSource {
 }
 
 // Volume names one volume and selects exactly one source for it.
+//
+// No request descends into Volume yet (the spec fields are still opaque), so
+// validation is generated through the per-type opt-in below until the
+// herder requests open up.
+// +k8s:validation-gen=true
 type Volume struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	DurableDir    *DurableDirVolume      `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
-	External      *ExternalVolumeSource  `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
-	SystemInfo    *SystemInfoVolume      `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
-	Image         *ImageVolumeSource     `protobuf:"bytes,5,opt,name=image,proto3" json:"image,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Exactly one of durable_dir / external / system_info / image must be set.
+	//
+	// +k8s:optional
+	// +k8s:unionMember
+	DurableDir *DurableDirVolume `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	// +k8s:opaqueType # tagged in a follow-up
+	External *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	SystemInfo *SystemInfoVolume `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	// +k8s:opaqueType # tagged in a follow-up
+	Image         *ImageVolumeSource `protobuf:"bytes,5,opt,name=image,proto3" json:"image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

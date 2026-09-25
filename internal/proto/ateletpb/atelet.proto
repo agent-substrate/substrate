@@ -268,6 +268,14 @@ message SandboxAssets {
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
+
+  // Tagged ahead of the rest of WorkloadSpec: volumes' type carries
+  // validations, so the generator requires a presence tag here.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
   repeated Volume volumes = 2;
 }
 
@@ -319,8 +327,16 @@ message TrustBundleDataSource {
 // SystemInfoDataSource selects exactly one projection to place in the
 // volume.
 message SystemInfoDataSource {
+  // Exactly one of actor_metadata / trust_bundle must be set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:opaqueType # tagged in a follow-up
   ActorMetadataDataSource actor_metadata = 1;
 
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:opaqueType # tagged in a follow-up
   TrustBundleDataSource trust_bundle = 2;
 }
 
@@ -328,19 +344,38 @@ message SystemInfoDataSource {
 // on every Run/Restore, so they carry the values of the actor actually being
 // started, whatever checkpointed state it boots from.
 message SystemInfoVolume {
+  // +k8s:optional
+  // +k8s:maxItems=8 # matches the template's data_sources bound
+  // +k8s:listType=atomic
+  // +k8s:customValidation # paths unique across entries
   repeated SystemInfoDataSource data_sources = 1;
 }
 
 // Volume names one volume and selects exactly one source for it.
+// +k8s:validation-gen=true
 message Volume {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
 
+  // Exactly one of durable_dir / external / system_info / image must be set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
   DurableDirVolume durable_dir = 2;
 
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:opaqueType # tagged in a follow-up
   ExternalVolumeSource external = 3;
 
+  // +k8s:optional
+  // +k8s:unionMember
   SystemInfoVolume system_info = 4;
 
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:opaqueType # tagged in a follow-up
   ImageVolumeSource image = 5;
 }
 
