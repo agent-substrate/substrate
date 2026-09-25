@@ -26,6 +26,8 @@ By default, `kubectl-ate` will automatically read your `~/.kube/config`, discove
 
 If you prefer to route traffic directly (e.g., through a LoadBalancer or when running natively inside a cluster pod), simply provide the `--endpoint` flag to bypass the tunnel.
 
+Because the tunnel is an implementation detail, diagnostics that the Kubernetes client reports about it are not printed. Pass `--verbose` to see them when troubleshooting a connection.
+
 ## Tracing
 The CLI supports on-demand tracing using the `--trace` flag. When enabled, the CLI will generate a trace ID and signal to the server that it wants the request to be traced.
 
@@ -69,6 +71,7 @@ These flags can be appended to any command:
 | `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
+| `--verbose` | | Print internal Kubernetes client diagnostics that are otherwise suppressed | `false` |
 
 ---
 
