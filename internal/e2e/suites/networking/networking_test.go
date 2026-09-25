@@ -82,15 +82,53 @@ func TestActorDirectAccess(t *testing.T) {
 	})
 }
 
-// egressHTTPTarget returns a copy of the origin TestActorEgress dials:
-// testserver's http subcommand, published on port 80, listening on 8080.
-func egressHTTPTarget() e2e.ServerPod {
+// The origin's ports past the 80 it publishes as its primary. Named here
+// because two things have to agree on each one: the spec below, and the test
+// that dials it and then looks for that port in the gateway's access log.
+const (
+	// originAltPortName publishes the HTTP listener a second time, on a port
+	// that is neither 80 nor 443.
+	originAltPortName = "http-alt"
+	originAltPort     = 8080
+	// originGRPCPortName is cleartext HTTP/2, with nothing else on it.
+	originGRPCPortName = "grpc"
+	originGRPCPort     = 50051
+)
+
+// sharedOrigin returns a copy of the spec for the one origin the egress tests
+// dial: testserver's serve subcommand, answering HTTP on 80 and on 8080, and
+// gRPC on 50051, from a single pod.
+//
+// Six tests want an origin, differing only in which protocol and which port
+// they reach it on, so they share one through e2e.DeploySharedServerPod rather
+// than each standing up a pod of its own. The origin is scaffolding — what
+// these tests are about is the path between the actor and it — while deploying
+// one costs a namespace, an image push, a schedule and a readiness wait every
+// time.
+//
+// A port per protocol, rather than one port that works out what arrived: the
+// egress path is exactly what these tests suspect, so an origin that guessed
+// wrong, or that delayed the first byte while it guessed, would be
+// indistinguishable from the tunnel misbehaving.
+//
+// Keep the spec identical across those callers: the sharing is keyed on the
+// name and verified against the contents, so a caller that tweaks a field gets
+// a loud conflict instead of a second origin.
+func sharedOrigin() e2e.ServerPod {
 	return e2e.ServerPod{
-		Name:       "egresshttp",
+		Name:       "origin",
 		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args:       []string{"http"},
+		// The template appends --listen=:8080 for the primary port; every other
+		// listener is opened by a flag here. serve binds them all before it
+		// serves any, which is what lets the one readiness probe kubelet allows
+		// -- an HTTP GET on 8080 -- stand for the gRPC port too.
+		Args:       []string{"serve", "--grpc=:" + strconv.Itoa(originGRPCPort)},
 		Port:       80,
 		TargetPort: 8080,
+		ExtraPorts: []e2e.ServerPort{
+			{Name: originAltPortName, Port: originAltPort, TargetPort: 8080},
+			{Name: originGRPCPortName, Port: originGRPCPort},
+		},
 	}
 }
 
@@ -107,8 +145,8 @@ func TestActorEgress(t *testing.T) {
 	ctx := context.Background()
 
 	// Deploy the origin first so a fixture failure costs no Actor resume.
-	origin := egressHTTPTarget()
-	target := e2e.DeployServerPod(t, ctx, origin)
+	origin := sharedOrigin()
+	target := e2e.DeploySharedServerPod(t, ctx, origin)
 
 	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress", egressFixture(), e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
@@ -166,16 +204,6 @@ func TestActorEgressHTTPS(t *testing.T) {
 	assertEgressGatewayConnect(t, ctx, since, actorName, "443")
 }
 
-// httpTarget is the origin TestActorEgressNonStandardPort dials: a plain HTTP
-// server on a port that is neither 80 nor 443. testserver's http subcommand
-// serves nothing but /healthz, which is all this target is dialed for.
-var httpTarget = e2e.ServerPod{
-	Name:       "httptarget",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-	Args:       []string{"http"},
-	Port:       8080,
-}
-
 // TestActorEgressNonStandardPort covers plaintext HTTP/1.1 egress to a port
 // that is neither 80 nor 443, the shape most in-cluster services actually take.
 //
@@ -192,7 +220,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 
 	// Stand the target up first: a fixture failure here should not leave a
 	// resumed Actor idling in the cluster waiting for a destination.
-	target := e2e.DeployServerPod(t, ctx, httpTarget)
+	target := e2e.DeploySharedServerPod(t, ctx, sharedOrigin())
 
 	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-port", egressFixture(), e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
@@ -200,14 +228,15 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 
 	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 
-	// Address() is the ClusterIP literal, not the Service's DNS name: the
+	// AddressFor gives the ClusterIP literal, not the Service's DNS name: the
 	// authority atunnel sends is always an address, so the name would add
 	// nothing but a dependency on the sandbox's DNS-over-UDP masquerade path --
 	// turning a DNS failure into something that reads as an egress-port
 	// failure. kube-proxy's service DNAT happens later, in the host netns, so
 	// <ClusterIP>:8080 is what SO_ORIGINAL_DST returns and what has to reach
-	// the gateway.
-	url := fmt.Sprintf("http://%s/healthz", target.Address())
+	// the gateway -- the Service's own port, even though the container behind
+	// it is the same listener port 80 is published in front of.
+	url := fmt.Sprintf("http://%s/healthz", target.AddressFor(t, originAltPortName))
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
 	if status != http.StatusOK {
@@ -215,7 +244,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 	}
 	t.Logf("Actor egress fetch of %s succeeded", url)
 
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(httpTarget.Port))
+	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(originAltPort))
 }
 
 // fetchThroughEgressActor asks the egress demo Actor to fetch url and returns
