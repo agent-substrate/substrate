@@ -207,6 +207,220 @@ func TestReadDiskRejectsInvalidKey(t *testing.T) {
 	}
 }
 
+// TestWriteDiskFileCountSpreadsBytesOverFiles checks that a multi-file write
+// lays total bytes out as file_count files under key, that its digest is the
+// concatenation ReadDisk reads back, and that a single-file write reports the
+// same shape a caller would see with file_count unset.
+func TestWriteDiskFileCountSpreadsBytesOverFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	svc, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create glutton service: %v", err)
+	}
+	defer svc.Close()
+
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		size      int32
+		fileCount int32
+		wantSizes []int64
+	}{
+		{name: "even split", size: 4096, fileCount: 4, wantSizes: []int64{1024, 1024, 1024, 1024}},
+		{name: "remainder goes to the first files", size: 10, fileCount: 3, wantSizes: []int64{4, 3, 3}},
+		{name: "more files than bytes", size: 2, fileCount: 3, wantSizes: []int64{1, 1, 0}},
+		{name: "chunk unaligned files", size: (1 << 20) + 2, fileCount: 2, wantSizes: []int64{(1 << 19) + 1, (1 << 19) + 1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := "multi"
+			writeResp, err := svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
+				Key:       key,
+				Size:      tt.size,
+				WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
+				FileCount: tt.fileCount,
+			})
+			if err != nil {
+				t.Fatalf("WriteDisk failed: %v", err)
+			}
+			if writeResp.GetSize() != int64(tt.size) {
+				t.Errorf("WriteDisk size: got %d, want total %d", writeResp.GetSize(), tt.size)
+			}
+
+			entries, err := os.ReadDir(filepath.Join(tempDir, key))
+			if err != nil {
+				t.Fatalf("key is not a directory: %v", err)
+			}
+			if len(entries) != int(tt.fileCount) {
+				t.Fatalf("files under key: got %d, want %d", len(entries), tt.fileCount)
+			}
+			var concatenated []byte
+			for i, entry := range entries {
+				if entry.Name() != diskFileName(i) {
+					t.Errorf("file %d named %q, want %q", i, entry.Name(), diskFileName(i))
+				}
+				data, err := os.ReadFile(filepath.Join(tempDir, key, entry.Name()))
+				if err != nil {
+					t.Fatalf("reading file %d: %v", i, err)
+				}
+				if int64(len(data)) != tt.wantSizes[i] {
+					t.Errorf("file %d size: got %d, want %d", i, len(data), tt.wantSizes[i])
+				}
+				concatenated = append(concatenated, data...)
+			}
+			wantDigest := sha256.Sum256(concatenated)
+			if !bytes.Equal(writeResp.GetSha256(), wantDigest[:]) {
+				t.Errorf("WriteDisk sha256 is not the digest of the files concatenated in name order")
+			}
+
+			for _, mode := range []gluttonpb.ReadMode{gluttonpb.ReadMode_READ_MODE_DATA, gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY} {
+				readResp, err := svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{Key: key, ReadMode: mode})
+				if err != nil {
+					t.Fatalf("ReadDisk(%v) failed: %v", mode, err)
+				}
+				if readResp.GetSize() != int64(tt.size) {
+					t.Errorf("ReadDisk(%v) size: got %d, want %d", mode, readResp.GetSize(), tt.size)
+				}
+				if !bytes.Equal(readResp.GetSha256(), writeResp.GetSha256()) {
+					t.Errorf("ReadDisk(%v) sha256 differs from WriteDisk's", mode)
+				}
+				wantData := concatenated
+				if mode == gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY {
+					wantData = nil
+				}
+				if !bytes.Equal(readResp.GetData(), wantData) {
+					t.Errorf("ReadDisk(%v) data: got %d bytes, want %d", mode, len(readResp.GetData()), len(wantData))
+				}
+			}
+		})
+	}
+}
+
+// TestWriteDiskTruncateReplacesLayout checks that TRUNCATE swaps key between
+// its single-file and multi-file layouts without leaving the other behind,
+// and that shrinking file_count drops the files a larger count wrote.
+func TestWriteDiskTruncateReplacesLayout(t *testing.T) {
+	tempDir := t.TempDir()
+	svc, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create glutton service: %v", err)
+	}
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := "layout"
+	write := func(size, fileCount int32) *gluttonpb.WriteDiskResponse {
+		t.Helper()
+		resp, err := svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
+			Key:       key,
+			Size:      size,
+			WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
+			FileCount: fileCount,
+		})
+		if err != nil {
+			t.Fatalf("WriteDisk(size=%d, file_count=%d) failed: %v", size, fileCount, err)
+		}
+		return resp
+	}
+	readBack := func(want *gluttonpb.WriteDiskResponse) {
+		t.Helper()
+		resp, err := svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{Key: key, ReadMode: gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY})
+		if err != nil {
+			t.Fatalf("ReadDisk failed: %v", err)
+		}
+		if resp.GetSize() != want.GetSize() || !bytes.Equal(resp.GetSha256(), want.GetSha256()) {
+			t.Errorf("ReadDisk size %d / sha256 %x, want the last write's %d / %x", resp.GetSize(), resp.GetSha256(), want.GetSize(), want.GetSha256())
+		}
+	}
+	path := filepath.Join(tempDir, key)
+
+	// file -> directory
+	write(64, 0)
+	readBack(write(64, 8))
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatalf("key should be a directory after a multi-file write: %v", err)
+	}
+	if len(entries) != 8 {
+		t.Errorf("files after file_count=8: got %d, want 8", len(entries))
+	}
+
+	// shrinking the count removes the surplus files
+	readBack(write(64, 2))
+	entries, err = os.ReadDir(path)
+	if err != nil {
+		t.Fatalf("key should still be a directory: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("files after file_count=2: got %d, want 2", len(entries))
+	}
+
+	// directory -> file
+	readBack(write(64, 1))
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat failed: %v", err)
+	}
+	if fi.IsDir() {
+		t.Errorf("key should be a plain file after a single-file write")
+	}
+}
+
+func TestWriteDiskOverwriteWithFileCountKeepsTails(t *testing.T) {
+	tempDir := t.TempDir()
+	svc, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create glutton service: %v", err)
+	}
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := "overwrite-multi"
+
+	if _, err := svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
+		Key: key, Size: 4096, WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE, FileCount: 4,
+	}); err != nil {
+		t.Fatalf("WriteDisk (large) failed: %v", err)
+	}
+	// Each of the four files keeps its 1024-byte length: 256 bytes are
+	// rewritten and the 768-byte tail persists.
+	overwriteResp, err := svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
+		Key: key, Size: 1024, WriteMode: gluttonpb.WriteMode_WRITE_MODE_OVERWRITE, FileCount: 4,
+	})
+	if err != nil {
+		t.Fatalf("WriteDisk (overwrite) failed: %v", err)
+	}
+	if overwriteResp.GetSize() != 4096 {
+		t.Errorf("WriteDisk(OVERWRITE) size: got %d, want the files' total 4096", overwriteResp.GetSize())
+	}
+
+	readResp, err := svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{Key: key, ReadMode: gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY})
+	if err != nil {
+		t.Fatalf("ReadDisk failed: %v", err)
+	}
+	if readResp.GetSize() != 4096 {
+		t.Errorf("ReadDisk size: got %d, want 4096", readResp.GetSize())
+	}
+	if !bytes.Equal(readResp.GetSha256(), overwriteResp.GetSha256()) {
+		t.Errorf("WriteDisk(OVERWRITE) digest over all files should match ReadDisk's")
+	}
+}
+
+func TestWriteDiskRejectsNegativeFileCount(t *testing.T) {
+	tempDir := t.TempDir()
+	svc, err := New(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create glutton service: %v", err)
+	}
+	defer svc.Close()
+
+	_, err = svc.WriteDisk(context.Background(), &gluttonpb.WriteDiskRequest{Key: "neg", Size: 1, FileCount: -1})
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for negative file_count, got %v", err)
+	}
+}
+
 func TestReadDiskNotFound(t *testing.T) {
 	tempDir := t.TempDir()
 	svc, err := New(tempDir)
