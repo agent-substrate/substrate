@@ -43,6 +43,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/ateworker/overcommit"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
@@ -52,6 +53,7 @@ import (
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/otlprelay"
+	"go.ate.dev/substrate/internal/overcommit/predictor"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -83,6 +85,11 @@ var (
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
 	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateworker samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
+
+	enableOvercommit           = pflag.Bool("enable-overcommit", false, "Enable worker-level overcommit: hand back to the control plane what hosted actors are not predicted to use. Must match the ateapi's --enable-overcommit.")
+	overcommitMaturationWindow = pflag.Duration("overcommit-maturation-window", overcommit.DefaultMaturationWindow, "How long an actor runs before its usage is trusted for overcommit predictions.")
+	overcommitHistoryWindow    = pflag.Duration("overcommit-history-window", overcommit.DefaultHistoryWindow, "How much usage history overcommit predictions consider.")
+	overcommitPollInterval     = pflag.Duration("overcommit-poll-interval", overcommit.DefaultPollInterval, "How often overcommit samples usage and adjusts the Worker's allocation.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -144,6 +151,9 @@ func do(ctx context.Context) error {
 	}
 	if *usageSampleInterval < minUsageSampleInterval {
 		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
+	}
+	if *enableOvercommit && *overcommitPollInterval <= 0 {
+		return fmt.Errorf("--overcommit-poll-interval must be positive, got %s", *overcommitPollInterval)
 	}
 
 	const serviceName = "ateworker-gvisor"
@@ -262,6 +272,14 @@ func do(ctx context.Context) error {
 		go ateworkerService.watchMemory(ctx)
 	}
 
+	if *enableOvercommit {
+		controller, err := newOvercommitController(ateworkerService)
+		if err != nil {
+			return err
+		}
+		go controller.Run(ctx)
+	}
+
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
@@ -323,6 +341,30 @@ func do(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// newOvercommitController builds the overcommit controller, reaching the
+// node-local atelet the way the capacity report does.
+func newOvercommitController(s *AteWorkerService) (*overcommit.Controller, error) {
+	adjuster, err := overcommit.NewGRPCAdjuster(overcommit.DialConfig{
+		SocketPath:           nodepath.WorkerSupportSocket,
+		CredentialBundlePath: tunnelConfig.CredentialBundle,
+		TrustBundlePath:      tunnelConfig.TrustBundle,
+		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
+	})
+	if err != nil {
+		return nil, err
+	}
+	sampler := func(ctx context.Context) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+		return s.GetActiveWorkloadStats(ctx, &ateworkerpb.GetActiveWorkloadStatsRequest{})
+	}
+	strategy := predictor.NewWindowedMaxPredictor(*overcommitMaturationWindow, *overcommitHistoryWindow)
+	slog.Info("Worker-level overcommit enabled",
+		slog.String("strategy", strategy.Name()),
+		slog.Duration("maturation_window", *overcommitMaturationWindow),
+		slog.Duration("history_window", *overcommitHistoryWindow),
+		slog.Duration("poll_interval", *overcommitPollInterval))
+	return overcommit.NewController(sampler, strategy, adjuster, *overcommitPollInterval), nil
 }
 
 const (
