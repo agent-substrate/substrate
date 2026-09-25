@@ -24,8 +24,8 @@ import (
 	"github.com/vishvananda/netns"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
@@ -61,7 +61,7 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	named, err := netns.GetFromName(ateompath.ActorNetNSName(actorUID))
+	named, err := netns.GetFromName(nodepath.ActorNetNSName(actorUID))
 	if err != nil {
 		t.Fatalf("opening replacement namespace by name: %v", err)
 	}

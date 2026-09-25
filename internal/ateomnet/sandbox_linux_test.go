@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/vishvananda/netlink"
 
 	"github.com/agent-substrate/substrate/internal/roottest"
@@ -320,7 +320,7 @@ func TestSetupSucceedsOverALeftoverNamespace(t *testing.T) {
 	if first.GatewayNetNS != first.RuntimeNetNS {
 		first.GatewayNetNS.Close()
 	}
-	for _, name := range []string{ateompath.ActorNetNSName(uid), SandboxGatewayNetNSName(uid)} {
+	for _, name := range []string{nodepath.ActorNetNSName(uid), SandboxGatewayNetNSName(uid)} {
 		if _, err := os.Stat("/var/run/netns/" + name); err != nil {
 			t.Fatalf("expected leftover netns %s: %v", name, err)
 		}
@@ -506,7 +506,7 @@ func TestSessionCloseReportsAWaitItCouldNotFinish(t *testing.T) {
 	if err := session.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Close = %v, want the deadline reported", err)
 	}
-	if _, err := netns.GetFromName(ateompath.ActorNetNSName("close-deadline")); err == nil {
+	if _, err := netns.GetFromName(nodepath.ActorNetNSName("close-deadline")); err == nil {
 		t.Error("the namespace survived a Close whose wait timed out")
 	}
 }

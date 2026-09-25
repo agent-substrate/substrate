@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/pemutil"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -56,7 +56,7 @@ func systemInfoVolumesFor(actorUID string, spec *ateletpb.WorkloadSpec) []*syste
 		if si := vol.GetSystemInfo(); si != nil {
 			volumes = append(volumes, &systemInfoVolume{
 				Name: vol.GetName(),
-				Root: ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName()),
+				Root: ateletpath.SystemInfoVolumeRoot(actorUID, vol.GetName()),
 				Spec: si,
 			})
 		}

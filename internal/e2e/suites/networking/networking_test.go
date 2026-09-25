@@ -66,7 +66,7 @@ func egressFixture() e2e.Fixture {
 
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
-	actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
+	_, actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -110,7 +110,9 @@ func TestActorEgress(t *testing.T) {
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress", egressFixture(), e2e.EgressAllowAll())
+	fixture := egressFixture()
+
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress", fixture, e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -126,7 +128,7 @@ func TestActorEgress(t *testing.T) {
 	}
 	t.Logf("Actor egress fetch of %s succeeded; body: %s", url, body)
 
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(origin.Port))
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
 
 	// The Actor resolves the name itself -- DNS leaves over the UDP masquerade,
 	// not the tunnel, and atunnel forwards the resolved address, never the
@@ -148,7 +150,8 @@ func TestActorEgress(t *testing.T) {
 // between the Actor and the origin.
 func TestActorEgressHTTPS(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", egressFixture(), e2e.EgressAllowAll())
+	fixture := egressFixture()
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", fixture, e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -163,7 +166,7 @@ func TestActorEgressHTTPS(t *testing.T) {
 	}
 	t.Logf("Actor HTTPS egress fetch succeeded; body: %s", body)
 
-	assertEgressGatewayConnect(t, ctx, since, actorName, "443")
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "443")
 }
 
 // httpTarget is the origin TestActorEgressNonStandardPort dials: a plain HTTP
@@ -194,7 +197,8 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 	// resumed Actor idling in the cluster waiting for a destination.
 	target := e2e.DeployServerPod(t, ctx, httpTarget)
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-port", egressFixture(), e2e.EgressAllowAll())
+	fixture := egressFixture()
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-port", fixture, e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -215,7 +219,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 	}
 	t.Logf("Actor egress fetch of %s succeeded", url)
 
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(httpTarget.Port))
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(httpTarget.Port))
 }
 
 // fetchThroughEgressActor asks the egress demo Actor to fetch url and returns
@@ -270,18 +274,25 @@ func postThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.
 // assertEgressGatewayConnect waits for the atenet-egress log to show a CONNECT
 // to port opened by actorName. Envoy logs authenticated peer details in its
 // successful CONNECT access record; AgentGateway logs the terminated tunnel.
-func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, actorName, port string) {
+func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, atespace, actorName, port string) {
 	t.Helper()
-	want := fmt.Sprintf("a CONNECT to port %s by actor %s", port, actorName)
+	want := fmt.Sprintf("a CONNECT to port %s by actor %s/%s", port, atespace, actorName)
 	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
 		for _, line := range lines {
 			switch line.container {
 			case "envoy":
 				authority, ok := accessLogField(line.text, "authority")
-				if ok && strings.HasSuffix(authority, ":"+port) && strings.Contains(line.text, "/actor/"+actorName) {
-					t.Logf("egress gateway tunneled the request: %s", line.text)
-					return true
+				if !ok {
+					continue
 				}
+				if !strings.HasSuffix(authority, ":"+port) {
+					continue
+				}
+				spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
+				if !strings.Contains(line.text, spiffeSlug) {
+					continue
+				}
+				return true
 			case "agentgateway":
 				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
 					strings.Contains(line.text, "target=") &&
@@ -377,7 +388,7 @@ func accessLogField(line, key string) (string, bool) {
 
 // createAndResumeActorWithEgress creates an actor from template, gives it an
 // EgressPolicy of exactly rules (none leaves it without one) and resumes it.
-func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture, rules ...*ateapipb.EgressRule) (string, *ateapipb.Actor) {
+func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture, rules ...*ateapipb.EgressRule) (string, string, *ateapipb.Actor) {
 	t.Helper()
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
 	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith, rules)
@@ -385,7 +396,7 @@ func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix st
 
 // createAndResumeSubstrateActor is createAndResumeActor for a substrate
 // ActorTemplate fixture, referenced by atespace/name instead of the CRD pair.
-func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, *ateapipb.Actor) {
+func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, string, *ateapipb.Actor) {
 	t.Helper()
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
 	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith, []*ateapipb.EgressRule{e2e.EgressAllowAll()})
@@ -394,7 +405,7 @@ func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix str
 // createAndResume creates the actor, gives it an EgressPolicy with rules (none
 // when rules is nil), and resumes it. The policy goes in before the resume so
 // the actor's first outbound connection already finds it.
-func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string, rules []*ateapipb.EgressRule) (string, *ateapipb.Actor) {
+func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string, rules []*ateapipb.EgressRule) (string, string, *ateapipb.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
@@ -421,7 +432,7 @@ func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *at
 		t.Fatalf("ResumeActor: %v", err)
 	}
 	t.Logf("resumed actor %s/%s", networkingAtespace, actorName)
-	return actorName, resumeResponse.GetActor()
+	return resumeResponse.GetActor().GetMetadata().GetAtespace(), resumeResponse.GetActor().GetMetadata().GetName(), resumeResponse.GetActor()
 }
 
 func mustRouterClient(t *testing.T, ctx context.Context) *e2e.RouterClient {

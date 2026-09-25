@@ -1606,6 +1606,22 @@ func TestWorkerPodDeletion(t *testing.T) {
 	t.Logf("Waiting for actor %q to transition to CRASHED...", actorName)
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_CRASHED)
 
+	crashed, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("failed to get crashed actor %q: %v", actorName, err)
+	}
+	crash := crashed.GetStatus().GetCrash()
+	// The actor was RUNNING, not mid-operation, so the crash message carries no
+	// "<op> failed: " prefix.
+	if want := "worker pod went away while hosting the actor"; crash.GetMessage() != want {
+		t.Errorf("Crash.Message = %q, want %q", crash.GetMessage(), want)
+	}
+	if crash.GetCrashTime() == nil {
+		t.Errorf("Crash.CrashTime = nil, want set")
+	}
+
 	// Verify the worker is cleaned up (deleted) from store
 	t.Logf("Verifying worker for pod %s/%s is removed from store...", podNamespace, podName)
 	deadline := time.Now().Add(30 * time.Second)

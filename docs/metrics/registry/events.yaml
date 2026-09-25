@@ -15,14 +15,16 @@
 # The log events that Substrate emits over OTLP. Weaver reads this file with
 # metrics.yaml, which holds every attribute the groups below refer to.
 #
-# An event name promises a fixed set of attributes. The list in each group is
-# the reviewable form of the Keys field on the matching internal/actorevent
-# Event. TestEventsMatchTheRegistry in that package holds the two in step both
-# ways, so an event has to be declared here before it can ship.
+# An event name promises a set of attributes: a required one is on every
+# record, and a conditionally required one is present exactly when its
+# condition holds. The lists in each group are the reviewable form of the Keys
+# and Conditional fields on the matching internal/actorevent Event.
+# TestEventsMatchTheRegistry in that package holds the two in step both ways,
+# so an event has to be declared here before it can ship.
 #
 # Metrics cannot answer what state an actor is in: the cardinality rule
-# no-actor-identity bars actor identity from metric labels. These events carry
-# the identity, thus they are the only per-actor state answer.
+# no-actor-identity bars actor identity from metric labels. The lifecycle events
+# carry the identity, thus they are the only per-actor state answer.
 
 groups:
   - id: event.ate.actor.state_changed
@@ -97,3 +99,66 @@ groups:
         requirement_level: required
       - ref: ate.actor.state
         requirement_level: required
+
+  - id: event.ate.actor.usage_sampled
+    type: event
+    name: ate.actor.usage_sampled
+    stability: development
+    brief: A measurement of the CPU and the memory of one actor.
+    note: >
+      The ateom that runs the actor writes one record per actor on a timer,
+      plus an initial and a final record per activation. ate.stats.kind tells
+      them apart.
+
+      The timestamp is when the measurement was read. The measurements are
+      absent, not zero, while the actor is not measurable: the source is
+      unspecified, and the record says only that the actor is pending and,
+      through ate.actor.epoch, since when.
+
+      Group by ate.stats.source before you add values: the two sources do not
+      measure the same thing. ate.stats.cpu.time restarts at zero with each
+      ate.actor.epoch. ate.stats.memory.usage and ate.stats.memory.working_set
+      are absolute; ate.stats.memory.peak is as the source reports it.
+
+      This stream may be sampled or dropped. Select it by event name; thus a
+      consumer can sample or drop it without touching the lifecycle events.
+    annotations:
+      substrate:
+        emitted_by: [ateom-gvisor, ateom-microvm]
+        code_anchor: internal/actorevent/actorevent.go
+        cuj: How much CPU and memory does this actor use, and since when?
+    attributes:
+      - ref: ate.atespace
+        requirement_level: required
+      - ref: ate.actor.name
+        requirement_level: required
+      - ref: ate.actor.uid
+        requirement_level: required
+      - ref: ate.template.atespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.workerpool.namespace
+        requirement_level: required
+      - ref: ate.workerpool.name
+        requirement_level: required
+      - ref: ate.sandbox.class
+        requirement_level: required
+      - ref: ate.stats.source
+        requirement_level: required
+      - ref: ate.stats.kind
+        requirement_level: required
+      - ref: ate.actor.epoch
+        requirement_level: required
+      - ref: ate.stats.memory.usage
+        requirement_level:
+          conditionally_required: ate.stats.source is not unspecified.
+      - ref: ate.stats.memory.peak
+        requirement_level:
+          conditionally_required: ate.stats.source is not unspecified and the source reports a peak.
+      - ref: ate.stats.memory.working_set
+        requirement_level:
+          conditionally_required: ate.stats.source is not unspecified.
+      - ref: ate.stats.cpu.time
+        requirement_level:
+          conditionally_required: ate.stats.source is not unspecified.

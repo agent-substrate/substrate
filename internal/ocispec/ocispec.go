@@ -21,8 +21,9 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -36,10 +37,8 @@ const hostname = "actor"
 // Options describes one actor container. Args, Env and Capabilities arrive
 // already resolved.
 type Options struct {
-	ActorUID      string
-	ContainerName string
-	Args          []string
-	Env           []string
+	Args []string
+	Env  []string
 	// NetNSPath is the network namespace the ateom runs the actor in.
 	NetNSPath    string
 	Volumes      []*ateletpb.Volume
@@ -47,6 +46,15 @@ type Options struct {
 	Capabilities []string
 	// Resources are the container's own declared limits, or nil for none.
 	Resources *ateletpb.ResourceLimits
+
+	// The actor's directories the bind mount sources are joined from, one
+	// subdirectory per volume name.
+	DurableDirVolumeMountsDir string
+	VolumesDir                string
+	SystemInfoVolumeRootsDir  string
+	// BundlePath is this container's bundle, where its image volumes are
+	// composed.
+	BundlePath string
 }
 
 const (
@@ -168,14 +176,14 @@ func Build(o Options) *specs.Spec {
 		vol := volumesByName[vm.GetName()]
 		switch {
 		case vol.GetDurableDir() != nil:
-			srcPath = ateompath.DurableDirVolumeMountPoint(o.ActorUID, vm.GetName())
+			srcPath = filepath.Join(o.DurableDirVolumeMountsDir, vm.GetName())
 		case vol.GetExternal() != nil:
-			srcPath = ateompath.VolumeHostPath(o.ActorUID, vm.GetName())
+			srcPath = filepath.Join(o.VolumesDir, vm.GetName())
 		case vol.GetSystemInfo() != nil:
-			srcPath = ateompath.SystemInfoVolumeRoot(o.ActorUID, vm.GetName())
+			srcPath = filepath.Join(o.SystemInfoVolumeRootsDir, vm.GetName())
 			options = []string{"bind", "ro"}
 		case vol.GetImage() != nil:
-			srcPath = ateompath.ImageVolumeMountPath(o.ActorUID, o.ContainerName, vm.GetName())
+			srcPath = imagecache.ImageVolumeMountPath(o.BundlePath, vm.GetName())
 			options = []string{"bind", "ro"}
 		default:
 			continue

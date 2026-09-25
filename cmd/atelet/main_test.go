@@ -33,9 +33,10 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/atelet"
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -231,6 +232,10 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   testPauseImage,
+		},
 	}
 }
 
@@ -339,6 +344,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", makeReq(), false},
+		{"missing sandbox assets", makeReq(func(r *ateletpb.RestoreRequest) { r.SandboxAssets = nil }), true},
 		{"empty snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "" }), true},
 		{"bucketless snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "relative/path" }), true},
 		{"invalid ateom uid", makeReq(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }), true},
@@ -430,14 +436,14 @@ func TestToAteomSnapshotScope(t *testing.T) {
 // with a nil error, failing the test. StaticFilesDir is redirected to a temp
 // dir so the planted path is writable and isolated.
 func TestFetchAssetRejectsBadHash(t *testing.T) {
-	orig := ateompath.StaticFilesDir
-	ateompath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { ateompath.StaticFilesDir = orig })
+	orig := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = t.TempDir()
+	t.Cleanup(func() { nodepath.StaticFilesDir = orig })
 
 	// Invalid (8 chars, not 64) but separator-free, so it resolves to a normal
 	// filename inside the temp StaticFilesDir.
 	const badHash = "deadbeef"
-	if err := os.WriteFile(ateompath.RunSCBinaryPath(badHash), []byte("planted"), 0o755); err != nil {
+	if err := os.WriteFile(ateletpath.RunSCBinaryPath(badHash), []byte("planted"), 0o755); err != nil {
 		t.Fatalf("planting cache file: %v", err)
 	}
 
@@ -471,15 +477,15 @@ func (fakeObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) 
 // TestFetchAssetStreaming covers the streamed download: good asset cached,
 // over-cap rejected, hash mismatch rejected (failures leave no cache file).
 func TestFetchAssetStreaming(t *testing.T) {
-	origDir, origCap := ateompath.StaticFilesDir, maxAssetBytes
-	t.Cleanup(func() { ateompath.StaticFilesDir, maxAssetBytes = origDir, origCap })
+	origDir, origCap := nodepath.StaticFilesDir, maxAssetBytes
+	t.Cleanup(func() { nodepath.StaticFilesDir, maxAssetBytes = origDir, origCap })
 
 	content := []byte("micro-vm kernel bytes")
 	goodHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	const url = "gs://test-bucket/asset"
 
 	t.Run("good asset is cached", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		nodepath.StaticFilesDir = t.TempDir()
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
 		path, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err != nil {
@@ -495,20 +501,20 @@ func TestFetchAssetStreaming(t *testing.T) {
 	})
 
 	t.Run("over-cap asset rejected, cache not written", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		nodepath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = 4 // content is longer than this
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
 		}
-		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(ateletpath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
 		}
 	})
 
 	t.Run("hash mismatch rejected, cache not written", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		nodepath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
@@ -516,13 +522,13 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
 		}
-		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(ateletpath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
 		}
 	})
 
 	t.Run("missing object keeps the client's sentinel", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		nodepath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		// The ategcs clients tag a missing object with ErrObjectNotFound.
 		notFound := fmt.Errorf("%w: no such object", ategcs.ErrObjectNotFound)
@@ -534,7 +540,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 	})
 
 	t.Run("malformed url is rejected", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		nodepath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
 		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open.
@@ -545,7 +551,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 	})
 
 	t.Run("network error keeps its context wrap", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		nodepath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
@@ -855,7 +861,7 @@ func TestRemoveActorDirsReclaimsTheRoot(t *testing.T) {
 		t.Fatalf("resetActorDirs: %v", err)
 	}
 	// Written at Run and deliberately kept out of the directories reset wipes.
-	if err := os.WriteFile(ateompath.ActorSandboxAssetsFile(actorUID), []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(ateletpath.ActorSandboxAssetsFile(actorUID), []byte("{}"), 0o600); err != nil {
 		t.Fatalf("writing sandbox assets file: %v", err)
 	}
 
@@ -863,7 +869,7 @@ func TestRemoveActorDirsReclaimsTheRoot(t *testing.T) {
 		t.Fatalf("removeActorDirs: %v", err)
 	}
 
-	actorDir := ateompath.ActorPath(actorUID)
+	actorDir := ateletpath.ActorPath(actorUID)
 	if entries, err := os.ReadDir(actorDir); err == nil {
 		left := make([]string, 0, len(entries))
 		for _, e := range entries {
@@ -883,7 +889,7 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
 
-	stillMounted := filepath.Join(ateompath.VolumeHostPath(actorUID, "data"), "payload")
+	stillMounted := filepath.Join(ateletpath.VolumeHostPath(actorUID, "data"), "payload")
 	if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
 		t.Fatalf("creating volume dir: %v", err)
 	}
@@ -1246,7 +1252,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		return sandboxAssetsRecord{
 			SandboxClass:  class,
 			PauseImage:    testPauseImage,
-			SnapshotFiles: []string{"config.json", "memory-ranges", ateompath.DurableDirTarFile},
+			SnapshotFiles: []string{"config.json", "memory-ranges", resources.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeFull,
 		}
 	}
@@ -1269,7 +1275,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		s := &AteomHerder{gcsClient: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
-			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
+			"config.json": "cfg", "memory-ranges": "mem", resources.DurableDirTarFile: "data",
 		})
 
 		if _, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri); err != nil {
@@ -1294,7 +1300,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		s := &AteomHerder{gcsClient: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
-			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
+			"config.json": "cfg", "memory-ranges": "mem", resources.DurableDirTarFile: "data",
 		})
 
 		req := validUploadPausedCheckpointRequest()
@@ -1313,7 +1319,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		if rec.Scope != ateattr.SnapshotScopeData {
 			t.Errorf("uploaded manifest scope = %q, want %q", rec.Scope, ateattr.SnapshotScopeData)
 		}
-		if want := []string{ateompath.DurableDirTarFile}; !slices.Equal(rec.SnapshotFiles, want) {
+		if want := []string{resources.DurableDirTarFile}; !slices.Equal(rec.SnapshotFiles, want) {
 			t.Errorf("uploaded manifest files = %v, want %v", rec.SnapshotFiles, want)
 		}
 	})
@@ -1360,9 +1366,9 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "mystery",
 			PauseImage:    testPauseImage,
-			SnapshotFiles: []string{ateompath.DurableDirTarFile},
+			SnapshotFiles: []string{resources.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeFull,
-		}, map[string]string{ateompath.DurableDirTarFile: "data"})
+		}, map[string]string{resources.DurableDirTarFile: "data"})
 
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
@@ -1378,9 +1384,9 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
 			PauseImage:    testPauseImage,
-			SnapshotFiles: []string{ateompath.DurableDirTarFile},
+			SnapshotFiles: []string{resources.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeData,
-		}, map[string]string{ateompath.DurableDirTarFile: "data"})
+		}, map[string]string{resources.DurableDirTarFile: "data"})
 
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
 		if got := status.Code(err); got != codes.FailedPrecondition {
@@ -1395,8 +1401,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
 			PauseImage:    testPauseImage,
-			SnapshotFiles: []string{ateompath.DurableDirTarFile},
-		}, map[string]string{ateompath.DurableDirTarFile: "data"})
+			SnapshotFiles: []string{resources.DurableDirTarFile},
+		}, map[string]string{resources.DurableDirTarFile: "data"})
 
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
@@ -1436,7 +1442,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: errors.New("boom")}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
-			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
+			"config.json": "cfg", "memory-ranges": "mem", resources.DurableDirTarFile: "data",
 		})
 
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)

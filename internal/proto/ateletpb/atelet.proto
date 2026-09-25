@@ -750,12 +750,8 @@ message RestoreRequest {
   // +k8s:optional
   string actor_template_name = 6;
 
-  // Sandbox binary config is not sent on restore: the snapshot is
-  // self-describing. atelet reads the snapshot manifest to recover the pinned
-  // sandbox version that created it.
-  //
   // +k8s:optional
-  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+  // +k8s:opaqueType # opened up when Restore's validation is wired
   WorkloadSpec spec = 7;
 
   // +k8s:required
@@ -803,6 +799,13 @@ message RestoreRequest {
 
   // +k8s:optional
   int64 memory_bytes = 15; // Memory limit in bytes.
+
+  // The sandbox binaries and pause image to restore with, resolved from the
+  // ActorTemplate's SandboxConfig. Required.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # tagged in a follow-up
+  SandboxAssets sandbox_assets = 16;
 }
 
 message RestoreResponse {

@@ -203,7 +203,9 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_CRASHED, func(a *ateapipb.Actor) {
+		a.Status.Crash = newActorCrash("resume", crashMessageWorkerGone)
+	})
 
 	reverted, err := w.RevertActor(ctx, actorRef)
 	if err != nil {
@@ -211,6 +213,9 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 	}
 	if got := reverted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
+	}
+	if got := reverted.GetStatus().GetCrash(); got != nil {
+		t.Errorf("Crash = %v, want cleared by the revert", got)
 	}
 	if got := reverted.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != "" {
 		t.Errorf("external snapshot = %q, want none", got)

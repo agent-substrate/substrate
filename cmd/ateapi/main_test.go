@@ -32,3 +32,35 @@ func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
 	}
 }
+
+func TestResolveActorJWTIssuer(t *testing.T) {
+	tests := []struct {
+		name      string
+		flagValue string
+		namespace string
+		want      string
+		wantErr   bool
+	}{
+		{name: "unset uses the namespace's idp Service", namespace: "ate-system", want: "https://idp.ate-system.svc"},
+		{name: "unset in a relocated install", namespace: "team-a", want: "https://idp.team-a.svc"},
+		{name: "set is used as given", flagValue: "https://idp.example.com/prod/", namespace: "ate-system", want: "https://idp.example.com/prod/"},
+		{name: "set but invalid", flagValue: "http://idp.example.com", namespace: "ate-system", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveActorJWTIssuer(tt.flagValue, tt.namespace)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveActorJWTIssuer(%q, %q) = %q, want error", tt.flagValue, tt.namespace, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveActorJWTIssuer(%q, %q) returned error: %v", tt.flagValue, tt.namespace, err)
+			}
+			if got != tt.want {
+				t.Errorf("resolveActorJWTIssuer(%q, %q) = %q, want %q", tt.flagValue, tt.namespace, got, tt.want)
+			}
+		})
+	}
+}
