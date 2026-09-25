@@ -129,6 +129,7 @@ func (s *Server) processRequestHeaders(
 ) *extprocv3.ProcessingResponse {
 	start := time.Now()
 	md := NewRequestMetadata(reqHeaders.GetHeaders().GetHeaders(), req.GetAttributes())
+	md.DynamicMetadata = req.GetMetadataContext().GetFilterMetadata()
 
 	// One atenet binary serves both directions, as two ext_proc handlers
 	// selected here. They are deployed separately today — atenet-router fronts

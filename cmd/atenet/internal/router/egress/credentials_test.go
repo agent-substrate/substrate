@@ -55,7 +55,7 @@ func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
 // for api.example.com, with provider as the credential provider (nil leaves
 // injection off).
 func injectionHandler(provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("api.example.com")}, nil, 0, provider, providerName)
+	return New(&egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("api.example.com")}, nil, 0, provider, providerName, PeerCertificateSourceEnvoy)
 }
 
 // On the TLS-terminated MITM leg an allowed rule's credential is resolved and
