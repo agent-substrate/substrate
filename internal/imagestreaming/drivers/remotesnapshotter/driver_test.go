@@ -20,6 +20,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +36,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// mockSnapshotsServer is a fake remote snapshotter. By default, Prepare
+// provides the layers in remoteMounts the way a remote snapshotter does: it
+// commits them under the chain ID from the containerd.io/snapshot.ref label
+// and returns AlreadyExists. It declines every other layer by returning
+// mounts with a nil error.
 type mockSnapshotsServer struct {
 	snapshots.UnimplementedSnapshotsServer
 	mu          sync.Mutex
@@ -41,9 +48,15 @@ type mockSnapshotsServer struct {
 	viewFunc    func(context.Context, *snapshots.ViewSnapshotRequest) (*snapshots.ViewSnapshotResponse, error)
 	commitFunc  func(context.Context, *snapshots.CommitSnapshotRequest) (*emptypb.Empty, error)
 	removeFunc  func(context.Context, *snapshots.RemoveSnapshotRequest) (*emptypb.Empty, error)
+	statFunc    func(context.Context, *snapshots.StatSnapshotRequest) (*snapshots.StatSnapshotResponse, error)
+
+	// remoteMounts maps the chain IDs the fake can provide to their mounts.
+	remoteMounts map[string][]*snapshots.Mount
 
 	preparedKeys  []string
 	committedKeys map[string]bool
+	commitNames   []string
+	statKeys      []string
 	viewedKeys    []string
 	removedKeys   []string
 	mountsByKey   map[string][]*snapshots.Mount
@@ -53,46 +66,40 @@ func (m *mockSnapshotsServer) Prepare(ctx context.Context, req *snapshots.Prepar
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.preparedKeys = append(m.preparedKeys, req.GetKey())
-	var resp *snapshots.PrepareSnapshotResponse
-	var err error
 	if m.prepareFunc != nil {
-		resp, err = m.prepareFunc(ctx, req)
-	} else {
-		resp = &snapshots.PrepareSnapshotResponse{
-			Mounts: []*snapshots.Mount{
-				{
-					Type:   "overlay",
-					Source: "/var/lib/mock/" + req.GetKey(),
-				},
-			},
-		}
+		return m.prepareFunc(ctx, req)
 	}
-	if err == nil && resp != nil {
-		if m.mountsByKey == nil {
-			m.mountsByKey = make(map[string][]*snapshots.Mount)
-		}
-		m.mountsByKey[req.GetKey()] = resp.Mounts
+	target := req.GetLabels()["containerd.io/snapshot.ref"]
+	if mounts, ok := m.remoteMounts[target]; ok {
+		m.commitLocked(target, mounts)
+		return nil, status.Errorf(codes.AlreadyExists, "target snapshot %q: already exists", target)
 	}
-	return resp, err
+	return &snapshots.PrepareSnapshotResponse{
+		Mounts: []*snapshots.Mount{{Type: "bind", Source: "/var/lib/mock/" + req.GetKey()}},
+	}, nil
 }
 
 func (m *mockSnapshotsServer) Commit(ctx context.Context, req *snapshots.CommitSnapshotRequest) (*emptypb.Empty, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.committedKeys == nil {
-		m.committedKeys = make(map[string]bool)
-	}
-	m.committedKeys[req.GetName()] = true
-	if m.mountsByKey == nil {
-		m.mountsByKey = make(map[string][]*snapshots.Mount)
-	}
-	if mounts, ok := m.mountsByKey[req.GetKey()]; ok {
-		m.mountsByKey[req.GetName()] = mounts
-	}
+	m.commitNames = append(m.commitNames, req.GetName())
 	if m.commitFunc != nil {
 		return m.commitFunc(ctx, req)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+func (m *mockSnapshotsServer) Stat(ctx context.Context, req *snapshots.StatSnapshotRequest) (*snapshots.StatSnapshotResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statKeys = append(m.statKeys, req.GetKey())
+	if m.statFunc != nil {
+		return m.statFunc(ctx, req)
+	}
+	if !m.committedKeys[req.GetKey()] {
+		return nil, status.Errorf(codes.NotFound, "snapshot %v does not exist", req.GetKey())
+	}
+	return &snapshots.StatSnapshotResponse{Info: &snapshots.Info{Name: req.GetKey()}}, nil
 }
 
 func (m *mockSnapshotsServer) View(ctx context.Context, req *snapshots.ViewSnapshotRequest) (*snapshots.ViewSnapshotResponse, error) {
@@ -118,6 +125,18 @@ func (m *mockSnapshotsServer) Remove(ctx context.Context, req *snapshots.RemoveS
 		return m.removeFunc(ctx, req)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+// commitLocked records a committed snapshot. The caller must hold m.mu.
+func (m *mockSnapshotsServer) commitLocked(name string, mounts []*snapshots.Mount) {
+	if m.committedKeys == nil {
+		m.committedKeys = make(map[string]bool)
+	}
+	if m.mountsByKey == nil {
+		m.mountsByKey = make(map[string][]*snapshots.Mount)
+	}
+	m.committedKeys[name] = true
+	m.mountsByKey[name] = mounts
 }
 
 func setupTestRemoteSnapshotter(t *testing.T, provider string) (*mockSnapshotsServer, *Driver) {
@@ -229,25 +248,13 @@ func TestPrepareAndReleaseLayers(t *testing.T) {
 		t.Fatalf("failed to create dummy file in mount2: %v", err)
 	}
 
-	callCount := 0
-	srv.prepareFunc = func(ctx context.Context, req *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error) {
-		callCount++
-		src := mount1Dir
-		if callCount == 2 {
-			src = mount2Dir
-		}
-		return &snapshots.PrepareSnapshotResponse{
-			Mounts: []*snapshots.Mount{
-				{
-					Type:   "overlay",
-					Source: "overlay",
-					Options: []string{
-						"lowerdir=" + src,
-					},
-				},
-			},
-		}, nil
+	chain := computeChainIDs([]string{diff1, diff2})
+	srv.mu.Lock()
+	srv.remoteMounts = map[string][]*snapshots.Mount{
+		chain[0].ChainID: {{Type: "overlay", Source: "overlay", Options: []string{"lowerdir=" + mount1Dir}}},
+		chain[1].ChainID: {{Type: "overlay", Source: "overlay", Options: []string{"lowerdir=" + mount2Dir}}},
 	}
+	srv.mu.Unlock()
 
 	req := &imagestreaming.StreamRequest{ImageRef: "us-docker.pkg.dev/proj/repo/image:tag"}
 	res, err := driver.PrepareLayers(ctx, req)
@@ -291,9 +298,14 @@ func TestPrepareAndReleaseLayers(t *testing.T) {
 	if len(res2.LayerDirs) != 2 {
 		t.Fatalf("res2 len(LayerDirs) = %d, want 2", len(res2.LayerDirs))
 	}
-	if callCount != 2 {
-		t.Errorf("Prepare RPC called %d times, expected 2 (cached lease should have avoided extra RPCs)", callCount)
+	srv.mu.Lock()
+	if len(srv.preparedKeys) != 2 {
+		t.Errorf("Prepare RPC called %d times, expected 2 (cached lease should have avoided extra RPCs)", len(srv.preparedKeys))
 	}
+	if len(srv.commitNames) != 0 {
+		t.Errorf("Commit called for %v, want no commits", srv.commitNames)
+	}
+	srv.mu.Unlock()
 
 	// First release: refCount drops to 1, mounts remain active.
 	if err := driver.ReleaseLayers(ctx, req); err != nil {
@@ -322,46 +334,183 @@ func TestPrepareAndReleaseLayers(t *testing.T) {
 	}
 }
 
-func TestPrepareLayers_ViewFallbackOnAlreadyExists(t *testing.T) {
-	srv, driver := setupTestRemoteSnapshotter(t, ProviderSOCI)
-	ctx := context.Background()
+// TestPrepareLayers_SnapshotterOutcomes covers each result of the remote
+// snapshotter protocol for a two-layer image.
+func TestPrepareLayers_SnapshotterOutcomes(t *testing.T) {
+	diffIDs := []string{
+		"sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		"sha256:2222222222222222222222222222222222222222222222222222222222222222",
+	}
+	chain := computeChainIDs(diffIDs)
+	c0, c1 := chain[0].ChainID, chain[1].ChainID
 
-	diff := "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-	driver.imageResolver = func(ctx context.Context, ref string, auth *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
-		return "sha256:digest", &v1.Config{}, []string{diff}, []string{"sha256:blob"}, nil
+	tests := []struct {
+		name       string
+		committed  []string // chain IDs already committed on the node
+		remote     []string // chain IDs the snapshotter can provide
+		prepareErr error    // returned by every Prepare when set
+		statErr    error    // returned by every Stat when set
+
+		wantErr     error // matched with errors.Is when set
+		wantFailure bool  // want an error other than ErrNotStreamable
+		wantStats   []string
+		// Snapshot keys, without the per-run prefix.
+		wantPrepared []string
+		wantViewed   []string
+		wantRemoved  []string
+	}{
+		{
+			name:       "layers already committed",
+			committed:  []string{c0, c1},
+			wantStats:  []string{c0, c1},
+			wantViewed: []string{"l0-view", "l1-view"},
+		},
+		{
+			name:         "prepare returns AlreadyExists",
+			remote:       []string{c0, c1},
+			wantStats:    []string{c0, c0, c1, c1},
+			wantPrepared: []string{"l0-prep", "l1-prep"},
+			wantViewed:   []string{"l0-view", "l1-view"},
+		},
+		{
+			name:         "prepare declines the first layer",
+			wantErr:      imagestreaming.ErrNotStreamable,
+			wantStats:    []string{c0},
+			wantPrepared: []string{"l0-prep"},
+			wantRemoved:  []string{"l0-prep"},
+		},
+		{
+			name:         "prepare declines a later layer",
+			remote:       []string{c0},
+			wantErr:      imagestreaming.ErrNotStreamable,
+			wantStats:    []string{c0, c0, c1},
+			wantPrepared: []string{"l0-prep", "l1-prep"},
+			wantViewed:   []string{"l0-view"},
+			wantRemoved:  []string{"l1-prep", "l0-view"},
+		},
+		{
+			name:         "prepare fails",
+			prepareErr:   status.Error(codes.Internal, "commit failed"),
+			wantFailure:  true,
+			wantStats:    []string{c0},
+			wantPrepared: []string{"l0-prep"},
+			wantRemoved:  []string{"l0-prep"},
+		},
+		{
+			name:         "prepare returns AlreadyExists without committing the chain ID",
+			prepareErr:   status.Error(codes.AlreadyExists, "key exists"),
+			wantFailure:  true,
+			wantStats:    []string{c0, c0},
+			wantPrepared: []string{"l0-prep"},
+		},
+		{
+			name:        "stat fails",
+			statErr:     status.Error(codes.Unavailable, "remount failed"),
+			wantFailure: true,
+			wantStats:   []string{c0},
+		},
 	}
 
-	mountDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(mountDir, "file"), []byte("test"), 0o644)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, driver := setupTestRemoteSnapshotter(t, ProviderRemoteSnapshotter)
+			ctx := context.Background()
+			driver.imageResolver = func(ctx context.Context, ref string, auth *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+				return "sha256:digest", &v1.Config{}, diffIDs, []string{"sha256:blob0", "sha256:blob1"}, nil
+			}
 
-	srv.prepareFunc = func(ctx context.Context, req *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error) {
-		return nil, status.Error(codes.AlreadyExists, "snapshot already exists")
-	}
-	srv.viewFunc = func(ctx context.Context, req *snapshots.ViewSnapshotRequest) (*snapshots.ViewSnapshotResponse, error) {
-		return &snapshots.ViewSnapshotResponse{
-			Mounts: []*snapshots.Mount{
-				{
-					Type:   "overlay",
-					Source: mountDir,
-				},
-			},
-		}, nil
-	}
+			mountDirs := map[string]string{c0: t.TempDir(), c1: t.TempDir()}
+			bindMount := func(chainID string) []*snapshots.Mount {
+				return []*snapshots.Mount{{Type: "bind", Source: mountDirs[chainID], Options: []string{"ro", "rbind"}}}
+			}
+			srv.mu.Lock()
+			srv.remoteMounts = map[string][]*snapshots.Mount{}
+			for _, c := range tc.remote {
+				srv.remoteMounts[c] = bindMount(c)
+			}
+			for _, c := range tc.committed {
+				srv.commitLocked(c, bindMount(c))
+			}
+			if tc.prepareErr != nil {
+				srv.prepareFunc = func(context.Context, *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error) {
+					return nil, tc.prepareErr
+				}
+			}
+			if tc.statErr != nil {
+				srv.statFunc = func(context.Context, *snapshots.StatSnapshotRequest) (*snapshots.StatSnapshotResponse, error) {
+					return nil, tc.statErr
+				}
+			}
+			srv.mu.Unlock()
 
-	req := &imagestreaming.StreamRequest{ImageRef: "example.com/existing:latest"}
-	res, err := driver.PrepareLayers(ctx, req)
-	if err != nil {
-		t.Fatalf("PrepareLayers error when snapshot already exists: %v", err)
-	}
-	if len(res.LayerDirs) != 1 {
-		t.Fatalf("got %d LayerDirs, want 1", len(res.LayerDirs))
-	}
+			ref := "example.com/app:v1"
+			res, err := driver.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ref})
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("PrepareLayers error = %v, want %v", err, tc.wantErr)
+				}
+			case tc.wantFailure:
+				if err == nil || errors.Is(err, imagestreaming.ErrNotStreamable) {
+					t.Fatalf("PrepareLayers error = %v, want an error other than ErrNotStreamable", err)
+				}
+			case err != nil:
+				t.Fatalf("PrepareLayers error: %v", err)
+			default:
+				if len(res.LayerDirs) != 2 {
+					t.Fatalf("got %d LayerDirs, want 2", len(res.LayerDirs))
+				}
+				for i, c := range []string{c0, c1} {
+					target, err := os.Readlink(filepath.Join(res.LayerDirs[i], "fs"))
+					if err != nil || target != mountDirs[c] {
+						t.Errorf("layer %d fs symlink = %q (err %v), want %q", i, target, err, mountDirs[c])
+					}
+				}
+			}
 
-	srv.mu.Lock()
-	if len(srv.viewedKeys) != 1 {
-		t.Errorf("View called %d times, want 1", len(srv.viewedKeys))
+			srv.mu.Lock()
+			defer srv.mu.Unlock()
+			if !slices.Equal(srv.statKeys, tc.wantStats) {
+				t.Errorf("Stat keys = %v, want %v", srv.statKeys, tc.wantStats)
+			}
+			if got := keySuffixes(srv.preparedKeys); !slices.Equal(got, tc.wantPrepared) {
+				t.Errorf("Prepare keys = %v, want %v", got, tc.wantPrepared)
+			}
+			if got := keySuffixes(srv.viewedKeys); !slices.Equal(got, tc.wantViewed) {
+				t.Errorf("View keys = %v, want %v", got, tc.wantViewed)
+			}
+			// A removed chain ID would show up here unstripped and fail the comparison.
+			if got := keySuffixes(srv.removedKeys); !slices.Equal(got, tc.wantRemoved) {
+				t.Errorf("Remove keys = %v, want %v", got, tc.wantRemoved)
+			}
+			if len(srv.commitNames) != 0 {
+				t.Errorf("Commit called for %v, want no commits", srv.commitNames)
+			}
+
+			if err != nil {
+				imageWorkDir := filepath.Join(driver.workDir, sanitizePathKey(ref))
+				if _, statErr := os.Stat(imageWorkDir); !errors.Is(statErr, os.ErrNotExist) {
+					t.Errorf("image work dir after failure: got err %v, want it removed", statErr)
+				}
+				driver.mu.Lock()
+				_, leased := driver.leases[ref]
+				driver.mu.Unlock()
+				if leased {
+					t.Errorf("lease for %s recorded after failure", ref)
+				}
+			}
+		})
 	}
-	srv.mu.Unlock()
+}
+
+// keySuffixes strips the per-run prefix from snapshot keys, leaving
+// "l<N>-prep" or "l<N>-view".
+func keySuffixes(keys []string) []string {
+	var out []string
+	for _, k := range keys {
+		out = append(out, k[strings.LastIndex(k, "-l")+1:])
+	}
+	return out
 }
 
 func TestReconcileLeases(t *testing.T) {

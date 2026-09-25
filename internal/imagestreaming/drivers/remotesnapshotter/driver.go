@@ -365,7 +365,9 @@ func (d *Driver) CanStream(ctx context.Context, req *imagestreaming.StreamReques
 	return true, nil
 }
 
-// PrepareLayers asks the remote snapshotter to prepare snapshots for each layer in the image.
+// PrepareLayers asks the remote snapshotter to provide each layer in the image
+// and returns read-only views of them. If the snapshotter declines any layer,
+// it returns an error wrapping imagestreaming.ErrNotStreamable.
 func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
 	if req == nil || req.ImageRef == "" {
 		return nil, errors.New("image reference is required")
@@ -429,14 +431,11 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 		snapshotter = d.name
 	}
 
-	cleanupOnErr := func(failedKeys ...string) {
-		for _, k := range failedKeys {
-			if k != "" {
-				_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{Snapshotter: snapshotter, Key: k})
-			}
-		}
+	// cleanupOnErr removes the views created so far and the wrapper
+	// directories. Layers committed under their chain IDs stay for later pulls.
+	cleanupOnErr := func() {
 		for _, key := range snapshotKeys {
-			_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{Snapshotter: snapshotter, Key: key})
+			d.removeSnapshot(client, snapshotter, key)
 		}
 		_ = os.RemoveAll(imageWorkDir)
 	}
@@ -445,6 +444,7 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 	runID := fmt.Sprintf("%x", time.Now().UnixNano())
 
 	for i, c := range chainInfos {
+		prepKey := fmt.Sprintf("%s-%s-l%d-prep", imgKey, runID, i)
 		viewKey := fmt.Sprintf("%s-%s-l%d-view", imgKey, runID, i)
 		labels := map[string]string{
 			"containerd.io/snapshot.ref":                 c.ChainID,
@@ -458,80 +458,12 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 			labels["containerd.io/snapshot/cri.image-layers"] = allLayersStr
 		}
 
-		var mounts []*snapshots.Mount
-		// Fast path: Check if layer snapshot is already committed on the node.
-		viewResp, viewErr := client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
-			Snapshotter: snapshotter,
-			Key:         viewKey,
-			Parent:      c.ChainID,
-		})
-		if viewErr == nil {
-			mounts = viewResp.GetMounts()
-			snapshotKeys = append(snapshotKeys, viewKey)
-		} else {
-			// Layer not yet committed. Prepare active snapshot and commit it as c.ChainID.
-			prepKey := fmt.Sprintf("%s-%s-l%d-prep", imgKey, runID, i)
-			prepResp, prepErr := client.Prepare(d.withNamespace(ctx), &snapshots.PrepareSnapshotRequest{
-				Snapshotter: snapshotter,
-				Key:         prepKey,
-				Parent:      c.ParentChainID,
-				Labels:      labels,
-			})
-			if prepErr != nil {
-				st, ok := status.FromError(prepErr)
-				if ok && st.Code() == codes.AlreadyExists {
-					// Another process prepared/committed it concurrently; retry View.
-					viewResp, viewErr = client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
-						Snapshotter: snapshotter,
-						Key:         viewKey,
-						Parent:      c.ChainID,
-					})
-					if viewErr != nil {
-						cleanupOnErr(prepKey, viewKey)
-						return nil, fmt.Errorf("creating view after AlreadyExists for %s: %w", c.ChainID, viewErr)
-					}
-					mounts = viewResp.GetMounts()
-					snapshotKeys = append(snapshotKeys, viewKey)
-				} else {
-					cleanupOnErr(prepKey)
-					return nil, fmt.Errorf("PrepareSnapshot for layer %d (%s): %w", i, c.ChainID, prepErr)
-				}
-			} else {
-				// Commit active snapshot so subsequent layers can reference c.ChainID as parent.
-				_, commitErr := client.Commit(d.withNamespace(ctx), &snapshots.CommitSnapshotRequest{
-					Snapshotter: snapshotter,
-					Name:        c.ChainID,
-					Key:         prepKey,
-					Labels:      labels,
-				})
-				if commitErr != nil {
-					st, ok := status.FromError(commitErr)
-					if ok && st.Code() == codes.AlreadyExists {
-						_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{
-							Snapshotter: snapshotter,
-							Key:         prepKey,
-						})
-					} else {
-						cleanupOnErr(prepKey)
-						return nil, fmt.Errorf("CommitSnapshot for layer %d (%s): %w", i, c.ChainID, commitErr)
-					}
-				}
-				// Create read-only view for the committed layer.
-				viewResp, viewErr = client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
-					Snapshotter: snapshotter,
-					Key:         viewKey,
-					Parent:      c.ChainID,
-				})
-				if viewErr == nil {
-					mounts = viewResp.GetMounts()
-					snapshotKeys = append(snapshotKeys, viewKey)
-				} else {
-					// Fallback to prepare mounts if view fails
-					mounts = prepResp.GetMounts()
-					snapshotKeys = append(snapshotKeys, prepKey)
-				}
-			}
+		mounts, err := d.viewLayer(ctx, client, snapshotter, c, prepKey, viewKey, labels)
+		if err != nil {
+			cleanupOnErr()
+			return nil, fmt.Errorf("layer %d (%s): %w", i, c.ChainID, err)
 		}
+		snapshotKeys = append(snapshotKeys, viewKey)
 
 		if len(mounts) == 0 {
 			cleanupOnErr()
@@ -594,6 +526,90 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 		Config:      cfg,
 		LayerDirs:   layerDirs,
 	}, nil
+}
+
+// viewLayer returns mounts for a read-only view of one layer, following
+// containerd's remote snapshotter protocol. On error, the caller only needs
+// to clean up earlier layers.
+func (d *Driver) viewLayer(ctx context.Context, client snapshots.SnapshotsClient, snapshotter string, c chainInfo, prepKey, viewKey string, labels map[string]string) ([]*snapshots.Mount, error) {
+	committed, err := d.hasSnapshot(ctx, client, snapshotter, c.ChainID)
+	if err != nil {
+		return nil, err
+	}
+	if !committed {
+		if err := d.prepareLayer(ctx, client, snapshotter, c, prepKey, labels); err != nil {
+			return nil, err
+		}
+	}
+	resp, err := client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
+		Snapshotter: snapshotter,
+		Key:         viewKey,
+		Parent:      c.ChainID,
+	})
+	if err != nil {
+		d.removeSnapshot(client, snapshotter, viewKey)
+		return nil, fmt.Errorf("creating view: %w", err)
+	}
+	return resp.GetMounts(), nil
+}
+
+// prepareLayer asks the snapshotter to provide a layer that isn't committed
+// yet. A snapshotter that can provide the layer commits it under the chain ID
+// and returns AlreadyExists. One that can't returns mounts for the caller to
+// unpack the layer into; the driver removes that snapshot instead and returns
+// imagestreaming.ErrNotStreamable.
+func (d *Driver) prepareLayer(ctx context.Context, client snapshots.SnapshotsClient, snapshotter string, c chainInfo, key string, labels map[string]string) error {
+	_, err := client.Prepare(d.withNamespace(ctx), &snapshots.PrepareSnapshotRequest{
+		Snapshotter: snapshotter,
+		Key:         key,
+		Parent:      c.ParentChainID,
+		Labels:      labels,
+	})
+	switch status.Code(err) {
+	case codes.OK:
+		// Never commit the unpopulated snapshot: that would leave an empty
+		// layer under the chain ID.
+		d.removeSnapshot(client, snapshotter, key)
+		return fmt.Errorf("declined by snapshotter: %w", imagestreaming.ErrNotStreamable)
+	case codes.AlreadyExists:
+		// The snapshotter consumed key when it committed the layer.
+		found, err := d.hasSnapshot(ctx, client, snapshotter, c.ChainID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("prepare returned AlreadyExists but the chain ID snapshot does not exist")
+		}
+		return nil
+	default:
+		d.removeSnapshot(client, snapshotter, key)
+		return fmt.Errorf("preparing snapshot: %w", err)
+	}
+}
+
+// hasSnapshot reports whether the snapshotter has a snapshot named key.
+func (d *Driver) hasSnapshot(ctx context.Context, client snapshots.SnapshotsClient, snapshotter, key string) (bool, error) {
+	_, err := client.Stat(d.withNamespace(ctx), &snapshots.StatSnapshotRequest{
+		Snapshotter: snapshotter,
+		Key:         key,
+	})
+	switch status.Code(err) {
+	case codes.OK:
+		return true, nil
+	case codes.NotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("stat snapshot: %w", err)
+	}
+}
+
+// removeSnapshot removes key, ignoring errors. It doesn't use the caller's
+// context, so cleanup still runs after cancellation.
+func (d *Driver) removeSnapshot(client snapshots.SnapshotsClient, snapshotter, key string) {
+	_, _ = client.Remove(d.withNamespace(context.Background()), &snapshots.RemoveSnapshotRequest{
+		Snapshotter: snapshotter,
+		Key:         key,
+	})
 }
 
 func (d *Driver) probeListable(ctx context.Context, mountDir string) error {

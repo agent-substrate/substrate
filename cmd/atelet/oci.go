@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -295,7 +296,11 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
 			res, err := streamer.PrepareLayers(ctx, req)
 			if err != nil {
 				instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
-				slog.WarnContext(ctx, "Image streaming layer preparation failed; falling back to cache",
+				level, msg := slog.LevelWarn, "Image streaming layer preparation failed; falling back to cache"
+				if errors.Is(err, imagestreaming.ErrNotStreamable) {
+					level, msg = slog.LevelInfo, "Image not streamable; falling back to cache"
+				}
+				slog.Log(ctx, level, msg,
 					slog.String("image", ref),
 					slog.String("streamer", streamer.Name()),
 					slog.Any("err", err))

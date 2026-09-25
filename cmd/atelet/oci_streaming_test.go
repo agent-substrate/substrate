@@ -133,6 +133,31 @@ func TestEnsureContainerImage_ErrorFallback(t *testing.T) {
 	}
 }
 
+func TestEnsureContainerImage_DeclinedFallback(t *testing.T) {
+	ctx := context.Background()
+	regHost := imageVolumeTestRegistry(t)
+	ref := regHost + "/fallback-declined:v1"
+	pushTestImage(t, ref, singleFileLayer(t, "file.txt", "hello"))
+
+	store, err := imagecache.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("imagecache.New: %v", err)
+	}
+
+	m := mock.New()
+	m.PrepareLayersFunc = func(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
+		return nil, fmt.Errorf("layer 0: %w", imagestreaming.ErrNotStreamable)
+	}
+
+	img, err := ensureContainerImage(ctx, store, m, nil, nil, ref)
+	if err != nil {
+		t.Fatalf("ensureContainerImage after decline: %v", err)
+	}
+	if len(img.LayerDirs) == 0 {
+		t.Fatal("expected cached layer dirs after decline, got none")
+	}
+}
+
 func TestEnsureContainerImage_NilStreamer(t *testing.T) {
 	ctx := context.Background()
 	regHost := imageVolumeTestRegistry(t)
