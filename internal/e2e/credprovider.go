@@ -17,6 +17,8 @@ package e2e
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 const (
@@ -45,10 +47,13 @@ const (
 // DeployCredentialProvider installs the k8s-credential-provider and the
 // credinject fixture (the Secret behind CredentialInjectionURI and the
 // authorization policy that lets the probe atespaces resolve it), and removes
-// both when the test ends. The provider Deployment is restarted after the
+// both when the test passes. The provider Deployment is restarted after the
 // policy ConfigMap is applied because it reads the policy once at startup, so
 // a provider left running by an earlier install would otherwise keep
 // enforcing a stale one.
+//
+// A failed test keeps both so the provider's logs can be inspected; the next
+// run re-applies them.
 //
 // The egress gateway's side of the connection — the --credential-provider-*
 // flags on its ext_proc sidecar — is install-time configuration
@@ -72,15 +77,24 @@ func DeployCredentialProvider(t *testing.T) {
 	// Deployment mounts it, and the provider loads it at startup.
 	fixture := filepath.Join(root, credinjectFixtureManifest)
 	kubectl("apply", "-f", fixture)
-	t.Cleanup(func() { kubectl("delete", "--ignore-not-found", "-f", fixture) })
+	deleteOnPass := func(manifest string) {
+		t.Cleanup(func() {
+			if t.Failed() {
+				return
+			}
+			kubectl("delete", "--ignore-not-found", "-f", manifest)
+		})
+	}
+	deleteOnPass(fixture)
 
 	provider := filepath.Join(root, credentialProviderManifest)
 	koApply(t, provider)
-	t.Cleanup(func() { kubectl("delete", "--ignore-not-found", "-f", provider) })
+	deleteOnPass(provider)
 
 	// Restart unconditionally: if the Deployment already existed, koApply may
 	// have changed nothing, leaving a pod that started under a previous
-	// policy ConfigMap.
-	kubectl("-n", "ate-system", "rollout", "restart", "deployment/k8s-credential-provider")
-	kubectl("-n", "ate-system", "rollout", "status", "deployment/k8s-credential-provider", "--timeout=3m")
+	// policy ConfigMap. The provider manifest pins the canonical namespace.
+	ns := installdefaults.SystemNamespace
+	kubectl("-n", ns, "rollout", "restart", "deployment/k8s-credential-provider")
+	kubectl("-n", ns, "rollout", "status", "deployment/k8s-credential-provider", "--timeout=3m")
 }

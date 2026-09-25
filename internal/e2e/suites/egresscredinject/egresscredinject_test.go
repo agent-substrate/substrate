@@ -105,36 +105,15 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	}
 	defer rc.Close()
 
-	// The first fetch retries two transient failure modes for one
-	// propagation window before counting:
-	//
-	//   - certificate errors: sdsmintd signs with the pool mounted into the
-	//     gateway pod, and kubelet propagates Secret contents into that mount
-	//     on its own schedule (see TestActorEgressMITMTrust);
-	//   - 503 denials: the injector maps a provider it cannot reach to a
-	//     retryable 503 by design (see egress.mapCredentialProviderError).
-	//     The gateway's gRPC channel to the provider outlives this suite's
-	//     provider redeploys, so right after one — a rerun, most likely — it
-	//     can still be in connect backoff against the old, deleted Service.
-	deadline := time.Now().Add(2 * time.Minute)
-	var injected fetchResponse
-	for {
-		injected = probeFetch(t, ctx, rc, id, echoOrigin, nil)
-		isCertErr := strings.Contains(injected.Error, "certificate") || strings.Contains(injected.Error, "x509")
-		retryable := (injected.Error != "" && isCertErr) || (injected.Error == "" && injected.Status == "503")
-		if !retryable || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Second)
-	}
 	wantHeader := "Bearer " + e2e.CredentialInjectionToken
+	injected := fetchEcho(t, ctx, rc, id, echoOrigin, nil)
 	if got := assertEchoedAuthorization(t, "injection fetch", injected); got != wantHeader {
 		t.Errorf("upstream received Authorization %q, want the injected %q", got, wantHeader)
 	}
 
 	// An actor-set Authorization header must not survive injection: the
 	// gateway overwrites it, so a client cannot pre-seed a credential.
-	seeded := probeFetch(t, ctx, rc, id, echoOrigin, []string{"header=" + url.QueryEscape("Authorization:Bearer actor-forged")})
+	seeded := fetchEcho(t, ctx, rc, id, echoOrigin, []string{"header=" + url.QueryEscape("Authorization:Bearer actor-forged")})
 	if got := assertEchoedAuthorization(t, "pre-seeded-header fetch", seeded); got != wantHeader {
 		t.Errorf("upstream received Authorization %q after the actor pre-seeded its own, want the injected %q", got, wantHeader)
 	}
@@ -144,7 +123,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	// no Authorization header at all. (The probe does not follow redirects, so
 	// an origin-side upgrade to HTTPS would surface as a non-200 here rather
 	// than silently re-running the TLS case.)
-	cleartext := probeFetch(t, ctx, rc, id, echoOriginPlain, nil)
+	cleartext := fetchEcho(t, ctx, rc, id, echoOriginPlain, nil)
 	if cleartext.Error != "" {
 		t.Errorf("cleartext fetch of %s failed at the transport: %s", echoOriginPlain, cleartext.Error)
 	} else if cleartext.Status != "200" {
@@ -155,23 +134,69 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 
 	// Fail closed: each of these rules names a credential that cannot be
 	// injected, and the denial must be the mapped status, not a request that
-	// went out without the credential.
-	for _, tc := range []struct {
+	// went out without the credential. No retries: the gateway answers these
+	// itself.
+	tests := []struct {
 		name       string
 		origin     string
 		wantStatus string
-	}{
-		{"unfetchable secret", unfetchableOrigin, "403"},
-		{"unserved provider", unservedOrigin, "500"},
-		{"unauthorized namespace", unauthorizedOrigin, "403"},
-	} {
-		got := probeFetch(t, ctx, rc, id, tc.origin, nil)
-		if got.Error != "" {
-			t.Errorf("%s: fetch of %s failed at the transport (%s), want an HTTP %s from the gateway", tc.name, tc.origin, got.Error, tc.wantStatus)
-		} else if got.Status != tc.wantStatus {
-			t.Errorf("%s: fetch of %s returned status %s, want %s", tc.name, tc.origin, got.Status, tc.wantStatus)
-		}
+	}{{
+		name:       "unfetchable secret",
+		origin:     unfetchableOrigin,
+		wantStatus: "403",
+	}, {
+		name:       "unserved provider",
+		origin:     unservedOrigin,
+		wantStatus: "500",
+	}, {
+		name:       "unauthorized namespace",
+		origin:     unauthorizedOrigin,
+		wantStatus: "403",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := probeFetch(t, ctx, rc, id, tt.origin, nil)
+			if got.Error != "" {
+				t.Fatalf("fetch of %s failed at the transport (%s), want an HTTP %s from the gateway", tt.origin, got.Error, tt.wantStatus)
+			}
+			if got.Status != tt.wantStatus {
+				t.Errorf("fetch of %s returned status %s, want %s", tt.origin, got.Status, tt.wantStatus)
+			}
+		})
 	}
+}
+
+const echoRetryWindow = 2 * time.Minute
+
+// fetchEcho is probeFetch for echo fetches that should return 200. It retries
+// transient failures for up to echoRetryWindow:
+//
+//   - certificate errors, until the gateway's signing pool propagates;
+//   - 503, while the gateway reconnects to a redeployed provider;
+//   - 502/503/504 from httpbin.org itself.
+func fetchEcho(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, origin string, extraParams []string) fetchResponse {
+	t.Helper()
+	deadline := time.Now().Add(echoRetryWindow)
+	for {
+		resp := probeFetch(t, ctx, rc, id, origin, extraParams)
+		if !transientEchoFailure(resp) || time.Now().After(deadline) {
+			return resp
+		}
+		t.Logf("fetch of %s: transient failure (status %q, error %q), retrying", origin, resp.Status, resp.Error)
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// transientEchoFailure reports whether fetchEcho should retry resp.
+func transientEchoFailure(resp fetchResponse) bool {
+	if resp.Error != "" {
+		return strings.Contains(resp.Error, "certificate") || strings.Contains(resp.Error, "x509")
+	}
+	switch resp.Status {
+	case "502", "503", "504":
+		return true
+	}
+	return false
 }
 
 // echoedHeaders is the echo origin's response shape: the request headers it
@@ -248,9 +273,8 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 	}
 }
 
-// createAndResumeActor mirrors the egressmitm suite's self-healing actor
-// lifecycle (actor records outlive the fixture namespace); DeployProbe has
-// already waited for the template's golden snapshot.
+// createAndResumeActor first deletes any actor left by an earlier run, since
+// actor records outlive the fixture namespace.
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
@@ -262,6 +286,12 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
+	t.Cleanup(func() {
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
+		}
+	})
 	// One rule per hostname, each carrying the injection whose outcome that
 	// host is used to observe. Effects apply only on the first matching rule,
 	// and only these hosts are allowed at all.
@@ -274,12 +304,6 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		e2e.EgressInjectHeader("Authorization", "Bearer ",
 			"ate-secret://k8s.io/default/kube-system/api-token/token", unauthorizedHost),
 	)
-	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
-		}
-	})
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}

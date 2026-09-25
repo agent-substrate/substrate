@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // The capabilities e2e assertions are only as trustworthy as this decoder and
@@ -82,21 +84,54 @@ func TestDecodeCapMask(t *testing.T) {
 }
 
 func TestParseFetchHeaders(t *testing.T) {
-	headers, err := parseFetchHeaders([]string{"Authorization:Bearer x", "X-Test:a:b"})
-	if err != nil {
-		t.Fatalf("parseFetchHeaders failed: %v", err)
-	}
-	if got := headers.Get("Authorization"); got != "Bearer x" {
-		t.Errorf("Authorization = %q, want %q", got, "Bearer x")
-	}
-	// Only the first colon separates; the value keeps the rest verbatim.
-	if got := headers.Get("X-Test"); got != "a:b" {
-		t.Errorf("X-Test = %q, want %q", got, "a:b")
-	}
-	for _, bad := range []string{"no-colon", ":empty-name"} {
-		if _, err := parseFetchHeaders([]string{bad}); err == nil {
-			t.Errorf("parseFetchHeaders(%q) succeeded, want an error", bad)
-		}
+	tests := []struct {
+		name    string
+		params  []string
+		want    http.Header
+		wantErr bool
+	}{{
+		name:   "no parameters",
+		params: nil,
+		want:   http.Header{},
+	}, {
+		name:   "name and value",
+		params: []string{"Authorization:Bearer x"},
+		want:   http.Header{"Authorization": {"Bearer x"}},
+	}, {
+		// Only the first colon separates; the value keeps the rest verbatim.
+		name:   "value containing a colon",
+		params: []string{"X-Test:a:b"},
+		want:   http.Header{"X-Test": {"a:b"}},
+	}, {
+		name:   "repeated name keeps every value",
+		params: []string{"x-test:1", "X-Test:2"},
+		want:   http.Header{"X-Test": {"1", "2"}},
+	}, {
+		name:    "no colon",
+		params:  []string{"no-colon"},
+		wantErr: true,
+	}, {
+		name:    "empty name",
+		params:  []string{":empty-name"},
+		wantErr: true,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseFetchHeaders(tt.params)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseFetchHeaders(%q) = %v, want an error", tt.params, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseFetchHeaders(%q) failed: %v", tt.params, err)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("parseFetchHeaders(%q) mismatch (-want +got):\n%s", tt.params, diff)
+			}
+		})
 	}
 }
 
@@ -158,6 +193,22 @@ func TestFetchDoesNotFollowRedirects(t *testing.T) {
 	}
 	if resp["status"] != "302" {
 		t.Errorf("status = %q, want 302", resp["status"])
+	}
+}
+
+// A malformed ?header= fails the fetch before anything is sent.
+func TestFetchRejectsMalformedHeader(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("fetch sent the request despite a malformed header parameter")
+	}))
+	defer origin.Close()
+
+	resp := doFetch(t, origin.URL, "no-colon")
+	if !strings.Contains(resp["error"], "not <name>:<value>") {
+		t.Errorf("error = %q, want the malformed-header error", resp["error"])
+	}
+	if resp["status"] != "" {
+		t.Errorf("status = %q, want none", resp["status"])
 	}
 }
 
