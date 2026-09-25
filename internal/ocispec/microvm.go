@@ -73,6 +73,16 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	if spec.Linux == nil {
 		spec.Linux = &specs.Linux{}
 	}
+	// A container that drops NET_BIND_SERVICE could not bind a low port in the
+	// guest, while gVisor's netstack never enforced the limit. Kubernetes lists
+	// the key as safe. Not in Build: runsc restore rejects a Sysctl change
+	// against the checkpoint-time spec.
+	if spec.Linux.Sysctl == nil {
+		spec.Linux.Sysctl = map[string]string{}
+	}
+	if _, ok := spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"]; !ok {
+		spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"] = "0"
+	}
 	// The container's own declared limits survive the merge; StartRootfsContainer
 	// sets CgroupsPath.
 	spec.Linux.Resources = mergeKataResources(spec.Linux.Resources)
