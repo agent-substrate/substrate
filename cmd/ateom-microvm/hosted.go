@@ -23,13 +23,13 @@ import (
 	"net"
 	"time"
 
-	"github.com/vishvananda/netns"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
@@ -218,7 +218,7 @@ func (s *AteomService) guestStatsFor(actorUID string) *guestStatsTarget {
 }
 
 // sandboxNetNS is where an actor's tap and atunnel's sockets live, or -1.
-func (s *AteomService) sandboxNetNS(actorUID string) netns.NsHandle {
+func (s *AteomService) sandboxNetNS(actorUID string) netns.Handle {
 	hosted := s.lookupActor(actorUID)
 	if hosted == nil {
 		return -1

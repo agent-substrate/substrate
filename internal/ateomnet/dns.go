@@ -24,7 +24,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/vishvananda/netns"
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 )
 
 // dnsServer answers an actor's DNS. Satisfied by atunnel.DNSRelay; an interface
@@ -35,13 +35,13 @@ type dnsServer interface {
 }
 
 // serveSandboxDNS serves UDP and TCP DNS in the sandbox's local gateway namespace.
-func serveSandboxDNS(ctx context.Context, relay dnsServer, ns netns.NsHandle, port uint16) (_ []io.Closer, _ []func(), retErr error) {
+func serveSandboxDNS(ctx context.Context, relay dnsServer, ns netns.Handle, port uint16) (_ []io.Closer, _ []func(), retErr error) {
 	// Bind the wildcard because the microVM tap's gateway address is added later.
 	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(int(port)))
 
 	var packet net.PacketConn
 	var stream net.Listener
-	if err := NetNSDo(ctx, ns, func(context.Context) error {
+	if err := netns.Do(ctx, ns, func(context.Context) error {
 		pc, err := net.ListenPacket("udp", address)
 		if err != nil {
 			return fmt.Errorf("while opening the actor DNS socket: %w", err)
