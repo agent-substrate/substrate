@@ -50,6 +50,9 @@ service AteomSupport {
 message SetWorkerCapacityRequest {
   // What the worker can supply, in the same vocabulary the control plane
   // records and an ActorTemplate asks in.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # cross-package type; descending into ateapipb is not wired up yet
   ateapi.WorkerResources capacity = 1;
 }
 
@@ -60,11 +63,17 @@ message RequestActorSuspendRequest {
   // The actor the calling worker is hosting. atelet forwards this to the
   // control plane, which serves it only if the actor is assigned to the worker
   // the caller's certificate names.
+  //
+  // +k8s:required
   string actor_atespace = 1;
+
+  // +k8s:required
   string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name, as for MintActorCertificate.
+  //
+  // +k8s:required
   string actor_uid = 3;
 }
 
@@ -73,15 +82,23 @@ message RequestActorSuspendResponse {
 
 message MintActorCertificateRequest {
   // The actor for which the certificate should be issued.
+  //
+  // +k8s:required
   string actor_atespace = 3;
+
+  // +k8s:required
   string actor_name = 4;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
+  //
+  // +k8s:required
   string actor_uid = 5;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
+  //
+  // +k8s:required
   bytes certificate_signing_request = 1;
 }
 
@@ -119,15 +136,31 @@ service AteomHerder {
 }
 
 message TerminateRequest {
+  // +k8s:required
   string target_ateom_uid = 1;
 
+  // +k8s:required
   string atespace = 2;
+
+  // +k8s:required
   string actor_name = 3;
+
+  // +k8s:required
   string actor_uid = 4;
 
+  // The template identity is carried for metrics attribution and is not
+  // validated today.
+  //
+  // +k8s:optional
   string actor_template_atespace = 5;
+
+  // +k8s:optional
   string actor_template_name = 6;
 
+  // A nil spec is tolerated today; parity with the hand-written validation.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 }
 
@@ -135,29 +168,55 @@ message TerminateResponse {
 }
 
 message RunRequest {
+  // +k8s:required
   string target_ateom_uid = 1;
 
+  // +k8s:required
   string atespace = 2;
+
+  // +k8s:required
   string actor_name = 3;
+
+  // +k8s:required
   string actor_uid = 4;
 
+  // The template identity is carried for metrics attribution and is not
+  // validated today.
+  //
+  // +k8s:optional
   string actor_template_atespace = 5;
+
+  // +k8s:optional
   string actor_template_name = 6;
 
+  // A nil spec is tolerated today; parity with the hand-written validation.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
   // The sandbox binaries to use for booting this actor from scratch. atelet
   // fetches the relevant assets and records them with the actor's on-node state
   // so a later Checkpoint can pin the same version into the snapshot manifest.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   SandboxAssets sandbox_assets = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. atelet
   // passes these through to the sandbox so it is sized to the actor (not the
   // whole host or worker pod). Zero means "unset": keep the runtime default.
-  int64 cpu_milli = 10;    // CPU limit in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
+
+  // +k8s:optional
   int64 memory_bytes = 11; // Memory limit in bytes.
 }
 
@@ -383,29 +442,52 @@ enum SnapshotScope {
 }
 
 message CheckpointRequest {
+  // +k8s:required
   string target_ateom_uid = 1;
 
+  // +k8s:required
   string atespace = 2;
+
+  // +k8s:required
   string actor_name = 3;
+
+  // +k8s:required
   string actor_uid = 4;
 
+  // The template identity is carried for metrics attribution and is not
+  // validated today.
+  //
+  // +k8s:optional
   string actor_template_atespace = 5;
+
+  // +k8s:optional
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on checkpoint: atelet uses the version the
   // actor is currently running (recorded with the actor's on-node state at
   // Run/Restore) and records it into the snapshot manifest.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
+  // +k8s:required
   CheckpointType type = 8;
 
   // The checkpoint configuration, depending on the type.
+  //
+  // Declarative validation cannot express oneof members today (tags on them
+  // never reach the generator), so the type/config consistency checks stay in
+  // hand-written validation until they move to a message-level custom
+  // validation.
   oneof config {
     LocalCheckpointConfiguration local_config = 9;
     ExternalCheckpointConfiguration external_config = 10;
   }
 
   // What should be included in the checkpoint.
+  //
+  // +k8s:required
   SnapshotScope scope = 11;
 }
 
@@ -413,19 +495,32 @@ message CheckpointResponse {
 }
 
 message UploadPausedCheckpointRequest {
+  // +k8s:required
   string atespace = 1;
+
+  // +k8s:required
   string actor_name = 2;
+
+  // +k8s:required
   string actor_uid = 3;
 
   // For metrics attribution, like on CheckpointRequest.
+  //
+  // +k8s:optional
   string actor_template_atespace = 4;
+
+  // +k8s:optional
   string actor_template_name = 5;
 
   // The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
   // at pause time.
+  //
+  // +k8s:required
   string local_snapshot_name = 6;
 
   // Destination object-storage URI (the actor's in-progress snapshot URI).
+  //
+  // +k8s:required
   string destination_snapshot_uri = 7;
 
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
@@ -433,6 +528,8 @@ message UploadPausedCheckpointRequest {
   // the local snapshot's own manifest, which is authoritative. When they
   // differ, atelet converts where possible (micro-VM FULL capture to a DATA
   // upload by selecting the durable-dir tar) and rejects otherwise.
+  //
+  // +k8s:required
   SnapshotScope desired_scope = 8;
 }
 
@@ -440,29 +537,52 @@ message UploadPausedCheckpointResponse {
 }
 
 message RestoreRequest {
+  // +k8s:required
   string target_ateom_uid = 1;
 
+  // +k8s:required
   string atespace = 2;
+
+  // +k8s:required
   string actor_name = 3;
+
+  // +k8s:required
   string actor_uid = 4;
 
+  // The template identity is carried for metrics attribution and is not
+  // validated today.
+  //
+  // +k8s:optional
   string actor_template_atespace = 5;
+
+  // +k8s:optional
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on restore: the snapshot is
   // self-describing. atelet reads the snapshot manifest to recover the pinned
   // sandbox version that created it.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
+  // +k8s:required
   CheckpointType type = 8;
 
   // The checkpoint configuration, depending on the type.
+  //
+  // Declarative validation cannot express oneof members today (tags on them
+  // never reach the generator), so the type/config consistency checks stay in
+  // hand-written validation until they move to a message-level custom
+  // validation.
   oneof config {
     LocalCheckpointConfiguration local_config = 9;
     ExternalCheckpointConfiguration external_config = 10;
   }
 
   // What content to restore from the checkpoint.
+  //
+  // +k8s:required
   SnapshotScope scope = 11;
 
   // The object storage URI of the ActorTemplate's golden snapshot.
@@ -471,16 +591,25 @@ message RestoreRequest {
   // the snapshot referenced by `config`. A top-level field rather than part
   // of the `config` oneof: the actor's snapshot may be local (a pause
   // checkpoint) while the golden snapshot is always external.
+  //
+  // +k8s:optional
   string golden_snapshot_uri = 12;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   optional EgressGateway egress_gateway = 13;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
   // for a FULL micro-VM restore the size baked into the snapshot wins. Zero
   // means "unset": keep the runtime default.
-  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+
+  // +k8s:optional
   int64 memory_bytes = 15; // Memory limit in bytes.
 }
 

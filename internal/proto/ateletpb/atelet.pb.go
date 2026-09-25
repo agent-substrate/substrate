@@ -209,6 +209,9 @@ type SetWorkerCapacityRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// What the worker can supply, in the same vocabulary the control plane
 	// records and an ActorTemplate asks in.
+	//
+	// +k8s:required
+	// +k8s:opaqueType # cross-package type; descending into ateapipb is not wired up yet
 	Capacity      *ateapipb.WorkerResources `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -292,10 +295,15 @@ type RequestActorSuspendRequest struct {
 	// The actor the calling worker is hosting. atelet forwards this to the
 	// control plane, which serves it only if the actor is assigned to the worker
 	// the caller's certificate names.
+	//
+	// +k8s:required
 	ActorAtespace string `protobuf:"bytes,1,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
-	ActorName     string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	// The UID of the actor --- used to guard against deletion and recreation of
 	// an actor with the same name, as for MintActorCertificate.
+	//
+	// +k8s:required
 	ActorUid      string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -391,13 +399,20 @@ func (*RequestActorSuspendResponse) Descriptor() ([]byte, []int) {
 type MintActorCertificateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor for which the certificate should be issued.
+	//
+	// +k8s:required
 	ActorAtespace string `protobuf:"bytes,3,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
-	ActorName     string `protobuf:"bytes,4,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	ActorName string `protobuf:"bytes,4,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	// The UID of the actor --- used to guard against deletion and recreation of
 	// an actor with the same name.
+	//
+	// +k8s:required
 	ActorUid string `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// DER-encoded PKCS #10 certificate signing request. Atunnel retains the
 	// corresponding private key.
+	//
+	// +k8s:required
 	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
@@ -507,16 +522,29 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 }
 
 type TerminateRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:required
+	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The template identity is carried for metrics attribution and is not
+	// validated today.
+	//
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// A nil spec is tolerated today; parity with the hand-written validation.
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TerminateRequest) Reset() {
@@ -635,24 +663,46 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 }
 
 type RunRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:required
+	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The template identity is carried for metrics attribution and is not
+	// validated today.
+	//
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// A nil spec is tolerated today; parity with the hand-written validation.
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
 	// so a later Checkpoint can pin the same version into the snapshot manifest.
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
 	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. atelet
 	// passes these through to the sandbox so it is sized to the actor (not the
 	// whole host or worker pod). Zero means "unset": keep the runtime default.
-	CpuMilli      int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	//
+	// +k8s:optional
+	CpuMilli int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	// +k8s:optional
 	MemoryBytes   int64 `protobuf:"varint,11,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2195,19 +2245,37 @@ func (x *ExternalCheckpointConfiguration) GetSnapshotUri() string {
 }
 
 type CheckpointRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:required
+	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The template identity is carried for metrics attribution and is not
+	// validated today.
+	//
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on checkpoint: atelet uses the version the
 	// actor is currently running (recorded with the actor's on-node state at
 	// Run/Restore) and records it into the snapshot manifest.
-	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// +k8s:required
 	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
+	//
+	// Declarative validation cannot express oneof members today (tags on them
+	// never reach the generator), so the type/config consistency checks stay in
+	// hand-written validation until they move to a message-level custom
+	// validation.
 	//
 	// Types that are valid to be assigned to Config:
 	//
@@ -2215,6 +2283,8 @@ type CheckpointRequest struct {
 	//	*CheckpointRequest_ExternalConfig
 	Config isCheckpointRequest_Config `protobuf_oneof:"config"`
 	// What should be included in the checkpoint.
+	//
+	// +k8s:required
 	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2391,23 +2461,35 @@ func (*CheckpointResponse) Descriptor() ([]byte, []int) {
 }
 
 type UploadPausedCheckpointRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Atespace  string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid  string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// For metrics attribution, like on CheckpointRequest.
+	//
+	// +k8s:optional
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
 	// at pause time.
+	//
+	// +k8s:required
 	LocalSnapshotName string `protobuf:"bytes,6,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
+	//
+	// +k8s:required
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
 	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
 	// The scope the pause checkpoint captured is not sent: atelet reads it from
 	// the local snapshot's own manifest, which is authoritative. When they
 	// differ, atelet converts where possible (micro-VM FULL capture to a DATA
 	// upload by selecting the durable-dir tar) and rejects otherwise.
+	//
+	// +k8s:required
 	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2536,19 +2618,37 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 }
 
 type RestoreRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:required
+	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The template identity is carried for metrics attribution and is not
+	// validated today.
+	//
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on restore: the snapshot is
 	// self-describing. atelet reads the snapshot manifest to recover the pinned
 	// sandbox version that created it.
-	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// +k8s:required
 	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
+	//
+	// Declarative validation cannot express oneof members today (tags on them
+	// never reach the generator), so the type/config consistency checks stay in
+	// hand-written validation until they move to a message-level custom
+	// validation.
 	//
 	// Types that are valid to be assigned to Config:
 	//
@@ -2556,6 +2656,8 @@ type RestoreRequest struct {
 	//	*RestoreRequest_ExternalConfig
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
 	// What content to restore from the checkpoint.
+	//
+	// +k8s:required
 	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	// The object storage URI of the ActorTemplate's golden snapshot.
 	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
@@ -2563,14 +2665,22 @@ type RestoreRequest struct {
 	// the snapshot referenced by `config`. A top-level field rather than part
 	// of the `config` oneof: the actor's snapshot may be local (a pause
 	// checkpoint) while the golden snapshot is always external.
+	//
+	// +k8s:optional
 	GoldenSnapshotUri string `protobuf:"bytes,12,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
 	// gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
 	// for a FULL micro-VM restore the size baked into the snapshot wins. Zero
 	// means "unset": keep the runtime default.
-	CpuMilli      int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	//
+	// +k8s:optional
+	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	// +k8s:optional
 	MemoryBytes   int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
