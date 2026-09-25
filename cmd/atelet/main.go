@@ -503,14 +503,15 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
-		}
-	}()
-	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+	systemInfoReg, err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec()))
+	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			systemInfoReg.Undo()
+		}
+	}()
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
 		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
 	); err != nil {
@@ -1095,10 +1096,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		runtimeRec = goldenRec
 	}
 
-	// Undo the Register if the restore fails.
+	// Undo the Register if the restore fails. Written by the prep leg below and
+	// read only after g.Wait returns.
+	var systemInfoReg *registration
 	defer func() {
 		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+			systemInfoReg.Undo()
 		}
 	}()
 
@@ -1170,7 +1173,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return err
 		}
-		if err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+		if systemInfoReg, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return err
 		}

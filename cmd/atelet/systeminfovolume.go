@@ -107,8 +107,9 @@ func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, i
 // Register records actorUID's system-info volumes and writes their contents
 // from current cluster state. If actorUID is already registered (for example
 // after a worker pod crash left a stale entry without Terminate), the previous
-// registration is superseded.
-func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) error {
+// registration is superseded. The returned registration undoes this call
+// alone; a Register that fails leaves no entry behind.
+func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) (*registration, error) {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
 	// Held until the initial write finishes so a refresh cannot interleave.
 	actor.mu.Lock()
@@ -129,14 +130,45 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 
 	for _, v := range volumes {
 		if err := r.write(ref, actorUID, v); err != nil {
-			return fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
+			r.unlink(actor)
+			actor.stale = true
+			return nil, fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
 		}
 	}
-	return nil
+	return &registration{r: r, actor: actor}, nil
 }
 
-// Deregister drops actorUID's registration. After Deregister returns, no more
-// system-info volumes will be written for the actor.
+// registration is the entry one Register call created.
+type registration struct {
+	r     *systemInfoVolumeRefresher
+	actor *registeredActor
+}
+
+// Undo drops the entry unless a later Register for the same actor has
+// replaced it, and stops writes to its volumes. Undo on a nil registration
+// is a no-op.
+func (h *registration) Undo() {
+	if h == nil {
+		return
+	}
+	h.r.unlink(h.actor)
+	h.actor.mu.Lock()
+	h.actor.stale = true
+	h.actor.mu.Unlock()
+}
+
+// unlink removes actor from the registry if it is still the entry for its UID.
+func (r *systemInfoVolumeRefresher) unlink(actor *registeredActor) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.actors[actor.uid] == actor {
+		delete(r.actors, actor.uid)
+	}
+}
+
+// Deregister drops actorUID's current registration, whichever Register call
+// made it. After Deregister returns, no more system-info volumes will be
+// written for the actor.
 func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	r.mu.Lock()
 	actor := r.actors[actorUID]
