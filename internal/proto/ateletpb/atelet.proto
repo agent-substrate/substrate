@@ -405,7 +405,17 @@ message Volume {
 }
 
 message VolumeMount {
+  // name must match the name of a Volume.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
+
+  // mount_path within the container. Must be a clean absolute Unix path.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
 }
 
@@ -420,8 +430,23 @@ message Container {
   string image = 2;
   repeated string command = 3;
   repeated string args = 7;
+
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's env bound
+  // +k8s:listType=map # each variable is set at most once
+  // +k8s:listMapKey=name
   repeated EnvEntry env = 4;
+
   WakeupProbe wakeup_probe = 5;
+
+  // Keyed by mount_path: each path hosts exactly one mount, while a volume
+  // may be mounted at multiple paths.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volume_mounts bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=mount_path
+  // +k8s:customValidation # mounts must not nest
   repeated VolumeMount volume_mounts = 6;
 
   // +k8s:optional
@@ -474,7 +499,15 @@ message ResourceLimits {
 }
 
 message EnvEntry {
+  // name may be any printable ASCII character except '='.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256 # guardrail
+  // +k8s:customValidation # printable ASCII except '='
   string name = 1;
+
+  // +k8s:optional
+  // +k8s:maxLength=32768 # guardrail
   string value = 2 [ debug_redact = true ];
 }
 

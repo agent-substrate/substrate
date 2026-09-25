@@ -662,3 +662,161 @@ func TestValidateWorkloadSpecContainers(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateEnvEntry(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.EnvEntry)) *ateletpb.EnvEntry {
+		e := &ateletpb.EnvEntry{Name: "PORT", Value: "8080"}
+		for _, m := range mutate {
+			m(e)
+		}
+		return e
+	}
+	tests := []struct {
+		name string
+		obj  *ateletpb.EnvEntry
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing name",
+		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name: "name with equals sign",
+		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "A=B" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
+	}, {
+		name: "name with spaces and punctuation is allowed",
+		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "weird name!" }),
+	}, {
+		name: "name with a non-ASCII rune",
+		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "café" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
+	}, {
+		name: "name too long",
+		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = strings.Repeat("N", 257) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("name"), nil, 256).WithOrigin("maxLength")},
+	}, {
+		name: "empty value is allowed",
+		obj:  valid(func(e *ateletpb.EnvEntry) { e.Value = "" }),
+	}, {
+		name: "value too long",
+		obj:  valid(func(e *ateletpb.EnvEntry) { e.Value = strings.Repeat("v", 32769) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("value"), nil, 32768).WithOrigin("maxLength")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_EnvEntry(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateVolumeMount(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.VolumeMount)) *ateletpb.VolumeMount {
+		m := &ateletpb.VolumeMount{Name: "data", MountPath: "/var/data"}
+		for _, mu := range mutate {
+			mu(m)
+		}
+		return m
+	}
+	badPath := func(p string) *ateletpb.VolumeMount {
+		return valid(func(m *ateletpb.VolumeMount) { m.MountPath = p })
+	}
+	invalidPath := field.ErrorList{field.Invalid(field.NewPath("mount_path"), nil, "")}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.VolumeMount
+		want field.ErrorList
+	}{
+		{name: "valid", obj: valid()},
+		{name: "missing name", obj: valid(func(m *ateletpb.VolumeMount) { m.Name = "" }),
+			want: field.ErrorList{field.Required(field.NewPath("name"), "")}},
+		{name: "invalid name: uppercase", obj: valid(func(m *ateletpb.VolumeMount) { m.Name = "Data" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")}},
+		{name: "missing mount_path", obj: badPath(""),
+			want: field.ErrorList{field.Required(field.NewPath("mount_path"), "")}},
+		{name: "relative mount_path", obj: badPath("var/data"), want: invalidPath},
+		{name: "root mount_path", obj: badPath("/"), want: invalidPath},
+		{name: "trailing slash", obj: badPath("/var/data/"), want: invalidPath},
+		{name: "double slash", obj: badPath("/var//data"), want: invalidPath},
+		{name: "colon", obj: badPath("/var/da:ta"), want: invalidPath},
+		{name: "dot-dot segment", obj: badPath("/var/../etc"), want: invalidPath},
+		{name: "control character", obj: badPath("/var/da\x01ta"), want: invalidPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_VolumeMount(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+// TestValidateContainerMountsAndEnv exercises the newly keyed env and
+// volume_mounts lists through the parent, so errors carry real paths.
+func TestValidateContainerMountsAndEnv(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.Container)) *ateletpb.Container {
+		c := &ateletpb.Container{
+			Name: "main",
+			Env:  []*ateletpb.EnvEntry{{Name: "PORT", Value: "8080"}},
+			VolumeMounts: []*ateletpb.VolumeMount{
+				{Name: "data", MountPath: "/data"},
+				{Name: "data", MountPath: "/mnt/data"},
+			},
+		}
+		for _, m := range mutate {
+			m(c)
+		}
+		return c
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.Container
+		want field.ErrorList
+	}{{
+		name: "valid: the same volume mounted at two paths",
+		obj:  valid(),
+	}, {
+		name: "duplicate env names",
+		obj: valid(func(c *ateletpb.Container) {
+			c.Env = append(c.Env, &ateletpb.EnvEntry{Name: "PORT", Value: "9"})
+		}),
+		want: field.ErrorList{field.Duplicate(field.NewPath("env").Index(1), nil)},
+	}, {
+		name: "duplicate mount paths",
+		obj: valid(func(c *ateletpb.Container) {
+			c.VolumeMounts[1].MountPath = "/data"
+		}),
+		want: field.ErrorList{field.Duplicate(field.NewPath("volume_mounts").Index(1), nil)},
+	}, {
+		name: "nested mount paths",
+		obj: valid(func(c *ateletpb.Container) {
+			c.VolumeMounts[1].MountPath = "/data/nested"
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "nesting rejected regardless of order",
+		obj: valid(func(c *ateletpb.Container) {
+			c.VolumeMounts[0].MountPath = "/mnt/data/nested"
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "sibling paths with a shared segment prefix are allowed",
+		obj: valid(func(c *ateletpb.Container) {
+			c.VolumeMounts[0].MountPath = "/data/a"
+			c.VolumeMounts[1].MountPath = "/data/ab"
+		}),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_Container(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}

@@ -1627,9 +1627,18 @@ func (x *Volume) GetImage() *ImageVolumeSource {
 }
 
 type VolumeMount struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	MountPath     string                 `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name must match the name of a Volume.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// mount_path within the container. Must be a clean absolute Unix path.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096
+	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
+	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1685,12 +1694,24 @@ type Container struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	Name         string         `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Image        string         `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
-	Command      []string       `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
-	Args         []string       `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
-	Env          []*EnvEntry    `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
-	WakeupProbe  *WakeupProbe   `protobuf:"bytes,5,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
+	Name    string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Image   string   `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
+	Args    []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=32 # matches the template's env bound
+	// +k8s:listType=map # each variable is set at most once
+	// +k8s:listMapKey=name
+	Env         []*EnvEntry  `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
+	WakeupProbe *WakeupProbe `protobuf:"bytes,5,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
+	// Keyed by mount_path: each path hosts exactly one mount, while a volume
+	// may be mounted at multiple paths.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=32 # matches the template's volume_mounts bound
+	// +k8s:listType=map
+	// +k8s:listMapKey=mount_path
+	// +k8s:customValidation # mounts must not nest
 	VolumeMounts []*VolumeMount `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// +k8s:optional
 	SecurityContext *SecurityContext `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
@@ -1968,9 +1989,16 @@ func (x *ResourceLimits) GetCpuMillis() int64 {
 }
 
 type EnvEntry struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name may be any printable ASCII character except '='.
+	//
+	// +k8s:required
+	// +k8s:maxLength=256 # guardrail
+	// +k8s:customValidation # printable ASCII except '='
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:optional
+	// +k8s:maxLength=32768 # guardrail
+	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

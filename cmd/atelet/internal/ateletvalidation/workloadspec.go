@@ -87,6 +87,72 @@ func ValidateCustom_ExternalVolumeSource_VolumeType(_ context.Context, _ operati
 	return errs
 }
 
+// envEntryNameRE constrains env var names to any printable ASCII character
+// except '='.
+var envEntryNameRE = regexp.MustCompile(`^[ -<>-~]+$`)
+
+func ValidateCustom_EnvEntry_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == "" {
+		return nil // required is enforced by tags
+	}
+	if !envEntryNameRE.MatchString(*value) {
+		return field.ErrorList{field.Invalid(fldPath, *value, "may contain any printable ASCII character except '='")}
+	}
+	return nil
+}
+
+// mountPathBadSegmentRE matches '.' or '..' path segments.
+var mountPathBadSegmentRE = regexp.MustCompile(`(^|/)[.][.]?(/|$)`)
+
+// ValidateCustom_VolumeMount_MountPath requires a clean absolute Unix path
+// that starts with '/', is not '/', and contains no ':', '.' or '..'
+// segments, '//', trailing '/', or control characters.
+func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	p := *value
+	if p == "" {
+		return nil // required is enforced by tags
+	}
+	bad := !strings.HasPrefix(p, "/") || len(p) == 1 ||
+		strings.HasSuffix(p, "/") || strings.Contains(p, "//") ||
+		strings.Contains(p, ":") || mountPathBadSegmentRE.MatchString(p)
+	if !bad {
+		for _, r := range p {
+			if r < 0x20 || r == 0x7f {
+				bad = true
+				break
+			}
+		}
+	}
+	if bad {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters")}
+	}
+	return nil
+}
+
+// ValidateCustom_Container_VolumeMounts rejects nested mounts (volumes cannot
+// mount onto other volumes). Mount-path uniqueness is enforced by the list
+// key.
+func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateletpb.VolumeMount) field.ErrorList {
+	var errs field.ErrorList
+	for i, m := range value {
+		path := m.GetMountPath()
+		if path == "" {
+			continue // required is enforced by tags
+		}
+		for j := 0; j < i; j++ {
+			prior := value[j].GetMountPath()
+			if prior == "" || prior == path {
+				continue
+			}
+			if strings.HasPrefix(path, prior+"/") || strings.HasPrefix(prior, path+"/") {
+				errs = append(errs, field.Invalid(fldPath.Index(i).Child("mount_path"), path,
+					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
+			}
+		}
+	}
+	return errs
+}
+
 // capabilityRE constrains Linux capability names: uppercase, without the
 // "CAP_" prefix (which is added when the OCI spec is written; the prefixed
 // spelling would silently grant nothing).
