@@ -67,6 +67,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -681,6 +682,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// all: the actor's current state was just captured by CheckpointWorkload,
 	// and the control plane tracks only a single local snapshot, which this
 	// checkpoint either overwrites (pause) or clears (suspend).
+	//
+	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
+	// in-place path: that leaves the whole checkpoint window with no local snapshot
+	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
+	// the actor for good (resume never falls back to object storage, RequiredNodes
+	// pins it to this node, nothing clears the field).
 	//
 	// Best-effort: if this fail, the actor's terminate prunes again.
 	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
@@ -1323,6 +1330,26 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 		}
 		src := filepath.Join(srcDir, snapshotName, fileName)
 		dst := filepath.Join(dstDir, fileName)
+		// Link rather than copy. The local checkpoint lives under the same actor dir
+		// as the restore staging area, so this stages the memory image in constant
+		// time instead of re-writing its whole working set. Nothing rewrites the
+		// shared inode: CH demand-pages from the staged image read-only,
+		// rewriteSnapshotSocketPaths renames its rewritten config.json into place
+		// rather than truncating, and MergeDeltaIntoBase refuses its in-place overlay
+		// once the image carries a second link.
+		//
+		// EXDEV alone falls back to copying, so an unexpected link failure surfaces
+		// instead of silently reverting to the full copy this exists to remove. It
+		// also keeps sparsefile.CopyFile off a dst that is already a link to src, where its
+		// O_TRUNC would empty both and report a successful copy of the old size.
+		switch err := linkFile(src, dst); {
+		case err == nil:
+			continue
+		case !errors.Is(err, unix.EXDEV):
+			return fmt.Errorf("failed to link %s to %s: %w", src, dst, err)
+		}
+		slog.WarnContext(ctx, "local checkpoint and restore dir are on different filesystems; copying instead of linking",
+			slog.String("src", src), slog.String("dst", dst))
 		if _, err := sparsefile.CopyFile(src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
@@ -1330,6 +1357,10 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 
 	return nil
 }
+
+// linkFile is os.Link, indirected so a test can force the cross-filesystem
+// fallback in copyLocalCheckpoint without mounting a second filesystem.
+var linkFile = os.Link
 
 // goldenOnlyFiles returns the golden snapshot files not shadowed by the
 // actor's own snapshot: on a DATA_ON_GOLDEN restore the actor's files (the

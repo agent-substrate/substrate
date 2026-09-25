@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"syscall"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"golang.org/x/sys/unix"
@@ -112,7 +113,8 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 // baseFile and deltaFile are siblings under the actor dir (restore-state/ and
 // checkpoint-state/), so the renames are same-filesystem (metadata-only). If they
 // straddle a mount boundary (EXDEV) it falls back to the copying MergeSparseOverlay
-// (baseFile is untouched until the first rename succeeds).
+// (baseFile is untouched until the first rename succeeds), as it does when baseFile
+// carries a second link and so cannot be overlaid in place.
 func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {
 	bi, err := os.Stat(baseFile)
 	if err != nil {
@@ -126,6 +128,18 @@ func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {
 		// Same guest => identical memory-ranges length; a mismatch would misalign the
 		// overlay offsets, so refuse rather than corrupt.
 		return fmt.Errorf("MergeDeltaIntoBase: size mismatch base=%d delta=%d", bi.Size(), di.Size())
+	}
+
+	// The fast path below MUTATES baseFile's inode in place, which is only safe while
+	// baseFile is the sole name for it. atelet stages restore-state by linking from
+	// this actor's local pause snapshot rather than copying it, so a second link means
+	// the overlay would rewrite that cached snapshot too, corrupting the actor's only
+	// local restore point. Copy in that case, which is what MergeSparseOverlay does.
+	// atelet holds that snapshot for the whole checkpoint, so this is the normal path
+	// for a locally staged restore; the in-place path below is for one staged from
+	// object storage.
+	if st, ok := bi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+		return MergeSparseOverlay(ctx, baseFile, deltaFile, deltaFile)
 	}
 
 	// Move baseFile (with its already-on-disk working set) next to deltaFile. If this
