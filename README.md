@@ -249,7 +249,9 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 
 ## Star History
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/star-history-dark.svg">
-  <img alt="Line chart of GitHub stars for agent-substrate/substrate, rising from 0 in May 2026 to 3,790 on September 25, 2026, with a surge after September 20" src="docs/assets/star-history.svg">
-</picture>
+<a href="https://www.star-history.com/?repos=agent-substrate%2Fsubstrate&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=agent-substrate/substrate&type=date&theme=dark&legend=top-left">
+    <img alt="Star history chart for agent-substrate/substrate" src="https://api.star-history.com/svg?repos=agent-substrate/substrate&type=date&legend=top-left">
+  </picture>
+</a>
