@@ -41,9 +41,9 @@ import (
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
-// watchPoolMaxConns sizes the dedicated outbox watch pool: one connection
-// for the WatchWorkers poller, one for the maintenance loop, and one of headroom
-// so a transiently slow poll can never gate a maintenance pass.
+// watchPoolMaxConns sizes the dedicated watch pool: one connection for the
+// WatchWorkers poller, one for the maintenance loop, and one of headroom so a
+// transiently slow poll can never gate a maintenance pass.
 const (
 	watchPoolMaxConns = 3
 	watchPoolMinConns = 1
@@ -51,8 +51,8 @@ const (
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the outbox side only: the WatchWorkers pollers
-	// and the partition-maintenance loop.
+	// watchPool serves the WatchWorkers pollers and the maintenance loop
+	// (outbox partitions, expired leases), keeping them off the request path's pool.
 	watchPool             *pgxpool.Pool
 	ownsWatchPool         bool
 	leaseTTL              time.Duration
@@ -239,12 +239,12 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 	}
 	go func() {
 		defer close(p.maintenanceDone)
-		p.outboxMaintenance(maintenanceCtx)
+		p.maintenance(maintenanceCtx)
 	}()
 	return p, nil
 }
 
-// Close stops the outbox maintenance loop and waits for it to exit,
+// Close stops the maintenance loop and waits for it to exit,
 // then closes the watch pool if Connect created one. It does not close the
 // main pool, which the caller owns.
 func (p *Persistence) Close() {

@@ -30,25 +30,22 @@ import (
 // can reclaim it.
 const defaultLeaseTTL = 30 * time.Second
 
+// leaseCleanupBatch bounds one DELETE of a cleanup pass, so a backlog of
+// expired rows drains over several short statements rather than one long
+// one holding many row locks.
+const leaseCleanupBatch = 1000
+
 func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	ttl := p.leaseTTL
 	token := uuid.NewString()
-	// Acquisition runs before any workflow step span opens, so log the two
-	// queries' durations to make this window attributable: the cleanup DELETE
-	// scans the whole table and contends with concurrent acquires/releases.
+	// Acquisition runs before any workflow step span opens, so log the
+	// query's duration to make this window attributable.
 	t := time.Now()
-	if err := p.cleanupExpiredLeases(ctx); err != nil {
-		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
-	}
-	dCleanup := time.Since(t)
-
-	t = time.Now()
 	acquired, err := p.acquireLease(ctx, key, token, ttl)
 	dAcquire := time.Since(t)
 	slog.InfoContext(ctx, "PostgreSQL lease acquisition finished",
 		slog.String("key", key),
 		slog.Bool("acquired", acquired && err == nil),
-		slog.Duration("cleanup_expired", dCleanup),
 		slog.Duration("acquire", dAcquire))
 	if err != nil {
 		return nil, err
@@ -68,8 +65,8 @@ func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Leas
 	closeFn := func() {
 		// Close runs after the last workflow step span ends but inside the
 		// operation, so log its two waits: the renewal goroutine may be
-		// mid-query when cancelled, and the release DELETE contends with
-		// concurrent acquires' full-table cleanup DELETEs.
+		// mid-query when cancelled, and the release DELETE may wait on a
+		// concurrent write to the same row.
 		t := time.Now()
 		cancel()
 		<-renewalDone
@@ -89,11 +86,34 @@ func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Leas
 	return store.NewLease(leaseCtx, closeFn), nil
 }
 
-func (p *Persistence) cleanupExpiredLeases(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE expires_at <= clock_timestamp()`); err != nil {
-		return fmt.Errorf("deleting expired leases: %w", err)
+// cleanupExpiredLeases deletes expired lease rows and returns how many it
+// removed. Acquisition reclaims an expired row for its own key by itself, so
+// this only keeps rows for keys nobody asks for again from accumulating. It
+// runs from the maintenance loop rather than on the acquisition path, where
+// it was one more write and round trip on every workflow.
+//
+// Rows are taken in batches with SKIP LOCKED, so a pass never waits on a
+// concurrent acquire reclaiming a row or on another replica's pass, and two
+// replicas cleaning at once delete disjoint rows. A pass keeps going while
+// batches come back full and stops on the first short one.
+func (p *Persistence) cleanupExpiredLeases(ctx context.Context) (int64, error) {
+	var deleted int64
+	for {
+		tag, err := p.watchPool.Exec(ctx, `
+			DELETE FROM leases
+			WHERE key IN (
+				SELECT key FROM leases
+				WHERE expires_at <= clock_timestamp()
+				LIMIT $1
+				FOR UPDATE SKIP LOCKED)`, leaseCleanupBatch)
+		if err != nil {
+			return deleted, fmt.Errorf("deleting expired leases: %w", err)
+		}
+		deleted += tag.RowsAffected()
+		if tag.RowsAffected() < leaseCleanupBatch {
+			return deleted, nil
+		}
 	}
-	return nil
 }
 
 func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
