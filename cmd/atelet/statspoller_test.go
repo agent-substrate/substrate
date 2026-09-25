@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -52,9 +53,19 @@ type fakeStatsAteom struct {
 	// sawDeadline records whether the probe's context carried one, pinning the
 	// per-call timeout.
 	sawDeadline bool
+	// gate, when set, is received from before answering, so a test can order
+	// this probe after another worker's response has been folded.
+	gate <-chan struct{}
 }
 
 func (f *fakeStatsAteom) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+	if f.gate != nil {
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err() // a misconfigured gate fails the probe, not the run
+		}
+	}
 	f.mu.Lock()
 	f.calls++
 	_, f.sawDeadline = ctx.Deadline()
@@ -73,6 +84,31 @@ func executingResponse(templateNS, templateName string, class ateompb.SandboxCla
 			MemoryCurrentBytes:    current,
 			MemoryWorkingSetBytes: workingSet,
 		}},
+	}
+}
+
+// measuredSample is one measured entry of a multi-actor response.
+func measuredSample(actorUID, templateNS, templateName string, current, workingSet, cpuUsec uint64) *ateompb.WorkloadStatsSample {
+	return &ateompb.WorkloadStatsSample{
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: templateNS,
+		ActorTemplateName:     templateName,
+		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+		MemoryCurrentBytes:    current,
+		MemoryWorkingSetBytes: workingSet,
+		CpuUsageUsec:          cpuUsec,
+	}
+}
+
+// pendingSample is one pending entry: attribution present, source
+// UNSPECIFIED, measurements absent.
+func pendingSample(actorUID, templateNS, templateName string) *ateompb.WorkloadStatsSample {
+	return &ateompb.WorkloadStatsSample{
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: templateNS,
+		ActorTemplateName:     templateName,
+		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
 	}
 }
 
@@ -95,15 +131,21 @@ func pendingResponse(actorUID string) *ateompb.GetActiveWorkloadStatsResponse {
 }
 
 // closeRecorder counts Close calls, standing in for a probe's connection.
+// collect closes it after folding the response, so onClose is the point at
+// which that worker's entries are in the aggregates.
 type closeRecorder struct {
-	mu     sync.Mutex
-	closes int
+	mu      sync.Mutex
+	closes  int
+	onClose func()
 }
 
 func (c *closeRecorder) Close() error {
 	c.mu.Lock()
 	c.closes++
 	c.mu.Unlock()
+	if c.onClose != nil {
+		c.onClose()
+	}
 	return nil
 }
 
@@ -314,8 +356,8 @@ func cpuResponse(actorUID string, cpuUsec uint64) *ateompb.GetActiveWorkloadStat
 // first sight of an actor establishes a baseline and charges nothing (atelet
 // cannot tell a new actor from its own restart, and re-charging an epoch the
 // previous atelet counted would spike the counter), a later sweep charges
-// only the increase, a decrease is an epoch reset whose new value is the
-// usage since the reset, and an actor that disappears stops contributing and
+// only the increase, a cgroup decrease is an epoch reset whose new value is
+// the usage since the reset, and an actor that disappears stops contributing and
 // is dropped from the baselines.
 func TestStatsPollerCPUDeltas(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
@@ -637,5 +679,273 @@ func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
 	}
 	if got[pooled] != nil && got[pooled].cpuDeltaUsec != 250 {
 		t.Errorf("sweep 2 (partial list): pooled cpu delta = %d, want 250", got[pooled].cpuDeltaUsec)
+	}
+}
+
+// TestStatsPollerFoldsMultiActorWorker pins the fold over a multi-actor
+// worker: same-template entries sum, another template gets its own key, and
+// a pending entry contributes nothing.
+func TestStatsPollerFoldsMultiActorWorker(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-w1": {resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+			measuredSample("actor-1", "ns-a", "tmpl-a", 1000, 700, 0),
+			measuredSample("actor-2", "ns-a", "tmpl-a", 500, 300, 0),
+			measuredSample("actor-3", "ns-b", "tmpl-b", 42, 40, 0),
+			pendingSample("actor-4", "ns-a", "tmpl-a"),
+		}}},
+	}
+	p, closers := newPollerFixture(t, fakes)
+
+	got := p.collect(context.Background())
+
+	want := map[templateKey]*templateAggregate{
+		{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}: {
+			sampledActors: 2, memoryCurrentBytes: 1500, memoryWorkingSetBytes: 1000,
+		},
+		{templateNamespace: "ns-b", templateName: "tmpl-b", sandboxClass: "gvisor", source: "cgroup"}: {
+			sampledActors: 1, memoryCurrentBytes: 42, memoryWorkingSetBytes: 40,
+		},
+	}
+	if diff := cmp.Diff(want, got, cmp.AllowUnexported(templateAggregate{}, templateKey{}, workerPoolRef{})); diff != "" {
+		t.Errorf("collect() mismatch (-want +got):\n%s", diff)
+	}
+	// One probe serves all four entries.
+	if fakes["uid-w1"].calls != 1 {
+		t.Errorf("worker probed %d times, want 1", fakes["uid-w1"].calls)
+	}
+	assertClosed(t, fakes, closers, 1)
+}
+
+// TestStatsPollerMultiActorCPUBaselines pins that CPU baselines are per
+// actor, not per worker: two actors on one worker advance independently, and
+// a pending sibling neither gains a baseline nor disturbs the others'.
+func TestStatsPollerMultiActorCPUBaselines(t *testing.T) {
+	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	fake := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000),
+		measuredSample("actor-2", "ns-a", "tmpl-a", 1, 1, 5000),
+		pendingSample("actor-3", "ns-a", "tmpl-a"),
+	}}}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-w1": fake})
+
+	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 0 {
+		t.Fatalf("first sweep delta = %d, want 0 (baselines only)", got)
+	}
+	if _, ok := p.lastCPU["actor-3"]; ok {
+		t.Error("pending actor was given a CPU baseline")
+	}
+
+	// actor-1 advances by 600, actor-2 by 250; the sum lands on the shared key.
+	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1600),
+		measuredSample("actor-2", "ns-a", "tmpl-a", 1, 1, 5250),
+		pendingSample("actor-3", "ns-a", "tmpl-a"),
+	}}
+	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 850 {
+		t.Errorf("second sweep delta = %d, want 850 (600 + 250)", got)
+	}
+
+	// actor-2 resets its epoch; actor-1 keeps advancing. The reset charges
+	// the new value, not a negative delta.
+	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1700),
+		measuredSample("actor-2", "ns-a", "tmpl-a", 1, 1, 40),
+	}}
+	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 140 {
+		t.Errorf("reset sweep delta = %d, want 140 (100 + 40)", got)
+	}
+	if len(p.lastCPU) != 2 {
+		t.Errorf("baselines = %v, want exactly the two measured actors", p.lastCPU)
+	}
+}
+
+// TestStatsPollerMultiActorEvents pins one usage event per measured entry
+// and none for a pending one.
+func TestStatsPollerMultiActorEvents(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-w1": {resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+			measuredSample("actor-1", "ns-a", "tmpl-a", 1000, 700, 10),
+			measuredSample("actor-2", "ns-a", "tmpl-a", 500, 300, 20),
+			pendingSample("actor-3", "ns-a", "tmpl-a"),
+		}}},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	var buf syncBuffer
+	p.eventEmitter = newBufferEmitter(&buf, false)
+
+	p.collect(context.Background())
+
+	var uids []string
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("event line is not JSON: %v: %s", err, line)
+		}
+		labels, _ := rec["labels"].(map[string]any)
+		uid, _ := labels["ate.actor.uid"].(string)
+		uids = append(uids, uid)
+	}
+	sort.Strings(uids)
+	if want := []string{"actor-1", "actor-2"}; !cmp.Equal(want, uids) {
+		t.Errorf("event actor uids = %v, want %v (one per measured entry, none for pending)", uids, want)
+	}
+}
+
+// TestStatsPollerPendingKeepsCPUBaseline pins that a sweep in which an actor
+// reports pending carries its baseline forward: the interval is charged when
+// the actor is measured again, not lost.
+func TestStatsPollerPendingKeepsCPUBaseline(t *testing.T) {
+	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	fake := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000),
+	}}}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-w1": fake})
+
+	p.collect(context.Background()) // baseline 1000
+
+	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+		pendingSample("actor-1", "ns-a", "tmpl-a"),
+	}}
+	if got := p.collect(context.Background()); len(got) != 0 {
+		t.Fatalf("pending sweep produced aggregates %v, want none", got)
+	}
+	if got, ok := p.lastCPU["actor-1"]; !ok || got != 1000 {
+		t.Fatalf("baseline after pending sweep = %d (present=%v), want 1000 kept", got, ok)
+	}
+
+	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1600),
+	}}
+	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 600 {
+		t.Errorf("delta after pending sweep = %d, want 600 (measured against the kept baseline)", got)
+	}
+}
+
+// TestStatsPollerCPUDecreaseBySource pins the decrease rule, with and without
+// a pending sweep between the samples: a cgroup decrease charges the new value,
+// since that counter restarts at zero, and a guest-agent decrease charges
+// nothing, since that counter can resume at another guest's value.
+func TestStatsPollerCPUDecreaseBySource(t *testing.T) {
+	guestAgent := func(s *ateompb.WorkloadStatsSample) *ateompb.WorkloadStatsSample {
+		s.SandboxClass = ateompb.SandboxClass_SANDBOX_CLASS_MICROVM
+		s.Source = ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT
+		return s
+	}
+	for _, tc := range []struct {
+		name      string
+		sample    func(cpu uint64) *ateompb.WorkloadStatsSample
+		key       templateKey
+		pending   bool
+		wantDelta int64
+	}{
+		{
+			name: "cgroup",
+			sample: func(cpu uint64) *ateompb.WorkloadStatsSample {
+				return measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, cpu)
+			},
+			key:       templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"},
+			wantDelta: 400,
+		},
+		{
+			name: "cgroup across pending",
+			sample: func(cpu uint64) *ateompb.WorkloadStatsSample {
+				return measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, cpu)
+			},
+			key:       templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"},
+			pending:   true,
+			wantDelta: 400,
+		},
+		{
+			name: "guest-agent",
+			sample: func(cpu uint64) *ateompb.WorkloadStatsSample {
+				return guestAgent(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, cpu))
+			},
+			key:       templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "microvm", source: "guest-agent"},
+			wantDelta: 0,
+		},
+		{
+			name: "guest-agent across pending",
+			sample: func(cpu uint64) *ateompb.WorkloadStatsSample {
+				return guestAgent(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, cpu))
+			},
+			key:       templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "microvm", source: "guest-agent"},
+			pending:   true,
+			wantDelta: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeStatsAteom{}
+			p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-w1": fake})
+			sweep := func(sample *ateompb.WorkloadStatsSample) map[templateKey]*templateAggregate {
+				fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{sample}}
+				return p.collect(context.Background())
+			}
+
+			sweep(tc.sample(1000)) // baseline 1000
+			if tc.pending {
+				sweep(pendingSample("actor-1", "ns-a", "tmpl-a"))
+			}
+			if got := sweep(tc.sample(400))[tc.key].cpuDeltaUsec; got != tc.wantDelta {
+				t.Errorf("delta for a decrease 1000 -> 400 = %d, want %d", got, tc.wantDelta)
+			}
+			// Either way 400 is the new baseline.
+			if got := sweep(tc.sample(500))[tc.key].cpuDeltaUsec; got != 100 {
+				t.Errorf("delta after the decrease = %d, want 100", got)
+			}
+		})
+	}
+}
+
+// TestStatsPollerRestoreInFlightMeasuredWins pins that when one worker
+// measures an actor and another reports it pending in the same sweep, the
+// measured value is the baseline in either fold order.
+func TestStatsPollerRestoreInFlightMeasuredWins(t *testing.T) {
+	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	for _, order := range []string{"measured first", "pending first", "unordered"} {
+		t.Run(order, func(t *testing.T) {
+			src := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+				measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000),
+			}}}
+			dst := &fakeStatsAteom{resp: availableResponse()}
+			p, closers := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-src": src, "uid-dst": dst})
+
+			p.collect(context.Background()) // baseline C0 = 1000
+
+			// Sweep N: source measured at C1 = 1300; destination pending.
+			src.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+				measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1300),
+			}}
+			dst.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+				pendingSample("actor-1", "ns-a", "tmpl-a"),
+			}}
+			// The gated probe answers only after the other worker's response has
+			// been folded: collect closes a probe's connection after the fold.
+			gate := make(chan struct{})
+			release := sync.OnceFunc(func() { close(gate) })
+			switch order {
+			case "measured first":
+				dst.gate = gate
+				closers["uid-src"].onClose = release
+			case "pending first":
+				src.gate = gate
+				closers["uid-dst"].onClose = release
+			}
+			if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 300 {
+				t.Fatalf("sweep N delta = %d, want 300", got)
+			}
+			if got := p.lastCPU["actor-1"]; got != 1300 {
+				t.Fatalf("baseline after sweep N = %d, want the measured 1300, not the carried 1000", got)
+			}
+
+			// Sweep N+1: only the destination hosts it now, measured at C2 = 1500.
+			closers["uid-src"].onClose, closers["uid-dst"].onClose = nil, nil
+			src.resp, src.gate = availableResponse(), nil
+			dst.resp, dst.gate = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+				measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1500),
+			}}, nil
+			if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 200 {
+				t.Errorf("sweep N+1 delta = %d, want 200 (C2-C1); 500 would double-charge C1-C0", got)
+			}
+		})
 	}
 }

@@ -48,24 +48,19 @@ import (
 const workerPoolLabel = "ate.dev/worker-pool"
 
 // minActorStatsPollInterval is the floor a configured poll interval is clamped
-// to. It is the worst-case duration of one ateom's sweep on the micro-VM
-// runtime -- maxActorContainers containers at statsCallTimeout each, constants
-// that live with that runtime -- so a shorter interval could start a new poll
-// into a guest agent still serving the previous one.
+// to: one actor's worst-case micro-VM read, maxActorContainers (25) containers
+// at statsCallTimeout (2s) each. Sweeps never overlap, so it bounds
+// guest-agent load, not correctness.
 const minActorStatsPollInterval = 50 * time.Second
 
-// statsRPCTimeout bounds one ateom's GetActiveWorkloadStats call. It has to
-// cover the ateom's own worst-case sweep (see minActorStatsPollInterval);
-// anything still unanswered past that is a stuck socket, not a slow guest.
+// statsRPCTimeout bounds one ateom's GetActiveWorkloadStats call. The micro-VM
+// ateom sets its statsSweepBudget (45s) below this timeout and reports guests
+// it did not reach as pending, so the call does not grow with actor count.
 const statsRPCTimeout = 55 * time.Second
 
-// statsSweepConcurrency bounds how many ateoms one sweep probes at once. The
-// interval floor protects a single guest from overlapping polls; probing
-// DISTINCT ateoms concurrently puts one probe on each guest, so the only
-// stacking the cap prevents is on atelet itself -- without it, a node of
-// stuck-but-accepting sockets would hold one hung call per ateom for the full
-// statsRPCTimeout. With it, such a node degrades the sweep to
-// ceil(n/statsSweepConcurrency) timeouts instead of n.
+// statsSweepConcurrency bounds how many ateoms one sweep probes at once, one
+// call per ateom whatever it hosts. It caps how many stuck sockets can hold a
+// hung call open on atelet at the same time.
 const statsSweepConcurrency = 8
 
 // workerPoolListTimeout bounds the per-sweep pod list that fetches worker
@@ -74,11 +69,10 @@ const statsSweepConcurrency = 8
 const workerPoolListTimeout = 10 * time.Second
 
 // clampActorStatsPollInterval enforces the floor on a nonzero configured
-// interval, warning rather than obeying: an interval below the worst-case
-// sweep would pile overlapping polls onto the same guest agent.
+// interval, warning rather than obeying.
 func clampActorStatsPollInterval(ctx context.Context, configured time.Duration) time.Duration {
 	if configured > 0 && configured < minActorStatsPollInterval {
-		slog.WarnContext(ctx, "actor-stats-poll-interval below the worst-case sweep; clamping",
+		slog.WarnContext(ctx, "actor-stats-poll-interval below the floor; clamping",
 			slog.Duration("configured", configured), slog.Duration("clamped_to", minActorStatsPollInterval))
 		return minActorStatsPollInterval
 	}
@@ -142,13 +136,9 @@ type statsPoller struct {
 	// exist, the same bound lastCPU keeps.
 	cachedPools map[string]workerPoolRef
 
-	// lastCPU is the previous sweep's cpu_usage_usec per actor uid, the
-	// baseline the next sweep's deltas are computed against. Only the sweep
-	// loop touches it (under collect's mutex), and entries for actors a sweep
-	// did not see are dropped at its end -- an actor that leaves the node
-	// stops occupying memory here, and one that comes BACK later simply
-	// re-baselines. Empty after an atelet restart, so the first sweep
-	// contributes zero deltas: an undercount, never an overcount.
+	// lastCPU is the last measured cpu_usage_usec per actor uid, the baseline
+	// for the next delta; read-only during a sweep and replaced whole at the
+	// end. Pending actors keep their entry, unseen actors are dropped.
 	lastCPU map[string]uint64
 }
 
@@ -242,8 +232,9 @@ func (p *statsPoller) tick(ctx context.Context) {
 // worker pods (nothing garbage-collects them eagerly), ateoms that have made
 // their directory but not yet listened, and workers torn down mid-sweep. The
 // no-sample answers are equally routine: an empty samples list is an idle
-// worker, and a pending entry (source UNSPECIFIED) is a boot or restore in
-// progress -- both are skips by the RPC's own contract.
+// worker, and a pending entry (source UNSPECIFIED) is a workload the ateom
+// could not measure (boot, restore, teardown, or an unreached guest), which
+// adds nothing but keeps its CPU baseline.
 func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggregate {
 	entries, err := os.ReadDir(p.ateomsDir)
 	if err != nil {
@@ -291,17 +282,20 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				return nil
 			}
 
-			// One entry per workload the ateom is executing; empty when it is
-			// available. Today that is at most one entry -- multi-actor
-			// workers will grow it, and nothing here assumes otherwise.
+			// One entry per workload the ateom is hosting; empty when it is
+			// available.
 			for _, sample := range resp.GetSamples() {
 				if sample.GetSource() == ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
-					// A pending workload: attributed but not measured (boot,
-					// restore, teardown, or a transition underneath the
-					// ateom's read). It contributes nothing anywhere -- not
-					// to the aggregates (sampled_actors keeps meaning
-					// "measured"), not to the CPU baselines, and no event --
-					// exactly as the old no-sample answers behaved.
+					// Pending: hosted but not measured, so it adds nothing
+					// and its CPU baseline carries forward. A measured value
+					// from another worker this sweep (restore in flight) wins.
+					if last, ok := p.lastCPU[sample.GetActorUid()]; ok {
+						mu.Lock()
+						if _, measured := seenCPU[sample.GetActorUid()]; !measured {
+							seenCPU[sample.GetActorUid()] = last
+						}
+						mu.Unlock()
+					}
 					continue
 				}
 				p.eventEmitter.emit(ctx, eventKindPeriodic, sample, pools[podUID])
@@ -323,22 +317,20 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				agg.memoryCurrentBytes = addSat(agg.memoryCurrentBytes, sample.GetMemoryCurrentBytes())
 				agg.memoryWorkingSetBytes = addSat(agg.memoryWorkingSetBytes, sample.GetMemoryWorkingSetBytes())
 
-				// The counter increase this sample represents. A decrease means
-				// the epoch reset underneath us (the cgroup source restarts at
-				// zero on restore), so the new value IS the usage since the
-				// reset. A sample with NO baseline charges nothing and only
-				// records one: atelet cannot tell a new actor from its own
-				// restart, and charging the whole epoch-so-far would re-count
-				// hours of usage the previous atelet already counted, as one
-				// artificial spike. The bounded price is that every actor's
-				// boot-to-first-poll usage goes uncounted -- the events channel
-				// carries per-actor precision.
+				// The counter increase since the baseline. On a decrease, a
+				// cgroup counter restarted at zero, so the new value is the
+				// usage since then. A guest-agent decrease is ambiguous (a
+				// resume at another guest's value, a restart at zero, or a
+				// container exit), so it charges nothing. A sample with no
+				// baseline charges nothing: atelet cannot tell a new actor
+				// from its own restart.
 				cpu := sample.GetCpuUsageUsec()
 				seenCPU[sample.GetActorUid()] = cpu
 				if last, ok := p.lastCPU[sample.GetActorUid()]; ok {
-					if last <= cpu {
+					switch {
+					case last <= cpu:
 						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu-last)
-					} else {
+					case sample.GetSource() == ateompb.StatsSource_STATS_SOURCE_CGROUP:
 						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu)
 					}
 				}
