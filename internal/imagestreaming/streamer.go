@@ -20,8 +20,27 @@ package imagestreaming
 import (
 	"context"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
+
+type contextKeyKeychain struct{}
+
+// WithKeychainContext returns a child context carrying the specified authn.Keychain.
+func WithKeychainContext(ctx context.Context, k authn.Keychain) context.Context {
+	return context.WithValue(ctx, contextKeyKeychain{}, k)
+}
+
+// KeychainFromContext extracts an authn.Keychain from the context if present.
+func KeychainFromContext(ctx context.Context) authn.Keychain {
+	if ctx == nil {
+		return nil
+	}
+	if k, ok := ctx.Value(contextKeyKeychain{}).(authn.Keychain); ok {
+		return k
+	}
+	return nil
+}
 
 // AuthConfig contains registry authentication credentials that may be required
 // by streaming providers to fetch layer chunks on demand from private registries.

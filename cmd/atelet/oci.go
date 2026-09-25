@@ -31,8 +31,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagestreaming"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -82,7 +84,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, instruments *Instruments, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, keychain authn.Keychain, instruments *Instruments, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -116,7 +118,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		if img, err = ensureContainerImage(gctx, imageCache, streamer, instruments, ref); err != nil {
+		if img, err = ensureContainerImage(gctx, imageCache, streamer, keychain, instruments, ref); err != nil {
 			return fmt.Errorf("in ensureContainerImage: %w", err)
 		}
 		return nil
@@ -276,7 +278,7 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 // If an ImageStreamer is provided and supports streaming the image, it mounts
 // the virtual layer directories via the streaming provider without full layer download/untar.
 // If streaming fails or is unsupported, it falls back to imageCache.EnsureImage.
-func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, instruments *Instruments, ref string) (*imagecache.Image, error) {
+func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, keychain authn.Keychain, instruments *Instruments, ref string) (*imagecache.Image, error) {
 	t0 := time.Now()
 	if streamer != nil {
 		req := &imagestreaming.StreamRequest{ImageRef: ref}
@@ -308,7 +310,7 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
 				if res.Config != nil {
 					cfg = *res.Config
 				} else {
-					d, c, err := fetchImageConfig(ctx, ref)
+					d, c, err := fetchImageConfig(ctx, ref, keychain)
 					if err != nil {
 						instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
 						slog.WarnContext(ctx, "Failed to resolve image config for streamed image; falling back to cache",
@@ -347,13 +349,19 @@ fallback:
 	return img, err
 }
 
-func fetchImageConfig(ctx context.Context, ref string) (v1.Hash, v1.Config, error) {
+func fetchImageConfig(ctx context.Context, ref string, keychain authn.Keychain) (v1.Hash, v1.Config, error) {
 	opts := []name.Option{name.Insecure}
 	parsedRef, err := name.ParseReference(ref, opts...)
 	if err != nil {
 		return v1.Hash{}, v1.Config{}, fmt.Errorf("while parsing reference %q: %w", ref, err)
 	}
-	img, err := remote.Image(parsedRef, remote.WithContext(ctx))
+	remoteOpts := []remote.Option{remote.WithContext(ctx)}
+	if keychain != nil {
+		remoteOpts = append(remoteOpts, remote.WithAuthFromKeychain(keychain))
+	} else {
+		remoteOpts = append(remoteOpts, remote.WithAuthFromKeychain(authn.NewMultiKeychain(authn.DefaultKeychain, google.Keychain)))
+	}
+	img, err := remote.Image(parsedRef, remoteOpts...)
 	if err != nil {
 		return v1.Hash{}, v1.Config{}, fmt.Errorf("while fetching image metadata %q: %w", ref, err)
 	}

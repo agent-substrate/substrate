@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagestreaming/mock"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -51,7 +52,7 @@ func TestEnsureContainerImage_StreamerSuccess(t *testing.T) {
 		}, nil
 	}
 
-	img, err := ensureContainerImage(ctx, nil, m, nil, "example.com/test:latest")
+	img, err := ensureContainerImage(ctx, nil, m, nil, nil, "example.com/test:latest")
 	if err != nil {
 		t.Fatalf("ensureContainerImage: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestEnsureContainerImage_UnsupportedFallback(t *testing.T) {
 		return false, nil
 	}
 
-	img, err := ensureContainerImage(ctx, store, m, nil, ref)
+	img, err := ensureContainerImage(ctx, store, m, nil, nil, ref)
 	if err != nil {
 		t.Fatalf("ensureContainerImage fallback: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestEnsureContainerImage_ErrorFallback(t *testing.T) {
 		return nil, errors.New("daemon connection failed")
 	}
 
-	img, err := ensureContainerImage(ctx, store, m, nil, ref)
+	img, err := ensureContainerImage(ctx, store, m, nil, nil, ref)
 	if err != nil {
 		t.Fatalf("ensureContainerImage fallback on error: %v", err)
 	}
@@ -144,7 +145,7 @@ func TestEnsureContainerImage_NilStreamer(t *testing.T) {
 		t.Fatalf("imagecache.New: %v", err)
 	}
 
-	img, err := ensureContainerImage(ctx, store, nil, nil, ref)
+	img, err := ensureContainerImage(ctx, store, nil, nil, nil, ref)
 	if err != nil {
 		t.Fatalf("ensureContainerImage with nil streamer: %v", err)
 	}
@@ -182,6 +183,7 @@ func TestPrepareOCIDirectory_WithStreaming(t *testing.T) {
 		ctx,
 		nil, // imageCache is nil; streaming handles it completely!
 		m,
+		nil, // keychain is nil
 		nil, // instruments is nil
 		actorUID,
 		containerName,
@@ -328,7 +330,7 @@ func TestImageStreaming_MetricsRecording(t *testing.T) {
 		}, nil
 	}
 
-	_, err = ensureContainerImage(ctx, nil, m, inst, "example.com/app:v1")
+	_, err = ensureContainerImage(ctx, nil, m, nil, inst, "example.com/app:v1")
 	if err != nil {
 		t.Fatalf("ensureContainerImage: %v", err)
 	}
@@ -385,5 +387,43 @@ func TestImageStreaming_MetricsRecording(t *testing.T) {
 	}
 	if !foundDuration {
 		t.Errorf("metric %s not collected", imageStreamingDurationMetric)
+	}
+}
+
+type trackingKeychain struct {
+	resolved []string
+}
+
+func (k *trackingKeychain) Resolve(target authn.Resource) (authn.Authenticator, error) {
+	k.resolved = append(k.resolved, target.String())
+	return authn.Anonymous, nil
+}
+
+func TestEnsureContainerImage_WithKeychain(t *testing.T) {
+	ctx := context.Background()
+	regHost := imageVolumeTestRegistry(t)
+	ref := regHost + "/test-keychain:v1"
+	pushTestImage(t, ref, singleFileLayer(t, "file.txt", "hello"))
+
+	m := mock.New()
+	m.CanStreamFunc = func(ctx context.Context, req *imagestreaming.StreamRequest) (bool, error) {
+		return true, nil
+	}
+	m.PrepareLayersFunc = func(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
+		return &imagestreaming.StreamResult{
+			LayerDirs: []string{"/streamed/layer1"},
+		}, nil
+	}
+
+	kc := &trackingKeychain{}
+	img, err := ensureContainerImage(ctx, nil, m, kc, nil, ref)
+	if err != nil {
+		t.Fatalf("ensureContainerImage: %v", err)
+	}
+	if len(img.LayerDirs) != 1 || img.LayerDirs[0] != "/streamed/layer1" {
+		t.Errorf("img.LayerDirs = %v, want [/streamed/layer1]", img.LayerDirs)
+	}
+	if len(kc.resolved) == 0 {
+		t.Errorf("keychain was never consulted during fetchImageConfig")
 	}
 }

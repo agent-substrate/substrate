@@ -26,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/imagestreaming"
 	"github.com/agent-substrate/substrate/internal/proto/snapshots"
+	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -393,5 +394,38 @@ func TestReconcileLeases(t *testing.T) {
 	}
 	if len(lease.layers) != 1 || lease.layers[0] != mountDir {
 		t.Errorf("got layers %v, want [%s]", lease.layers, mountDir)
+	}
+}
+
+type staticTestKeychain struct {
+	authn.Keychain
+	resolved []string
+}
+
+func (k *staticTestKeychain) Resolve(target authn.Resource) (authn.Authenticator, error) {
+	k.resolved = append(k.resolved, target.String())
+	return authn.Anonymous, nil
+}
+
+func TestWithKeychain_AttachesToDriver(t *testing.T) {
+	kc := &staticTestKeychain{}
+	d, err := New(WithKeychain(kc))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if d.keychain != kc {
+		t.Errorf("got driver keychain = %v, want %v", d.keychain, kc)
+	}
+}
+
+func TestNewFromConfig_PropagatesKeychainFromContext(t *testing.T) {
+	kc := &staticTestKeychain{}
+	ctx := imagestreaming.WithKeychainContext(context.Background(), kc)
+	d, err := NewFromConfig(ctx, ProviderRemoteSnapshotter, imagestreaming.Config{})
+	if err != nil {
+		t.Fatalf("NewFromConfig failed: %v", err)
+	}
+	if d.keychain != kc {
+		t.Errorf("got driver keychain = %v, want %v", d.keychain, kc)
 	}
 }

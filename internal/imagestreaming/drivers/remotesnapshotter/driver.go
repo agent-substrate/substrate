@@ -80,7 +80,7 @@ const (
 
 func init() {
 	imagestreaming.Register(ProviderRemoteSnapshotter, func(ctx context.Context, cfg imagestreaming.Config) (imagestreaming.ImageStreamer, error) {
-		return NewFromConfig(ProviderRemoteSnapshotter, cfg)
+		return NewFromConfig(ctx, ProviderRemoteSnapshotter, cfg)
 	})
 }
 
@@ -153,6 +153,13 @@ func WithImageResolver(fn ImageResolverFunc) Option {
 	}
 }
 
+// WithKeychain sets the credential keychain used for resolving image metadata.
+func WithKeychain(k authn.Keychain) Option {
+	return func(d *Driver) {
+		d.keychain = k
+	}
+}
+
 type imageLease struct {
 	digest       string
 	config       *v1.Config
@@ -171,6 +178,7 @@ type Driver struct {
 	snapshotterName  string
 	listableTimeout  time.Duration
 	listableInterval time.Duration
+	keychain         authn.Keychain
 
 	snapshotsClient snapshots.SnapshotsClient
 	imageResolver   ImageResolverFunc
@@ -195,7 +203,7 @@ func New(opts ...Option) (*Driver, error) {
 		opt(d)
 	}
 	if d.imageResolver == nil {
-		d.imageResolver = defaultImageResolver
+		d.imageResolver = d.defaultImageResolver
 	}
 	return d, nil
 }
@@ -216,7 +224,7 @@ func NewRiptide(opts ...Option) (*Driver, error) {
 		opt(d)
 	}
 	if d.imageResolver == nil {
-		d.imageResolver = defaultImageResolver
+		d.imageResolver = d.defaultImageResolver
 	}
 	return d, nil
 }
@@ -237,14 +245,20 @@ func NewSOCI(opts ...Option) (*Driver, error) {
 		opt(d)
 	}
 	if d.imageResolver == nil {
-		d.imageResolver = defaultImageResolver
+		d.imageResolver = d.defaultImageResolver
 	}
 	return d, nil
 }
 
-// NewFromConfig builds a driver from a configuration map.
-func NewFromConfig(provider string, cfg imagestreaming.Config) (*Driver, error) {
+// NewFromConfig builds a driver from a configuration map and optional context.
+func NewFromConfig(ctx context.Context, provider string, cfg imagestreaming.Config, extraOpts ...Option) (*Driver, error) {
 	opts := []Option{}
+	if ctx != nil {
+		if kc := imagestreaming.KeychainFromContext(ctx); kc != nil {
+			opts = append(opts, WithKeychain(kc))
+		}
+	}
+	opts = append(opts, extraOpts...)
 	if sock := cfg[imagestreaming.SocketPathKey]; sock != "" {
 		opts = append(opts, WithSocketPath(sock))
 	}
@@ -790,7 +804,7 @@ func sanitizePathKey(ref string) string {
 	return s
 }
 
-func defaultImageResolver(ctx context.Context, refStr string, authConfig *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+func (d *Driver) defaultImageResolver(ctx context.Context, refStr string, authConfig *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
 	ref, err := name.ParseReference(refStr)
 	if err != nil {
 		return "", nil, nil, nil, fmt.Errorf("parsing reference %q: %w", refStr, err)
@@ -818,6 +832,8 @@ func defaultImageResolver(ctx context.Context, refStr string, authConfig *images
 		if auth != nil {
 			opts = append(opts, remote.WithAuth(auth))
 		}
+	} else if d != nil && d.keychain != nil {
+		opts = append(opts, remote.WithAuthFromKeychain(d.keychain))
 	} else {
 		opts = append(opts, remote.WithAuthFromKeychain(authn.NewMultiKeychain(authn.DefaultKeychain, google.Keychain)))
 	}

@@ -64,6 +64,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -292,7 +293,11 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 	clusterTrustBundleInformerFactory.WaitForCacheSync(stopCh)
 
-	streamer, err := initImageStreamer(ctx, *imageStreamer, *imageStreamerSocket)
+	streamerCtx := ctx
+	if imageCredsKeychain != nil {
+		streamerCtx = imagestreaming.WithKeychainContext(ctx, imageCredsKeychain)
+	}
+	streamer, err := initImageStreamer(streamerCtx, *imageStreamer, *imageStreamerSocket)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize image streamer", err)
 	}
@@ -309,6 +314,7 @@ func main() {
 		wrappedGCS,
 		imageCache,
 		streamer,
+		imageCredsKeychain,
 		instruments,
 		volPlugins,
 		csiDriverConfigLister,
@@ -452,6 +458,7 @@ type AteomHerder struct {
 	ateomDialer           *AteomDialer
 	imageCache            *imagecache.Store
 	imageStreamer         imagestreaming.ImageStreamer
+	imageKeychain         authn.Keychain
 	anonGCSClient         ategcs.ObjectStorage
 	gcsClient             ategcs.ObjectStorage
 	instruments           *Instruments
@@ -526,6 +533,7 @@ func NewService(
 	gcsClient ategcs.ObjectStorage,
 	imageCache *imagecache.Store,
 	imageStreamer imagestreaming.ImageStreamer,
+	imageKeychain authn.Keychain,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
@@ -535,6 +543,7 @@ func NewService(
 		ateomDialer:           ateomDialer,
 		imageCache:            imageCache,
 		imageStreamer:         imageStreamer,
+		imageKeychain:         imageKeychain,
 		anonGCSClient:         anonGCSClient,
 		gcsClient:             gcsClient,
 		instruments:           instruments,
@@ -1541,6 +1550,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			gCtx,
 			s.imageCache,
 			s.imageStreamer,
+			s.imageKeychain,
 			s.instruments,
 			actorUID,
 			ocispec.PauseContainer,
@@ -1571,6 +1581,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				gCtx,
 				s.imageCache,
 				s.imageStreamer,
+				s.imageKeychain,
 				s.instruments,
 				actorUID,
 				ctr.GetName(),

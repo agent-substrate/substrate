@@ -36,6 +36,6 @@ const (
 
 func init() {
 	imagestreaming.Register(ProviderName, func(ctx context.Context, cfg imagestreaming.Config) (imagestreaming.ImageStreamer, error) {
-		return remotesnapshotter.NewFromConfig(ProviderName, cfg)
+		return remotesnapshotter.NewFromConfig(ctx, ProviderName, cfg)
 	})
 }
