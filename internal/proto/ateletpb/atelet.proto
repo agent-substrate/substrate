@@ -283,12 +283,32 @@ message DurableDirVolume {
 }
 
 message ExternalVolumeSource {
+  // Required, unlike the actor status counterpart: the control plane only
+  // sends volumes that finished provisioning.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+  // +k8s:customValidation # no control characters
   string storage_volume_id = 1;
+
+  // +k8s:optional
+  // +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+  // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
+
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
   map<string, string> volume_context = 3;
 }
 
 message ImageVolumeSource {
+  // reference is the OCI image reference, pinned by digest.
+  //
+  // +k8s:required
+  // +k8s:maxLength=512 # matches the template ImageVolumeSource.reference's bound
+  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string reference = 1;
 }
 
@@ -366,7 +386,6 @@ message Volume {
 
   // +k8s:optional
   // +k8s:unionMember
-  // +k8s:opaqueType # tagged in a follow-up
   ExternalVolumeSource external = 3;
 
   // +k8s:optional
@@ -375,7 +394,6 @@ message Volume {
 
   // +k8s:optional
   // +k8s:unionMember
-  // +k8s:opaqueType # tagged in a follow-up
   ImageVolumeSource image = 5;
 }
 

@@ -16,6 +16,7 @@ package ateletvalidation
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -441,6 +442,100 @@ func TestValidateWorkloadSpecVolumes(t *testing.T) {
 			op := operation.Operation{Type: operation.Create}
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_WorkloadSpec(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateExternalVolumeSource(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.ExternalVolumeSource)) *ateletpb.ExternalVolumeSource {
+		v := &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "projects/p/zones/z/disks/vol-1",
+			VolumeType:      "substrate.io/mock",
+			VolumeContext:   map[string]string{"fsType": "ext4"},
+		}
+		for _, m := range mutate {
+			m(v)
+		}
+		return v
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.ExternalVolumeSource
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing storage_volume_id",
+		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.StorageVolumeId = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("storage_volume_id"), "")},
+	}, {
+		name: "storage_volume_id with a control character",
+		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.StorageVolumeId = "vol\x01" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
+	}, {
+		name: "storage_volume_id too long",
+		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.StorageVolumeId = strings.Repeat("x", 257) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
+	}, {
+		name: "unset volume_type is allowed",
+		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.VolumeType = "" }),
+	}, {
+		name: "volume_type without the prefix",
+		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.VolumeType = "pd.csi.storage.gke.io" }),
+	}, {
+		name: "invalid volume_type: uppercase",
+		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.VolumeType = "substrate.io/Mock" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
+	}, {
+		name: "volume_context key too long",
+		obj: valid(func(v *ateletpb.ExternalVolumeSource) {
+			v.VolumeContext = map[string]string{strings.Repeat("k", 129): "v"}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 128).WithOrigin("maxLength")},
+	}, {
+		name: "volume_context value too long",
+		obj: valid(func(v *ateletpb.ExternalVolumeSource) {
+			v.VolumeContext = map[string]string{"k": strings.Repeat("v", 257)}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("volume_context").Key("k"), nil, 256).WithOrigin("maxLength")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_ExternalVolumeSource(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateImageVolumeSource(t *testing.T) {
+	tests := []struct {
+		name string
+		obj  *ateletpb.ImageVolumeSource
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  &ateletpb.ImageVolumeSource{Reference: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+	}, {
+		name: "missing reference",
+		obj:  &ateletpb.ImageVolumeSource{},
+		want: field.ErrorList{field.Required(field.NewPath("reference"), "")},
+	}, {
+		name: "reference not pinned by digest",
+		obj:  &ateletpb.ImageVolumeSource{Reference: "example.com/app:v1"},
+		want: field.ErrorList{field.Invalid(field.NewPath("reference"), nil, "")},
+	}, {
+		name: "reference with a malformed digest",
+		obj:  &ateletpb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"},
+		want: field.ErrorList{field.Invalid(field.NewPath("reference"), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_ImageVolumeSource(context.Background(), op, nil, tt.obj, nil))
 		})
 	}
 }
