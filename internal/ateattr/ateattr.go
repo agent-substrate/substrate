@@ -256,13 +256,13 @@ func NormalizeOperationName(op string) string {
 	return OperationUnknown
 }
 
-// Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not a
+// Values for SchedulerOutcomeKey. NoCapacity is a capacity signal, not a
 // failure, so it is a distinct outcome rather than an error.type value; only the
 // Error outcome carries an error.type.
 const (
-	SchedulerOutcomeAssigned     = "assigned"
-	SchedulerOutcomeNoFreeWorker = "no_free_worker"
-	SchedulerOutcomeError        = "error"
+	SchedulerOutcomeAssigned   = "assigned"
+	SchedulerOutcomeNoCapacity = "no_capacity"
+	SchedulerOutcomeError      = "error"
 )
 
 // Values for SnapshotKindKey, set by ateapi from its own resume branching, so
