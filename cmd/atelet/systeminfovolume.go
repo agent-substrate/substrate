@@ -255,23 +255,10 @@ func writeFileAtomicRoot(root *os.Root, relPath string, data []byte, perm os.Fil
 		f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := root.Rename(tmp, relPath); err != nil {
-		return err
-	}
-
-	d, err := root.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return root.Rename(tmp, relPath)
 }
 
 // eventHandler enqueues the bundle names an event touches.

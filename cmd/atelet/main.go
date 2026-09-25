@@ -1830,10 +1830,8 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 }
 
 // writeFileAtomic writes data to path by writing a temp file in the same
-// directory, syncing, and renaming it over the target, then syncing the
-// parent directory so the rename is durable. The identity directory is
-// bind-mounted into actors, so the file must change atomically: a reader
-// must never observe a truncated or partially written value.
+// directory and renaming it over the target so readers never observe a
+// truncated or partially written value.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -1849,23 +1847,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(f.Name(), path); err != nil {
-		return err
-	}
-
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return os.Rename(f.Name(), path)
 }
 
 // resetActorDirs empties the actor's directories and leaves them in place for
