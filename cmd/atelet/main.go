@@ -717,7 +717,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	return &ateletpb.CheckpointResponse{}, nil
+	return &ateletpb.CheckpointResponse{SnapshotFiles: sandboxRec.SnapshotFiles}, nil
 }
 
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {

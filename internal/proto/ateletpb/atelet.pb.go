@@ -2355,7 +2355,10 @@ func (*CheckpointRequest_LocalConfig) isCheckpointRequest_Config() {}
 func (*CheckpointRequest_ExternalConfig) isCheckpointRequest_Config() {}
 
 type CheckpointResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The files the snapshot consists of, as relative names in the snapshot
+	// directory, reported by ateom.
+	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2388,6 +2391,13 @@ func (x *CheckpointResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use CheckpointResponse.ProtoReflect.Descriptor instead.
 func (*CheckpointResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *CheckpointResponse) GetSnapshotFiles() []string {
+	if x != nil {
+		return x.SnapshotFiles
+	}
+	return nil
 }
 
 type UploadPausedCheckpointRequest struct {
@@ -2939,8 +2949,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0fexternal_config\x18\n" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
-	"\x06config\"\x14\n" +
-	"\x12CheckpointResponse\"\x85\x03\n" +
+	"\x06config\";\n" +
+	"\x12CheckpointResponse\x12%\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x85\x03\n" +
 	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +

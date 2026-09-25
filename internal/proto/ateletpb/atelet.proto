@@ -410,6 +410,9 @@ message CheckpointRequest {
 }
 
 message CheckpointResponse {
+  // The files the snapshot consists of, as relative names in the snapshot
+  // directory, reported by ateom.
+  repeated string snapshot_files = 1;
 }
 
 message UploadPausedCheckpointRequest {

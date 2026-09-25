@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -176,7 +177,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}
 
 	// Pause: a local checkpoint, which leaves the snapshot on this node.
-	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+	checkpointResp, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -189,8 +190,12 @@ func TestLocalSnapshotGC(t *testing.T) {
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got, want := checkpointResp.GetSnapshotFiles(), []string{"checkpoint.img"}; !slices.Equal(got, want) {
+		t.Errorf("Checkpoint reported snapshot files %v, want %v", got, want)
 	}
 	snapshotFile := filepath.Join(ateompath.LocalSnapshotDir(actorUID, snapshotName), "checkpoint.img")
 	if _, err := os.Stat(snapshotFile); err != nil {
