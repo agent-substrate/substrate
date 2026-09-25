@@ -14,8 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// These integration tests use an external package to avoid an import cycle:
-// atunnel imports ateomnet.
+// These integration tests use an external package so that ateomnet's own test
+// binary does not depend on atunnel.
 package ateomnet_test
 
 import (
@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
@@ -44,9 +45,9 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 	}
 	t.Cleanup(func() { ateomnet.CleanupSandboxNetwork(n) })
 
-	listeners, err := ateomnet.ListenInNetNS(ctx, n.GatewayNetNS, []uint16{egressPort})
+	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
 	if err != nil {
-		t.Fatalf("ListenInNetNS: %v", err)
+		t.Fatalf("netns.Listen: %v", err)
 	}
 	defer listeners[0].Close()
 
@@ -70,7 +71,7 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 	go accept()
 
 	for _, want := range []string{"93.184.216.34:443", "93.184.216.34:8080", "93.184.216.34:9999"} {
-		if err := ateomnet.NetNSDo(ctx, n.RuntimeNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
 			c, err := net.Dial("tcp", want)
 			if err != nil {
 				return err

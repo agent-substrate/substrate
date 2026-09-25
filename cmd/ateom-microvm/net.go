@@ -23,9 +23,9 @@ import (
 	"os"
 
 	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netns"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 )
 
 const (
@@ -51,9 +51,9 @@ var gatewayHWAddr = ateomnet.MustParseMAC(gatewayMAC)
 
 // setupActorTap creates the guest's tap with a fixed gateway address and MAC.
 // Returns the FDs cloud-hypervisor adopts on boot or restore.
-func setupActorTap(ctx context.Context, actorNetNS netns.NsHandle, name string, queuePairs int) ([]*os.File, error) {
+func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, queuePairs int) ([]*os.File, error) {
 	var fds []*os.File
-	err := ateomnet.NetNSDo(ctx, actorNetNS, func(ctx context.Context) error {
+	err := netns.Do(ctx, actorNetNS, func(ctx context.Context) error {
 		if old, lerr := netlink.LinkByName(name); lerr == nil {
 			_ = netlink.LinkDel(old)
 		}
@@ -98,9 +98,9 @@ func setupActorTap(ctx context.Context, actorNetNS netns.NsHandle, name string, 
 }
 
 // actorTapMTUOf reads the tap MTU, falling back to actorTapMTU on error.
-func actorTapMTUOf(ctx context.Context, actorNetNS netns.NsHandle, name string) int {
+func actorTapMTUOf(ctx context.Context, actorNetNS netns.Handle, name string) int {
 	mtu := actorTapMTU
-	_ = ateomnet.NetNSDo(ctx, actorNetNS, func(ctx context.Context) error {
+	_ = netns.Do(ctx, actorNetNS, func(ctx context.Context) error {
 		if l, err := netlink.LinkByName(name); err == nil {
 			mtu = l.Attrs().MTU
 		} else {

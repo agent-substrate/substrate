@@ -23,18 +23,16 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/netip"
-	"runtime"
 	"sync"
-	"syscall"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
 
@@ -46,7 +44,7 @@ type SandboxNetwork struct {
 	// RuntimeNetNS is what the sandbox runs in, whichever runtime that is: the
 	// micro-VM's tap lives here, and gVisor claims every interface here and
 	// moves their addresses into its own stack.
-	RuntimeNetNS netns.NsHandle
+	RuntimeNetNS netns.Handle
 	// GatewayNetNS holds the sandbox's default gateway, DNS relay, and atunnel
 	// sockets. This is local to the sandbox, not the external egress gateway.
 	// For microVMs it shares RuntimeNetNS.
@@ -54,7 +52,7 @@ type SandboxNetwork struct {
 	// TODO: we hope gVisor can take that same single-namespace shape soon,
 	// once runsc can be given one interface rather than claiming every
 	// interface in the namespace it runs in.
-	GatewayNetNS netns.NsHandle
+	GatewayNetNS netns.Handle
 }
 
 func (n *SandboxNetwork) holdsNetNS() bool { return n.RuntimeNetNS > 0 }
@@ -88,14 +86,14 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 	}
 
 	actorNSName := ateompath.ActorNetNSName(actorUID)
-	actorNS, err := CreateNetNSWithoutSwitching(actorNSName)
+	actorNS, err := netns.CreateNamed(actorNSName)
 	if err != nil {
 		return nil, fmt.Errorf("while creating the actor netns %s: %w", actorNSName, err)
 	}
 	defer func() {
 		if retErr != nil {
 			actorNS.Close()
-			_ = removeNamedNetNS(actorNSName)
+			_ = netns.RemoveNamed(actorNSName)
 		}
 	}()
 
@@ -109,7 +107,7 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 		defer func() {
 			if retErr != nil {
 				outer.Close()
-				_ = removeNamedNetNS(SandboxGatewayNetNSName(cfg.ActorUID))
+				_ = netns.RemoveNamed(SandboxGatewayNetNSName(cfg.ActorUID))
 			}
 		}()
 		atunnelNS = outer
@@ -127,21 +125,21 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 
 // setupVethPair creates the gateway namespace and the veth pair joining it to
 // actorNS. The caller owns the returned handle and its name.
-func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.NsHandle) (_ netns.NsHandle, retErr error) {
+func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.Handle) (_ netns.Handle, retErr error) {
 	gatewayNSName := SandboxGatewayNetNSName(cfg.ActorUID)
-	outer, err := CreateNetNSWithoutSwitching(gatewayNSName)
+	outer, err := netns.CreateNamed(gatewayNSName)
 	if err != nil {
 		return 0, fmt.Errorf("while creating the outer netns %s: %w", gatewayNSName, err)
 	}
 	defer func() {
 		if retErr != nil {
 			outer.Close()
-			_ = removeNamedNetNS(gatewayNSName)
+			_ = netns.RemoveNamed(gatewayNSName)
 		}
 	}()
 
 	// Keep the kernel-owned peer outside gVisor's namespace.
-	if err := NetNSDo(ctx, outer, func(context.Context) error {
+	if err := netns.Do(ctx, outer, func(context.Context) error {
 		veth := &netlink.Veth{
 			LinkAttrs: netlink.LinkAttrs{Name: gatewayVethName},
 			PeerName:  ActorVethName,
@@ -170,7 +168,7 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 	}
 
 	// gVisor imports these addresses and routes into its network stack.
-	if err := NetNSDo(ctx, actorNS, func(context.Context) error {
+	if err := netns.Do(ctx, actorNS, func(context.Context) error {
 		// Loopback lets the actor reach its own address.
 		if err := linkUp("lo"); err != nil {
 			return err
@@ -204,11 +202,11 @@ func linkUp(name string) error {
 }
 
 // setupGatewaySide brings up lo and puts atunnel in front of the actor's TCP.
-func setupGatewaySide(ctx context.Context, ns netns.NsHandle, egressPort uint16) error {
-	if err := NetNSDo(ctx, ns, func(context.Context) error {
+func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) error {
+	if err := netns.Do(ctx, ns, func(context.Context) error {
 		// atunnel answers the actor's DNS on 53, and the worker holds no
 		// CAP_NET_BIND_SERVICE.
-		if err := AllowUnprivilegedPorts(); err != nil {
+		if err := netns.AllowUnprivilegedPorts(); err != nil {
 			return err
 		}
 		return linkUp("lo")
@@ -221,7 +219,7 @@ func setupGatewaySide(ctx context.Context, ns netns.NsHandle, egressPort uint16)
 // installEgressRedirect redirects TCP egress to atunnel, excluding the sandbox's
 // own /30: that keeps ingress replies and DNS over TCP to the gateway off the
 // redirect, so the relay serves them on its own listener.
-func installEgressRedirect(ns netns.NsHandle, egressPort uint16) error {
+func installEgressRedirect(ns netns.Handle, egressPort uint16) error {
 	if egressPort == 0 {
 		return fmt.Errorf("actornet: atunnel egress port is required")
 	}
@@ -298,37 +296,11 @@ func CleanupSandboxNetwork(network *SandboxNetwork) error {
 	}
 	// Deleting the namespaces takes any veth pair with them.
 	for _, name := range []string{ateompath.ActorNetNSName(network.ActorUID), SandboxGatewayNetNSName(network.ActorUID)} {
-		if err := removeNamedNetNS(name); err != nil {
+		if err := netns.RemoveNamed(name); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("while deleting netns %s: %w", name, err))
 		}
 	}
 	return errs
-}
-
-// ListenInNetNS opens wildcard TCP listeners inside ns.
-// Sockets retain their namespace and can be served from another namespace.
-func ListenInNetNS(ctx context.Context, ns netns.NsHandle, ports []uint16) (_ []net.Listener, retErr error) {
-	var listeners []net.Listener
-	defer func() {
-		if retErr != nil {
-			for _, l := range listeners {
-				_ = l.Close()
-			}
-		}
-	}()
-	if err := NetNSDo(ctx, ns, func(context.Context) error {
-		for _, port := range ports {
-			l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-			if err != nil {
-				return fmt.Errorf("while listening on port %d: %w", port, err)
-			}
-			listeners = append(listeners, l)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return listeners, nil
 }
 
 // egressServer serves one actor's captured connections. Satisfied by
@@ -339,8 +311,8 @@ type egressServer interface {
 
 // ServeSandboxEgress serves redirected TCP in the gateway namespace.
 // Closing the returned listeners stops accepting new connections.
-func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns netns.NsHandle, ports []uint16) ([]io.Closer, []func(), error) {
-	listeners, err := ListenInNetNS(ctx, ns, ports)
+func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns netns.Handle, ports []uint16) ([]io.Closer, []func(), error) {
+	listeners, err := netns.Listen(ctx, ns, ports)
 	if err != nil {
 		return nil, nil, fmt.Errorf("while opening actor egress listeners: %w", err)
 	}
@@ -368,117 +340,6 @@ func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns
 	return closers, serve, nil
 }
 
-// closerFunc adapts a cancel function to io.Closer, so a caller takes a
-// sandbox's sockets and the work behind them down as one list.
-type closerFunc func() error
-
-func (f closerFunc) Close() error { return f() }
-
-// withNetNS switches to targetNS, calls run, then restores the original namespace.
-// run can call restore to switch back and unlock the OS thread before returning.
-// Calling restore again after it succeeds has no effect.
-//
-// A separate goroutine lets us leave the thread locked if restoration fails.
-// Go then discards that thread when the goroutine exits.
-func withNetNS(targetNS netns.NsHandle, run func(restore func() error) error) error {
-	var resultErr error
-	var done sync.WaitGroup
-	done.Add(1)
-	go func() {
-		defer done.Done()
-		runtime.LockOSThread()
-		originalNS, err := netns.Get()
-		if err != nil {
-			runtime.UnlockOSThread()
-			resultErr = fmt.Errorf("while reading the current netns: %w", err)
-			return
-		}
-		defer originalNS.Close()
-		if err := netns.Set(targetNS); err != nil {
-			runtime.UnlockOSThread()
-			resultErr = fmt.Errorf("while entering the actor netns: %w", err)
-			return
-		}
-
-		restored := false
-		restore := func() error {
-			if restored {
-				return nil
-			}
-			if err := netns.Set(originalNS); err != nil {
-				return fmt.Errorf("while restoring the worker netns: %w", err)
-			}
-			runtime.UnlockOSThread()
-			restored = true
-			return nil
-		}
-
-		resultErr = run(restore)
-		if err := restore(); err != nil {
-			resultErr = err
-		}
-	}()
-	done.Wait()
-	return resultErr
-}
-
-// NetNSDialer dials TCP or UDP IP literals in ns, pinning a thread only until
-// the socket is created.
-func NetNSDialer(ns netns.NsHandle) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if err := validateNetNSDialTarget(network, addr); err != nil {
-			return nil, err
-		}
-
-		var conn net.Conn
-		dialErr := withNetNS(ns, func(restore func() error) error {
-			// Only creating the socket needs the namespace, and
-			// ControlContext runs once it exists: restore there rather than
-			// holding the thread for the whole connect.
-			socketCreated := false
-			dialer := net.Dialer{ControlContext: func(context.Context, string, string, syscall.RawConn) error {
-				if socketCreated {
-					return errors.New("sandbox dial cannot recreate its socket outside the namespace")
-				}
-				socketCreated = true
-				return restore()
-			}}
-			var err error
-			conn, err = dialer.DialContext(ctx, network, addr)
-			return err
-		})
-		if dialErr != nil || ctx.Err() != nil {
-			if conn != nil {
-				_ = conn.Close()
-			}
-			if dialErr != nil {
-				return nil, dialErr
-			}
-			return nil, ctx.Err()
-		}
-		return conn, nil
-	}
-}
-
-func validateNetNSDialTarget(network, addr string) error {
-	switch network {
-	case "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
-	default:
-		return net.UnknownNetworkError(network)
-	}
-	hostname, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return err
-	}
-	if _, err := netip.ParseAddr(hostname); err != nil {
-		return fmt.Errorf("NetNSDialer supports only IP literals (got %q): %w", hostname, err)
-	}
-	return nil
-}
-
 // SandboxSession owns a sandbox's network and serving sockets.
 type SandboxSession struct {
 	Network *SandboxNetwork
@@ -492,7 +353,7 @@ type SandboxSession struct {
 
 // ServeSandbox builds a sandbox's network and serves egress and DNS from its
 // gateway namespace. A nil server leaves that unserved, which fails closed.
-func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, dns dnsServer) (_ *SandboxSession, retErr error) {
+func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, resolver dns.Server) (_ *SandboxSession, retErr error) {
 	network, err := SetupSandboxNetwork(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -505,8 +366,8 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	}()
 
 	var serve []func()
-	if dns != nil {
-		closers, serveDNS, err := serveSandboxDNS(ctx, dns, network.GatewayNetNS, cfg.DNSPort)
+	if resolver != nil {
+		closers, serveDNS, err := dns.Serve(ctx, resolver, network.GatewayNetNS, cfg.DNSPort)
 		if err != nil {
 			return nil, err
 		}
@@ -635,8 +496,8 @@ func (s *SandboxSession) Dialer() func(context.Context, string, string) (net.Con
 		if err != nil {
 			return nil, fmt.Errorf("while retaining the sandbox namespace: %w", err)
 		}
-		ns := netns.NsHandle(fd)
+		ns := netns.Handle(fd)
 		defer ns.Close()
-		return NetNSDialer(ns)(ctx, network, address)
+		return netns.Dialer(ns)(ctx, network, address)
 	}
 }
