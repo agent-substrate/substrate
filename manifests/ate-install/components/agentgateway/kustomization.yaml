@@ -125,6 +125,10 @@ patches:
           env:
           - name: RUST_LOG
             value: debug
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
           ports:
           - name: https
             containerPort: 8443

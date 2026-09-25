@@ -236,6 +236,42 @@ func TestRequestLegServesBothDecryptedChains(t *testing.T) {
 	}
 }
 
+func TestRequestLegDeniesHTTP1WebSocketUpgrade(t *testing.T) {
+	h := policyHandler(allowAllPolicy())
+	for _, leg := range []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName} {
+		t.Run(leg, func(t *testing.T) {
+			md := innerMetadata(leg, "GET", "api.example.com", nil)
+			md.Headers["connection"] = "keep-alive, UpGrAdE"
+			md.Headers["upgrade"] = "WebSocket"
+			_, err := h.HandleRequestHeaders(context.Background(), md)
+			wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+		})
+	}
+}
+
+func TestRequestLegAllowsOrdinaryHTTPSRequest(t *testing.T) {
+	h := policyHandler(allowAllPolicy())
+	for _, tc := range []struct {
+		name       string
+		method     string
+		connection string
+		upgrade    string
+	}{
+		{name: "ordinary GET", method: "GET"},
+		{name: "other upgrade", method: "GET", connection: "Upgrade", upgrade: "h2c"},
+		{name: "upgrade without connection token", method: "GET", connection: "keep-alive", upgrade: "websocket"},
+		{name: "non-GET", method: "POST", connection: "Upgrade", upgrade: "websocket"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			md := innerMetadata(extproc.EgressTLSMITMFilterChainName, tc.method, "api.example.com", nil)
+			md.Headers["connection"] = tc.connection
+			md.Headers["upgrade"] = tc.upgrade
+			res, err := h.HandleRequestHeaders(context.Background(), md)
+			wantDial(t, res, err, extproc.EgressDialAddress)
+		})
+	}
+}
+
 // Without the identity the outer chain shares, a request cannot be attributed
 // to any actor and is refused.
 func TestRequestLegRequiresIdentity(t *testing.T) {

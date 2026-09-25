@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -369,5 +370,170 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	}
 	if got.PauseImage != restorePause {
 		t.Errorf("restored actor pause image = %q, want the request's %q", got.PauseImage, restorePause)
+	}
+}
+
+func TestRestoreFailureBeforeRegistrationPreservesExistingRegistration(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+	const (
+		actorUID     = "actor-uid-restore"
+		snapshotName = "pause-snap-1"
+	)
+
+	store := newCTBStore(t)
+	certA := string(testCertPEM(t))
+	store.set(t, certA)
+	refresher := newSystemInfoVolumeRefresher(store.lister, nil)
+	registeredDir := t.TempDir()
+	registerTrustVolume(t, refresher, registeredDir, actorUID)
+	registered := refresher.actors[actorUID]
+
+	assetHash := fmt.Sprintf("%x", sha256.Sum256([]byte("missing asset")))
+	writeLocalSnapshot(t, ateompath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    testPauseImage,
+		Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+		SnapshotFiles: []string{"checkpoint.img"},
+	}, map[string]string{"checkpoint.img": "guest-memory"})
+
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app"}},
+		Volumes: []*ateletpb.Volume{{
+			Name:   "trust",
+			Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")},
+		}},
+	}
+	s := &AteomHerder{
+		anonGCSClient:     fakeObjectStorage{err: fmt.Errorf("asset unavailable")},
+		systemInfoVolumes: refresher,
+	}
+	_, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+		Atespace:       "team-a",
+		ActorName:      "actor-restore",
+		ActorUid:       actorUID,
+		TargetAteomUid: "ateom-uid-1",
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   testPauseImage,
+			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+			}}},
+		},
+		Spec:  spec,
+		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Type:  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Config: &ateletpb.RestoreRequest_LocalConfig{
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		},
+	})
+	if err == nil {
+		t.Fatal("Restore succeeded with an unavailable sandbox asset")
+	}
+	if got := refresher.actors[actorUID]; got != registered {
+		t.Fatalf("failed Restore removed the existing registration: got %p, want %p", got, registered)
+	}
+
+	certB := string(testCertPEM(t))
+	store.set(t, certB)
+	if err := refresher.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+		t.Fatalf("refreshBundle: %v", err)
+	}
+	if got := readProjected(t, registeredDir, actorUID, "trust", "ca.pem"); got != certB {
+		t.Fatalf("existing registration stopped refreshing after failed Restore: got %q, want cert B", got)
+	}
+}
+
+func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
+	useTempNodeDirs(t)
+	store := newCTBStore(t)
+	store.set(t, string(testCertPEM(t)))
+	refresher := newSystemInfoVolumeRefresher(store.lister, nil)
+	content := []byte("runsc binary")
+	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
+	s := &AteomHerder{
+		anonGCSClient:     fakeObjectStorage{data: content},
+		imageCache:        newImageVolumeStore(t),
+		systemInfoVolumes: refresher,
+	}
+	spec := &ateletpb.WorkloadSpec{
+		Volumes: []*ateletpb.Volume{{
+			Name:   "trust",
+			Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")},
+		}},
+	}
+	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
+		Atespace:       "team-a",
+		ActorName:      "actor-run",
+		ActorUid:       "actor-uid-run",
+		TargetAteomUid: "ateom-uid-1",
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   "://invalid-image",
+			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+			}}},
+		},
+		Spec: spec,
+	})
+	if err == nil {
+		t.Fatal("Run succeeded with an invalid pause image")
+	}
+	if got := refresher.actors["actor-uid-run"]; got != nil {
+		t.Fatalf("failed Run left its registration live: %p", got)
+	}
+}
+
+func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
+	useTempNodeDirs(t)
+	const (
+		actorUID     = "actor-uid-restore-after"
+		snapshotName = "pause-snap-after"
+	)
+	store := newCTBStore(t)
+	store.set(t, string(testCertPEM(t)))
+	refresher := newSystemInfoVolumeRefresher(store.lister, nil)
+	content := []byte("runsc binary")
+	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
+	writeLocalSnapshot(t, ateompath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    "://invalid-image",
+		Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+		SnapshotFiles: []string{"checkpoint.img"},
+	}, map[string]string{"checkpoint.img": "guest-memory"})
+
+	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{{
+		Name:   "trust",
+		Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")},
+	}}}
+	s := &AteomHerder{
+		anonGCSClient:     fakeObjectStorage{data: content},
+		imageCache:        newImageVolumeStore(t),
+		systemInfoVolumes: refresher,
+	}
+	_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
+		Atespace:       "team-a",
+		ActorName:      "actor-restore-after",
+		ActorUid:       actorUID,
+		TargetAteomUid: "ateom-uid-1",
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   "://invalid-image",
+			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+			}}},
+		},
+		Spec:  spec,
+		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Type:  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Config: &ateletpb.RestoreRequest_LocalConfig{
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
+		t.Fatalf("Restore error = %v, want the post-registration OCI preparation failure", err)
+	}
+	if got := refresher.actors[actorUID]; got != nil {
+		t.Fatalf("failed Restore left its owned registration live: %p", got)
 	}
 }

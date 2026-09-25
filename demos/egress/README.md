@@ -133,6 +133,14 @@ then asserts:
 
 Add `--cleanup` to remove everything the script created.
 
+### HTTPS and WebSocket E2E tests with Envoy MITM
+
+The actor trusts the gateway through its projected CA bundle. The gateway
+opens a separate TLS connection to each test origin, so it also needs the
+service-DNS CA that signed those origins. The [MITM egress test
+runbook](../../docs/dev/mitm-egress-test-runbook.md) sets up both sides on Kind
+and runs the trust and protocol tests.
+
 ## Manual walkthrough
 
 ```bash

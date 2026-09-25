@@ -19,6 +19,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +33,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -40,20 +43,45 @@ import (
 )
 
 const (
-	listenAddress   = ":80"
-	maxRequestBody  = 64 << 10
-	maxResponseBody = 1 << 20
-	requestTimeout  = 15 * time.Second
+	listenAddress           = ":80"
+	maxRequestBody          = 64 << 10
+	maxResponseBody         = 1 << 20
+	requestTimeout          = 15 * time.Second
+	maxWebSocketMessages    = 16
+	maxWebSocketMessageSize = 64 << 10
 )
 
 type fetchRequest struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	RootCA string `json:"rootCA,omitempty"`
+	HTTP1  bool   `json:"http1,omitempty"`
 }
 
 type fetchResponse struct {
 	StatusCode int    `json:"statusCode,omitempty"`
 	Body       string `json:"body,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+	TLS        bool   `json:"tls"`
 	Error      string `json:"error,omitempty"`
+}
+
+type websocketRequest struct {
+	URL      string   `json:"url"`
+	RootCA   string   `json:"rootCA,omitempty"`
+	Messages []string `json:"messages"`
+}
+
+type websocketMessage struct {
+	Type    int    `json:"type"`
+	Message string `json:"message"`
+}
+
+type websocketResponse struct {
+	StatusCode int                `json:"statusCode,omitempty"`
+	Protocol   string             `json:"protocol,omitempty"`
+	TLS        bool               `json:"tls"`
+	Messages   []websocketMessage `json:"messages"`
+	Error      string             `json:"error,omitempty"`
 }
 
 // grpcRequest asks for one unary Echo against target, and additionally for a
@@ -135,7 +163,13 @@ func newHandler(client *http.Client) http.Handler {
 		if traceparent := r.Header.Get("traceparent"); traceparent != "" {
 			outbound.Header.Set("traceparent", traceparent)
 		}
-		response, err := client.Do(outbound)
+		requestClient, cleanup, err := fetchClient(client, input)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("configuring request: %v", err)})
+			return
+		}
+		defer cleanup()
+		response, err := requestClient.Do(outbound)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
 			return
@@ -147,10 +181,161 @@ func newHandler(client *http.Client) http.Handler {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
 			return
 		}
-		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body)})
+		writeJSON(w, response.StatusCode, fetchResponse{
+			StatusCode: response.StatusCode,
+			Body:       string(body),
+			Protocol:   response.Proto,
+			TLS:        response.TLS != nil && len(response.TLS.VerifiedChains) > 0,
+		})
 	})
+	mux.HandleFunc("/websocket", handleWebSocket)
 	mux.HandleFunc("/grpc", handleGRPC)
 	return mux
+}
+
+// fetchClient constructs a per-request client only when the request asks for
+// request-scoped TLS or protocol behavior. The default path retains the
+// caller's client, including its transport and redirect policy.
+func fetchClient(base *http.Client, input fetchRequest) (*http.Client, func(), error) {
+	if input.RootCA == "" && !input.HTTP1 {
+		return base, func() {}, nil
+	}
+	if base == nil {
+		base = http.DefaultClient
+	}
+	// Start from the standard transport so request-scoped trust cannot inherit
+	// an insecure TLS callback or proxy from an injected/base client.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	if input.RootCA != "" {
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM([]byte(input.RootCA)) {
+			return nil, nil, errors.New("rootCA does not contain a valid certificate")
+		}
+		transport.TLSClientConfig.RootCAs = roots
+	}
+	if input.HTTP1 {
+		protocols := new(http.Protocols)
+		protocols.SetHTTP1(true)
+		transport.Protocols = protocols
+		transport.ForceAttemptHTTP2 = false
+		transport.TLSNextProto = nil
+	}
+	requestClient := *base
+	requestClient.Transport = transport
+	requestClient.Timeout = requestTimeout
+	requestClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &requestClient, transport.CloseIdleConnections, nil
+}
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, websocketResponse{Messages: []websocketMessage{}, Error: "method must be POST"})
+		return
+	}
+
+	var input websocketRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, websocketResponse{Messages: []websocketMessage{}, Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+		return
+	}
+	if err := validateWebSocketRequest(input); err != nil {
+		writeJSON(w, http.StatusBadRequest, websocketResponse{Messages: []websocketMessage{}, Error: err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+	response, err := performWebSocket(ctx, input)
+	if err != nil {
+		response.Error = err.Error()
+		writeJSON(w, http.StatusBadGateway, response)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func validateWebSocketRequest(input websocketRequest) error {
+	parsed, err := url.Parse(input.URL)
+	if err != nil {
+		return fmt.Errorf("invalid WebSocket URL: %w", err)
+	}
+	if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
+		return errors.New("WebSocket URL scheme must be ws or wss")
+	}
+	if parsed.Hostname() == "" {
+		return errors.New("WebSocket URL must include a hostname")
+	}
+	if len(input.Messages) == 0 {
+		return errors.New("messages must contain at least one message")
+	}
+	if len(input.Messages) > maxWebSocketMessages {
+		return fmt.Errorf("messages contains %d items, maximum is %d", len(input.Messages), maxWebSocketMessages)
+	}
+	for index, message := range input.Messages {
+		if len(message) > maxWebSocketMessageSize {
+			return fmt.Errorf("message %d is %d bytes, maximum is %d", index, len(message), maxWebSocketMessageSize)
+		}
+	}
+	return nil
+}
+
+func performWebSocket(ctx context.Context, input websocketRequest) (websocketResponse, error) {
+	dialer := websocket.Dialer{HandshakeTimeout: requestTimeout, Proxy: nil}
+	if input.RootCA != "" {
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM([]byte(input.RootCA)) {
+			return websocketResponse{Messages: []websocketMessage{}}, errors.New("configuring TLS: rootCA does not contain a valid certificate")
+		}
+		dialer.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	}
+	response := websocketResponse{Messages: []websocketMessage{}}
+	conn, handshakeResponse, err := dialer.DialContext(ctx, input.URL, nil)
+	if handshakeResponse != nil {
+		response.StatusCode = handshakeResponse.StatusCode
+		response.Protocol = handshakeResponse.Proto
+	}
+	if err != nil {
+		return response, fmt.Errorf("WebSocket handshake failed: %w", err)
+	}
+	if tlsConn, ok := conn.UnderlyingConn().(*tls.Conn); ok {
+		response.TLS = tlsConn.ConnectionState().VerifiedChains != nil
+	}
+	defer conn.Close()
+	conn.SetReadLimit(maxWebSocketMessageSize)
+
+	stopCancellation := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stopCancellation:
+		}
+	}()
+	defer close(stopCancellation)
+
+	for index, message := range input.Messages {
+		if err := conn.SetWriteDeadline(time.Now().Add(requestTimeout)); err != nil {
+			return response, fmt.Errorf("setting write deadline for message %d: %w", index, err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
+			return response, fmt.Errorf("writing message %d: %w", index, err)
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(requestTimeout)); err != nil {
+			return response, fmt.Errorf("setting read deadline for message %d: %w", index, err)
+		}
+		messageType, received, err := conn.ReadMessage()
+		if err != nil {
+			return response, fmt.Errorf("reading response to message %d: %w", index, err)
+		}
+		response.Messages = append(response.Messages, websocketMessage{Type: messageType, Message: string(received)})
+	}
+	return response, nil
 }
 
 // handleGRPC dials the requested target and echoes back what the RPCs returned.
