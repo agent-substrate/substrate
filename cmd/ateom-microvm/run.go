@@ -798,6 +798,9 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 	if kparams != "" {
 		cmdline += " " + kparams
 	}
+	if runtime.GOARCH == "amd64" {
+		cmdline += " clocksource=kvm-clock"
+	}
 	serial := &ch.ConsoleConfig{Mode: "Off"}
 	if debug {
 		cmdline += " " + earlyconParam()

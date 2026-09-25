@@ -192,6 +192,68 @@ func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
 	}
 }
 
+func TestEgressManifestsDisableWebSocketUpgrades(t *testing.T) {
+	want := map[string][]string{
+		egressManifests[0]: {extproc.EgressCleartextFilterChainName},
+		egressManifests[1]: {extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName},
+	}
+	for _, path := range egressManifests {
+		t.Run(path, func(t *testing.T) {
+			tree := bootstrapTree(t, path)
+			chains := map[string]node{}
+			for _, lc := range allChains(tree) {
+				name := str(lc.chain, "name")
+				if slices.Contains(requestLegs, name) {
+					chains[name] = lc.chain
+				}
+			}
+			for _, name := range want[path] {
+				chain, present := chains[name]
+				if !present {
+					t.Errorf("expected request-leg chain %q is absent", name)
+					continue
+				}
+				var disabled bool
+				for _, upgrade := range list(hcm(chain), "upgrade_configs") {
+					if str(upgrade, "upgrade_type") == "websocket" {
+						enabled, ok := upgrade["enabled"].(bool)
+						disabled = ok && !enabled
+						break
+					}
+				}
+				if !disabled {
+					t.Errorf("chain %q must explicitly disable websocket upgrades", name)
+				}
+				var routes []node
+				for _, virtualHost := range list(child(hcm(chain), "route_config"), "virtual_hosts") {
+					routes = append(routes, list(virtualHost, "routes")...)
+				}
+				if len(routes) == 0 {
+					t.Errorf("chain %q has no routes", name)
+				}
+				for i, route := range routes {
+					action := child(route, "route")
+					if action == nil {
+						t.Errorf("chain %q route %d has no route action", name, i)
+						continue
+					}
+					disabled := false
+					for _, upgrade := range list(action, "upgrade_configs") {
+						if str(upgrade, "upgrade_type") == "websocket" {
+							enabled, ok := upgrade["enabled"].(bool)
+							disabled = ok && !enabled
+							break
+						}
+					}
+					if !disabled {
+						t.Errorf("chain %q route %d must explicitly disable websocket upgrades", name, i)
+					}
+				}
+			}
+		})
+	}
+}
+
 // extProcOf returns the ext_proc filter config of a chain's HCM and its index
 // among the http_filters, or nil and -1.
 func extProcOf(chain node) (node, int, []node) {

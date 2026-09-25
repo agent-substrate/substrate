@@ -307,13 +307,12 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_http
-              # Absent this, Envoy answers an Upgrade request itself instead of
-              # proxying it, so every WebSocket through this leg fails at the
-              # handshake. Note it covers the HTTP/1.1 path only; WebSockets over
-              # h2 are RFC 8441 extended CONNECT and would additionally need
-              # http2_protocol_options.allow_connect.
+              # Route actions explicitly deny WebSocket HTTP/1.1 upgrades;
+              # keep the HCM default disabled as well. WebSockets over h2 use
+              # RFC 8441 extended CONNECT and are outside this HTTP/1.1 policy.
               upgrade_configs:
               - upgrade_type: websocket
+                enabled: false
               # Disable stream_idle_timeout as there is already an overall timeout in the outer tunnel in the HCM.
               stream_idle_timeout: 0s
               # This is the leg that knows where the traffic actually went.
@@ -350,12 +349,9 @@ data:
                 - name: all
                   domains: ["*"]
                   routes:
-                  # Upgrade is what cannot cross an h2 upstream: forwarding one
-                  # needs RFC 8441 extended CONNECT, which almost no origin
-                  # advertises. So the default route below stays pinned to
-                  # HTTP/1.1, which every origin accepts, rather than letting
-                  # upstream ALPN choose -- ALPN takes h2 against nearly
-                  # everything today, and every WebSocket then fails with a 502.
+                  # The default route below stays pinned to HTTP/1.1, which every
+                  # origin accepts, rather than letting upstream ALPN choose --
+                  # ALPN takes h2 against nearly everything today.
                   #
                   # gRPC is the one thing that default cannot serve: its status
                   # rides in trailers, which HTTP/1.1 cannot express.
@@ -386,6 +382,9 @@ data:
                         value: { string_match: { exact: name } }
                     route:
                       cluster: egress_forward_proxy_grpc
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -399,6 +398,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_tls_grpc
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -408,6 +410,9 @@ data:
                         value: { string_match: { exact: name } }
                     route:
                       cluster: egress_forward_proxy
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       # The route timeout runs until the response completes, which
                       # for SSE or long-poll is never, so 0.
                       timeout: 0s
@@ -419,6 +424,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_tls
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
@@ -530,8 +538,11 @@ data:
               # answers it 426 before any filter runs.
               http_protocol_options:
                 accept_http_10: true
+              # Route actions explicitly deny WebSocket HTTP/1.1 upgrades at
+              # the cleartext egress boundary.
               upgrade_configs:
               - upgrade_type: websocket
+                enabled: false
               stream_idle_timeout: 0s
               access_log:
               - name: envoy.access_loggers.file
@@ -572,6 +583,9 @@ data:
                         value: { string_match: { exact: name } }
                     route:
                       cluster: egress_forward_proxy_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -581,6 +595,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's

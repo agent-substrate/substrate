@@ -281,10 +281,11 @@ data:
               # answers it 426 before any filter runs.
               http_protocol_options:
                 accept_http_10: true
-              # Without this Envoy answers an Upgrade itself instead of proxying
-              # it, and every WebSocket fails at the handshake.
+              # Route actions explicitly deny WebSocket HTTP/1.1 upgrades;
+              # keep the HCM default disabled as well.
               upgrade_configs:
               - upgrade_type: websocket
+                enabled: false
               # The outer HCM's stream_idle_timeout already bounds an idle
               # tunnel.
               stream_idle_timeout: 0s
@@ -327,6 +328,9 @@ data:
                         value: { string_match: { exact: name } }
                     route:
                       cluster: egress_forward_proxy_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       # The route timeout runs until the response completes, which
                       # for SSE or long-poll is never, so 0.
                       timeout: 0s
@@ -338,6 +342,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
