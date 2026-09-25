@@ -185,6 +185,21 @@ func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, 
 	return validateCapabilities(fldPath, value, true)
 }
 
+// httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
+// characters only, with well-formed percent-escapes, and no query string
+// or fragment.
+var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
+
+func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == "" {
+		return nil // required is enforced by tags
+	}
+	if !httpGetPathRE.MatchString(*value) {
+		return field.ErrorList{field.Invalid(fldPath, *value, "must be a URL path starting with '/', using only RFC 3986 path-segment characters, without query or fragment")}
+	}
+	return nil
+}
+
 // ValidateCustom_SystemInfoVolume_DataSources requires every projected file
 // path to be unique across all data sources: atelet writes them in order
 // into one tree, so a repeated path silently clobbers the earlier file.

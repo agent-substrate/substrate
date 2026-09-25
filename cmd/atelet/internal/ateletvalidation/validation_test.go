@@ -820,3 +820,99 @@ func TestValidateContainerMountsAndEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateHTTPGetAction(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.HTTPGetAction)) *ateletpb.HTTPGetAction {
+		a := &ateletpb.HTTPGetAction{Path: "/healthz", Port: 8080}
+		for _, m := range mutate {
+			m(a)
+		}
+		return a
+	}
+	tests := []struct {
+		name string
+		obj  *ateletpb.HTTPGetAction
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing path",
+		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("path"), "")},
+	}, {
+		name: "path without a leading slash",
+		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "healthz" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
+	}, {
+		name: "path with a query string",
+		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "/healthz?verbose=1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
+	}, {
+		name: "path with a valid percent escape",
+		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "/health%20z" }),
+	}, {
+		name: "path with a malformed percent escape",
+		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "/health%2" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
+	}, {
+		name: "missing port",
+		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Port = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("port"), "")},
+	}, {
+		name: "port above the range",
+		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Port = 65536 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("port"), nil, "").WithOrigin("maximum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_HTTPGetAction(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateWakeupProbe(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.WakeupProbe)) *ateletpb.WakeupProbe {
+		p := &ateletpb.WakeupProbe{
+			HttpGet:        &ateletpb.HTTPGetAction{Path: "/healthz", Port: 8080},
+			TimeoutSeconds: 30,
+		}
+		for _, m := range mutate {
+			m(p)
+		}
+		return p
+	}
+	tests := []struct {
+		name string
+		obj  *ateletpb.WakeupProbe
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing http_get",
+		obj:  valid(func(p *ateletpb.WakeupProbe) { p.HttpGet = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("http_get"), "")},
+	}, {
+		name: "missing timeout",
+		obj:  valid(func(p *ateletpb.WakeupProbe) { p.TimeoutSeconds = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("timeout_seconds"), "")},
+	}, {
+		name: "timeout above the bound",
+		obj:  valid(func(p *ateletpb.WakeupProbe) { p.TimeoutSeconds = 3601 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("timeout_seconds"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "bad probe path surfaces through the probe",
+		obj:  valid(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/x?y" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("http_get", "path"), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_WakeupProbe(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}

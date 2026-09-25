@@ -437,6 +437,7 @@ message Container {
   // +k8s:listMapKey=name
   repeated EnvEntry env = 4;
 
+  // +k8s:optional
   WakeupProbe wakeup_probe = 5;
 
   // Keyed by mount_path: each path hosts exactly one mount, while a volume
@@ -514,16 +515,31 @@ message EnvEntry {
 // WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 message WakeupProbe {
+  // +k8s:required
   HTTPGetAction http_get = 1;
+
   // How long to keep polling before giving up and failing the actor start.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3600 # matches the template wakeup probe's bound
   int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
 message HTTPGetAction {
   // Path to access on the HTTP server.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024 # matches the template probe path's bound
+  // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
+
   // TCP port to connect to (1..65535).
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=65535
   int32 port = 2;
 }
 
