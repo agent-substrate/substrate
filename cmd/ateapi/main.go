@@ -49,6 +49,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -368,7 +369,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		slog.String("postgres-connection-string", *postgresConnectionString),
+		postgresConnectionAttr(*postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
@@ -406,6 +407,31 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 		}
 		return objectstore.NewGCS(client), nil
 	}
+}
+
+// postgresConnectionAttr describes the connection string for the startup log
+// without echoing it. The bundled and Cloud SQL IAM setups use passwordless
+// strings, but an external database DSN can carry a password, and the raw
+// value would otherwise be written to the log on every restart. Only the
+// parsed, non-secret parts are logged; a string that does not parse is
+// reported as invalid and connectStore surfaces the actual error.
+func postgresConnectionAttr(connString string) slog.Attr {
+	const key = "postgres-connection-string"
+	if connString == "" {
+		return slog.String(key, "")
+	}
+	cfg, err := pgconn.ParseConfig(connString)
+	if err != nil {
+		return slog.String(key, "<invalid pg connection string>")
+	}
+	return slog.Group(key,
+		slog.String("host", cfg.Host),
+		slog.Int("port", int(cfg.Port)),
+		slog.String("database", cfg.Database),
+		slog.String("user", cfg.User),
+		slog.Bool("password-set", cfg.Password != ""),
+		slog.Bool("tls", cfg.TLSConfig != nil),
+	)
 }
 
 // connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
