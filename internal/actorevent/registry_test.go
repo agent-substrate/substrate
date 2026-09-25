@@ -31,8 +31,9 @@ type registry struct {
 		Type       string `json:"type"`
 		Name       string `json:"name"`
 		Attributes []struct {
-			Ref              string `json:"ref"`
-			RequirementLevel string `json:"requirement_level"`
+			Ref string `json:"ref"`
+			// "required", or {conditionally_required: <condition>}.
+			RequirementLevel any `json:"requirement_level"`
 		} `json:"attributes"`
 	} `json:"groups"`
 }
@@ -55,33 +56,49 @@ func TestEventsMatchTheRegistry(t *testing.T) {
 		t.Fatalf("parse %s: %v", registryPath, err)
 	}
 
-	declared := map[string][]string{}
+	type shape struct{ required, conditional []string }
+	declared := map[string]shape{}
 	for _, g := range reg.Groups {
 		if g.Type != "event" {
 			continue
 		}
-		keys := make([]string, 0, len(g.Attributes))
+		var sh shape
 		for _, a := range g.Attributes {
-			if a.RequirementLevel != "required" {
-				t.Errorf("%s declares %s as %q; an event name promises a fixed shape, so every attribute is required",
-					g.Name, a.Ref, a.RequirementLevel)
+			switch lvl := a.RequirementLevel.(type) {
+			case string:
+				if lvl != "required" {
+					t.Errorf("%s declares %s as %q; an event attribute is required or conditionally required with a stated condition",
+						g.Name, a.Ref, lvl)
+				}
+				sh.required = append(sh.required, a.Ref)
+			case map[string]any:
+				if c, ok := lvl["conditionally_required"].(string); !ok || c == "" {
+					t.Errorf("%s declares %s as %v; an event attribute is required or conditionally required with a stated condition",
+						g.Name, a.Ref, lvl)
+				}
+				sh.conditional = append(sh.conditional, a.Ref)
+			default:
+				t.Errorf("%s declares %s with an unreadable requirement level %v", g.Name, a.Ref, lvl)
 			}
-			keys = append(keys, a.Ref)
 		}
-		declared[g.Name] = keys
+		declared[g.Name] = sh
 	}
 
 	for _, ev := range events {
-		keys, ok := declared[ev.Name]
+		sh, ok := declared[ev.Name]
 		if !ok {
 			t.Errorf("%s has no group in %s; add one", ev.Name, registryPath)
 			continue
 		}
 		delete(declared, ev.Name)
 
-		got, want := slices.Sorted(slices.Values(keys)), slices.Sorted(slices.Values(ev.Keys))
+		got, want := slices.Sorted(slices.Values(sh.required)), slices.Sorted(slices.Values(ev.Keys))
 		if !slices.Equal(got, want) {
-			t.Errorf("%s: %s declares %v, the Event declares %v", ev.Name, registryPath, got, want)
+			t.Errorf("%s: %s requires %v, the Event declares %v", ev.Name, registryPath, got, want)
+		}
+		got, want = slices.Sorted(slices.Values(sh.conditional)), slices.Sorted(slices.Values(ev.Conditional))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: %s conditionally requires %v, the Event declares %v", ev.Name, registryPath, got, want)
 		}
 	}
 

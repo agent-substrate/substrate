@@ -1472,31 +1472,31 @@ type WorkloadStatsSample struct {
 	// Measurements. All four are zero when source is STATS_SOURCE_UNSPECIFIED,
 	// which means "not measured" rather than "measured as zero".
 	//
-	// Two of them accumulate -- memory_peak_bytes and cpu_usage_usec -- and both
-	// are scoped to the current EPOCH rather than to the actor's lifetime. An
-	// epoch begins wherever the accounting behind the sample begins, which is not
-	// the same event for every source: STATS_SOURCE_CGROUP reads a sandbox cgroup
-	// that a restore recreates, so both restart at zero there, while
-	// STATS_SOURCE_GUEST_AGENT reads counters the guest kernel keeps in its own
-	// RAM, which a restored guest brings back with it. A caller that wants a
-	// lifetime figure has to accumulate one itself, and must read a decrease as a
-	// new epoch rather than emit a negative delta -- but not the converse. An
-	// epoch can also begin at a value above the last one reported, so no
-	// comparison of consecutive samples detects every boundary.
+	// memory_current_bytes and memory_working_set_bytes are absolute.
 	MemoryCurrentBytes uint64 `protobuf:"varint,8,opt,name=memory_current_bytes,json=memoryCurrentBytes,proto3" json:"memory_current_bytes,omitempty"`
-	// High-water mark of memory_current_bytes within the current epoch. Also zero
-	// when the runtime cannot report a peak at all: the cgroup source reads
-	// memory.peak, which only exists on Linux 5.19 and later.
+	// High-water mark of memory_current_bytes, as the source reports it: the
+	// cgroup source restarts it on a restore, the guest-agent source brings the
+	// guest's own back with it. Also zero when the runtime cannot report a peak:
+	// the cgroup source reads memory.peak, which only exists on Linux 5.19 and
+	// later.
 	MemoryPeakBytes uint64 `protobuf:"varint,9,opt,name=memory_peak_bytes,json=memoryPeakBytes,proto3" json:"memory_peak_bytes,omitempty"`
 	// memory_current_bytes less the reclaimable page cache, floored at zero. This
 	// is the figure to compare against a memory limit; memory_current_bytes
 	// drifts upward with cache the kernel would drop for free under pressure.
 	MemoryWorkingSetBytes uint64 `protobuf:"varint,10,opt,name=memory_working_set_bytes,json=memoryWorkingSetBytes,proto3" json:"memory_working_set_bytes,omitempty"`
-	// Cumulative CPU time within the current epoch.
+	// Cumulative CPU time since the activation began (epoch_unix_nano), for
+	// every source. The cgroup source restarts on its own; the guest-agent
+	// source is rebased on its first read after a restore, since the guest's
+	// counters survive in guest RAM. An ateom that leaves epoch_unix_nano at zero
+	// also sends the raw guest counter. A lifetime figure is the sum over epochs
+	// of each epoch's highest value.
 	CpuUsageUsec       uint64 `protobuf:"varint,11,opt,name=cpu_usage_usec,json=cpuUsageUsec,proto3" json:"cpu_usage_usec,omitempty"`
 	ObservedAtUnixNano int64  `protobuf:"varint,12,opt,name=observed_at_unix_nano,json=observedAtUnixNano,proto3" json:"observed_at_unix_nano,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// The activation this sample belongs to, as the unix-nano time it began. A
+	// Run or Restore starts one. Zero from an ateom that does not set it.
+	EpochUnixNano int64 `protobuf:"varint,13,opt,name=epoch_unix_nano,json=epochUnixNano,proto3" json:"epoch_unix_nano,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkloadStatsSample) Reset() {
@@ -1609,6 +1609,13 @@ func (x *WorkloadStatsSample) GetCpuUsageUsec() uint64 {
 func (x *WorkloadStatsSample) GetObservedAtUnixNano() int64 {
 	if x != nil {
 		return x.ObservedAtUnixNano
+	}
+	return 0
+}
+
+func (x *WorkloadStatsSample) GetEpochUnixNano() int64 {
+	if x != nil {
+		return x.EpochUnixNano
 	}
 	return 0
 }
@@ -1863,7 +1870,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x0f_egress_gateway\"\x19\n" +
 	"\x17RestoreWorkloadResponse\"6\n" +
 	"\x17GetWorkloadStatsRequest\x12\x1b\n" +
-	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xab\x04\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xd3\x04\n" +
 	"\x13WorkloadStatsSample\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -1878,7 +1885,8 @@ const file_ateom_proto_rawDesc = "" +
 	"\x18memory_working_set_bytes\x18\n" +
 	" \x01(\x04R\x15memoryWorkingSetBytes\x12$\n" +
 	"\x0ecpu_usage_usec\x18\v \x01(\x04R\fcpuUsageUsec\x121\n" +
-	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\"N\n" +
+	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\x12&\n" +
+	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\"N\n" +
 	"\x18GetWorkloadStatsResponse\x122\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"V\n" +
