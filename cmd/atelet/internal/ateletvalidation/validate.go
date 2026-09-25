@@ -32,6 +32,12 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.Reque
 	return toInvalidArgument(Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
 }
 
+// ValidateMintActorCertificateRequest validates req at the RPC edge. A
+// non-nil return is the InvalidArgument error the handler responds with.
+func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.MintActorCertificateRequest) error {
+	return toInvalidArgument(Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
+}
+
 func toInvalidArgument(errs field.ErrorList) error {
 	if len(errs) == 0 {
 		return nil

@@ -87,21 +87,25 @@ message MintActorCertificateRequest {
   // The actor for which the certificate should be issued.
   //
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_atespace = 3;
 
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 4;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
   //
   // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 5;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   //
   // +k8s:required
+  // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
   bytes certificate_signing_request = 1;
 }
 

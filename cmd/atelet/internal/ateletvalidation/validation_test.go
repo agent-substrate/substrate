@@ -94,6 +94,90 @@ func TestValidateRequestActorSuspendRequestEdge(t *testing.T) {
 	}
 }
 
+func validMintActorCertificateRequest(mutate ...func(*ateletpb.MintActorCertificateRequest)) *ateletpb.MintActorCertificateRequest {
+	r := &ateletpb.MintActorCertificateRequest{
+		ActorAtespace:             "team-a",
+		ActorName:                 "actor-1",
+		ActorUid:                  "01234567-89ab-cdef-0123-456789abcdef",
+		CertificateSigningRequest: []byte("der-bytes"),
+	}
+	for _, m := range mutate {
+		m(r)
+	}
+	return r
+}
+
+func TestValidateMintActorCertificateRequest(t *testing.T) {
+	valid := validMintActorCertificateRequest
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.MintActorCertificateRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing actor_atespace",
+		obj:  valid(func(r *ateletpb.MintActorCertificateRequest) { r.ActorAtespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_atespace"), "")},
+	}, {
+		name: "invalid actor_atespace: uppercase",
+		obj:  valid(func(r *ateletpb.MintActorCertificateRequest) { r.ActorAtespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_name",
+		obj:  valid(func(r *ateletpb.MintActorCertificateRequest) { r.ActorName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		name: "invalid actor_name: trailing dash",
+		obj:  valid(func(r *ateletpb.MintActorCertificateRequest) { r.ActorName = "actor-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_uid",
+		obj:  valid(func(r *ateletpb.MintActorCertificateRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid: not a uuid",
+		obj:  valid(func(r *ateletpb.MintActorCertificateRequest) { r.ActorUid = "not-a-uuid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "missing certificate_signing_request",
+		obj:  valid(func(r *ateletpb.MintActorCertificateRequest) { r.CertificateSigningRequest = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("certificate_signing_request"), "")},
+	}, {
+		name: "certificate_signing_request at the bound",
+		obj: valid(func(r *ateletpb.MintActorCertificateRequest) {
+			r.CertificateSigningRequest = make([]byte, 16384)
+		}),
+	}, {
+		name: "certificate_signing_request too large",
+		obj: valid(func(r *ateletpb.MintActorCertificateRequest) {
+			r.CertificateSigningRequest = make([]byte, 16385)
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("certificate_signing_request"), nil, 16384).WithOrigin("maxBytes")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_MintActorCertificateRequest(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+// TestValidateMintActorCertificateRequestEdge covers the handler-facing
+// wrapper: valid passes, invalid comes back as InvalidArgument.
+func TestValidateMintActorCertificateRequestEdge(t *testing.T) {
+	if err := ValidateMintActorCertificateRequest(context.Background(), validMintActorCertificateRequest()); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	err := ValidateMintActorCertificateRequest(context.Background(), &ateletpb.MintActorCertificateRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty request error = %v, want InvalidArgument", err)
+	}
+}
+
 func validTerminateRequest(mutate ...func(*ateletpb.TerminateRequest)) *ateletpb.TerminateRequest {
 	r := &ateletpb.TerminateRequest{
 		TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",

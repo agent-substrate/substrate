@@ -42,6 +42,12 @@ func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *atel
 	if err != nil {
 		return nil, err
 	}
+	// Reject malformed requests here rather than forwarding them for the
+	// control plane to reject after a round trip. After authentication, so an
+	// unauthenticated caller learns nothing but Unauthenticated.
+	if err := ateletvalidation.ValidateMintActorCertificateRequest(ctx, req); err != nil {
+		return nil, err
+	}
 
 	// TODO(identity): Check that we believe that this ateom is running the
 	// requested actor?  ate-api-server will further check that we (the atelet)

@@ -404,18 +404,22 @@ type MintActorCertificateRequest struct {
 	// The actor for which the certificate should be issued.
 	//
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorAtespace string `protobuf:"bytes,3,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorName string `protobuf:"bytes,4,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	// The UID of the actor --- used to guard against deletion and recreation of
 	// an actor with the same name.
 	//
 	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// DER-encoded PKCS #10 certificate signing request. Atunnel retains the
 	// corresponding private key.
 	//
 	// +k8s:required
+	// +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
 	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache

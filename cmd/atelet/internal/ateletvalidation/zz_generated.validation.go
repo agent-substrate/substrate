@@ -325,6 +325,9 @@ func Validate_MintActorCertificateRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -353,6 +356,9 @@ func Validate_MintActorCertificateRequest(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			return
 		}
@@ -383,6 +389,9 @@ func Validate_MintActorCertificateRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -411,6 +420,9 @@ func Validate_MintActorCertificateRequest(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 16384); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			return
 		}
