@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,6 +119,114 @@ func nestedVirtualizationEnabled(cluster *containerpb.Cluster) bool {
 		}
 	}
 	return false
+}
+
+// podCertificateProjectionGAMinor is the first Kubernetes 1.x minor whose
+// kubelet serves pod certificate projection without a feature gate.
+const podCertificateProjectionGAMinor = 37
+
+// nodePoolsWithoutPodCertificateProjection returns the pools whose nodes will
+// not mount pod certificate volumes after the beta APIs are turned on in place.
+//
+// Turning the APIs on is a control-plane change, and it is enough on its own:
+// the APIs are served afterward. But projection is a kubelet feature, gated
+// through 1.36, and a kubelet that was already running when the APIs were
+// turned on never picks it up. Pods with a pod certificate volume scheduled
+// onto such a node fail with "MountVolume.SetUp failed: unimplemented" while
+// the control plane looks healthy. Nodes created afterward are fine, as is
+// any kubelet on 1.37 or later, where projection is GA.
+//
+// It is the pool's version that decides this, not the control plane's: a 1.37
+// control plane can still be running 1.36 nodes. A version that cannot be
+// parsed is reported too, since a spurious warning costs far less than a
+// silent mount failure.
+func nodePoolsWithoutPodCertificateProjection(cluster *containerpb.Cluster) []*containerpb.NodePool {
+	var stale []*containerpb.NodePool
+	for _, pool := range cluster.GetNodePools() {
+		if minor, ok := kubernetesMinor(pool.GetVersion()); ok && minor >= podCertificateProjectionGAMinor {
+			continue
+		}
+		stale = append(stale, pool)
+	}
+	return stale
+}
+
+// kubernetesMinor extracts the minor from a GKE version such as
+// "1.36.4-gke.1247000". It only understands Kubernetes 1.x.
+func kubernetesMinor(version string) (int, bool) {
+	major, rest, ok := strings.Cut(version, ".")
+	if !ok || major != "1" {
+		return 0, false
+	}
+	minor, _, _ := strings.Cut(rest, ".")
+	n, err := strconv.Atoi(minor)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// replacementNodePoolCommand is the command that adds a pool to take over
+// from one whose nodes predate the beta APIs. A new pool is the remedy because
+// it is the one GKE operation that is certain to produce new kubelets: an
+// upgrade to the version a pool already runs is skipped outright, and a pool
+// can only be upgraded forward when GKE happens to offer a newer patch.
+//
+// It copies what this tool sets on the pools it creates, so for a cluster
+// this tool made the new pool is equivalent. Anything else customized on the
+// old pool (taints, service account, autoscaling) has to be carried over by
+// hand, which the warning says.
+func replacementNodePoolCommand(cfg *Config, pool *containerpb.NodePool) string {
+	nodeConfig := pool.GetConfig()
+	args := []string{
+		"gcloud container node-pools create " + replacementNodePoolName(pool.GetName()),
+		"--cluster=" + cfg.ClusterName,
+		"--project=" + cfg.ProjectID,
+		"--location=" + cfg.ClusterLocation,
+		"--node-version=" + pool.GetVersion(),
+		"--machine-type=" + nodeConfig.GetMachineType(),
+		fmt.Sprintf("--num-nodes=%d", max(pool.GetInitialNodeCount(), 1)),
+	}
+	if nodeConfig.GetDiskSizeGb() > 0 {
+		args = append(args, fmt.Sprintf("--disk-size=%d", nodeConfig.GetDiskSizeGb()))
+	}
+	if nodeConfig.GetDiskType() != "" {
+		args = append(args, "--disk-type="+nodeConfig.GetDiskType())
+	}
+	if nodeConfig.GetAdvancedMachineFeatures().GetEnableNestedVirtualization() {
+		args = append(args, "--enable-nested-virtualization")
+	}
+	return strings.Join(args, " ")
+}
+
+// replacementNodePoolName derives a name for the replacement pool. GKE caps
+// pool names at 40 characters.
+func replacementNodePoolName(name string) string {
+	const suffix = "-2"
+	if len(name)+len(suffix) > 40 {
+		name = strings.TrimRight(name[:40-len(suffix)], "-")
+	}
+	return name + suffix
+}
+
+// deleteNodePoolCommand removes the old pool once its workloads have moved.
+func deleteNodePoolCommand(cfg *Config, pool *containerpb.NodePool) string {
+	return fmt.Sprintf("gcloud container node-pools delete %s --cluster=%s --project=%s --location=%s",
+		pool.GetName(), cfg.ClusterName, cfg.ProjectID, cfg.ClusterLocation)
+}
+
+// warnNodePoolsWithoutPodCertificateProjection is called after this tool has
+// turned the beta APIs on for an existing cluster. Replacing a pool moves
+// running workloads, so it is left to the user rather than done here.
+func warnNodePoolsWithoutPodCertificateProjection(cfg *Config, cluster *containerpb.Cluster) {
+	for _, pool := range nodePoolsWithoutPodCertificateProjection(cluster) {
+		slog.Warn("Node pool predates the beta APIs and its nodes cannot mount pod certificate volumes; replace it with a new pool, copying over any settings of its own such as taints, service account, or autoscaling",
+			slog.String("cluster", cfg.ClusterName),
+			slog.String("node_pool", pool.GetName()),
+			slog.String("version", pool.GetVersion()),
+			slog.String("create_replacement", replacementNodePoolCommand(cfg, pool)),
+			slog.String("then_delete_old", deleteNodePoolCommand(cfg, pool)))
+	}
 }
 
 func createClusterInternal(ctx context.Context, cfg *Config, client *container.ClusterManagerClient, parent string) error {
@@ -245,6 +354,7 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		if err := waitContainerOperation(ctx, client, op.Name, cfg); err != nil {
 			return err
 		}
+		warnNodePoolsWithoutPodCertificateProjection(cfg, cluster)
 	} else {
 		slog.Info("Cluster EnableK8SBetaApis match perfectly.", slog.String("cluster", cfg.ClusterName))
 	}
