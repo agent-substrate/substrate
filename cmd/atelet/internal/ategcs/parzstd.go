@@ -17,6 +17,7 @@ package ategcs
 import (
 	"io"
 	"runtime"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -40,6 +41,30 @@ const (
 	parZstdQueue = 2
 )
 
+var parZstdChunkPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, parZstdChunk)
+	},
+}
+
+var parZstdOutPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, parZstdChunk+parZstdChunk/16)
+	},
+}
+
+var zstdEncoderPool = sync.Pool{
+	New: func() any {
+		enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1))
+		if err != nil {
+			panic(err)
+		}
+		return enc
+	},
+}
+
 // parZstd is an io.WriteCloser that compresses what it is given as parallel zstd
 // frames, written to dst in order. Close flushes the tail and reports the first
 // error from any worker or from dst.
@@ -52,6 +77,7 @@ type parZstd struct {
 	jobs    chan parZstdJob
 	ordered chan chan []byte
 	done    chan struct{}
+	wg      sync.WaitGroup
 	err     error
 }
 
@@ -74,9 +100,10 @@ func newParZstd(dst io.Writer, workers int) *parZstd {
 		done:    make(chan struct{}),
 	}
 	for range workers * parZstdQueue {
-		p.free <- make([]byte, 0, parZstdChunk)
+		p.free <- parZstdChunkPool.Get().([]byte)
 	}
 	for range workers {
+		p.wg.Add(1)
 		go p.worker()
 	}
 	go p.writer()
@@ -84,19 +111,16 @@ func newParZstd(dst io.Writer, workers int) *parZstd {
 	return p
 }
 
-// worker compresses whole chunks. Each holds its own encoder: the encoders are
-// single-shot EncodeAll users, so one per worker keeps their state private.
+// worker compresses whole chunks. Each holds an encoder recycled from zstdEncoderPool:
+// the encoders are single-shot EncodeAll users, so holding one per worker keeps their
+// state private during execution.
 func (p *parZstd) worker() {
-	enc, err := zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(zstd.SpeedFastest),
-		zstd.WithEncoderConcurrency(1))
-	if err != nil {
-		// NewWriter only fails on bad options, which are compile-time constants here.
-		panic(err)
-	}
-	defer enc.Close()
+	defer p.wg.Done()
+	enc := zstdEncoderPool.Get().(*zstd.Encoder)
+	defer zstdEncoderPool.Put(enc)
 	for j := range p.jobs {
-		j.out <- enc.EncodeAll(j.buf, make([]byte, 0, len(j.buf)+len(j.buf)/16))
+		outBuf := parZstdOutPool.Get().([]byte)
+		j.out <- enc.EncodeAll(j.buf, outBuf[:0])
 		p.free <- j.buf[:0]
 	}
 }
@@ -110,6 +134,7 @@ func (p *parZstd) writer() {
 		if p.err == nil {
 			_, p.err = p.dst.Write(frame)
 		}
+		parZstdOutPool.Put(frame[:0])
 	}
 }
 
@@ -140,8 +165,17 @@ func (p *parZstd) flush() {
 func (p *parZstd) Close() error {
 	p.flush()
 	close(p.jobs)
+	p.wg.Wait()
 	close(p.ordered)
 	<-p.done
+	if p.buf != nil {
+		parZstdChunkPool.Put(p.buf[:0])
+		p.buf = nil
+	}
+	close(p.free)
+	for b := range p.free {
+		parZstdChunkPool.Put(b[:0])
+	}
 	return p.err
 }
 

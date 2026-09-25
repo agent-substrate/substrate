@@ -20,11 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
+	"github.com/agent-substrate/substrate/internal/sparsefile"
 	"golang.org/x/sys/unix"
 )
 
@@ -174,6 +174,12 @@ func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {
 // at the same byte offsets, leaving dst's other bytes untouched. Holes in src are
 // located via SEEK_DATA/SEEK_HOLE and skipped. src and dst are assumed to be the
 // same logical size (the caller validates this).
+//
+// Extents are transferred using copy_file_range(2) via sparsefile.KernelCopyRange,
+// which offloads the copy entirely within the kernel page cache without allocating
+// userspace buffers or bouncing memory through userspace read/write loops. Calls
+// are capped to 1 GiB per invocation to avoid monopolizing kernel threads on
+// large extents, and transient interruptions (EINTR) are automatically retried.
 func copySparseRegions(src, dst *os.File) (copied int64, err error) {
 	si, err := src.Stat()
 	if err != nil {
@@ -181,7 +187,7 @@ func copySparseRegions(src, dst *os.File) (copied int64, err error) {
 	}
 	size := si.Size()
 	sfd := int(src.Fd())
-	buf := make([]byte, 1<<20)
+	dfd := int(dst.Fd())
 	off := int64(0)
 	for off < size {
 		// Next populated region [ds, de) in src.
@@ -196,29 +202,16 @@ func copySparseRegions(src, dst *os.File) (copied int64, err error) {
 		if err != nil {
 			return copied, fmt.Errorf("SEEK_HOLE: %w", err)
 		}
-		if _, err := src.Seek(ds, io.SeekStart); err != nil {
-			return copied, err
-		}
-		if _, err := dst.Seek(ds, io.SeekStart); err != nil {
-			return copied, err
-		}
 		remaining := de - ds
+		curOff := ds
 		for remaining > 0 {
-			n := int64(len(buf))
-			if n > remaining {
-				n = remaining
+			n, rerr := sparsefile.KernelCopyRange(sfd, dfd, curOff, remaining)
+			if rerr != nil {
+				return copied, fmt.Errorf("copy_file_range: %w", rerr)
 			}
-			r, err := io.ReadFull(src, buf[:n])
-			if r > 0 {
-				if _, werr := dst.Write(buf[:r]); werr != nil {
-					return copied, werr
-				}
-				copied += int64(r)
-			}
-			if err != nil {
-				return copied, fmt.Errorf("reading data region: %w", err)
-			}
-			remaining -= int64(r)
+			copied += n
+			curOff += n
+			remaining -= n
 		}
 		off = de
 	}

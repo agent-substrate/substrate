@@ -22,7 +22,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
+	"github.com/agent-substrate/substrate/internal/sparsefile"
 )
 
 // GetFileCopyTo materializes the artifact identified by key at dst as a
