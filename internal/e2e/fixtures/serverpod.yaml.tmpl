@@ -43,6 +43,7 @@ ${ARGS}
     ports:
     - name: serve
       containerPort: ${TARGET_PORT}
+${UDP_CONTAINER_PORTS}
     # The suite starts dialing as soon as it has an address, so without a
     # readiness gate the first connection can land before the listener exists
     # and come back refused -- which reads as a failure of whatever sits between
@@ -83,3 +84,4 @@ spec:
   - name: serve
     port: ${PORT}
     targetPort: ${TARGET_PORT}
+${UDP_SERVICE_PORTS}

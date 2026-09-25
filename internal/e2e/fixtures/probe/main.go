@@ -22,12 +22,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -351,6 +353,128 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// resolveTimeout bounds a lookup. The resolver retries on its own schedule
+// when nothing answers, so without a bound a request made while DNS is broken
+// hangs for whatever /etc/resolv.conf adds up to instead of reporting it.
+const resolveTimeout = 10 * time.Second
+
+// resolveResult is the /resolve response body.
+type resolveResult struct {
+	Host string `json:"host"`
+	// Addresses is what the name resolved to. Returned rather than a bare
+	// "it worked" so a caller can check the answer is the one it deployed,
+	// which a stale or hijacked resolver would fail.
+	Addresses []string `json:"addresses,omitempty"`
+	// Error is the lookup failure. A failure is a result -- it is what an
+	// actor that cannot reach DNS looks like -- so it is not an HTTP error.
+	Error string `json:"error,omitempty"`
+}
+
+// resolve looks ?host= up through the sandbox's own resolver, which reaches the
+// cluster's DNS over UDP. It is the narrowest check that actor DNS still
+// leaves the worker pod: unlike /fetch it opens no connection afterwards, so
+// nothing about the answer depends on the egress path.
+func resolve(w http.ResponseWriter, r *http.Request) {
+	host := r.URL.Query().Get("host")
+	result := resolveResult{Host: host}
+	if host == "" {
+		result.Error = "missing host parameter"
+		writeJSON(w, result)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), resolveTimeout)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		result.Error = err.Error()
+	} else {
+		result.Addresses = addresses
+	}
+	writeJSON(w, result)
+}
+
+// UDP probe budget. A datagram that is dropped on its way out of the worker
+// pod is silent -- nothing answers, and nothing reports the drop -- so the wait
+// IS the measurement, and a delivered-but-slow echo read as a drop would be a
+// false accusation. Retrying inside the budget covers the other direction: UDP
+// may lose a single datagram for reasons that have nothing to do with policy,
+// and one lost datagram must not read as "blocked".
+const (
+	udpEchoAttempts = 5
+	udpEchoWait     = time.Second
+)
+
+// udpEchoResult is the /udpecho response body.
+type udpEchoResult struct {
+	Addr string `json:"addr"`
+	// Echoed reports whether the datagram came back. False is a normal,
+	// assertable outcome -- it is what a dropped datagram looks like from in
+	// here -- so it is never an HTTP error.
+	Echoed bool `json:"echoed"`
+	// Attempts is how many datagrams were sent before giving up or getting one
+	// back, so a flaky pass (echoed on the last try) is visible in the log
+	// rather than indistinguishable from a clean one.
+	Attempts int `json:"attempts"`
+	// Error is the last send or receive failure. A read timeout is the
+	// expected one when Echoed is false; an ICMP-driven "connection refused"
+	// means the datagram reached a host that had nothing listening, which is a
+	// different finding and worth not confusing with a drop.
+	Error string `json:"error,omitempty"`
+}
+
+// udpecho sends datagrams to ?addr= and reports whether one was echoed back,
+// so a test can assert which of an actor's UDP destinations actually leave the
+// worker pod. It needs an echo server on the far end: reachable-but-silent and
+// dropped are the same observation from inside the sandbox.
+func udpecho(w http.ResponseWriter, r *http.Request) {
+	addr := r.URL.Query().Get("addr")
+	result := udpEchoResult{Addr: addr}
+	if addr == "" {
+		result.Error = "missing addr parameter"
+		writeJSON(w, result)
+		return
+	}
+
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		result.Error = "dialing " + addr + ": " + err.Error()
+		writeJSON(w, result)
+		return
+	}
+	defer conn.Close()
+
+	// A token unique to this request, so a straggler from an earlier one
+	// cannot be counted as this one's echo.
+	payload := fmt.Sprintf("probe-%d", time.Now().UnixNano())
+	for result.Attempts < udpEchoAttempts {
+		result.Attempts++
+		if _, err := conn.Write([]byte(payload)); err != nil {
+			result.Error = "sending to " + addr + ": " + err.Error()
+			continue
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(udpEchoWait)); err != nil {
+			result.Error = "setting the read deadline: " + err.Error()
+			break
+		}
+		// Oversized on purpose: a wrong-length reply should be reported as the
+		// mismatch it is, not silently truncated into a match.
+		buf := make([]byte, 512)
+		n, err := conn.Read(buf)
+		if err != nil {
+			result.Error = "waiting for the echo from " + addr + ": " + err.Error()
+			continue
+		}
+		if string(buf[:n]) == payload {
+			result.Echoed = true
+			result.Error = ""
+			break
+		}
+		result.Error = fmt.Sprintf("echo from %s was %q, want %q", addr, buf[:n], payload)
+	}
+	writeJSON(w, result)
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -371,6 +495,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
 	mux.HandleFunc("/fetch", fetch)
+	mux.HandleFunc("/udpecho", udpecho)
+	mux.HandleFunc("/resolve", resolve)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/resources", resources)
