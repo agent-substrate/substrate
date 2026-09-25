@@ -4855,6 +4855,51 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if want := "atespaces:" + testAtespace + ":actors:id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
 	}
+	assertActorJWTLifetime(t, mintResp, claims, 15*time.Minute)
+}
+
+func TestMintActorJWT_ClampsRequestedExpiration(t *testing.T) {
+	ns := namespaceForTest("ns-mintactorjwt-expiration")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	createResp, err := tc.client.CreateActor(t.Context(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	mintResp, err := tc.client.MintActorJWT(t.Context(), &ateapipb.MintActorJWTRequest{
+		Actor:             &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+		ActorUid:          createResp.GetMetadata().GetUid(),
+		Audience:          []string{"foo"},
+		ExpirationSeconds: 7200,
+	})
+	if err != nil {
+		t.Fatalf("MintActorJWT failed: %v", err)
+	}
+
+	segments := strings.Split(mintResp.GetActorJwt(), ".")
+	if len(segments) != 3 {
+		t.Fatalf("actor JWT has %d segments, want 3", len(segments))
+	}
+	var claims actoridjwt.WireClaims
+	decodeJWTSegment(t, segments[1], &claims)
+	assertActorJWTLifetime(t, mintResp, claims, time.Hour)
+}
+
+// assertActorJWTLifetime checks that expires_at matches the exp claim and that
+// the token is valid for want after it was issued.
+func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJWTResponse, claims actoridjwt.WireClaims, want time.Duration) {
+	t.Helper()
+	if got, exp := resp.GetExpiresAt().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
+		t.Errorf("expires_at = %v, want the exp claim %v", got, exp)
+	}
+	if got := time.Duration(claims.Expiration-claims.IssuedAt) * time.Second; got != want {
+		t.Errorf("exp - iat = %v, want %v", got, want)
+	}
 }
 
 // decodeJWTSegment base64url-decodes one JWT segment and unmarshals its JSON into v.

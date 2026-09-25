@@ -17,8 +17,10 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -1637,5 +1639,59 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				t.Fatalf("missing snapshot source for %s", scenario)
 			}
 		})
+	}
+}
+
+func TestValidateMintActorJWTRequest(t *testing.T) {
+	valid := func() *ateapipb.MintActorJWTRequest {
+		return &ateapipb.MintActorJWTRequest{
+			Actor:    &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			ActorUid: "0f8fad5b-d9cb-469f-a165-70867728950e",
+			Audience: []string{"https://example.com"},
+		}
+	}
+	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
+		req := valid()
+		req.ExpirationSeconds = seconds
+		return req
+	}
+	tests := []struct {
+		name string
+		req  *ateapipb.MintActorJWTRequest
+		want field.ErrorList
+	}{
+		{name: "default expiration", req: valid()},
+		{name: "expiration below the clamp", req: withExpiration(1)},
+		{name: "expiration above the clamp", req: withExpiration(86400)},
+		{
+			name: "negative expiration",
+			req:  withExpiration(-1),
+			want: field.ErrorList{field.Invalid(field.NewPath("expiration_seconds"), int64(-1), "").WithOrigin("minimum")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateMintActorJWTRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestActorJWTLifetime(t *testing.T) {
+	tests := []struct {
+		expirationSeconds int64
+		want              time.Duration
+	}{
+		{expirationSeconds: 0, want: 15 * time.Minute},
+		{expirationSeconds: 1, want: 5 * time.Minute},
+		{expirationSeconds: 300, want: 5 * time.Minute},
+		{expirationSeconds: 1800, want: 30 * time.Minute},
+		{expirationSeconds: 3600, want: time.Hour},
+		{expirationSeconds: 3601, want: time.Hour},
+		{expirationSeconds: math.MaxInt64, want: time.Hour},
+	}
+	for _, tt := range tests {
+		if got := actorJWTLifetime(tt.expirationSeconds); got != tt.want {
+			t.Errorf("actorJWTLifetime(%d) = %v, want %v", tt.expirationSeconds, got, tt.want)
+		}
 	}
 }
