@@ -376,28 +376,32 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
-		{"data-on-golden with golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+		{"data-on-golden with base config", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUri = goldenSnapshotURI
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
 		}), false},
-		{"data-on-golden without golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+		{"data-on-golden without base config", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}), true},
-		{"data-on-golden with bucketless golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+		{"data-on-golden with empty base config", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUri = "relative/path"
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{}
 		}), true},
-		// A pause (local) checkpoint may combine with the golden snapshot:
-		// the golden URI is a top-level field precisely so LOCAL restores
-		// can carry it.
+		{"data-on-golden with bucketless base config", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: "relative/path"}
+		}), true},
+		// A pause (local) checkpoint may combine with the base snapshot:
+		// base_config is a top-level field precisely so LOCAL restores can
+		// carry it.
 		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUri = goldenSnapshotURI
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "local-snap-1"}}
 		}), false},
-		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.GoldenSnapshotUri = goldenSnapshotURI
+		{"base config with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
 		}), true},
 	}
 	for _, tc := range tests {
