@@ -969,6 +969,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
+		sandboxClass:      req.GetSandboxAssets().GetSandboxClass(),
 	}
 	attribution := resources.ActorAttribution{
 		Ref:              actorRef,
@@ -1010,8 +1011,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// Fetch the snapshot manifest stored beside the checkpoint images
 	// first: it lists the checkpoint files to download and records the actor
-	// identity and the sandbox that captured the snapshot, which the runtime
-	// sandbox is checked against below.
+	// identity used to label the restore's metrics.
 	tManifest := time.Now()
 	manifestDone := false
 	defer func() {
@@ -1077,9 +1077,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	manifestDone = true
 
 	// The manifest is what tells a golden restore from a latest one, so the
-	// metric dimensions only become knowable here.
+	// snapshot kind only becomes knowable here.
 	op.kind = restoreSnapshotKind(req, sandboxRec)
-	op.sandboxClass = sandboxRec.SandboxClass
 
 	// The sandbox (binaries + pause image) that runs the restored workload
 	// comes from the request, resolved by the control plane from the
