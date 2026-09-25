@@ -621,10 +621,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	}
 
 	actorClaims := &actoridjwt.Claims{
-		// TODO(identity): This needs to be configurable per-install.  The user
-		// needs to make sure that the OIDC discovery docs are accessible at
-		// this URL, so that relying parties can verify the JWTs.
-		Issuer: "https://api.ate-system.svc",
+		Issuer: s.actorJWTIssuer,
 		// TODO(identity): this format is very likely going to change.
 		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudience(),

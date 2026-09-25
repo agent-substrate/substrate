@@ -433,8 +433,9 @@ for a worked example.
 
 ### A Note on Logs
 
-**Substrate exports one thing over OTLP: the actor lifecycle events**, from
-ateapi, through `serverboot.InitLogging`. They are off unless
+**Substrate exports one thing over OTLP: the actor events**, ateapi's
+lifecycle records and the ateoms' usage samples, through
+`serverboot.InitLogging`. They are off unless
 `OTEL_LOGS_EXPORTER=otlp` is set, which only the kind overlay does today. See
 [the same records over OTLP](../../observability.md#the-same-records-over-otlp).
 
@@ -461,11 +462,13 @@ onto the log record's own trace fields with no transformation.
 Those logs are collected by whatever agent already reads container stdout on
 your nodes. The collector is not in that path.
 
-If you do add such an agent, note that ateapi writes the lifecycle records to
-both stdout and OTLP. Reading its stdout as well gives you each record twice:
-either exclude the `ate-system` namespace from the agent, or drop the records
-whose instrumentation scope is
-`github.com/agent-substrate/substrate/internal/actorevent`.
+If you do add such an agent, note that the actor events, ateapi's lifecycle
+records and the ateoms' usage samples, go to both stdout and OTLP. Reading
+stdout as well gives you each record twice. ateapi runs in `ate-system` and the
+ateoms run in the worker pool namespaces, so a namespace exclusion does not
+cover both: drop the records by `event.name` (`ate.actor.state_changed`,
+`ate.actor.crashed`, `ate.actor.usage_sampled`), or exclude the
+`ate-api-server` and `ateom` containers by name.
 
 The logs pipeline also serves **your** workloads: actors or services
 instrumented with the OpenTelemetry logs SDK that push OTLP log records to the
