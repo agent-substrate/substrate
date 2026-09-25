@@ -419,16 +419,27 @@ message VolumeMount {
   string mount_path = 2;
 }
 
-// Container's remaining fields are tagged in follow-ups; the ones below are
-// tagged ahead because their types carry validations (the generator requires
-// presence tags for those) or because the containers list is keyed by name.
 message Container {
   // +k8s:required
   // +k8s:format=k8s-short-name
+  // +k8s:customValidation # "pause" is reserved for sandbox infrastructure
   string name = 1;
 
+  // +k8s:required
+  // +k8s:maxLength=512 # matches the template Container.image's bound
+  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string image = 2;
+
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string command = 3;
+
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string args = 7;
 
   // +k8s:optional

@@ -1687,17 +1687,26 @@ func (x *VolumeMount) GetMountPath() string {
 	return ""
 }
 
-// Container's remaining fields are tagged in follow-ups; the ones below are
-// tagged ahead because their types carry validations (the generator requires
-// presence tags for those) or because the containers list is keyed by name.
 type Container struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	Name    string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Image   string   `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	// +k8s:customValidation # "pause" is reserved for sandbox infrastructure
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:required
+	// +k8s:maxLength=512 # matches the template Container.image's bound
+	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
+	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=64
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
-	Args    []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=64
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
+	Args []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches the template's env bound
 	// +k8s:listType=map # each variable is set at most once

@@ -626,7 +626,9 @@ func TestValidateSecurityContext(t *testing.T) {
 // TestValidateWorkloadSpecContainers exercises the newly keyed containers
 // list through the parent, as with volumes.
 func TestValidateWorkloadSpecContainers(t *testing.T) {
-	ctr := func(name string) *ateletpb.Container { return &ateletpb.Container{Name: name} }
+	ctr := func(name string) *ateletpb.Container {
+		return &ateletpb.Container{Name: name, Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+	}
 	tests := []struct {
 		name string
 		obj  *ateletpb.WorkloadSpec
@@ -650,6 +652,7 @@ func TestValidateWorkloadSpecContainers(t *testing.T) {
 		name: "negative limits surface through the container",
 		obj: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
 			Name:      "main",
+			Image:     "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 			Resources: &ateletpb.ResourceLimits{CpuMillis: -1},
 		}}},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
@@ -761,8 +764,9 @@ func TestValidateVolumeMount(t *testing.T) {
 func TestValidateContainerMountsAndEnv(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.Container)) *ateletpb.Container {
 		c := &ateletpb.Container{
-			Name: "main",
-			Env:  []*ateletpb.EnvEntry{{Name: "PORT", Value: "8080"}},
+			Name:  "main",
+			Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Env:   []*ateletpb.EnvEntry{{Name: "PORT", Value: "8080"}},
 			VolumeMounts: []*ateletpb.VolumeMount{
 				{Name: "data", MountPath: "/data"},
 				{Name: "data", MountPath: "/mnt/data"},
@@ -913,6 +917,73 @@ func TestValidateWakeupProbe(t *testing.T) {
 			op := operation.Operation{Type: operation.Create}
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_WakeupProbe(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+// TestValidateContainerNameAndProcess covers the fields that define what the
+// container runs: name (with the reserved "pause"), image, command, and args.
+func TestValidateContainerNameAndProcess(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.Container)) *ateletpb.Container {
+		c := &ateletpb.Container{
+			Name:    "main",
+			Image:   "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Command: []string{"/bin/app"},
+			Args:    []string{"--serve"},
+		}
+		for _, m := range mutate {
+			m(c)
+		}
+		return c
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.Container
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "reserved name pause",
+		obj:  valid(func(c *ateletpb.Container) { c.Name = "pause" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
+	}, {
+		name: "missing image",
+		obj:  valid(func(c *ateletpb.Container) { c.Image = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("image"), "")},
+	}, {
+		name: "image not pinned by digest",
+		obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app:v1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
+	}, {
+		name: "image with a malformed digest",
+		obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app@sha256:abc" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
+	}, {
+		name: "empty command and args are allowed",
+		obj: valid(func(c *ateletpb.Container) {
+			c.Command = nil
+			c.Args = nil
+		}),
+	}, {
+		name: "too many command items",
+		obj: valid(func(c *ateletpb.Container) {
+			c.Command = make([]string, 65)
+		}),
+		want: field.ErrorList{field.TooMany(field.NewPath("command"), 65, 64).WithOrigin("maxItems")},
+	}, {
+		name: "arg over the length guardrail",
+		obj: valid(func(c *ateletpb.Container) {
+			c.Args = []string{strings.Repeat("a", 4097)}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("args").Index(0), nil, 4096).WithOrigin("maxLength")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_Container(context.Background(), op, nil, tt.obj, nil))
 		})
 	}
 }
