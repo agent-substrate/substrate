@@ -32,6 +32,11 @@ export CLUSTER_NAME=substrate-poc
 #   gcloud container get-server-config --zone ${CLUSTER_LOCATION} --format="value(defaultClusterVersion)"
 # See tools/setup-gcp/README.md ("Create Cluster") for the full constraint.
 export CLUSTER_VERSION=1.36.3-gke.1767000
+# Release channel for a new cluster: rapid, regular, stable, or none to
+# unenroll. Unset leaves the cluster on GKE's default channel, which is not the
+# same as none. A channel only serves the versions it carries, so CLUSTER_VERSION
+# and this have to agree — 1.37 is in rapid alone at the time of writing.
+# export RELEASE_CHANNEL=rapid
 export NODE_POOL_NAME=gvisor-pool
 export NODE_POOL_VERSION=1.36.3-gke.1767000
 export NODE_MACHINE_TYPE=c3-standard-4

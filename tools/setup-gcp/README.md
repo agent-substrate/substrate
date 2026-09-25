@@ -95,6 +95,18 @@ Filestore CSI driver disabled).
 > podcertificate ClusterTrustBundles to be ready" and `kubectl get
 > clustertrustbundles` reports the resource type is not served.
 
+Which versions you can ask for depends on the release channel, so
+`--cluster-version` often needs `--release-channel` beside it. A channel only
+serves the versions it currently carries — at the time of writing, 1.37 is in
+Rapid alone — and a `--cluster-version` the channel does not carry is rejected
+by GKE. Leaving `--release-channel` empty is not the same as passing `none`:
+empty sends no channel at all, so GKE applies its default (Regular today),
+while `none` explicitly unenrolls the cluster from release channels.
+
+`extended` is rejected up front. This tool enables the beta APIs on every
+cluster it creates and the extended channel does not allow beta APIs, so such a
+create can only fail.
+
 > [!WARNING]
 > **Turn node auto-upgrade off on any node pool that runs workers, and do not
 > use spot or preemptible nodes for them.** When a worker pod is deleted,
@@ -133,6 +145,7 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--name` | Name of the GKE cluster. | `CLUSTER_NAME` | `substrate-poc` |
 | `--location` | Zone or region for the cluster (must be compatible with `--region`). | `CLUSTER_LOCATION` | `us-west1-c` |
 | `--version` | Kubernetes version. | `CLUSTER_VERSION` | None |
+| `--release-channel` | Release channel for the new cluster: `rapid`, `regular`, `stable`, or `none` to unenroll. Empty leaves the cluster on GKE's default channel. | `RELEASE_CHANNEL` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
@@ -265,6 +278,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--cluster-name` | Name of the GKE cluster. | `CLUSTER_NAME` | `substrate-poc` |
 | `--cluster-location`| Zone or region for the cluster (must be compatible with `--region`). | `CLUSTER_LOCATION` | `us-west1-c` |
 | `--cluster-version` | Kubernetes version. | `CLUSTER_VERSION` | None |
+| `--release-channel` | Release channel for the new cluster: `rapid`, `regular`, `stable`, or `none` to unenroll. Empty leaves the cluster on GKE's default channel. | `RELEASE_CHANNEL` | None |
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |

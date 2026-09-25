@@ -52,6 +52,43 @@ func deleteCluster(ctx context.Context, cfg *Config) error {
 	return waitContainerOperation(ctx, client, op.Name, cfg)
 }
 
+// releaseChannels maps the --release-channel values to the API enum. "none" is
+// spelled out rather than being the empty string, because the two mean
+// different things to GKE: an unset ReleaseChannel leaves the cluster on GKE's
+// default (Regular today), while an explicit UNSPECIFIED opts out of release
+// channels altogether. Only a caller who asks for "none" gets the second.
+var releaseChannels = map[string]containerpb.ReleaseChannel_Channel{
+	"none":     containerpb.ReleaseChannel_UNSPECIFIED,
+	"rapid":    containerpb.ReleaseChannel_RAPID,
+	"regular":  containerpb.ReleaseChannel_REGULAR,
+	"stable":   containerpb.ReleaseChannel_STABLE,
+	"extended": containerpb.ReleaseChannel_EXTENDED,
+}
+
+// validateReleaseChannel normalizes ReleaseChannel and rejects what GKE would.
+func validateReleaseChannel(cfg *Config) error {
+	cfg.ReleaseChannel = strings.ToLower(strings.TrimSpace(cfg.ReleaseChannel))
+	if cfg.ReleaseChannel == "" {
+		return nil
+	}
+	if _, ok := releaseChannels[cfg.ReleaseChannel]; !ok {
+		names := make([]string, 0, len(releaseChannels))
+		for name := range releaseChannels {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		return fmt.Errorf("release channel %q is invalid: must be one of %s", cfg.ReleaseChannel, strings.Join(names, ", "))
+	}
+	// Caught here rather than left to GKE because this tool asks for the beta
+	// PodCertificate APIs on every cluster it creates, and the extended
+	// channel refuses them: "enabling Beta APIs is not supported in the
+	// extended release channel". The create cannot succeed, so say so first.
+	if cfg.ReleaseChannel == "extended" {
+		return errors.New(`release channel "extended" cannot be used: it does not allow the Kubernetes beta APIs this tool enables on every cluster`)
+	}
+	return nil
+}
+
 func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateClusterRequest {
 	var networkConfig *containerpb.NetworkConfig
 	if cfg.EnableDataplaneV2 {
@@ -73,7 +110,7 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 	if cfg.BootDiskType != "" {
 		nodeConfig.DiskType = cfg.BootDiskType
 	}
-	return &containerpb.CreateClusterRequest{
+	req := &containerpb.CreateClusterRequest{
 		Parent: parent,
 		Cluster: &containerpb.Cluster{
 			Name:                  cfg.ClusterName,
@@ -102,6 +139,17 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 			},
 		},
 	}
+	// Only set when asked for. Leaving the field nil is not the same as
+	// sending UNSPECIFIED: nil means "GKE decides", which lands the cluster on
+	// the default channel, while UNSPECIFIED unenrolls it from channels
+	// altogether. Callers who pass nothing keep the behavior they had before
+	// this flag existed.
+	if cfg.ReleaseChannel != "" {
+		req.Cluster.ReleaseChannel = &containerpb.ReleaseChannel{
+			Channel: releaseChannels[cfg.ReleaseChannel],
+		}
+	}
+	return req
 }
 
 func filestoreCsiDriverEnabled(cluster *containerpb.Cluster) bool {
@@ -135,6 +183,9 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		return err
 	}
 	if err := validateBootDisk(cfg); err != nil {
+		return err
+	}
+	if err := validateReleaseChannel(cfg); err != nil {
 		return err
 	}
 	client, err := container.NewClusterManagerClient(ctx)
@@ -397,6 +448,7 @@ func init() {
 	clusterCmd.Flags().StringVar(&cfg.ClusterName, "name", getEnv("CLUSTER_NAME", "substrate-poc"), "Name of the GKE cluster [env: CLUSTER_NAME]")
 	clusterCmd.Flags().StringVar(&cfg.ClusterLocation, "location", getEnv("CLUSTER_LOCATION", "us-west1-c"), "Zone or region for the cluster [env: CLUSTER_LOCATION]")
 	clusterCmd.Flags().StringVar(&cfg.ClusterVersion, "version", getEnv("CLUSTER_VERSION", ""), "Kubernetes version [env: CLUSTER_VERSION]")
+	clusterCmd.Flags().StringVar(&cfg.ReleaseChannel, "release-channel", getEnv("RELEASE_CHANNEL", ""), "Release channel for a new cluster: rapid, regular, stable, or none to unenroll; empty = GKE's default channel [env: RELEASE_CHANNEL]")
 	clusterCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", resolveMachineTypeDefault(), "Machine type for the node pool [env: NODE_MACHINE_TYPE]")
