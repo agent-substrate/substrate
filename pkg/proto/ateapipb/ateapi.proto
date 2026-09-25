@@ -1564,32 +1564,38 @@ message MintActorJWTRequest {
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
   repeated string audience = 1;
+
+  // Requested lifetime of the JWT, in seconds. Zero means 900 (15 minutes).
+  // Other values are clamped to [300, 3600]; expires_at in the response
+  // reports the expiration actually used.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 expiration_seconds = 8;
 }
 
-// Response message for MintActorJWT
-//
-// TODO(identity): check why k8s do ":" and not "/" as a seprator for the Subject format
-//
-// TODO(identity): whats the right format for the subject? kubernetes follow "system:serviceaccount:<namespace>:<name>".
+// Response message for MintActorJWT.
 message MintActorJWTResponse {
-  // Actor JWT.  An OIDC Discovery-compatible JWT
+  // The signed actor JWT. Relying parties verify it with OpenID Connect
+  // Discovery against its issuer.
+  //
+  // The header carries `alg`, `kid`, and `typ: JWT`.
   //
   // Claims:
   //
-  // * iss: Issuer - a valid URL where a relying party can fetch the OIDC
-  //   discovery documents.
-  // * sub: Subject - a string expressing the identity carried in the
-  // credential. Format
-  //   `atespaces:${atespace}:actors:${actorname}`.
-  // * aud: Audience - a string identifying the service this token will be used
-  //   to authenticate to.
-  // * nbf: Not Before - a numeric unix timestamp
-  // * exp: Expiration - a numeric unix timestamp
-  // * iat: Issued At - a numeric unix timestamp
-  // * `ate.dev`: Ate/Substrate Extension - JSON object
-  //   * atespace: (string) The atespace the actor belongs to
-  //   * actorName: (string) The actor's name, unique within its atespace
+  // * iss: The issuer URL. Relying parties fetch
+  //   `<iss>/.well-known/openid-configuration` to find the signing keys.
+  // * sub: `atespaces:<atespace>:actors:<name>`.
+  // * aud: The requested audiences, always a JSON array.
+  // * exp, nbf, iat: Numeric Unix timestamps. nbf is five minutes before iat
+  //   to allow for clock skew.
+  // * jti: A random token ID.
+  // * `ate.dev`: A JSON object with the actor's `atespace`, `actorName`, and
+  //   `actorUID`.
   string actor_jwt = 1 [ debug_redact = true ];
+
+  // When actor_jwt expires. Equal to its exp claim.
+  google.protobuf.Timestamp expires_at = 2;
 }
 
 // Request message for MintActorCertificate.

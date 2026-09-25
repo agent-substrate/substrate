@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -620,14 +621,17 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
+	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// equal to the exp claim.
+	now := time.Now().Truncate(time.Second)
+	expiresAt := now.Add(actorJWTLifetime(req.GetExpirationSeconds()))
 	actorClaims := &actoridjwt.Claims{
-		Issuer: s.actorJWTIssuer,
-		// TODO(identity): this format is very likely going to change.
+		Issuer:     s.actorJWTIssuer,
 		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudience(),
-		Expiration: time.Now().Add(15 * time.Minute),
-		NotBefore:  time.Now().Add(-5 * time.Minute),
-		IssuedAt:   time.Now(),
+		Expiration: expiresAt,
+		NotBefore:  now.Add(-5 * time.Minute),
+		IssuedAt:   now,
 		JTI:        rand.Text(),
 
 		Substrate: actoridjwt.SubstrateClaims{
@@ -643,8 +647,26 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	}
 
 	return &ateapipb.MintActorJWTResponse{
-		ActorJwt: actorJWT,
+		ActorJwt:  actorJWT,
+		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil
+}
+
+const (
+	defaultActorJWTLifetime = 15 * time.Minute
+	minActorJWTLifetime     = 5 * time.Minute
+	maxActorJWTLifetime     = time.Hour
+)
+
+// actorJWTLifetime maps a requested expiration_seconds to the lifetime to
+// sign with: zero means the default, anything else is clamped to the bounds.
+func actorJWTLifetime(expirationSeconds int64) time.Duration {
+	if expirationSeconds == 0 {
+		return defaultActorJWTLifetime
+	}
+	// Clamp in seconds so a huge request cannot overflow time.Duration.
+	seconds := min(max(expirationSeconds, int64(minActorJWTLifetime/time.Second)), int64(maxActorJWTLifetime/time.Second))
+	return time.Duration(seconds) * time.Second
 }
 
 func validateMintActorJWTRequest(ctx context.Context, req *ateapipb.MintActorJWTRequest) field.ErrorList {
