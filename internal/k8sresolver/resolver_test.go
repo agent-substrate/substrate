@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,9 +102,36 @@ func TestParseTarget(t *testing.T) {
 			wantPort:      "443",
 		},
 		{
+			name: "explicit path namespace preserves dotted service",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api.prod"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api.prod",
+			wantPort:      "443",
+		},
+		{
+			name: "explicit host namespace preserves dotted service",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Host: "ate-system", Path: "/api.prod:8443"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api.prod",
+			wantPort:      "8443",
+		},
+		{
 			name: "fqdn format api.ate-system.svc:443",
 			target: resolver.Target{
 				URL: url.URL{Scheme: "k8s", Path: "/api.ate-system.svc:443"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "443",
+		},
+		{
+			name: "dns style infers namespace without explicit namespace or port",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/api.ate-system"},
 			},
 			wantNamespace: "ate-system",
 			wantService:   "api",
@@ -127,6 +155,51 @@ func TestParseTarget(t *testing.T) {
 			wantService:   "api",
 			wantPort:      "443",
 		},
+		{
+			name: "localhost host uses path namespace",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Host: "localhost", Path: "/ate-system/api"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "443",
+		},
+		{
+			name: "EndpointSlice port sentinel",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:0"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "0",
+		},
+		{
+			name: "minimum explicit port",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:1"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "1",
+		},
+		{
+			name: "maximum explicit port",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:65535"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "65535",
+		},
+		{
+			name: "explicit port spelling is preserved",
+			target: resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:00443"},
+			},
+			wantNamespace: "ate-system",
+			wantService:   "api",
+			wantPort:      "00443",
+		},
 	}
 
 	for _, tt := range tests {
@@ -143,6 +216,101 @@ func TestParseTarget(t *testing.T) {
 			}
 			if gotPort != tt.wantPort {
 				t.Errorf("ParseTarget() gotPort = %v, want %v", gotPort, tt.wantPort)
+			}
+		})
+	}
+}
+
+func TestParseTargetRejectsInvalidSchemes(t *testing.T) {
+	tests := []struct {
+		name   string
+		scheme string
+	}{
+		{name: "missing", scheme: ""},
+		{name: "wrong", scheme: "dns"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := resolver.Target{
+				URL: url.URL{Scheme: tt.scheme, Path: "/ate-system/api:443"},
+			}
+
+			_, _, _, err := ParseTarget(target)
+			if err == nil {
+				t.Fatal("ParseTarget() error = nil, want an invalid scheme error")
+			}
+			if !strings.Contains(err.Error(), "invalid scheme") {
+				t.Fatalf("ParseTarget() error = %q, want an invalid scheme error", err)
+			}
+		})
+	}
+}
+
+func TestParseTargetRejectsEmptyNamespaceOrService(t *testing.T) {
+	tests := []struct {
+		name   string
+		target resolver.Target
+	}{
+		{
+			name:   "empty path namespace",
+			target: resolver.Target{URL: url.URL{Scheme: "k8s", Path: "//api:443"}},
+		},
+		{
+			name:   "empty path service",
+			target: resolver.Target{URL: url.URL{Scheme: "k8s", Path: "/ate-system/"}},
+		},
+		{
+			name:   "empty host service",
+			target: resolver.Target{URL: url.URL{Scheme: "k8s", Host: "ate-system"}},
+		},
+		{
+			name:   "empty inferred namespace",
+			target: resolver.Target{URL: url.URL{Scheme: "k8s", Path: "/api."}},
+		},
+		{
+			name:   "empty inferred service",
+			target: resolver.Target{URL: url.URL{Scheme: "k8s", Path: "/.ate-system"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, _, err := ParseTarget(tt.target)
+			if err == nil {
+				t.Fatal("ParseTarget() error = nil, want an empty namespace or service error")
+			}
+			if !strings.Contains(err.Error(), "namespace and service to be non-empty") {
+				t.Fatalf("ParseTarget() error = %q, want a non-empty namespace and service error", err)
+			}
+		})
+	}
+}
+
+func TestParseTargetRejectsInvalidPorts(t *testing.T) {
+	tests := []struct {
+		name string
+		port string
+	}{
+		{name: "empty", port: ""},
+		{name: "nonnumeric", port: "notaport"},
+		{name: "negative", port: "-1"},
+		{name: "above 65535", port: "65536"},
+		{name: "multiple colons", port: "443:extra"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := resolver.Target{
+				URL: url.URL{Scheme: "k8s", Path: "/ate-system/api:" + tt.port},
+			}
+
+			_, _, _, err := ParseTarget(target)
+			if err == nil {
+				t.Fatal("ParseTarget() error = nil, want an invalid port error")
+			}
+			if !strings.Contains(err.Error(), "invalid port") {
+				t.Fatalf("ParseTarget() error = %q, want an invalid port error", err)
 			}
 		})
 	}
