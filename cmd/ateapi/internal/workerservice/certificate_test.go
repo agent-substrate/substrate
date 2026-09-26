@@ -131,12 +131,20 @@ func TestMintAteomActorCertificate(t *testing.T) {
 		t.Errorf("leaf URIs = %v, want [%s]", leaf.URIs, wantURI)
 	}
 
+	// agentgateway resolves the actor from this extension and requires
+	// Purpose "atunnel".
 	identity, err := substratex509.ActorIdentityFromCertificate(leaf)
 	if err != nil {
 		t.Fatalf("ActorIdentityFromCertificate: %v", err)
 	}
-	if identity != nil {
-		t.Errorf("ActorIdentity = %+v, want nil (ateom certificates should not carry ActorIdentity)", identity)
+	want := &substratex509.ActorIdentity{
+		Atespace:  "team-a",
+		ActorName: "my-actor",
+		ActorUid:  actor.GetMetadata().GetUid(),
+		Purpose:   "atunnel",
+	}
+	if identity == nil || *identity != *want {
+		t.Errorf("ActorIdentity = %+v, want %+v", identity, want)
 	}
 }
 

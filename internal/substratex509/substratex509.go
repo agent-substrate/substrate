@@ -140,6 +140,11 @@ type ActorIdentity struct {
 	Atespace  string
 	ActorName string
 	ActorUid  string
+	// Purpose is what the ateom-for-actor certificate carries for the
+	// agentgateway egress dataplane, which resolves the actor from this
+	// extension and accepts only "atunnel". Nothing in Substrate reads it.
+	// It goes away once agentgateway reads the ateom-for-actor SPIFFE URI.
+	Purpose string `json:",omitempty"`
 }
 
 func AddActorIdentityToCertificate(actor *ActorIdentity, template *x509.Certificate) error {
