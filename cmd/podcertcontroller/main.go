@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/servicednssigner"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/pflag"
@@ -146,6 +147,11 @@ func main() {
 		slog.ErrorContext(ctx, "Error discovering PodCertificateRequest API", slog.Any("err", err))
 		os.Exit(1)
 	}
+	ctbs, err := clustertrustbundle.New(kc)
+	if err != nil {
+		slog.ErrorContext(ctx, "Error discovering ClusterTrustBundle API", slog.Any("err", err))
+		os.Exit(1)
+	}
 
 	hasher := rendezvous.New(
 		kc,
@@ -163,7 +169,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading servicedns.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	serviceDNSSignerController := signercontroller.New(clock.RealClock{}, servicednssigner.NewImpl(kc, serviceDNSCAPool, pcrClient), kc, hasher, pcrClient)
+	serviceDNSSignerController := signercontroller.New(clock.RealClock{}, servicednssigner.NewImpl(kc, serviceDNSCAPool, pcrClient), hasher, pcrClient, ctbs)
 
 	// Create a signer for podidentity.podcert.ate.dev/identity
 	podIdentityCAPool, err := localca.NewRefreshingPool(*podCAPoolFile)
@@ -171,7 +177,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading podidentity.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, pcrClient), kc, hasher, pcrClient)
+	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, pcrClient), hasher, pcrClient, ctbs)
 	go pcrClient.Informer().Run(ctx.Done())
 	go serviceDNSSignerController.Run(ctx, *workersPerSigner)
 	go podIdentitySignerController.Run(ctx, *workersPerSigner)
