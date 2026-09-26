@@ -209,6 +209,7 @@ func do(ctx context.Context) error {
 	if _, err := ateomcgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
 	}
+	removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
 
 	go reaper.Run(ctx)
 	slog.InfoContext(ctx, "Child process reaper launched")
@@ -405,6 +406,9 @@ type AteomService struct {
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
 
+	// procRoot is the procfs root ("/proc") used to read process cmdlines.
+	procRoot string
+
 	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
 	// it is the seam that lets them interleave a lifecycle transition with the
 	// stats handlers' lock-free read, the way containerStatsReader does for the
@@ -428,6 +432,7 @@ func NewService(dnsRelay *atunnel.DNSRelay, actorLogger *actorlog.ActorLogger, m
 		egressGatewayTrustBundlePath: egressGatewayTrustBundlePath,
 		ateletSPIFFEID:               ateletSPIFFEID,
 		cgroupRoot:                   defaultCgroupRoot,
+		procRoot:                     defaultProcRoot,
 	}
 }
 
@@ -772,9 +777,24 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return nil, fmt.Errorf("while archiving durable-dir volumes: %w", tarErr)
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		ckptCgroup, err := isolateCheckpointCache(s.cgroupRoot, s.procRoot, req.GetActorUid())
+		if err != nil {
+			slog.WarnContext(ctx, "Checkpointing without page cache isolation",
+				slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
+		}
+		defer func() {
+			if err := ckptCgroup.remove(); err != nil {
+				slog.WarnContext(ctx, "Failed to remove the checkpoint cgroup",
+					slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
+			}
+		}()
 		// Checkpoint pause container (root of the sandbox)
 		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
 		if err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath); err != nil {
+			if rerr := ckptCgroup.restore(); rerr != nil {
+				slog.WarnContext(ctx, "Failed to move the sentry back into its pause leaf",
+					slog.String("actorUID", req.GetActorUid()), slog.Any("err", rerr))
+			}
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
 		if hasDurableVolumes(req.GetSpec().GetContainers()) {
@@ -1013,6 +1033,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
+	}
+	switch req.GetScope() {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		dropActorCheckpointCacheAsync(req.GetActorUid(), checkpointDir)
 	}
 	if err := s.activateActorNetworking(ateomstats.ActorAttributionFromRequest(req), egress); err != nil {
 		return nil, err
