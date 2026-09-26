@@ -437,9 +437,16 @@ message UploadPausedCheckpointRequest {
   // differ, atelet converts where possible (micro-VM FULL capture to a DATA
   // upload by selecting the durable-dir tar) and rejects otherwise.
   SnapshotScope desired_scope = 8;
+
+  // The files of the local snapshot, as recorded when the pause captured it.
+  // atelet uploads the subset that desired_scope needs.
+  repeated string snapshot_files = 9;
 }
 
 message UploadPausedCheckpointResponse {
+  // The files the uploaded snapshot consists of, as relative names in the
+  // snapshot directory.
+  repeated string snapshot_files = 1;
 }
 
 message RestoreRequest {
@@ -486,6 +493,13 @@ message RestoreRequest {
   // The sandbox binaries and pause image to restore with, resolved from the
   // ActorTemplate's SandboxConfig. Required.
   SandboxAssets sandbox_assets = 16;
+
+  // The files of the snapshot referenced by `config`, as recorded when it
+  // was taken.
+  repeated string snapshot_files = 17;
+
+  // The files of the golden snapshot. Set only with golden_snapshot_uri.
+  repeated string golden_snapshot_files = 18;
 }
 
 message RestoreResponse {

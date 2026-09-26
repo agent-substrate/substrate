@@ -4330,8 +4330,13 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	// Drop the pause's Checkpoint call so the suspend's atelet traffic is
-	// observable in isolation.
+	// observable in isolation. atelet reports a different file list than it
+	// was sent, so the test can tell which one ateapi records.
 	tc.fakeAtelet.Reset()
+	uploadedFiles := []string{"uploaded.img"}
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.UploadedFiles = uploadedFiles
+	tc.fakeAtelet.Lock.Unlock()
 
 	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
@@ -4370,9 +4375,16 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if got := actor.GetStatus().GetExternalSnapshot().GetContentScope(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
 		t.Errorf("snapshot ContentScope = %v, want FULL", got)
 	}
-	// The pause records the files its checkpoint reported.
+	// The pause records the files its checkpoint reported. The suspend sends
+	// them to atelet and records the files atelet reports it uploaded.
 	if diff := cmp.Diff(checkpointFiles, paused.GetStatus().GetLocalSnapshot().GetSnapshotFiles()); diff != "" {
 		t.Errorf("LocalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(checkpointFiles, upload.GetSnapshotFiles()); diff != "" {
+		t.Errorf("upload snapshot_files mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(uploadedFiles, actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()); diff != "" {
+		t.Errorf("ExternalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
 	}
 }
 

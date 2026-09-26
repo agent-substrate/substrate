@@ -127,6 +127,9 @@ type FakeAteletServer struct {
 	UploadCalled  bool
 	UploadRequest *ateletpb.UploadPausedCheckpointRequest
 	FailUpload    error
+	// UploadedFiles, when set, is what UploadPausedCheckpoint reports it
+	// uploaded; otherwise it reports the request's files.
+	UploadedFiles []string
 
 	TerminateCalled  bool
 	TerminateRequest *ateletpb.TerminateRequest
@@ -182,6 +185,7 @@ func (f *FakeAteletServer) Reset() {
 	f.UploadCalled = false
 	f.UploadRequest = nil
 	f.FailUpload = nil
+	f.UploadedFiles = nil
 
 	f.TerminateCalled = false
 	f.TerminateRequest = nil
@@ -202,7 +206,11 @@ func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *atel
 	if err := f.writeSnapshot(req.GetDestinationSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	files := req.GetSnapshotFiles()
+	if f.UploadedFiles != nil {
+		files = f.UploadedFiles
+	}
+	return &ateletpb.UploadPausedCheckpointResponse{SnapshotFiles: files}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {

@@ -82,7 +82,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	actor = marked
 	var snapshotFiles []string
 	if fromPaused {
-		wireSnapshotScope, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
+		wireSnapshotScope, snapshotFiles, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
 	} else {
 		wireSnapshotScope, snapshotFiles, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate)
 	}
@@ -270,7 +270,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 // ateom to checkpoint. Retries re-send the same semantic request: the
 // destination is minted once and the upload overwrites deterministic object
 // names, with the remote manifest as the commit marker.
-func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, err error) {
+func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, snapshotFiles []string, err error) {
 	ctx, done := stepSpan(ctx, "UploadPausedCheckpoint")
 	defer func() { err = done(err) }()
 
@@ -281,7 +281,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
-		return "", fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
+		return "", nil, fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(local.GetNodeVmsWithLocalSnapshots()[0])
@@ -289,7 +289,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		// No atelet on the node is indistinguishable from an atelet restart or
 		// informer lag, and the snapshot bytes may still be on its disk: stay
 		// retryable rather than crash.
-		return "", fmt.Errorf("while getting atelet conn for node %q: %w", local.GetNodeVmsWithLocalSnapshots()[0], err)
+		return "", nil, fmt.Errorf("while getting atelet conn for node %q: %w", local.GetNodeVmsWithLocalSnapshots()[0], err)
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
@@ -303,19 +303,23 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		DestinationSnapshotUri: actor.GetStatus().GetInProgressSnapshotUri(),
 		// The commit scope, like a running-origin suspend; atelet converts
 		// from the captured scope in the snapshot's manifest where possible.
-		DesiredScope: actorSnapshotContentScopeToAtelet(commitSnapshotScope(actor.GetMetadata().GetAtespace(), actorTemplate)),
+		DesiredScope:  actorSnapshotContentScopeToAtelet(commitSnapshotScope(actor.GetMetadata().GetAtespace(), actorTemplate)),
+		SnapshotFiles: local.GetSnapshotFiles(),
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 
-	if _, err = client.UploadPausedCheckpoint(ctx, req); err != nil {
+	resp, err := client.UploadPausedCheckpoint(ctx, req)
+	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("UploadPausedCheckpoint", err)); cerr != nil {
-			return wireSnapshotScope, cerr
+			return wireSnapshotScope, nil, cerr
 		}
-		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, nil, fmt.Errorf("actor %s crashed: %w", actorRef, err)
 	}
-	return wireSnapshotScope, nil
+	// atelet uploads only the files the desired scope needs, so the uploaded
+	// snapshot can be a subset of the paused one.
+	return wireSnapshotScope, resp.GetSnapshotFiles(), nil
 }
 
 // newInProgressSnapshotURI is where the snapshot an actor is currently taking is

@@ -668,7 +668,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			},
 		})
 
-		if _, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
+		if _, _, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 			t.Fatal("ensurePausedSnapshotUploaded = nil, want error for missing node record")
 		}
 
@@ -696,7 +696,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 		})
 
 		tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
-		_, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, tmpl)
+		_, _, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, tmpl)
 		if !errors.Is(err, ErrNoAteletOnNode) {
 			t.Fatalf("ensurePausedSnapshotUploaded = %v, want ErrNoAteletOnNode", err)
 		}

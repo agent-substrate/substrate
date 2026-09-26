@@ -196,10 +196,11 @@ func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string)
 	return uri
 }
 
-// TestSnapshotFiles_SuspendTag follows the checkpoint's file list through the
-// control plane: the suspend records it on the actor's external snapshot, and
-// a tag of that snapshot keeps it.
-func TestSnapshotFiles_SuspendTag(t *testing.T) {
+// TestSnapshotFiles_SuspendTagResume follows the checkpoint's file list
+// through the control plane: the suspend records it on the actor's external
+// snapshot, a tag of that snapshot keeps it, and the next resume sends it to
+// atelet.
+func TestSnapshotFiles_SuspendTagResume(t *testing.T) {
 	ns := namespaceForTest("ns-snapshot-files")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -208,7 +209,7 @@ func TestSnapshotFiles_SuspendTag(t *testing.T) {
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	ctx := context.Background()
 
-	suspendActorForTest(t, tc, workerName, "actor-a")
+	snapshotURI := suspendActorForTest(t, tc, workerName, "actor-a")
 	actor, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
 	})
@@ -231,6 +232,20 @@ func TestSnapshotFiles_SuspendTag(t *testing.T) {
 	}
 	if diff := cmp.Diff(checkpointFiles, tag.GetStatus().GetSnapshot().GetSnapshotFiles()); diff != "" {
 		t.Errorf("tag snapshot files mismatch (-want +got):\n%s", diff)
+	}
+
+	waitForWorkerAvailable(t, tc, workerName)
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	restore := tc.fakeAtelet.lastRestoreRequest()
+	if got := restore.GetExternalConfig().GetSnapshotUri(); got != snapshotURI {
+		t.Fatalf("restore snapshot URI = %q, want the suspend's %q", got, snapshotURI)
+	}
+	if diff := cmp.Diff(checkpointFiles, restore.GetSnapshotFiles()); diff != "" {
+		t.Errorf("restore snapshot_files mismatch (-want +got):\n%s", diff)
 	}
 }
 

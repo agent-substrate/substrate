@@ -2418,7 +2418,10 @@ type UploadPausedCheckpointRequest struct {
 	// the local snapshot's own manifest, which is authoritative. When they
 	// differ, atelet converts where possible (micro-VM FULL capture to a DATA
 	// upload by selecting the durable-dir tar) and rejects otherwise.
-	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
+	DesiredScope SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
+	// The files of the local snapshot, as recorded when the pause captured it.
+	// atelet uploads the subset that desired_scope needs.
+	SnapshotFiles []string `protobuf:"bytes,9,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2509,8 +2512,18 @@ func (x *UploadPausedCheckpointRequest) GetDesiredScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
+func (x *UploadPausedCheckpointRequest) GetSnapshotFiles() []string {
+	if x != nil {
+		return x.SnapshotFiles
+	}
+	return nil
+}
+
 type UploadPausedCheckpointResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The files the uploaded snapshot consists of, as relative names in the
+	// snapshot directory.
+	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2543,6 +2556,13 @@ func (x *UploadPausedCheckpointResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use UploadPausedCheckpointResponse.ProtoReflect.Descriptor instead.
 func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *UploadPausedCheckpointResponse) GetSnapshotFiles() []string {
+	if x != nil {
+		return x.SnapshotFiles
+	}
+	return nil
 }
 
 type RestoreRequest struct {
@@ -2582,8 +2602,13 @@ type RestoreRequest struct {
 	// The sandbox binaries and pause image to restore with, resolved from the
 	// ActorTemplate's SandboxConfig. Required.
 	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The files of the snapshot referenced by `config`, as recorded when it
+	// was taken.
+	SnapshotFiles []string `protobuf:"bytes,17,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
+	// The files of the golden snapshot. Set only with golden_snapshot_uri.
+	GoldenSnapshotFiles []string `protobuf:"bytes,18,rep,name=golden_snapshot_files,json=goldenSnapshotFiles,proto3" json:"golden_snapshot_files,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
@@ -2735,6 +2760,20 @@ func (x *RestoreRequest) GetMemoryBytes() int64 {
 func (x *RestoreRequest) GetSandboxAssets() *SandboxAssets {
 	if x != nil {
 		return x.SandboxAssets
+	}
+	return nil
+}
+
+func (x *RestoreRequest) GetSnapshotFiles() []string {
+	if x != nil {
+		return x.SnapshotFiles
+	}
+	return nil
+}
+
+func (x *RestoreRequest) GetGoldenSnapshotFiles() []string {
+	if x != nil {
+		return x.GoldenSnapshotFiles
 	}
 	return nil
 }
@@ -2951,7 +2990,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\";\n" +
 	"\x12CheckpointResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x85\x03\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xac\x03\n" +
 	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2961,8 +3000,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12.\n" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
-	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xaa\x06\n" +
+	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\x12%\n" +
+	"\x0esnapshot_files\x18\t \x03(\tR\rsnapshotFiles\"G\n" +
+	"\x1eUploadPausedCheckpointResponse\x12%\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x85\a\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -2981,7 +3022,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
-	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\b\n" +
+	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12%\n" +
+	"\x0esnapshot_files\x18\x11 \x03(\tR\rsnapshotFiles\x122\n" +
+	"\x15golden_snapshot_files\x18\x12 \x03(\tR\x13goldenSnapshotFilesB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*\x9a\x01\n" +

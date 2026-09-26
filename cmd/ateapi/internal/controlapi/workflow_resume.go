@@ -43,11 +43,15 @@ type resumeSnapshotSource struct {
 	// snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
 	Scope       ateapipb.SnapshotContentScope
+	// SnapshotFiles are the files recorded for SnapshotURI.
+	SnapshotFiles []string
 	// GoldenSnapshotURI is the storage location of the ActorTemplate's golden
 	// snapshot. Populated only when the template's onResume configuration
 	// selects the golden snapshot as the boot source for the pending restore:
 	// restore then combines the golden snapshot with the actor's data.
 	GoldenSnapshotURI resources.SnapshotURI
+	// GoldenSnapshotFiles are the files recorded for GoldenSnapshotURI.
+	GoldenSnapshotFiles []string
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
@@ -184,6 +188,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, status.Errorf(codes.DataLoss, "Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
+		src.SnapshotFiles = actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()
 		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
@@ -226,6 +231,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenURI); err != nil {
 				return nil, nil, src, status.Errorf(codes.DataLoss, "golden external snapshot %q: %v", goldenURI, err)
 			}
+			src.GoldenSnapshotFiles = golden.GetSnapshotFiles()
 		}
 	}
 
@@ -700,6 +706,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
+		req.SnapshotFiles = local.GetSnapshotFiles()
 		// The wire scope describes the restore OPERATION: DATA_ON_GOLDEN when
 		// loadActorForResume resolved a golden URI per the template's onResume
 		// configuration, else what the pause captured.
@@ -707,6 +714,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
+			req.GoldenSnapshotFiles = src.GoldenSnapshotFiles
 		default:
 			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
 		}
@@ -731,12 +739,14 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		var scope ateletpb.SnapshotScope
 		var goldenSnapshotURI string
+		var goldenSnapshotFiles []string
 		switch {
 		case src.TemplateReplaced:
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			goldenSnapshotURI = src.GoldenSnapshotURI.String()
+			goldenSnapshotFiles = src.GoldenSnapshotFiles
 		default:
 			scope = actorSnapshotContentScopeToAtelet(src.Scope)
 		}
@@ -754,14 +764,16 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
-			Scope: scope,
+			SnapshotFiles: src.SnapshotFiles,
+			Scope:         scope,
 			// Empty unless this is a Golden data resume.
-			GoldenSnapshotUri: goldenSnapshotURI,
-			SandboxAssets:     sandboxAssets,
-			ActorUid:          actor.GetMetadata().Uid,
-			EgressGateway:     egressGateway,
-			CpuMilli:          cpuMilli,
-			MemoryBytes:       memBytes,
+			GoldenSnapshotUri:   goldenSnapshotURI,
+			GoldenSnapshotFiles: goldenSnapshotFiles,
+			SandboxAssets:       sandboxAssets,
+			ActorUid:            actor.GetMetadata().Uid,
+			EgressGateway:       egressGateway,
+			CpuMilli:            cpuMilli,
+			MemoryBytes:         memBytes,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
