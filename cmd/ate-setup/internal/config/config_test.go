@@ -44,7 +44,11 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
 		"ATE_API_POSTGRES_CONNECTION_STRING",
+		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING",
+		"ATE_API_POSTGRES_OWNER_ROLE",
 		"ATE_API_POSTGRES_POOL_MAX_CONNS",
+		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING",
+		"ATE_API_POSTGRES_READ_WRITE_ROLE",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
@@ -100,8 +104,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Router != RouterEnvoy {
 		t.Errorf("Router = %q, want %q", cfg.Router, RouterEnvoy)
 	}
-	if cfg.PostgresConnString() != DefaultPostgresConnectionString {
-		t.Errorf("PostgresConnString() = %q, want %q", cfg.PostgresConnString(), DefaultPostgresConnectionString)
+	if cfg.PostgresReadWriteConnectionString != "" || cfg.PostgresOwnerConnectionString != "" {
+		t.Errorf("unexpected external PostgreSQL connections: %q, %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString)
+	}
+	if cfg.PostgresReadWriteRole != DefaultPostgresReadWriteRole || cfg.PostgresOwnerRole != DefaultPostgresOwnerRole {
+		t.Errorf("unexpected default PostgreSQL roles: %q, %q", cfg.PostgresReadWriteRole, cfg.PostgresOwnerRole)
 	}
 	if cfg.RolloutTimeout != DefaultRolloutTimeout {
 		t.Errorf("RolloutTimeout = %v, want %v", cfg.RolloutTimeout, DefaultRolloutTimeout)
@@ -114,42 +121,34 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-// --cluster-size=size10 pins the apiserver's pool on the default connection
-// string only. An explicit ATE_API_POSTGRES_CONNECTION_STRING names a database
-// the installer did not size, so it is passed through as written.
 func TestLoadClusterSize(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		opts     Options
 		env      map[string]string
 		wantSize string
-		wantDSN  string
 	}{
 		{
 			name:     "flag",
 			opts:     Options{ClusterSize: ClusterSizeSize10},
 			wantSize: ClusterSizeSize10,
-			wantDSN:  DefaultPostgresConnectionString + Size10PostgresPoolParams,
 		},
 		{
 			name:     "environment",
 			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize10},
 			wantSize: ClusterSizeSize10,
-			wantDSN:  DefaultPostgresConnectionString + Size10PostgresPoolParams,
 		},
 		{
 			name:     "flag beats the environment",
 			opts:     Options{ClusterSize: ClusterSizeSize0},
 			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize10},
 			wantSize: ClusterSizeSize0,
-			wantDSN:  DefaultPostgresConnectionString,
 		},
 		{
 			name:     "explicit connection string is untouched",
 			opts:     Options{ClusterSize: ClusterSizeSize10},
 			env:      map[string]string{"ATE_API_POSTGRES_CONNECTION_STRING": "postgresql://someone@db.example:5432/atepg"},
 			wantSize: ClusterSizeSize10,
-			wantDSN:  "postgresql://someone@db.example:5432/atepg",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,9 +165,6 @@ func TestLoadClusterSize(t *testing.T) {
 			}
 			if cfg.Size10() != (tc.wantSize == ClusterSizeSize10) {
 				t.Errorf("Size10() = %v, want %v", cfg.Size10(), tc.wantSize == ClusterSizeSize10)
-			}
-			if got := cfg.PostgresConnString(); got != tc.wantDSN {
-				t.Errorf("PostgresConnString() = %q, want %q", got, tc.wantDSN)
 			}
 			env := scriptEnvMap(t, cfg)
 			if tc.wantSize == ClusterSizeSize10 {
@@ -228,8 +224,8 @@ func TestLoadFlagsBeatEnvironment(t *testing.T) {
 	}
 }
 
-// ATE_API_POSTGRES_CONNECTION_STRING is how a developer points the apiserver at
-// their own database, the same override the shell installer honored.
+// The old connection remains the owner connection when a separate read/write
+// login is added, and serves both pools until then.
 func TestLoadPostgresConnectionStringOverride(t *testing.T) {
 	loadEnv(t)
 	const dsn = "postgresql://someone@db.example:5432/atepg?sslmode=disable"
@@ -239,12 +235,51 @@ func TestLoadPostgresConnectionStringOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresConnString() != dsn {
-		t.Errorf("PostgresConnString() = %q, want %q", cfg.PostgresConnString(), dsn)
+	if cfg.PostgresReadWriteConnectionString != dsn || cfg.PostgresOwnerConnectionString != dsn {
+		t.Errorf("PostgreSQL connections = %q, %q, want %q for both", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
+	}
+
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "readwrite-dsn")
+	cfg, err = Load(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != dsn {
+		t.Errorf("separate PostgreSQL connections = %q, %q, want readwrite-dsn and %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
 	}
 }
 
-// ATE_API_POSTGRES_SCHEMA defaults to public, as in the shell installer, and
+func TestLoadPostgresIdentityOverrides(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "readwrite-dsn")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "tenant_readwrite")
+	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "tenant_owner")
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" || cfg.PostgresReadWriteRole != "tenant_readwrite" || cfg.PostgresOwnerRole != "tenant_owner" {
+		t.Fatalf("PostgreSQL identity overrides not loaded: %+v", cfg)
+	}
+	if !cfg.PostgresReadWriteRoleSet || !cfg.PostgresOwnerRoleSet {
+		t.Fatalf("PostgreSQL role overrides not marked as explicit: %+v", cfg)
+	}
+}
+
+func TestLoadPostgresOwnerWithoutReadWrite(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostgresReadWriteConnectionString != "owner-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" {
+		t.Errorf("owner-only PostgreSQL connections = %q, %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString)
+	}
+}
+
+// ATE_API_POSTGRES_SCHEMA defaults to substrate, as in the apiserver, and
 // an explicit value wins.
 func TestLoadPostgresSchema(t *testing.T) {
 	loadEnv(t)
@@ -252,17 +287,17 @@ func TestLoadPostgresSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresSchemaName() != DefaultPostgresSchema {
-		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), DefaultPostgresSchema)
+	if cfg.PostgresSchemaName() != "substrate" {
+		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "substrate")
 	}
 
-	t.Setenv("ATE_API_POSTGRES_SCHEMA", "substrate")
+	t.Setenv("ATE_API_POSTGRES_SCHEMA", "tenant_schema")
 	cfg, err = Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresSchemaName() != "substrate" {
-		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "substrate")
+	if cfg.PostgresSchemaName() != "tenant_schema" {
+		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "tenant_schema")
 	}
 }
 

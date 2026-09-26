@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
@@ -161,7 +163,7 @@ func TestPlanPostgres(t *testing.T) {
 		{
 			name:       "explicit DSN",
 			connString: "postgresql://user@db.example.com:5432/atepg",
-			want:       postgresPlan{external: "ATE_API_POSTGRES_CONNECTION_STRING"},
+			want:       postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
 		},
 		{
 			name:     "Cloud SQL instance from the environment",
@@ -185,8 +187,8 @@ func TestPlanPostgres(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{
 				Cfg: &config.Config{
-					PostgresConnectionString: tc.connString,
-					CloudSQL:                 tc.cloudSQL,
+					PostgresReadWriteConnectionString: tc.connString,
+					CloudSQL:                          tc.cloudSQL,
 				},
 				Kube: fakeKube(t, apiServerEnvVarsConfigMap(tc.recorded)),
 			}
@@ -198,6 +200,41 @@ func TestPlanPostgres(t *testing.T) {
 				t.Errorf("planPostgres() = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPostgresConnectionStrings(t *testing.T) {
+	admin := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem},
+		Data:       map[string][]byte{"POSTGRES_USER": []byte("custom-admin"), "POSTGRES_PASSWORD": []byte("custom-password")},
+	}
+	e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, admin)}
+	readWrite, owner, err := e.postgresReadWriteConnectionStrings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readWrite, "substrate_readwrite_user:substrate-readwrite") || !strings.Contains(owner, "substrate_admin_user:substrate-admin") || !strings.Contains(readWrite, "channel_binding=disable") {
+		t.Fatalf("unexpected bundled connections: %q, %q", readWrite, owner)
+	}
+	if got, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretPostgresAdmin); err != nil || string(got.Data["POSTGRES_USER"]) != "custom-admin" {
+		t.Fatalf("administrator Secret changed: %v, %v", got, err)
+	}
+
+	e.Cfg.ClusterSize = config.ClusterSizeSize10
+	readWrite, owner, err = e.postgresReadWriteConnectionStrings(t.Context())
+	if err != nil || !strings.Contains(readWrite, size10PostgresPoolParams) || strings.Contains(owner, size10PostgresPoolParams) {
+		t.Fatalf("size10 bundled connections: %q, %q, %v", readWrite, owner, err)
+	}
+
+	e.Cfg.PostgresReadWriteConnectionString = "readwrite-dsn"
+	readWrite, owner, err = e.postgresReadWriteConnectionStrings(t.Context())
+	if err != nil || readWrite != "readwrite-dsn" || owner != "readwrite-dsn" {
+		t.Fatalf("single external login: %q, %q, %v", readWrite, owner, err)
+	}
+	e.Cfg.PostgresOwnerConnectionString = "owner-dsn"
+	readWrite, owner, err = e.postgresReadWriteConnectionStrings(t.Context())
+	if err != nil || readWrite != "readwrite-dsn" || owner != "owner-dsn" {
+		t.Fatalf("separate external logins: %q, %q, %v", readWrite, owner, err)
 	}
 }
 

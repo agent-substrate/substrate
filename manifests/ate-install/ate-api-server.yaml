@@ -89,8 +89,13 @@ spec:
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
-          - --postgres-connection-string=@env
+          - --postgres-read-write-connection-string=@env
+          - --postgres-owner-connection-string=@env
+          - --postgres-read-write-role=@env
+          - --postgres-owner-role=@env
           - --postgres-schema=@env
+          - --postgres-admin-username-file=/etc/ateapi/postgres/admin/username
+          - --postgres-admin-password-file=/etc/ateapi/postgres/admin/password
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
@@ -168,6 +173,9 @@ spec:
         # itself.
         - name: "postgres-server-ca"
           mountPath: "/run/postgres-server-ca"
+          readOnly: true
+        - name: postgres-admin
+          mountPath: /etc/ateapi/postgres/admin
           readOnly: true
         ports:
         - containerPort: 443
@@ -254,6 +262,17 @@ spec:
         secret:
           secretName: "postgres-server-ca"
           optional: true
+      - name: postgres-admin
+        projected:
+          sources:
+          - secret:
+              name: postgres-admin
+              optional: true
+              items:
+              - key: POSTGRES_USER
+                path: username
+              - key: POSTGRES_PASSWORD
+                path: password
 ---
 # Allow voluntary disruptions (node drains, cluster upgrades) to take
 # at most one API server pod at a time, at any replica count.

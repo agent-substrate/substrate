@@ -26,6 +26,51 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
+// The serving certificate uses Ed25519, for which pgx cannot derive SCRAM
+// channel-binding data. TLS and client-certificate verification remain enabled.
+const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
+
+// The bundled size10 server is provisioned for this larger runtime pool.
+const size10PostgresPoolParams = "&pool_max_conns=64&pool_min_conns=4"
+
+func bundledPostgresDSN(user, password string) string {
+	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
+}
+
+func (e *Env) postgresReadWriteConnectionStrings(ctx context.Context) (string, string, error) {
+	if readWriteDSN := e.Cfg.PostgresReadWriteConnectionString; readWriteDSN != "" {
+		ownerDSN := e.Cfg.PostgresOwnerConnectionString
+		if ownerDSN == "" {
+			ownerDSN = readWriteDSN
+		}
+		return readWriteDSN, ownerDSN, nil
+	}
+	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
+		return "", "", err
+	}
+	readWriteDSN := bundledPostgresDSN("substrate_readwrite_user", "substrate-readwrite")
+	if e.Cfg.Size10() {
+		readWriteDSN += size10PostgresPoolParams
+	}
+	return readWriteDSN, bundledPostgresDSN("substrate_admin_user", "substrate-admin"), nil
+}
+
+func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
+	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretPostgresAdmin)
+	if err != nil {
+		return err
+	}
+	if secret == nil {
+		return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresAdmin, map[string]string{
+			"POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres",
+		})
+	}
+	if len(secret.Data["POSTGRES_USER"]) == 0 || len(secret.Data["POSTGRES_PASSWORD"]) == 0 {
+		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER and POSTGRES_PASSWORD", e.Namespace(), SecretPostgresAdmin)
+	}
+	return nil
+}
+
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
 // --cordon-control-plane the hostname anti-affinity keeps the pod alone on
 // its node, so a limit would only add CFS throttling on checkpoint and
@@ -58,8 +103,8 @@ type postgresPlan struct {
 // configured either as an explicit DSN or as a Cloud SQL instance — the
 // latter possibly adopted from the cluster.
 func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
-	if e.Cfg.PostgresConnectionString != "" {
-		return postgresPlan{external: "ATE_API_POSTGRES_CONNECTION_STRING"}, nil
+	if e.Cfg.PostgresReadWriteConnectionString != "" {
+		return postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}, nil
 	}
 	instance, err := e.resolveCloudSQLInstance(ctx)
 	if err != nil {
@@ -199,6 +244,9 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 	log.Step("deploy_postgres")
 
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
+		return err
+	}
+	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
 		return err
 	}
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {

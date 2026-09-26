@@ -37,6 +37,7 @@ const (
 	SecretPodIdentityCA    = "pod-identity-ca-pool"
 	SecretEgressMITMCAPool = "egress-mitm-ca-pool"
 	SecretAPIEnvVars       = "ate-api-server-secret-envvars"
+	SecretPostgresAdmin    = "postgres-admin"
 	SecretPostgresServerCA = "postgres-server-ca"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"

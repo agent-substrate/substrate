@@ -65,47 +65,56 @@ Backups, point-in-time recovery, and the shape of an existing instance are
 never reconciled — the settings above apply at creation. Change them later
 with `gcloud sql instances patch`.
 
-## 2. One-time schema privileges
+## 2. One-time roles and schema privileges
 
 [IAM database users](https://docs.cloud.google.com/sql/docs/postgres/add-manage-iam-users)
-are created with no privileges, and PostgreSQL 15+ removed
-`PUBLIC`'s `CREATE` on the `public` schema. Before serving, `ateapi` runs versioned
-migrations to create its tables. The connecting user needs DDL rights to do this.
-Grant them once as the built-in `postgres` user (note the database username is
-the GSA email **without** `.gserviceaccount.com`):
-
-```sql
-GRANT CREATE ON DATABASE atepg TO "ate-api-server@<project>.iam";
-GRANT USAGE, CREATE ON SCHEMA public TO "ate-api-server@<project>.iam";
-```
+are created with no privileges. By default, ateapi connects as the
+IAM user and then assumes `substrate_owner` for migrations or
+`substrate_readwrite` for application queries. Create these roles, grant the
+IAM user membership, create the `substrate` schema, and configure the
+owner's default privileges before deploying. The IAM database username is the GSA email **without**
+`.gserviceaccount.com`.
 
 Getting that `postgres` session on a private-IP-only instance takes two
 steps: give `postgres` a temporary password (fresh instances have none), and
 run `psql` from inside the cluster, which is the only place with a network
-path to the instance:
+path to the instance. Replace `<project>`, `<instance>`, and `<temp-pw>` below:
 
 ```sh
 gcloud sql users set-password postgres --instance=<instance> --password='<temp-pw>'
 IP=$(gcloud sql instances describe <instance> --format="value(ipAddresses[0].ipAddress)")
 kubectl run psql-grant --rm -i --restart=Never --image=postgres:18-alpine -- \
   psql "postgresql://postgres:<temp-pw>@${IP}:5432/atepg?sslmode=require" \
-  -c 'GRANT CREATE ON DATABASE atepg TO "ate-api-server@<project>.iam"; GRANT USAGE, CREATE ON SCHEMA public TO "ate-api-server@<project>.iam";'
+  -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+CREATE ROLE substrate_owner NOLOGIN;
+CREATE ROLE substrate_readwrite NOLOGIN;
+GRANT substrate_owner TO postgres WITH SET TRUE;
+GRANT substrate_owner, substrate_readwrite TO "ate-api-server@<project>.iam";
+CREATE SCHEMA substrate AUTHORIZATION substrate_owner;
+GRANT USAGE ON SCHEMA substrate TO substrate_readwrite;
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO substrate_readwrite;
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
+  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO substrate_readwrite;
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
+  GRANT EXECUTE ON ROUTINES TO substrate_readwrite;
+ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
+  GRANT USAGE ON TYPES TO substrate_readwrite;
+COMMIT;
+SQL
 ```
+
+The grant back to `postgres` lets this non-superuser administrator configure
+the owner role's default privileges.
 
 Nothing deployed ever uses this password — afterwards you can scramble it
 (`gcloud sql users set-password postgres --instance=<instance>
 --password="$(openssl rand -hex 16)"`) or keep it for admin access such as
-Cloud SQL Studio. Note that `postgres` is not a superuser on Cloud SQL: it
-can list the IAM user's tables but needs explicit `GRANT SELECT` from that
-user to read them.
+Cloud SQL Studio. Note that `postgres` is not a superuser on Cloud SQL.
 
-If the `atepg` tables already exist from a previous password-based user,
-transfer ownership instead (future in-place DDL requires it):
-
-```sql
-GRANT "ate-api-server@<project>.iam" TO "<olduser>";
-REASSIGN OWNED BY "<olduser>" TO "ate-api-server@<project>.iam";  -- run inside atepg
-```
+This identity layout requires a fresh `atepg` database. Existing tables and
+users need a separate migration of ownership and grants.
 
 ## 3. Deploy
 
@@ -119,13 +128,12 @@ export ATE_API_POSTGRES_CLOUDSQL_GSA=ate-api-server@<project>.iam.gserviceaccoun
 What this does differently from a plain install:
 
 - Skips the bundled PostgreSQL StatefulSet (a configured Cloud SQL instance
-  counts as an external database, exactly like an explicit
-  `ATE_API_POSTGRES_CONNECTION_STRING`); the install logs the skip and the
-  database it deferred to.
+  counts as an external database); the install logs the skip and the database
+  it deferred to.
 - Writes the proxy's configuration (`CSQL_PROXY_*`) into the
   `ate-api-server-envvars` ConfigMap and synthesizes a passwordless DSN
   (`user=<gsa-user> host=127.0.0.1 ... sslmode=disable`) into the
-  `ate-api-server-secret-envvars` Secret.
+  `ate-api-server-secret-envvars` Secret for both database connection pools.
 - Annotates the `ate-api-server` KSA with the GSA and patches the
   `cloud-sql-proxy` native sidecar (initContainer with
   `restartPolicy: Always`; requires Kubernetes 1.29+) into the deployment.
@@ -142,25 +150,21 @@ Optional environment variables:
   to instances provisioned outside this tool: `setup-gcp create cloudsql`
   itself only creates private-services-access (private IP) instances —
   `public` and `psc` require an instance configured accordingly out-of-band.
-- `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH` — set `false` to fall back to password
-  authentication through the proxy (still encrypted and identity-verified);
-  you must then provide `ATE_API_POSTGRES_CONNECTION_STRING` with the
-  password yourself (the install script rejects `false` without an explicit
-  connection string — a synthesized passwordless DSN cannot log in once the
-  proxy stops injecting IAM tokens).
+- `ATE_API_POSTGRES_READ_WRITE_ROLE` and `ATE_API_POSTGRES_OWNER_ROLE` — required stable
+  `NOLOGIN` roles (defaults: `substrate_readwrite` and `substrate_owner`).
+  If you override them, create the custom roles and substitute their names in
+  the grants in section 2. `ateapi` runs `SET ROLE` on every new connection;
+  stable roles keep grants and object ownership across IAM username rotations.
 - `ATE_API_POSTGRES_SCHEMA` — the schema holding the store's tables
-  (default `public`). If using a custom schema, the one-time schema grant
-  in §2 (`GRANT USAGE, CREATE ON SCHEMA ...`) must target your custom schema
-  instead of `public`.
-- `ATE_API_POSTGRES_POOL_MAX_CONNS` — pgxpool connections per ateapi replica
-  (default: `max(4, NumCPU)`); appended as `pool_max_conns` to whichever DSN
-  is in effect (synthesized, in-cluster default, or explicitly provided —
-  a `pool_max_conns` already present in an explicit DSN wins).
+  (default `substrate`). If you override it, create the named schema with
+  the owner role as owner and target it in the grants in section 2.
+- `ATE_API_POSTGRES_POOL_MAX_CONNS` — connections in the read/write pool
+  (default: `max(4, NumCPU)`). It does not affect the owner and watch pools, which are
+  capped at 2 and 3 connections.
 
-Changing any of these on a running installation takes effect immediately:
-the install script stamps a hash of the rendered configuration into the
-pod template (`ate.dev/env-hash`), so a config change rolls ate-api-server
-and an unchanged config triggers nothing.
+Changing the installed configuration rolls ate-api-server: the install script
+stamps a hash of the rendered configuration into the pod template
+(`ate.dev/env-hash`).
 
 ## 4. Verify
 
@@ -171,7 +175,7 @@ kubectl logs deployment/ate-api-server -n ate-system -c cloud-sql-proxy | head
 kubectl logs deployment/ate-api-server -n ate-system | head -5
 # expect the startup flag dump and no store connection errors
 kubectl get secret ate-api-server-secret-envvars -n ate-system \
-  -o jsonpath='{.data.ATE_API_POSTGRES_CONNECTION_STRING}' | base64 -d
+  -o jsonpath='{.data.ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING}' | base64 -d
 # expect: no password in the DSN
 ```
 
@@ -181,7 +185,9 @@ Common failure modes:
 |---|---|
 | proxy: `PERMISSION_DENIED` on startup | GSA missing `roles/cloudsql.client`, or the Workload Identity annotation/binding is absent |
 | `FATAL: Cloud SQL IAM service account authentication failed` | GSA missing `roles/cloudsql.instanceUser`, or the IAM database user was not created |
-| ateapi: `permission denied for schema public` | the one-time schema `GRANT` (section 2) was not run |
+| ateapi: `role "substrate_owner" does not exist` or `permission denied to set role` | Create the roles and grant the IAM database user membership (section 2) |
+| ateapi: `permission denied for schema substrate` | The one-time schema grants (section 2) were not run |
+| ateapi: `permission denied for table` | The owner role's default privileges (section 2) were not configured before migrations |
 | proxy: instance connection errors mentioning IAM | `cloudsql.iam_authentication` flag is off on the instance |
 
 ## 5. Scaling the database
@@ -192,17 +198,5 @@ instance shape and the data cache, storage/IOPS, connection-pool math,
 proxy sidecar resources, and Managed Connection Pooling — see
 [docs/dev/cloud-sql-scaling-guide.md](../../docs/dev/cloud-sql-scaling-guide.md).
 
-## Alternative: any external PostgreSQL (non-GCP)
-
-For a non-Cloud-SQL database, provide a DSN directly; password lives in a
-Secret and the server certificate is verified against a mounted CA. (This is
-also the shape of a [direct
-connection](https://docs.cloud.google.com/sql/docs/postgres/connection-options)
-to Cloud SQL without the proxy, if you ever need one — you then manage the
-server CA and credentials yourself.)
-
-```sh
-export ATE_API_POSTGRES_CONNECTION_STRING='postgresql://<user>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
-export ATE_API_POSTGRES_SERVER_CA_FILE=/path/to/server-ca.pem
-./hack/install-ate.sh --deploy-ate-system
-```
+For explicit connection strings or a non-Cloud-SQL PostgreSQL database, see
+the [general PostgreSQL configuration guide](../../docs/postgres.md).

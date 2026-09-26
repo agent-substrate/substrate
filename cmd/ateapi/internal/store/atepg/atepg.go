@@ -26,6 +26,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,20 +44,25 @@ import (
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
-// watchPoolMaxConns sizes the dedicated outbox watch pool: one connection
-// for the WatchWorkers poller, one for the maintenance loop, and one of headroom
-// so a transiently slow poll can never gate a maintenance pass.
+// watchPoolMaxConns sizes the dedicated outbox watch pool, leaving headroom
+// so a transiently slow poll can never gate another watcher.
 const (
 	watchPoolMaxConns = 3
 	watchPoolMinConns = 1
+	// Migrations need one connection for Goose's session lock and one for
+	// migration work. Outbox maintenance is serial after startup.
+	ownerPoolMaxConns = 2
 )
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the outbox side only: the WatchWorkers pollers
-	// and the partition-maintenance loop.
+	// watchPool serves the read/write WatchWorkers pollers. ownerPool is
+	// borrowed during startup for schema migrations, then serves outbox
+	// partition maintenance for the life of the process.
 	watchPool             *pgxpool.Pool
+	ownerPool             *pgxpool.Pool
 	ownsWatchPool         bool
+	ownsOwnerPool         bool
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
@@ -107,18 +115,44 @@ var _ store.Interface = (*Persistence)(nil)
 // PostgreSQL connection. Callers can retry this error before startup.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
-// Connect opens a pgxpool against dsn, creates schema if necessary, and
-// applies pending schema migrations. A dedicated watch pool isolates outbox
-// polling and maintenance from writes.
-func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
+// Connect opens read/write and owner pools. It creates the schema and applies migrations.
+func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRole, schema string, maxConnLifetime time.Duration, poolMaxConns int32) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
-	cfg, err := poolConfig(dsn)
+	if readWriteRole == "" {
+		return nil, fmt.Errorf("PostgreSQL read/write role must not be empty")
+	}
+	if ownerRole == "" {
+		return nil, fmt.Errorf("PostgreSQL owner role must not be empty")
+	}
+	if maxConnLifetime < 0 {
+		return nil, fmt.Errorf("PostgreSQL maximum connection lifetime must not be negative")
+	}
+	if poolMaxConns < 0 {
+		return nil, fmt.Errorf("PostgreSQL pool maximum connections must not be negative")
+	}
+	readWriteSource, ownerSource, err := connectionStringSources(readWriteDSN, ownerDSN)
 	if err != nil {
 		return nil, err
 	}
+	cfg, err := poolConfig(readWriteSource, readWriteRole, maxConnLifetime)
+	if err != nil {
+		return nil, err
+	}
+	if poolMaxConns > 0 {
+		cfg.MaxConns = poolMaxConns
+	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
+	ownerCfg, err := poolConfig(ownerSource, ownerRole, maxConnLifetime)
+	if err != nil {
+		return nil, fmt.Errorf("parse PostgreSQL owner connection string: %w", err)
+	}
+	ownerCfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
+	ownerCfg.MaxConns = ownerPoolMaxConns
+	ownerCfg.MinConns = 0
+	ownerCfg.MinIdleConns = 0
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
@@ -127,7 +161,19 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
 	}
-	if err := createSchema(ctx, pool, schema); err != nil {
+
+	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerCfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("open PostgreSQL owner pool: %w", err)
+	}
+	if err := ownerPool.Ping(ctx); err != nil {
+		ownerPool.Close()
+		pool.Close()
+		return nil, fmt.Errorf("%w: ping PostgreSQL owner connection: %w", ErrUnavailable, err)
+	}
+	if err := createSchema(ctx, ownerPool, schema); err != nil {
+		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
@@ -137,18 +183,61 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
 	if err != nil {
+		ownerPool.Close()
 		pool.Close()
 		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
 	}
 
-	p, err := newPersistence(ctx, pool, watchPool)
+	p, err := newPersistence(ctx, pool, watchPool, ownerPool)
 	if err != nil {
 		watchPool.Close()
+		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
 	p.ownsWatchPool = true
+	p.ownsOwnerPool = true
 	return p, nil
+}
+
+type connectionStringSource func() (string, error)
+
+func connectionStringSources(readWriteDSN, ownerDSN string) (connectionStringSource, connectionStringSource, error) {
+	if ownerDSN == "" {
+		return nil, nil, fmt.Errorf("PostgreSQL owner connection string must not be empty")
+	}
+	readWriteSource, err := newConnectionStringSource(readWriteDSN)
+	if err != nil {
+		return nil, nil, err
+	}
+	ownerSource, err := newConnectionStringSource(ownerDSN)
+	if err != nil {
+		return nil, nil, fmt.Errorf("PostgreSQL owner connection string: %w", err)
+	}
+	return readWriteSource, ownerSource, nil
+}
+
+func newConnectionStringSource(value string) (connectionStringSource, error) {
+	const filePrefix = "@file:"
+	if !strings.HasPrefix(value, filePrefix) {
+		return func() (string, error) { return value, nil }, nil
+	}
+	path := strings.TrimPrefix(value, filePrefix)
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("PostgreSQL connection string file path %q must be absolute", path)
+	}
+	source := func() (string, error) {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("reading PostgreSQL connection string file %q: %w", path, err)
+		}
+		dsn := strings.TrimSpace(string(contents))
+		if dsn == "" {
+			return "", fmt.Errorf("PostgreSQL connection string file %q is empty", path)
+		}
+		return dsn, nil
+	}
+	return source, nil
 }
 
 func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error {
@@ -161,8 +250,14 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "agent-substrate:create-schema:"+schema); err != nil {
 		return fmt.Errorf("locking PostgreSQL schema %q: %w", schema, err)
 	}
-	if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
-		return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&exists); err != nil {
+		return fmt.Errorf("checking PostgreSQL schema %q: %w", schema, err)
+	}
+	if !exists {
+		if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
+			return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing PostgreSQL schema %q: %w", schema, err)
@@ -170,8 +265,8 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	return nil
 }
 
-// poolConfig parses dsn into a pool configuration whose TLS material is read
-// from disk again for every new connection.
+// poolConfig parses a connection source into a pool configuration whose user,
+// password and TLS material are refreshed for every new connection.
 //
 // pgx resolves sslcert, sslkey and sslrootcert once, when the connection
 // string is parsed, and pins the result for the life of the pool. The paths in
@@ -180,45 +275,85 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 // certificate it started with, and keep trusting only the CAs it started with,
 // until connections started failing. Re-parsing in BeforeConnect costs one
 // small file read per new connection and picks up every rotation.
-func poolConfig(dsn string) (*pgxpool.Config, error) {
+func poolConfig(source connectionStringSource, role string, maxConnLifetime time.Duration) (*pgxpool.Config, error) {
+	if role == "" {
+		return nil, fmt.Errorf("PostgreSQL role must not be empty")
+	}
+	dsn, err := source()
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+		return nil, fmt.Errorf("parsing PostgreSQL connection string: invalid value")
 	}
-	usesTLS := cfg.ConnConfig.TLSConfig != nil
-	for _, fallback := range cfg.ConnConfig.Fallbacks {
-		usesTLS = usesTLS || fallback.TLSConfig != nil
-	}
-	if !usesTLS {
-		return cfg, nil
+	if maxConnLifetime > 0 {
+		cfg.MaxConnLifetime = maxConnLifetime
 	}
 	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+		dsn, err := source()
+		if err != nil {
+			return err
+		}
 		fresh, err := pgx.ParseConfig(dsn)
 		if err != nil {
-			return fmt.Errorf("re-reading PostgreSQL TLS material: %w", err)
+			return fmt.Errorf("parsing refreshed PostgreSQL connection string: invalid value")
 		}
+		if !sameConnectionIdentity(cc, fresh) {
+			return fmt.Errorf("PostgreSQL connection identity changed; restart is required")
+		}
+		cc.User = fresh.User
+		cc.Password = fresh.Password
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
 		return nil
 	}
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if _, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+			return fmt.Errorf("assuming PostgreSQL role %q: %w", role, err)
+		}
+		return nil
+	}
 	return cfg, nil
+}
+
+// sameConnectionIdentity reports whether fresh still points at the endpoint the
+// pool was built for. Only the endpoint is fenced: host, port, database and the
+// fallback hosts and ports. The user is not part of it. A rotation that issues
+// a new user each cycle, and keeps the previous one able to log in until the
+// cycle after, needs new connections to dial as the incoming user while older
+// connections finish on the outgoing one.
+func sameConnectionIdentity(current, fresh *pgx.ConnConfig) bool {
+	if current.Host != fresh.Host || current.Port != fresh.Port || current.Database != fresh.Database {
+		return false
+	}
+	if len(current.Fallbacks) != len(fresh.Fallbacks) {
+		return false
+	}
+	for i := range current.Fallbacks {
+		if current.Fallbacks[i].Host != fresh.Fallbacks[i].Host || current.Fallbacks[i].Port != fresh.Fallbacks[i].Port {
+			return false
+		}
+	}
+	return true
 }
 
 // NewPersistence wraps an already-open pool, applying pending migrations.
 // Callers that already hold a pool (e.g. tests using testcontainers) use
 // this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
-	return newPersistence(ctx, pool, pool)
+	return newPersistence(ctx, pool, pool, pool)
 }
 
-func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
-	if err := applyMigrations(ctx, pool); err != nil {
+func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Pool) (*Persistence, error) {
+	if err := applyMigrations(ctx, ownerPool); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
 	p := &Persistence{
 		pool:                  pool,
 		watchPool:             watchPool,
+		ownerPool:             ownerPool,
 		leaseTTL:              defaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
@@ -245,13 +380,16 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 }
 
 // Close stops the outbox maintenance loop and waits for it to exit,
-// then closes the watch pool if Connect created one. It does not close the
-// main pool, which the caller owns.
+// then closes the auxiliary pools if Connect created them. It does not close
+// the main pool, which the caller owns.
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
 	if p.ownsWatchPool {
 		p.watchPool.Close()
+	}
+	if p.ownsOwnerPool {
+		p.ownerPool.Close()
 	}
 }
 

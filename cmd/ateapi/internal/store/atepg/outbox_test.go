@@ -34,15 +34,14 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestConnect_DedicatedWatchPool covers the dual-pool path only Connect
-// takes (the rest of the suite uses NewPersistence, where feed traffic
-// shares the caller's pool): the watch pool must be distinct and owned, and
-// the watch must deliver through it end to end.
+// TestConnect_DedicatedWatchPool covers the auxiliary-pool path only Connect
+// takes (the rest of the suite uses NewPersistence, where every operation
+// shares the caller's pool).
 func TestConnect_DedicatedWatchPool(t *testing.T) {
 	requirePool(t) // ensures the container is up and containerDSN is set
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, containerDSN, "atepg", "atepg", "public", 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -55,8 +54,14 @@ func TestConnect_DedicatedWatchPool(t *testing.T) {
 	if !p.ownsWatchPool {
 		t.Fatal("Connect must own the watch pool so Close releases it")
 	}
+	if p.ownerPool == p.pool || p.ownerPool == p.watchPool || !p.ownsOwnerPool {
+		t.Fatal("Connect must own a dedicated owner pool")
+	}
 	if got := p.watchPool.Config().MaxConns; got != watchPoolMaxConns {
 		t.Fatalf("watch pool MaxConns = %d, want %d", got, watchPoolMaxConns)
+	}
+	if got := p.ownerPool.Config().MaxConns; got != ownerPoolMaxConns {
+		t.Fatalf("owner pool MaxConns = %d, want %d", got, ownerPoolMaxConns)
 	}
 
 	clearAll(t, p)
@@ -859,7 +864,7 @@ func TestWatchWorkers_ClosesAfterPersistentPollFailure(t *testing.T) {
 
 	// Connect so the watcher has its own pool: killing it simulates a
 	// persistent outage without touching the shared container pool.
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, containerDSN, "atepg", "atepg", "public", 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -1036,7 +1041,7 @@ func TestLocalPublishReachesWatchers(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, containerDSN, "atepg", "atepg", "public", 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -1120,7 +1125,7 @@ func TestLocalPublishSurvivesWatchClose(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, containerDSN, "atepg", "atepg", "public", 0, 0)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

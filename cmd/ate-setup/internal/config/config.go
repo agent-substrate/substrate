@@ -50,21 +50,11 @@ const (
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
 const DefaultRolloutTimeout = 60 * time.Second
 
-// DefaultPostgresConnectionString mirrors default_postgres_connection_string in
-// the shell installer: the apiserver reaches PostgreSQL over mTLS using the
-// podcertificate controller's projected servicedns trust bundle and its own
-// podidentity credential bundle.
-const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-
-// Size10PostgresPoolParams is appended to the default connection string on
-// size10 clusters. pgxpool defaults MaxConns to max(4, runtime.NumCPU()), which
-// under-uses the size10 server's raised max_connections; pinning the pool makes
-// the client side open the sockets the server is provisioned for.
-const Size10PostgresPoolParams = "&pool_max_conns=64&pool_min_conns=4"
-
-// DefaultPostgresSchema mirrors the shell installer's default for
-// ATE_API_POSTGRES_SCHEMA, the PostgreSQL schema holding the Substrate tables.
-const DefaultPostgresSchema = "public"
+const (
+	DefaultPostgresSchema        = "substrate"
+	DefaultPostgresReadWriteRole = "substrate_readwrite"
+	DefaultPostgresOwnerRole     = "substrate_owner"
+)
 
 // Cloud SQL Auth Proxy IP types, the values ATE_API_POSTGRES_CLOUDSQL_IP_TYPE
 // accepts.
@@ -130,16 +120,22 @@ type Config struct {
 
 	// Router selects the atenet router dataplane.
 	Router string
-	// PostgresConnectionString is the apiserver's store connection string.
-	// Empty means use DefaultPostgresConnectionString.
-	PostgresConnectionString string
+	// The read/write and owner connections can use different login identities.
+	// With one configured connection, both pools use it. Both empty selects
+	// bundled PostgreSQL.
+	PostgresReadWriteConnectionString string
+	PostgresOwnerConnectionString     string
+	PostgresReadWriteRole             string
+	PostgresOwnerRole                 string
+	// These distinguish an explicit role override from the default when
+	// adopting an existing Cloud SQL installation.
+	PostgresReadWriteRoleSet bool
+	PostgresOwnerRoleSet     bool
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
-	// PostgresPoolMaxConns sizes the apiserver's pgxpool
-	// (ATE_API_POSTGRES_POOL_MAX_CONNS). It is spliced into the DSN rather
-	// than passed separately, because that is the only place pgxpool reads it
-	// from. Empty leaves the pgxpool default in place.
+	// PostgresPoolMaxConns sizes the apiserver's read/write pool
+	// (ATE_API_POSTGRES_POOL_MAX_CONNS). Empty leaves the DSN or pgxpool default.
 	PostgresPoolMaxConns string
 	// PostgresServerCAFile is a local PEM file holding the server CA of an
 	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
@@ -330,25 +326,32 @@ func Load(opts Options) (*Config, error) {
 	cloudsqlInstance, cloudsqlInstanceSet := env["ATE_API_POSTGRES_CLOUDSQL_INSTANCE"]
 
 	kubeconfig, kubeconfigEnv := loadKubeconfig(opts.Kubeconfig, env["KUBECONFIG"])
+	ownerConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"], env["ATE_API_POSTGRES_CONNECTION_STRING"])
+	readWriteConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"], ownerConnectionString)
 
 	cfg := &Config{
-		Root:                     root,
-		Kind:                     kind,
-		Namespace:                firstNonEmpty(env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
-		Kubeconfig:               kubeconfig,
-		Context:                  firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
-		ProjectID:                env["PROJECT_ID"],
-		ClusterName:              env["CLUSTER_NAME"],
-		ClusterLocation:          env["CLUSTER_LOCATION"],
-		ExpectedJWTIssuer:        env["EXPECTED_JWT_ISSUER"],
-		BucketName:               env["BUCKET_NAME"],
-		KODockerRepo:             env["KO_DOCKER_REPO"],
-		KODefaultPlatforms:       env["KO_DEFAULTPLATFORMS"],
-		Images:                   loadImageSource(opts, env),
-		PostgresConnectionString: env["ATE_API_POSTGRES_CONNECTION_STRING"],
-		PostgresSchema:           env["ATE_API_POSTGRES_SCHEMA"],
-		PostgresPoolMaxConns:     env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
-		PostgresServerCAFile:     env["ATE_API_POSTGRES_SERVER_CA_FILE"],
+		Root:                              root,
+		Kind:                              kind,
+		Namespace:                         firstNonEmpty(env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
+		Kubeconfig:                        kubeconfig,
+		Context:                           firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
+		ProjectID:                         env["PROJECT_ID"],
+		ClusterName:                       env["CLUSTER_NAME"],
+		ClusterLocation:                   env["CLUSTER_LOCATION"],
+		ExpectedJWTIssuer:                 env["EXPECTED_JWT_ISSUER"],
+		BucketName:                        env["BUCKET_NAME"],
+		KODockerRepo:                      env["KO_DOCKER_REPO"],
+		KODefaultPlatforms:                env["KO_DEFAULTPLATFORMS"],
+		Images:                            loadImageSource(opts, env),
+		PostgresReadWriteConnectionString: readWriteConnectionString,
+		PostgresOwnerConnectionString:     ownerConnectionString,
+		PostgresReadWriteRole:             firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
+		PostgresOwnerRole:                 firstNonEmpty(env["ATE_API_POSTGRES_OWNER_ROLE"], DefaultPostgresOwnerRole),
+		PostgresReadWriteRoleSet:          env["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "",
+		PostgresOwnerRoleSet:              env["ATE_API_POSTGRES_OWNER_ROLE"] != "",
+		PostgresSchema:                    env["ATE_API_POSTGRES_SCHEMA"],
+		PostgresPoolMaxConns:              env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
+		PostgresServerCAFile:              env["ATE_API_POSTGRES_SERVER_CA_FILE"],
 		CloudSQL: CloudSQLConfig{
 			Instance:    cloudsqlInstance,
 			InstanceSet: cloudsqlInstanceSet,
@@ -490,21 +493,6 @@ func validateExtprocService(spec string) error {
 		return fmt.Errorf("--experimental-additional-egress-extproc-service port must be 1-65535, got %q", portStr)
 	}
 	return nil
-}
-
-// PostgresConnString returns the configured connection string, falling back to
-// the in-cluster default. On a size10 cluster the default also pins the
-// client pool to what the bundled server is provisioned for; an explicit
-// connection string is passed through untouched, since its database was sized
-// by whoever wrote it.
-func (c *Config) PostgresConnString() string {
-	if c.PostgresConnectionString != "" {
-		return c.PostgresConnectionString
-	}
-	if c.ClusterSize == ClusterSizeSize10 {
-		return DefaultPostgresConnectionString + Size10PostgresPoolParams
-	}
-	return DefaultPostgresConnectionString
 }
 
 // Size10 reports whether the size10 footprint profile is selected.

@@ -49,6 +49,13 @@ This sequence keeps the previous binary compatible during a rollout and a tempor
 
 Store migration files in `cmd/ateapi/internal/store/atepg/migrations`.
 
+Identity bootstrap uses the separate [identity SQL](../../cmd/ateapi/internal/store/atepg/identity.sql). The standalone Helm chart enables it by default for bundled PostgreSQL; the `ateapi` binary defaults to bootstrap off when run directly. Both the binary and operators can run this SQL after supplying the transaction-local settings listed in the file.
+For manual provisioning, the optional `substrate.bootstrap_owner_role` and
+`substrate.bootstrap_readwrite_role` settings select custom group roles; they
+default to the bundled development role names.
+
+Standalone Substrate defaults to the `substrate` schema, including under Kagent's umbrella chart. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema.
+
 - Use the next sequential `NNNNNN_name.sql` filename.
 - Add exactly one `-- +goose Up` annotation.
 - Use SQL migrations only.
@@ -57,6 +64,7 @@ Store migration files in `cmd/ateapi/internal/store/atepg/migrations`.
 - Do not add SQL transaction control statements.
 - Do not use `IF NOT EXISTS` for a schema change.
 - Keep each startup migration short.
+- Bootstrap sets default table and sequence privileges for the `substrate_readwrite` role before migrations. A BYO database administrator must provide equivalent privileges. These grants do not go to `PUBLIC` or Kagent's roles. In this first pass, migration ledgers receive the same table privileges as other objects.
 
 Before the first stable v1 release, developers can change or squash migration files. Recreate a development database after its migration history changes.
 

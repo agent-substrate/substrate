@@ -23,7 +23,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
-	"strings"
+	"strconv"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -34,12 +34,12 @@ import (
 const envHashAnnotation = "ate.dev/env-hash"
 
 // CreateAPIServerEnvVars reconciles how ate-api-server reaches its PostgreSQL
-// store: the DSN and schema into the ate-api-server-secret-envvars Secret, the
-// Cloud SQL Auth Proxy sidecar's settings into the ate-api-server-envvars
-// ConfigMap, and an external server CA into postgres-server-ca.
+// store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
+// stable roles, bootstrap mode, and Cloud SQL settings into the ConfigMap,
+// and an external server CA into postgres-server-ca.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
-// resolves --postgres-connection-string=@env and --postgres-schema=@env from
+// resolves the PostgreSQL connection, role, and schema flags from
 // the result. It lists the secretRef last, so the Secret wins over a DSN a
 // previous installer left in the ConfigMap.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
@@ -48,40 +48,77 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		return err
 	}
 
-	// A DSN the operator supplied on this run, as opposed to one synthesized,
-	// defaulted, or adopted back from the Secret. Only the former outranks
-	// ATE_API_POSTGRES_POOL_MAX_CONNS below.
-	dsn := e.Cfg.PostgresConnectionString
-	dsnFromOperator := dsn != ""
+	readWriteDSN := e.Cfg.PostgresReadWriteConnectionString
+	ownerDSN := e.Cfg.PostgresOwnerConnectionString
+	readWriteFromOperator := readWriteDSN != ""
+	poolMaxConns := e.Cfg.PostgresPoolMaxConns
 
 	cloudsql, err := e.resolveCloudSQL(ctx)
 	if err != nil {
 		return err
 	}
-	if dsn == "" && cloudsql.Adopted {
-		// The instance came from the cluster, so take the DSN that goes with
-		// it rather than synthesizing a fresh one over the operator's edits.
-		if dsn, err = e.recordedDSN(ctx); err != nil {
+	if readWriteDSN == "" && cloudsql.Adopted {
+		// Keep the credentials paired with an adopted Cloud SQL instance.
+		if readWriteDSN, ownerDSN, err = e.recordedConnectionStrings(ctx); err != nil {
 			return err
 		}
 	}
-	if dsn == "" {
+	if readWriteDSN == "" {
 		if cloudsql.Instance != "" {
-			if dsn, err = cloudSQLDSN(cloudsql); err != nil {
+			if readWriteDSN, err = cloudSQLDSN(cloudsql); err != nil {
 				return err
 			}
 		} else {
-			dsn = e.Cfg.PostgresConnString()
+			if readWriteDSN, ownerDSN, err = e.postgresReadWriteConnectionStrings(ctx); err != nil {
+				return err
+			}
 		}
 	}
-	dsn = withPoolMaxConns(dsn, e.Cfg.PostgresPoolMaxConns, dsnFromOperator)
-	log.Infof("POSTGRES_CONNECTION_STRING: %s", redactDSN(dsn))
+	if ownerDSN == "" {
+		ownerDSN = readWriteDSN
+	}
+	readWriteRole := e.Cfg.PostgresReadWriteRole
+	ownerRole := e.Cfg.PostgresOwnerRole
+	schema := e.Cfg.PostgresSchemaName()
+	if cloudsql.Adopted {
+		recorded, err := e.recordedAPIServerEnvVars(ctx)
+		if err != nil {
+			return err
+		}
+		if !e.Cfg.PostgresReadWriteRoleSet && recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "" {
+			readWriteRole = recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"]
+		}
+		if !e.Cfg.PostgresOwnerRoleSet && recorded["ATE_API_POSTGRES_OWNER_ROLE"] != "" {
+			ownerRole = recorded["ATE_API_POSTGRES_OWNER_ROLE"]
+		}
+		if poolMaxConns == "" {
+			poolMaxConns = recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"]
+		}
+		if e.Cfg.PostgresSchema == "" {
+			secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
+			if err != nil {
+				return err
+			}
+			if secret != nil && len(secret.Data["ATE_API_POSTGRES_SCHEMA"]) != 0 {
+				schema = string(secret.Data["ATE_API_POSTGRES_SCHEMA"])
+			}
+		}
+	}
+	log.Infof("POSTGRES_READ_WRITE_CONNECTION_STRING: %s", redactDSN(readWriteDSN))
+	log.Infof("POSTGRES_OWNER_CONNECTION_STRING: %s", redactDSN(ownerDSN))
 
-	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, cloudSQLEnvVars(cloudsql)); err != nil {
+	configVars := cloudSQLEnvVars(cloudsql)
+	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
+	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
+	configVars["ATE_API_POSTGRES_BOOTSTRAP"] = strconv.FormatBool(cloudsql.Instance == "" && !readWriteFromOperator)
+	if poolMaxConns != "" {
+		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
+	}
+	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
 	}
 	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars,
-		buildAPIServerEnvVars(dsn, e.Cfg.PostgresSchemaName())); err != nil {
+		buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema)); err != nil {
 		return err
 	}
 	if err := e.applyPostgresServerCA(ctx); err != nil {
@@ -90,29 +127,37 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	return e.annotateAPIServerEnvHash(ctx)
 }
 
-// buildAPIServerEnvVars is the Secret payload. ate-api-server takes the
-// connection string and the schema from it, and exits on an empty schema; an
-// unrecognized key here reaches the container as a stray environment variable,
-// so the set stays exactly what the shell installer's
-// create_api_server_env_vars writes.
+// buildAPIServerEnvVars is the Secret payload. ate-api-server takes both
+// connection strings and the schema from it, and exits on an empty schema; an
+// unrecognized key here reaches the container as a stray environment variable.
 //
 // The DSN can carry a password, for an external database without IAM
 // authentication, which is why this is a Secret and not the ConfigMap
 // alongside it.
-func buildAPIServerEnvVars(connString, schema string) map[string]string {
+func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]string {
 	return map[string]string{
-		"ATE_API_POSTGRES_CONNECTION_STRING": connString,
-		"ATE_API_POSTGRES_SCHEMA":            schema,
+		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": readWriteDSN,
+		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      ownerDSN,
+		"ATE_API_POSTGRES_SCHEMA":                       schema,
 	}
 }
 
-// recordedDSN reads the connection string the cluster currently runs with.
-func (e *Env) recordedDSN(ctx context.Context) (string, error) {
+// recordedConnectionStrings reads the credentials paired with an adopted Cloud
+// SQL instance. The old single connection key is accepted for existing installs.
+func (e *Env) recordedConnectionStrings(ctx context.Context) (string, string, error) {
 	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 	if err != nil || secret == nil {
-		return "", err
+		return "", "", err
 	}
-	return string(secret.Data["ATE_API_POSTGRES_CONNECTION_STRING"]), nil
+	readWriteDSN := string(secret.Data["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"])
+	if readWriteDSN == "" {
+		readWriteDSN = string(secret.Data["ATE_API_POSTGRES_CONNECTION_STRING"])
+	}
+	ownerDSN := string(secret.Data["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"])
+	if ownerDSN == "" {
+		ownerDSN = readWriteDSN
+	}
+	return readWriteDSN, ownerDSN, nil
 }
 
 // applyPostgresServerCA publishes the server CA of an external PostgreSQL,
@@ -132,37 +177,6 @@ func (e *Env) applyPostgresServerCA(ctx context.Context) error {
 	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresServerCA, map[string]string{
 		"server-ca.pem": string(pem),
 	})
-}
-
-// poolMaxConnsPattern matches the setting in either DSN format: a URI query
-// parameter, delimited by &, or a keyword/value pair, delimited by a space.
-var poolMaxConnsPattern = regexp.MustCompile(`pool_max_conns=[^ &]*`)
-
-// withPoolMaxConns splices pgxpool sizing into the DSN, the only place pgxpool
-// reads it from. Without it the pool silently queues clients at its default
-// size.
-//
-// A DSN the operator supplied on this run wins outright. The environment
-// variable does however overwrite the setting in an adopted DSN, so that a
-// scaling change is not silently dropped on redeploy.
-func withPoolMaxConns(dsn, maxConns string, dsnFromOperator bool) string {
-	if maxConns == "" {
-		return dsn
-	}
-	if loc := poolMaxConnsPattern.FindStringIndex(dsn); loc != nil {
-		if dsnFromOperator {
-			return dsn
-		}
-		return dsn[:loc[0]] + "pool_max_conns=" + maxConns + dsn[loc[1]:]
-	}
-	switch {
-	case strings.Contains(dsn, "://") && strings.Contains(dsn, "?"):
-		return dsn + "&pool_max_conns=" + maxConns
-	case strings.Contains(dsn, "://"):
-		return dsn + "?pool_max_conns=" + maxConns
-	default:
-		return dsn + " pool_max_conns=" + maxConns
-	}
 }
 
 var (

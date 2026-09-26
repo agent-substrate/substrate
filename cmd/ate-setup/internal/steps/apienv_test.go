@@ -25,79 +25,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 )
 
-// pgxpool reads its sizing out of the DSN, so an installation that gets this
-// wrong queues clients silently rather than failing.
-func TestWithPoolMaxConns(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		dsn             string
-		maxConns        string
-		dsnFromOperator bool
-		want            string
-	}{
-		{
-			name: "unset leaves the DSN alone",
-			dsn:  "postgresql://p@h:5432/atepg?sslmode=disable",
-			want: "postgresql://p@h:5432/atepg?sslmode=disable",
-		},
-		{
-			name:     "URI with a query gets another parameter",
-			dsn:      "postgresql://p@h:5432/atepg?sslmode=disable",
-			maxConns: "50",
-			want:     "postgresql://p@h:5432/atepg?sslmode=disable&pool_max_conns=50",
-		},
-		{
-			name:     "URI without a query starts one",
-			dsn:      "postgresql://p@h:5432/atepg",
-			maxConns: "50",
-			want:     "postgresql://p@h:5432/atepg?pool_max_conns=50",
-		},
-		{
-			name:     "keyword/value DSN gets another pair",
-			dsn:      "user=ate host=127.0.0.1 dbname=atepg",
-			maxConns: "50",
-			want:     "user=ate host=127.0.0.1 dbname=atepg pool_max_conns=50",
-		},
-		{
-			// An adopted DSN carries the previous run's value; a scaling
-			// change must not be silently dropped on redeploy.
-			name:     "replaces the value in an adopted URI",
-			dsn:      "postgresql://p@h:5432/atepg?pool_max_conns=10&sslmode=disable",
-			maxConns: "50",
-			want:     "postgresql://p@h:5432/atepg?pool_max_conns=50&sslmode=disable",
-		},
-		{
-			name:     "replaces the value in an adopted keyword/value DSN",
-			dsn:      "user=ate pool_max_conns=10 dbname=atepg",
-			maxConns: "50",
-			want:     "user=ate pool_max_conns=50 dbname=atepg",
-		},
-		{
-			// The operator spelled the whole DSN out on this run, so they
-			// meant the value in it.
-			name:            "an operator-supplied value wins",
-			dsn:             "postgresql://p@h:5432/atepg?pool_max_conns=10",
-			maxConns:        "50",
-			dsnFromOperator: true,
-			want:            "postgresql://p@h:5432/atepg?pool_max_conns=10",
-		},
-		{
-			// ... but a DSN that says nothing about sizing still takes it.
-			name:            "an operator-supplied DSN without the setting takes it",
-			dsn:             "postgresql://p@h:5432/atepg",
-			maxConns:        "50",
-			dsnFromOperator: true,
-			want:            "postgresql://p@h:5432/atepg?pool_max_conns=50",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := withPoolMaxConns(tc.dsn, tc.maxConns, tc.dsnFromOperator); got != tc.want {
-				t.Errorf("withPoolMaxConns() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 // The DSN is logged on every install, and for an external database it can
 // carry a password.
 func TestRedactDSN(t *testing.T) {
@@ -127,9 +54,9 @@ func TestRedactDSN(t *testing.T) {
 			want: "user=ate@p.iam host=127.0.0.1 port=5432 dbname=atepg sslmode=disable",
 		},
 		{
-			name: "the default in-cluster DSN is unchanged",
-			dsn:  config.DefaultPostgresConnectionString,
-			want: config.DefaultPostgresConnectionString,
+			name: "bundled password is redacted",
+			dsn:  bundledPostgresDSN("substrate_readwrite_user", "substrate-readwrite"),
+			want: strings.Replace(bundledPostgresDSN("substrate_readwrite_user", "substrate-readwrite"), ":substrate-readwrite@", ":***@", 1),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,6 +87,202 @@ func TestEnvHash(t *testing.T) {
 	// separator to stay distinguishable.
 	if envHash(map[string]string{"X": "1"}, nil) == envHash(nil, map[string][]byte{"X": []byte("1")}) {
 		t.Error("envHash() does not distinguish the ConfigMap from the Secret")
+	}
+}
+
+func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cfg       config.Config
+		bootstrap string
+		user      string
+	}{
+		{
+			name:      "bundled identities",
+			cfg:       config.Config{PostgresReadWriteRole: "substrate_readwrite", PostgresOwnerRole: "substrate_owner"},
+			bootstrap: "true",
+			user:      "substrate_readwrite_user",
+		},
+		{
+			name: "Cloud SQL one login",
+			cfg: config.Config{
+				PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
+				CloudSQL: config.CloudSQLConfig{Instance: "p:r:i", InstanceSet: true, GSA: "svc@p.iam.gserviceaccount.com"},
+			},
+			bootstrap: "false",
+			user:      "svc@p.iam",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem}, Data: map[string][]byte{"POSTGRES_USER": []byte("postgres"), "POSTGRES_PASSWORD": []byte("postgres")}},
+			)}
+			if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			secret, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readWrite := secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"]
+			owner := secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"]
+			if !strings.Contains(readWrite, tc.user) || owner == "" {
+				t.Fatalf("unexpected connections: %q, %q", readWrite, owner)
+			}
+			if tc.bootstrap == "false" && readWrite != owner {
+				t.Fatalf("Cloud SQL one-login connections differ: %q, %q", readWrite, owner)
+			}
+			cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cm.Data["ATE_API_POSTGRES_BOOTSTRAP"] != tc.bootstrap || cm.Data["ATE_API_POSTGRES_OWNER_ROLE"] != tc.cfg.PostgresOwnerRole {
+				t.Fatalf("unexpected PostgreSQL config: %v", cm.Data)
+			}
+		})
+	}
+}
+
+func TestCreateAPIServerEnvVarsPoolSizeWithFileReference(t *testing.T) {
+	cfg := config.Config{
+		PostgresReadWriteConnectionString: "@file:/run/postgres/readwrite-dsn",
+		PostgresPoolMaxConns:              "20",
+	}
+	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+	)}
+	if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretAPIEnvVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"] != "20" ||
+		secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != cfg.PostgresReadWriteConnectionString {
+		t.Fatalf("pool size %q, connection %q", cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"],
+			secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"])
+	}
+}
+
+func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		cfg           config.Config
+		wantReadWrite string
+		wantOwner     string
+		wantSchema    string
+		wantPoolSize  string
+	}{
+		{
+			name: "preserve recorded identity",
+			cfg: config.Config{
+				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
+				PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
+			},
+			wantReadWrite: "tenant_readwrite",
+			wantOwner:     "tenant_owner",
+			wantSchema:    "tenant_schema",
+			wantPoolSize:  "20",
+		},
+		{
+			name: "explicit overrides win",
+			cfg: config.Config{
+				PostgresReadWriteRole:    config.DefaultPostgresReadWriteRole,
+				PostgresOwnerRole:        config.DefaultPostgresOwnerRole,
+				PostgresReadWriteRoleSet: true,
+				PostgresOwnerRoleSet:     true,
+				PostgresSchema:           "other_schema",
+				PostgresPoolMaxConns:     "30",
+			},
+			wantReadWrite: config.DefaultPostgresReadWriteRole,
+			wantOwner:     config.DefaultPostgresOwnerRole,
+			wantSchema:    "other_schema",
+			wantPoolSize:  "30",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem},
+					Data: map[string]string{
+						"ATE_API_POSTGRES_CLOUDSQL_INSTANCE": "p:r:i",
+						"ATE_API_POSTGRES_READ_WRITE_ROLE":   "tenant_readwrite",
+						"ATE_API_POSTGRES_OWNER_ROLE":        "tenant_owner",
+						"ATE_API_POSTGRES_POOL_MAX_CONNS":    "20",
+					},
+				},
+				&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
+					Data: map[string][]byte{
+						"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("user=svc@p.iam host=127.0.0.1 dbname=atepg"),
+						"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      []byte("user=svc@p.iam host=127.0.0.1 dbname=atepg"),
+						"ATE_API_POSTGRES_SCHEMA":                       []byte("tenant_schema"),
+					},
+				},
+				&corev1.ServiceAccount{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        "ate-api-server",
+						Namespace:   NamespaceAteSystem,
+						Annotations: map[string]string{workloadIdentityAnnotation: "svc@p.iam.gserviceaccount.com"},
+					},
+				},
+			)}
+			if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"] != tc.wantReadWrite ||
+				cm.Data["ATE_API_POSTGRES_OWNER_ROLE"] != tc.wantOwner ||
+				cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"] != tc.wantPoolSize ||
+				secret.StringData["ATE_API_POSTGRES_SCHEMA"] != tc.wantSchema {
+				t.Fatalf("identity after redeploy: roles %q/%q, schema %q, pool size %q",
+					cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"], cm.Data["ATE_API_POSTGRES_OWNER_ROLE"],
+					secret.StringData["ATE_API_POSTGRES_SCHEMA"], cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"])
+			}
+		})
+	}
+}
+
+func TestRecordedConnectionStrings(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		data  map[string][]byte
+		owner string
+	}{
+		{"legacy single DSN", map[string][]byte{"ATE_API_POSTGRES_CONNECTION_STRING": []byte("legacy")}, "legacy"},
+		{"separate DSNs", map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("readwrite"), "ATE_API_POSTGRES_OWNER_CONNECTION_STRING": []byte("owner")}, "owner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
+				Data:       tc.data,
+			})}
+			readWrite, owner, err := e.recordedConnectionStrings(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if readWrite == "" || owner != tc.owner {
+				t.Fatalf("recorded connections: %q, %q", readWrite, owner)
+			}
+		})
 	}
 }
 
@@ -236,7 +359,7 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 	t.Run("stamps the pod template", func(t *testing.T) {
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: SecretAPIEnvVars},
-			Data:       map[string][]byte{"ATE_API_POSTGRES_CONNECTION_STRING": []byte("postgresql://h/atepg")},
+			Data:       map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("postgresql://h/atepg")},
 		}
 		e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, apiServerDeployment(SecretAPIEnvVars), secret)}
 

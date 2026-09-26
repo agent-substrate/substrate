@@ -297,6 +297,18 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelEndpointOverride(ctx); err != nil {
 		return err
 	}
+	postgres, err := e.planPostgres(ctx)
+	if err != nil {
+		return err
+	}
+	if postgres.bundled {
+		if err := e.applyBundledPostgres(ctx, postgres); err != nil {
+			return err
+		}
+		if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
+			return err
+		}
+	}
 	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err
 	}
