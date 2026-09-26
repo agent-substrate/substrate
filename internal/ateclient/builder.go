@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -158,10 +159,7 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
 
-	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
-	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
-	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
-	// clusters), client-go will print out a warning every time it initializes.
+	// Beta-only clusters warn when client-go initializes the deprecated API.
 	config.WarningHandlerWithContext = &rest.NoWarnings{}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -215,10 +213,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
 
-	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
-	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
-	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
-	// clusters), client-go will print out a warning every time it initializes.
+	// Beta-only clusters warn when client-go initializes the deprecated API.
 	config.WarningHandlerWithContext = &rest.NoWarnings{}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -268,7 +263,11 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 }
 
 func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.Config, error) {
-	ctbs, err := clientset.CertificatesV1beta1().ClusterTrustBundles().List(ctx, metav1.ListOptions{
+	client, err := clustertrustbundle.New(clientset)
+	if err != nil {
+		return nil, fmt.Errorf("discover ClusterTrustBundle API: %w", err)
+	}
+	ctbs, err := client.List(ctx, metav1.ListOptions{
 		LabelSelector: liveBundleSelector,
 	})
 	if err != nil {
@@ -277,7 +276,7 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 
 	pool := x509.NewCertPool()
 	found := false
-	for _, ctb := range ctbs.Items {
+	for _, ctb := range ctbs {
 		if ctb.Spec.SignerName != serviceDNSSignerName {
 			continue
 		}
