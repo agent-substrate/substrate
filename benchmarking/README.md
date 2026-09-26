@@ -116,6 +116,24 @@ and state restoration latency when a durable directory is attached to the actor.
 * `DurDirServeWarm`: Subsequent read within the same active cycle (cached state baseline).
 * `DurDirOverwrite`: In-place file overwrite with checksum verification.
 
+### Sweperf Benchmark
+
+The sweperf benchmark replays a recorded SWE-Perf task inside an actor, suspending and
+resuming between cycles to measure the cost of actor state transitions under a realistic
+agent workload. One task is four cycles.
+
+#### Sweperf Reported Metrics
+
+* `ResumeToFirstExec`: Resume RPC start until the first exec lands in the actor.
+* `CycleCEL`: Server-side execution time for one cycle.
+* `TaskCEL`: Server-side execution time for one task.
+* `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time.
+* `CreateAtespace`, `CreateActor`, `ResumeActor`, `SuspendActor`, `DeleteActor`: Server-side
+  elapsed time for each control-plane RPC, taken from the response trailer.
+* `<rpc>_rtt`: Client round trip for the control-plane RPC of the same name, so network and
+  queueing overhead stays visible separately from the server-side elapsed time.
+* `Workload_Cycle_<n>`: Client round trip for the exec request of cycle `n`.
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 

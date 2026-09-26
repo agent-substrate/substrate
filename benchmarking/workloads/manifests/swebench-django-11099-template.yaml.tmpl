@@ -14,14 +14,14 @@
 
 metadata:
   atespace: benchmark-workloads
-  name: swebench-astropy-7336
+  name: swebench-django-11099
 workerSelector:
   matchLabels:
     workload: benchmark-ateom
 containers:
-- name: astropy
+- name: django
   # Task image from https://github.com/gke-labs/sweperf, pinned by digest.
-  image: "${SWEPERF_IMAGE_REPO}/sweperf:astropy_7336@sha256:c265bfba3bea40c99e7baad734579b75d02dab6dbe6910cb1f9ed71c8b08f5b1"
+  image: "${SWEPERF_IMAGE_REPO}/sweperf:django_11099@sha256:7e4baaf61a7482d6d09e2fcccecd1529f47488aa52821d507cc8d6ad0ba31eea"
   command:
   - "python3"
   - "/replay.py"
@@ -35,4 +35,4 @@ sandboxConfig:
 snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
-  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/swebench-astropy-7336/
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/swebench-django-11099/

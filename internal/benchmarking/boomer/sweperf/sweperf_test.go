@@ -27,15 +27,70 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// statKey identifies one locust_request_duration_milliseconds series.
+type statKey struct {
+	name   string
+	status string
+}
+
+// statSample is what that series has observed.
+type statSample struct {
+	count uint64
+	sumMs float64
+}
+
+// readStats snapshots every stats row bmetrics has recorded. The registry is
+// global to the test binary, so a test reads it twice and compares.
+func readStats(t *testing.T) map[statKey]statSample {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	out := map[statKey]statSample{}
+	for _, mf := range families {
+		if mf.GetName() != "locust_request_duration_milliseconds" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var key statKey
+			for _, lp := range m.GetLabel() {
+				switch lp.GetName() {
+				case "name":
+					key.name = lp.GetValue()
+				case "status":
+					key.status = lp.GetValue()
+				}
+			}
+			h := m.GetHistogram()
+			out[key] = statSample{count: h.GetSampleCount(), sumMs: h.GetSampleSum()}
+		}
+	}
+	return out
+}
+
+// recordedSince returns what one row observed after the given snapshot.
+func recordedSince(t *testing.T, before map[statKey]statSample, name, status string) statSample {
+	t.Helper()
+	key := statKey{name: name, status: status}
+	now := readStats(t)[key]
+	was := before[key]
+	return statSample{count: now.count - was.count, sumMs: now.sumMs - was.sumMs}
+}
 
 type fakeControlClient struct {
 	ateapipb.ControlClient
@@ -46,6 +101,14 @@ type fakeControlClient struct {
 	resumeErr      error
 	suspendErr     error
 	deleteErr      error
+	// Make ResumeActor take time and report a smaller server-side elapsed.
+	resumeDelay     time.Duration
+	resumeElapsedUs string
+	// Report SUSPENDING for the first suspendedAfter GetActor calls.
+	suspendedAfter int
+	getActorCalls  int
+	// AnyState carried by the most recent DeleteActor request.
+	deleteAnyState bool
 }
 
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
@@ -72,10 +135,23 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
+	time.Sleep(f.resumeDelay)
+	if f.resumeElapsedUs != "" {
+		setTrailer(opts, metadata.Pairs(ateinterceptors.ServerElapsedTrailer, f.resumeElapsedUs))
+	}
 	if f.resumeErr != nil {
 		return nil, f.resumeErr
 	}
 	return &ateapipb.ResumeActorResponse{}, nil
+}
+
+// setTrailer fills the metadata that grpc.Trailer asked the call to populate.
+func setTrailer(opts []grpc.CallOption, md metadata.MD) {
+	for _, o := range opts {
+		if to, ok := o.(grpc.TrailerCallOption); ok {
+			*to.TrailerAddr = md
+		}
+	}
 }
 
 func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
@@ -88,10 +164,23 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
+func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "GetActor")
+	state := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	if f.getActorCalls < f.suspendedAfter {
+		state = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+	}
+	f.getActorCalls++
+	return &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: state}}, nil
+}
+
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
+	f.deleteAnyState = in.GetAnyState()
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
@@ -144,7 +233,7 @@ func TestActorRoutingHeader(t *testing.T) {
 	if err := u.pollLiveness(context.Background()); err != nil {
 		t.Fatalf("pollLiveness: %v", err)
 	}
-	if err := u.execute(context.Background(), 1, 0, 5); err != nil {
+	if _, _, err := u.execute(context.Background(), 1, 0, 5); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -370,7 +459,7 @@ func TestExecuteSyncExitCodeFailure(t *testing.T) {
 	cfg, _, _ := newTestConfig(t, handler)
 	u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-	err := u.execute(context.Background(), 1, 0, 5)
+	_, _, err := u.execute(context.Background(), 1, 0, 5)
 	if err == nil {
 		t.Fatalf("execute expected error on non-zero exit code, got nil")
 	}
@@ -387,7 +476,7 @@ func TestExecuteHTTPStatusError(t *testing.T) {
 	cfg, _, _ := newTestConfig(t, handler)
 	u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-	err := u.execute(context.Background(), 1, 0, 5)
+	_, _, err := u.execute(context.Background(), 1, 0, 5)
 	if err == nil {
 		t.Fatalf("execute expected error on HTTP 500, got nil")
 	}
@@ -424,19 +513,19 @@ func TestSweperfPollLiveness(t *testing.T) {
 
 func TestSweperfPollJobCompletion(t *testing.T) {
 	t.Run("job completes with exit code 0", func(t *testing.T) {
+		// Literal payload from replay.py, so a wrong json tag fails here.
 		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			exitCode := 0
-			json.NewEncoder(w).Encode(jobStatusResponse{
-				JobID:    "job-1",
-				Status:   "COMPLETED",
-				ExitCode: &exitCode,
-			})
+			fmt.Fprint(w, `{"job_id":"job-1","status":"COMPLETED","exit_code":0,"completed_step":5,"execution_duration_ms":1234.5}`)
 		})
 		cfg, _, _ := newTestConfig(t, handler)
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-		if err := u.pollJobCompletion(context.Background(), "job-1", 1); err != nil {
+		got, err := u.pollJobCompletion(context.Background(), "job-1", 1)
+		if err != nil {
 			t.Errorf("pollJobCompletion failed unexpectedly: %v", err)
+		}
+		if want := 1234500 * time.Microsecond; got != want {
+			t.Errorf("pollJobCompletion returned %v, want the reported %v", got, want)
 		}
 	})
 
@@ -453,7 +542,7 @@ func TestSweperfPollJobCompletion(t *testing.T) {
 		cfg, _, _ := newTestConfig(t, handler)
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-		if err := u.pollJobCompletion(context.Background(), "job-1", 1); err == nil {
+		if _, err := u.pollJobCompletion(context.Background(), "job-1", 1); err == nil {
 			t.Errorf("pollJobCompletion expected error on failed job, got nil")
 		}
 	})
@@ -540,6 +629,29 @@ func TestInitSweperfAndTaskFn(t *testing.T) {
 	shutdownFn(context.Background())
 }
 
+func TestStartUserWaitsForBootstrapSuspend(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(statusResponse{Status: "up"})
+	})
+	cfg, _, fakeCtrl := newTestConfig(t, handler)
+	fakeCtrl.suspendedAfter = 2
+
+	rt := &sweperfRuntime{cfg: cfg}
+	if _, err := rt.startUser(context.Background()); err != nil {
+		t.Fatalf("startUser: %v", err)
+	}
+
+	gets := 0
+	for _, c := range fakeCtrl.recordedCalls() {
+		if c == "GetActor" {
+			gets++
+		}
+	}
+	if gets < 3 {
+		t.Errorf("GetActor called %d times, want at least 3; startUser returned before the actor reached SUSPENDED", gets)
+	}
+}
+
 func TestSweperfBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server not ready", http.StatusInternalServerError)
@@ -577,5 +689,244 @@ func TestSweperfShutdownSuspendsBeforeDelete(t *testing.T) {
 	calls := fakeCtrl.recordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
 		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
+	}
+	// Without AnyState the server refuses to delete an actor caught mid-cycle.
+	if !fakeCtrl.deleteAnyState {
+		t.Error("DeleteActor sent AnyState=false; an actor not yet SUSPENDED would leak its worker")
+	}
+}
+
+func TestTracedCallRecordsBothLatencies(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
+	// 30ms on the wire, 5ms reported by the server.
+	fakeCtrl.resumeDelay = 30 * time.Millisecond
+	fakeCtrl.resumeElapsedUs = "5000"
+	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
+
+	before := readStats(t)
+	if ok := u.resume(context.Background()); !ok {
+		t.Fatalf("resume failed")
+	}
+
+	server := recordedSince(t, before, "ResumeActor", "success")
+	client := recordedSince(t, before, "ResumeActor_rtt", "success")
+
+	if server.count != 1 || client.count != 1 {
+		t.Fatalf("want one sample each, got ResumeActor=%d ResumeActor_rtt=%d", server.count, client.count)
+	}
+	if server.sumMs != 5 {
+		t.Errorf("ResumeActor = %vms, want the 5ms from the trailer", server.sumMs)
+	}
+	if client.sumMs < 30 {
+		t.Errorf("ResumeActor_rtt = %vms, want at least the 30ms spent on the wire", client.sumMs)
+	}
+}
+
+func TestTracedCallSkipsRTTRowWithoutTrailer(t *testing.T) {
+	cfg, _, _ := newTestConfig(t, http.HandlerFunc(nil))
+	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
+
+	before := readStats(t)
+	if ok := u.resume(context.Background()); !ok {
+		t.Fatalf("resume failed")
+	}
+
+	// Without a trailer both figures are the client's, so the second row
+	// would only duplicate the first.
+	if got := recordedSince(t, before, "ResumeActor_rtt", "success"); got.count != 0 {
+		t.Errorf("ResumeActor_rtt recorded %d samples, want none without a trailer", got.count)
+	}
+}
+
+func TestResumeToFirstExecStopsBeforeJobPolling(t *testing.T) {
+	const pollDelay = 60 * time.Millisecond
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/execute":
+			// Accepted at once; the work happens in the background.
+			json.NewEncoder(w).Encode(executeResponse{JobID: "job-1", Status: "ACCEPTED"})
+		case r.URL.Path == "/status" && r.URL.Query().Get("job_id") != "":
+			time.Sleep(pollDelay)
+			exitCode := 0
+			json.NewEncoder(w).Encode(jobStatusResponse{
+				JobID: "job-1", Status: "COMPLETED", ExitCode: &exitCode,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	cfg, _, _ := newTestConfig(t, handler)
+	u := &sweperfUser{
+		cfg:       cfg,
+		actorName: "act",
+		userClass: sweperfUserClass,
+		chunks:    []chunk{{0, 5}},
+	}
+
+	before := readStats(t)
+	u.step(context.Background())
+
+	ttfe := recordedSince(t, before, "ResumeToFirstExec", "success")
+	cycle := recordedSince(t, before, "Workload_Cycle_1", "success")
+
+	if ttfe.count != 1 {
+		t.Fatalf("ResumeToFirstExec recorded %d samples, want 1", ttfe.count)
+	}
+	if cycle.sumMs < float64(pollDelay.Milliseconds()) {
+		t.Fatalf("Workload_Cycle_1 = %vms, want at least the %v spent polling", cycle.sumMs, pollDelay)
+	}
+	if ttfe.sumMs >= cycle.sumMs {
+		t.Errorf("ResumeToFirstExec = %vms, want well under Workload_Cycle_1 = %vms; it is timing the workload",
+			ttfe.sumMs, cycle.sumMs)
+	}
+}
+
+func TestTaskCELOnlyOnFullTrajectory(t *testing.T) {
+	// Chunk 1 reports 1200ms of container time, chunk 2 reports 1800ms.
+	durations := map[string]string{"job-1": "1200", "job-2": "1800"}
+	cycle := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/execute":
+			cycle++
+			fmt.Fprintf(w, `{"job_id":"job-%d","status":"ACCEPTED"}`, cycle)
+		case "/status":
+			jobID := r.URL.Query().Get("job_id")
+			fmt.Fprintf(w, `{"job_id":%q,"status":"COMPLETED","exit_code":0,"execution_duration_ms":%s}`,
+				jobID, durations[jobID])
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	cfg, _, _ := newTestConfig(t, handler)
+	u := &sweperfUser{
+		cfg:       cfg,
+		actorName: "act",
+		userClass: sweperfUserClass,
+		chunks:    []chunk{{0, 5}, {5, 10}},
+	}
+
+	before := readStats(t)
+
+	u.step(context.Background())
+	if u.isDone() {
+		t.Fatalf("isDone after 1 of 2 cycles")
+	}
+	if want := 1200 * time.Millisecond; u.loopCEL != want {
+		t.Fatalf("loopCEL = %v after one cycle, want the reported %v", u.loopCEL, want)
+	}
+	if got := recordedSince(t, before, "TaskCEL", "success"); got.count != 0 {
+		t.Fatalf("TaskCEL recorded %d samples mid-trajectory, want none", got.count)
+	}
+
+	u.step(context.Background())
+	if !u.isDone() {
+		t.Fatalf("isDone false after both cycles")
+	}
+	if want := 3000 * time.Millisecond; u.loopCEL != want {
+		t.Fatalf("loopCEL = %v after two cycles, want the summed %v", u.loopCEL, want)
+	}
+
+	if got := recordedSince(t, before, "CycleCEL", "success"); got.count != 2 || got.sumMs != 3000 {
+		t.Errorf("CycleCEL recorded %d samples totalling %vms, want 2 totalling 3000", got.count, got.sumMs)
+	}
+
+	wall := u.loopWall
+	u.recordTaskMetrics()
+	got := recordedSince(t, before, "TaskCEL", "success")
+	if got.count != 1 {
+		t.Fatalf("TaskCEL recorded %d samples, want 1", got.count)
+	}
+	if got.sumMs != 3000 {
+		t.Errorf("TaskCEL = %vms, want the summed 3000ms", got.sumMs)
+	}
+	if gotWall := recordedSince(t, before, "TaskWallClock", "success"); gotWall.count != 1 ||
+		gotWall.sumMs != float64(wall.Milliseconds()) {
+		t.Errorf("TaskWallClock recorded %d samples totalling %vms, want 1 totalling %vms",
+			gotWall.count, gotWall.sumMs, wall.Milliseconds())
+	}
+	if u.loopCEL != 0 || u.loopWall != 0 || u.loopFailed {
+		t.Errorf("recordTaskMetrics left loopCEL=%v loopWall=%v loopFailed=%v, want them rearmed",
+			u.loopCEL, u.loopWall, u.loopFailed)
+	}
+}
+
+func TestCycleCELUsesContainerDurationNotWallClock(t *testing.T) {
+	// Two RUNNING polls at 200ms each, so wall clock dwarfs the reported 50ms.
+	polls := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/execute":
+			fmt.Fprint(w, `{"job_id":"job-1","status":"ACCEPTED"}`)
+		case "/status":
+			polls++
+			if polls <= 2 {
+				fmt.Fprint(w, `{"job_id":"job-1","status":"RUNNING"}`)
+				return
+			}
+			fmt.Fprint(w, `{"job_id":"job-1","status":"COMPLETED","exit_code":0,"execution_duration_ms":50}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	cfg, _, _ := newTestConfig(t, handler)
+	u := &sweperfUser{
+		cfg:       cfg,
+		actorName: "act",
+		userClass: sweperfUserClass,
+		chunks:    []chunk{{0, 5}},
+	}
+
+	before := readStats(t)
+	u.step(context.Background())
+
+	if want := 50 * time.Millisecond; u.loopCEL != want {
+		t.Errorf("loopCEL = %v, want the reported %v; it is timing the client", u.loopCEL, want)
+	}
+	if got := recordedSince(t, before, "CycleCEL", "success"); got.count != 1 || got.sumMs != 50 {
+		t.Errorf("CycleCEL recorded %d samples totalling %vms, want 1 totalling 50", got.count, got.sumMs)
+	}
+	if u.loopWall < 400*time.Millisecond {
+		t.Errorf("loopWall = %v, want at least the 400ms spent polling", u.loopWall)
+	}
+}
+
+func TestIterateEmitsTaskMetricsOnlyOnLastCycle(t *testing.T) {
+	cycle := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/execute":
+			cycle++
+			fmt.Fprintf(w, `{"job_id":"job-%d","status":"ACCEPTED"}`, cycle)
+		case "/status":
+			fmt.Fprint(w, `{"job_id":"job-1","status":"COMPLETED","exit_code":0,"execution_duration_ms":100}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	cfg, _, _ := newTestConfig(t, handler)
+	cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{})
+	r := &sweperfRuntime{cfg: cfg}
+	// Preloaded so iterate() skips startUser and runs the cycles directly.
+	r.users.Store(boomerutil.GoroutineID(), &sweperfUser{
+		cfg:       cfg,
+		actorName: "act",
+		userClass: sweperfUserClass,
+		chunks:    []chunk{{0, 5}, {5, 10}},
+	})
+
+	before := readStats(t)
+
+	r.iterate()
+	if got := recordedSince(t, before, "TaskCEL", "success"); got.count != 0 {
+		t.Fatalf("TaskCEL recorded %d samples after cycle 1 of 2, want none", got.count)
+	}
+
+	r.iterate()
+	if got := recordedSince(t, before, "TaskCEL", "success"); got.count != 1 {
+		t.Errorf("TaskCEL recorded %d samples after the full trajectory, want 1", got.count)
+	}
+	if got := recordedSince(t, before, "TaskWallClock", "success"); got.count != 1 {
+		t.Errorf("TaskWallClock recorded %d samples after the full trajectory, want 1", got.count)
 	}
 }

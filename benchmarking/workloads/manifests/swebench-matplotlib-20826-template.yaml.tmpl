@@ -14,14 +14,14 @@
 
 metadata:
   atespace: benchmark-workloads
-  name: swebench-astropy-7336
+  name: swebench-matplotlib-20826
 workerSelector:
   matchLabels:
     workload: benchmark-ateom
 containers:
-- name: astropy
+- name: matplotlib
   # Task image from https://github.com/gke-labs/sweperf, pinned by digest.
-  image: "${SWEPERF_IMAGE_REPO}/sweperf:astropy_7336@sha256:c265bfba3bea40c99e7baad734579b75d02dab6dbe6910cb1f9ed71c8b08f5b1"
+  image: "${SWEPERF_IMAGE_REPO}/sweperf:matplotlib_20826@sha256:74989c4921831f9fbf3fb95924e210bf6616ede00cf30cc9cf0bad945342174b"
   command:
   - "python3"
   - "/replay.py"
@@ -35,4 +35,4 @@ sandboxConfig:
 snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
-  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/swebench-astropy-7336/
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/swebench-matplotlib-20826/

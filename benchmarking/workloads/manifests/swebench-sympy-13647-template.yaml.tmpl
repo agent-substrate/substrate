@@ -14,14 +14,14 @@
 
 metadata:
   atespace: benchmark-workloads
-  name: swebench-astropy-7336
+  name: swebench-sympy-13647
 workerSelector:
   matchLabels:
     workload: benchmark-ateom
 containers:
-- name: astropy
+- name: sympy
   # Task image from https://github.com/gke-labs/sweperf, pinned by digest.
-  image: "${SWEPERF_IMAGE_REPO}/sweperf:astropy_7336@sha256:c265bfba3bea40c99e7baad734579b75d02dab6dbe6910cb1f9ed71c8b08f5b1"
+  image: "${SWEPERF_IMAGE_REPO}/sweperf:sympy_13647@sha256:89ed518b85efaf063cd3a515c33bc293a4883964d9af7cc21c4e34824ee171f1"
   command:
   - "python3"
   - "/replay.py"
@@ -35,4 +35,4 @@ sandboxConfig:
 snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
-  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/swebench-astropy-7336/
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/swebench-sympy-13647/

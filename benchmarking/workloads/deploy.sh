@@ -49,6 +49,8 @@ SANDBOX_CLASS="gvisor"
 # so benchmark actors do not inherit the 2 GiB kata default and drag its page
 # cache into every memory snapshot. Raise it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
+# Registry holding the SWE-Perf task images the swebench-* templates pull.
+SWEPERF_IMAGE_REPO="${SWEPERF_IMAGE_REPO:-us-docker.pkg.dev/gke-substrate-release/benchmark}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -133,6 +135,7 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${SWEPERF_IMAGE_REPO}|${SWEPERF_IMAGE_REPO}|g" \
       "${manifest}"
 }
 
