@@ -142,6 +142,7 @@ func TestServerTLSConfig(t *testing.T) {
 		trustBundle("podidentity.podcert.ate.dev:identity:primary-bundle", "podidentity.podcert.ate.dev/identity", true, podidentityCA),
 		trustBundle("servicedns.podcert.ate.dev:identity:canary-bundle", serviceDNSSignerName, false, canaryCA),
 	)
+	clientset.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/v1beta1", APIResources: []metav1.APIResource{{Name: "clustertrustbundles"}}}}
 
 	cfg, err := serverTLSConfig(context.Background(), clientset)
 	if err != nil {
@@ -189,6 +190,7 @@ func TestServerTLSConfigErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(tc.objects...)
+			clientset.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/v1beta1", APIResources: []metav1.APIResource{{Name: "clustertrustbundles"}}}}
 			if _, err := serverTLSConfig(context.Background(), clientset); err == nil {
 				t.Error("serverTLSConfig: want error, got nil")
 			}

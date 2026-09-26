@@ -31,9 +31,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volumepath"
-	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/util/wait"
-	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -77,7 +76,7 @@ type registeredActor struct {
 // systemInfoVolumeRefresher writes system-info volumes when an actor starts
 // and refreshes them as needed.
 type systemInfoVolumeRefresher struct {
-	lister    certlisters.ClusterTrustBundleLister
+	lister    trustBundleGetter
 	hasSynced cache.InformerSynced
 
 	// queue carries bundle names from informer events to the run loop.
@@ -91,7 +90,7 @@ type systemInfoVolumeRefresher struct {
 }
 
 // newSystemInfoVolumeRefresher subscribes to ClusterTrustBundle events.
-func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, informer cache.SharedIndexInformer) *systemInfoVolumeRefresher {
+func newSystemInfoVolumeRefresher(lister trustBundleGetter, informer cache.SharedIndexInformer) *systemInfoVolumeRefresher {
 	r := &systemInfoVolumeRefresher{
 		lister: lister,
 		queue:  workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
@@ -267,11 +266,11 @@ func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 		if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 			obj = d.Obj
 		}
-		ctb, ok := obj.(*certsv1beta1.ClusterTrustBundle)
-		if !ok {
+		ctb, err := meta.Accessor(obj)
+		if err != nil {
 			return
 		}
-		for _, name := range bundleNamesFor(ctb.Name) {
+		for _, name := range bundleNamesFor(ctb.GetName()) {
 			r.queue.Add(name)
 		}
 	}

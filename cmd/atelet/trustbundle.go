@@ -21,9 +21,24 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
+	"k8s.io/client-go/tools/cache"
 )
+
+type ctbInformerGetter struct {
+	informer cache.SharedIndexInformer
+	v1       bool
+}
+
+func (g ctbInformerGetter) Get(name string) (*certsv1beta1.ClusterTrustBundle, error) {
+	return clustertrustbundle.CachedBundle(g.informer, g.v1, name)
+}
+
+type trustBundleGetter interface {
+	Get(name string) (*certsv1beta1.ClusterTrustBundle, error)
+}
 
 // EgressTrustBundleName is the well-known name of the egress gateway CA
 // bundle (#823): the trust anchors for the per-SNI leaves the egress gateway
@@ -63,7 +78,7 @@ func bundleNamesFor(objectName string) []string {
 
 // rawTrustBundle returns the unsanitized contents of the ClusterTrustBundle
 // backing the allowlisted bundle name.
-func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (objectName, raw string, err error) {
+func rawTrustBundle(lister trustBundleGetter, name string) (objectName, raw string, err error) {
 	objectName, supported := supportedTrustBundles[name]
 	if !supported {
 		return "", "", fmt.Errorf("trust bundle %q is not supported by this deployment (supported: %s)", name, supportedTrustBundleNames())
