@@ -279,8 +279,10 @@ func newMeterProvider(ctx context.Context, serviceName string, relayCapable bool
 
 // Fatal logs msg + err and exits with status 1. For startup-time
 // fail-fast where there's no recovery path.
-func Fatal(ctx context.Context, msg string, err error) {
-	slog.ErrorContext(ctx, msg, slog.Any("err", err))
+func Fatal(ctx context.Context, msg string, err error, additionalArgs ...any) {
+	args := []any{slog.Any("err", err)}
+	args = append(args, additionalArgs...)
+	slog.ErrorContext(ctx, msg, args...)
 	os.Exit(1)
 }
 
