@@ -196,6 +196,44 @@ func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string)
 	return uri
 }
 
+// TestSnapshotFiles_SuspendTag follows the checkpoint's file list through the
+// control plane: the suspend records it on the actor's external snapshot, and
+// a tag of that snapshot keeps it.
+func TestSnapshotFiles_SuspendTag(t *testing.T) {
+	ns := namespaceForTest("ns-snapshot-files")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	ctx := context.Background()
+
+	suspendActorForTest(t, tc, workerName, "actor-a")
+	actor, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if diff := cmp.Diff(checkpointFiles, actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()); diff != "" {
+		t.Errorf("ExternalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
+	}
+
+	tag, err := tc.client.CreateTag(ctx, &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "files"},
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTag failed: %v", err)
+	}
+	if diff := cmp.Diff(checkpointFiles, tag.GetStatus().GetSnapshot().GetSnapshotFiles()); diff != "" {
+		t.Errorf("tag snapshot files mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // TestUpdateTag_Preconditions verifies the required version and uid
 // guards carried in the tag's metadata.
 func TestUpdateTag_Preconditions(t *testing.T) {

@@ -168,6 +168,16 @@ message ExternalSnapshot {
   // +k8s:optional
   // +k8s:format=k8s-uuid
   string actor_template_uid = 3;
+
+  // The files the snapshot consists of, as reported by the atelet that took
+  // it. Each is a plain file name under the snapshot's prefix.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:format=k8s-path-segment-name
+  // +k8s:eachVal=+k8s:maxLength=255
+  repeated string snapshot_files = 4;
 }
 
 // LocalSnapshot records information about a node-local snapshot.
@@ -198,6 +208,16 @@ message LocalSnapshot {
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 3;
+
+  // The files the snapshot consists of, as reported by the atelet that took
+  // it. Each is a plain file name in the node's local snapshot directory.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:format=k8s-path-segment-name
+  // +k8s:eachVal=+k8s:maxLength=255
+  repeated string snapshot_files = 4;
 }
 
 enum SnapshotContentScope {

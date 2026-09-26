@@ -143,6 +143,9 @@ type FakeAteletServer struct {
 // deletes whatever shares the snapshot's prefix.
 var snapshotObjects = []string{"manifest.json", "memory.zst"}
 
+// checkpointFiles are the snapshot files the fake Checkpoint reports.
+var checkpointFiles = []string{"checkpoint.img", "durable-dir.tar"}
+
 // SetObjectStore points the fake at the store a checkpoint should write to.
 func (f *FakeAteletServer) SetObjectStore(store *objectstoretest.Fake) {
 	f.Lock.Lock()
@@ -228,7 +231,7 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	return &ateletpb.CheckpointResponse{SnapshotFiles: checkpointFiles}, nil
 }
 
 func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {

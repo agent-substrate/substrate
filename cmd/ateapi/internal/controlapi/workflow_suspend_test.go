@@ -251,7 +251,7 @@ func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
-			if _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
+			if _, _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 				t.Fatal("ensureAteletSuspended: want error when atelet is unreachable, got nil")
 			}
 
@@ -304,7 +304,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl", Uid: "tmpl-uid-1"},
 		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
 	}
-	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
+	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl, nil)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
 			})
 
-			stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template)
+			stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil)
 			if err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
@@ -434,7 +434,7 @@ func TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure(t *testing.T) {
 	})
 
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, template); !errors.Is(err, errObjectStore) {
+	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil); !errors.Is(err, errObjectStore) {
 		t.Fatalf("ensureSuspendedFinalized = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	stuck, err := persistence.GetActor(ctx, actorRef)
@@ -449,7 +449,7 @@ func TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure(t *testing.T) {
 	}
 
 	objects.OnDelete = nil
-	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template)
+	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil)
 	if err != nil {
 		t.Fatalf("retried ensureSuspendedFinalized: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 
 			w := &ActorWorkflow{store: persistence}
 			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root"}}
-			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl); err != nil {
+			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl, nil); err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
 

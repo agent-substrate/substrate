@@ -4370,6 +4370,10 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if got := actor.GetStatus().GetExternalSnapshot().GetContentScope(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
 		t.Errorf("snapshot ContentScope = %v, want FULL", got)
 	}
+	// The pause records the files its checkpoint reported.
+	if diff := cmp.Diff(checkpointFiles, paused.GetStatus().GetLocalSnapshot().GetSnapshotFiles()); diff != "" {
+		t.Errorf("LocalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
+	}
 }
 
 // TestSuspendActor_FromPaused_UploadFailureCrashes: an atelet error while
