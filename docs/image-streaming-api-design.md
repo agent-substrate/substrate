@@ -306,8 +306,10 @@ Mounts and open file descriptors consume host kernel resources (VFS dentries, mo
 The generic driver implements reference counting across actors sharing the same base images:
 - **Active-Only Leases in Prototype:** Our prototype's `leases` map tracks `refCount` for each image:
   - **PrepareLayers on Run/Wake:** When an actor starts or resumes from sleep, `PrepareLayers` ensures layer mounts are active and increments the reference count (`refCount++`) for both container rootfs images and mounted OCI image volumes.
+  - **Concurrent Cold-Start Deduplication:** Concurrent `PrepareLayers` calls for the same cold image reference are coalesced via an in-flight map (`d.inflight`). A single leader goroutine resolves the manifest and prepares the snapshot views, while concurrent callers wait for completion and increment `refCount++` on the shared `imageLease`.
+  - **Negative Decline Cache (`DefaultDeclineTTL`):** When the snapshotter declines a layer (`imagestreaming.ErrNotStreamable`), the driver caches the decline in memory for `DefaultDeclineTTL` (10 minutes) so subsequent starts of the same unstreamable image reference immediately skip registry resolution and snapshotter RPCs.
   - **Release on Checkpoint / Sleep / Terminate:** When an actor transitions to Sleep/Paused state via `atelet.Checkpoint`, or when an actor terminates (`atelet.Terminate`), `atelet` releases its image leases (`ReleaseLayers`), decrementing `refCount` for each container image and mounted OCI image volume.
-  - **Unmount on Zero RefCount:** Only when `refCount == 0` (no other running actor on the worker references the image) does the driver issue `RemoveSnapshot` and unmount the virtual directories from the host.
+  - **Unmount on Zero RefCount:** Only when `refCount == 0` (no other running actor on the worker references the image) does the driver issue `RemoveSnapshot` on the `-view` keys and unmount the virtual directories from the host.
   - **Microsecond Warm Re-attachment:** Benchmarks confirm that warm layer re-attachment takes only **~1.8µs to 2ms** (the snapshotter daemon retains compressed chunks and metadata in local cache). Thus, waking actors incur negligible overhead while host mount tables remain clean.
 
 #### 5.3.2. Parallel Layer Preparation vs. OCI Parent Dependency
@@ -315,11 +317,12 @@ The generic driver implements reference counting across actors sharing the same 
 - **OCI Parent Dependency:** In containerd snapshotters, layer $N$ requires committed layer $N-1$ as its parent in overlayfs (ChainID dependency: $\text{ChainID}_N = \text{SHA256}(\text{ChainID}_{N-1} + \text{" "} + \text{DiffID}_N)$). Therefore, initial snapshot preparation across the layer stack must proceed sequentially from bottom to top.
 - **Concurrency Opportunity:** However, tag/manifest resolution, container config fetching, and snapshot `Stat` lookups for pre-existing layers can run concurrently across layers. Furthermore, once layers are prepared and mounted, chunk downloads happen completely concurrently and on-demand across all layers during actor startup as the sandbox accesses files.
 
-#### 5.3.3. Candidate Future Improvements (Evaluated Alternatives)
-- **Approach 2: Idle TTL / LRU Grace Period:** Rather than unmounting immediately upon Checkpoint, hold the lease during a configurable grace window (e.g. 5 minutes). If the actor wakes within the window, layer reuse is instant (zero RPCs). If it stays asleep past TTL, background GC unmounts the views.
+#### 5.3.3. Candidate Future Improvements (Deferred Post-GA)
+- **Approach 2: Idle TTL / LRU Grace Period:** Rather than unmounting `-view` snapshots immediately upon Checkpoint, hold the lease during a configurable grace window (e.g. 5 minutes). If the actor wakes within the window, layer reuse is instant (zero RPCs). If it stays asleep past TTL, background GC unmounts the views.
 - **Approach 3: Watermark-Driven Mount GC:** Retain warm mounts indefinitely across sleeping actors until host pressure thresholds are reached (e.g., active mount count > 100 or memory pressure), triggering LRU eviction of idle mounts.
+- **Committed ChainID Snapshot Eviction:** While active `-view` snapshots are removed immediately when `refCount == 0`, the underlying immutable layer snapshots committed under their `ChainID` remain in the snapshotter daemon's metadata store so subsequent actors (or images sharing base layers) hit `Stat(chainID) == OK` in microseconds. Because remote snapshotter `ChainID` snapshots store only lightweight streaming index metadata rather than unpacked layer tarballs, keeping them warm on the node is desirable at GA, with LRU/TTL eviction of committed `ChainID` snapshots deferred to future work.
 
-*Decision:* Approach 1 (Active-Only Leases with strict reference counting) is adopted for the initial implementation for simplicity, determinism, and zero state-machine complexity, with Approaches 2 and 3 documented for future optimization as workload density demands.
+*Decision:* Approach 1 (Active-Only Leases with strict reference counting and immediate `-view` cleanup) is adopted for the initial implementation for simplicity, determinism, and zero state-machine complexity, with Approaches 2, 3, and committed `ChainID` eviction documented for future optimization as workload density demands.
 
 #### 5.3.4. Node Reboot Resiliency & Startup Recovery
 - **Substrate Lifecycle Reality:** Substrate intentionally drains/crashes active actor workloads upon a node reboot (it does not attempt live in-memory VM migration).
@@ -504,8 +507,8 @@ A clear contract specifies when `atelet` falls back to traditional download mode
 
 | Error Category | Triggering Condition | Behavior |
 | :--- | :--- | :--- |
-| **Daemon Unavailable** | Socket connection refused, ENOENT, or `codes.Unavailable` | **Fallback:** Daemon is not running or node is unconfigured; fall back to `imagecache.EnsureImage`. |
-| **Unsupported Image** | The snapshotter declines a layer: `Prepare` returns mounts with a nil error instead of `AlreadyExists` (e.g. the image has no SOCI index or Riptide streaming metadata) | **Fallback:** The driver removes the prepared snapshot without committing it and returns `imagestreaming.ErrNotStreamable`; fall back to standard download. |
+| **Daemon Unavailable / Hung** | Socket connection refused, ENOENT, `codes.Unavailable`, or `CanStream` liveness probe (`DefaultProbeTimeout = 500ms`) fails | **Fallback:** Daemon is not running, crashed, or unresponsive; `CanStream` returns `false` and `atelet` falls back to `imagecache.EnsureImage`. |
+| **Unsupported Image** | The snapshotter declines a layer: `Prepare` returns mounts with a nil error instead of `AlreadyExists` (e.g. the image has no SOCI index or Riptide streaming metadata) | **Fallback:** The driver removes the prepared snapshot without committing it, records the image in the negative decline cache (`DefaultDeclineTTL = 10m`) so subsequent starts skip `CanStream`, and returns `imagestreaming.ErrNotStreamable`; fall back to standard download. |
 | **External Registry (Riptide)** | Image is hosted outside Google Artifact Registry (e.g. Docker Hub, Quay) on GKE | **Fallback:** The Riptide Snapshotter declines the layers, as for an unsupported image; fall back to standard download. |
 | **`imagePullSecrets` Required** | The image is readable only with a workload's pull secret, not with the node identity | **Fallback:** `Snapshots.v1` can't carry credentials, so the snapshotter declines the layers; fall back to `imagecache.EnsureImage` (Section 5.5.3). |
 | **Listable Timeout** | Daemon mounts FUSE, but directory listing fails or times out (`DefaultListableTimeout`) | **Fallback:** Daemon hung or unhealthy; unmount and fall back to standard download. |

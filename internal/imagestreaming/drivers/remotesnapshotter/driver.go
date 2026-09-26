@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +78,14 @@ const (
 
 	// DefaultListableInterval is the poll interval between readdir probe attempts.
 	DefaultListableInterval = 50 * time.Millisecond
+
+	// DefaultProbeTimeout bounds the gRPC liveness check in CanStream so a hung
+	// snapshotter daemon falls back quickly instead of stalling actor startup.
+	DefaultProbeTimeout = 500 * time.Millisecond
+
+	// DefaultDeclineTTL is how long the driver remembers that the snapshotter
+	// declined an image (ErrNotStreamable) before trying again.
+	DefaultDeclineTTL = 10 * time.Minute
 )
 
 func init() {
@@ -139,10 +146,18 @@ func WithListableInterval(interval time.Duration) Option {
 	}
 }
 
+// WithDeclineTTL sets how long declined images are remembered in memory.
+func WithDeclineTTL(ttl time.Duration) Option {
+	return func(d *Driver) {
+		d.declineTTL = ttl
+	}
+}
+
 // WithSnapshotsClient injects a SnapshotsClient (useful in tests).
 func WithSnapshotsClient(c snapshots.SnapshotsClient) Option {
 	return func(d *Driver) {
 		d.snapshotsClient = c
+		d.clientInjected = true
 	}
 }
 
@@ -172,6 +187,11 @@ type imageLease struct {
 	refCount     int
 }
 
+type inflightPrep struct {
+	done chan struct{}
+	err  error
+}
+
 // Driver implements imagestreaming.ImageStreamer for CNCF remote snapshotters.
 type Driver struct {
 	name             string
@@ -181,14 +201,18 @@ type Driver struct {
 	snapshotterName  string
 	listableTimeout  time.Duration
 	listableInterval time.Duration
+	declineTTL       time.Duration
 	keychain         authn.Keychain
 
 	snapshotsClient snapshots.SnapshotsClient
+	clientInjected  bool
 	imageResolver   ImageResolverFunc
 
-	mu     sync.Mutex
-	conn   *grpc.ClientConn
-	leases map[string]*imageLease
+	mu       sync.Mutex
+	conn     *grpc.ClientConn
+	leases   map[string]*imageLease
+	declined map[string]time.Time
+	inflight map[string]*inflightPrep
 }
 
 // New creates a generic remote snapshotter driver.
@@ -200,7 +224,10 @@ func New(opts ...Option) (*Driver, error) {
 		namespace:        DefaultNamespace,
 		listableTimeout:  DefaultListableTimeout,
 		listableInterval: DefaultListableInterval,
+		declineTTL:       DefaultDeclineTTL,
 		leases:           make(map[string]*imageLease),
+		declined:         make(map[string]time.Time),
+		inflight:         make(map[string]*inflightPrep),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -221,7 +248,10 @@ func NewRiptide(opts ...Option) (*Driver, error) {
 		snapshotterName:  "gcfs",
 		listableTimeout:  DefaultListableTimeout,
 		listableInterval: DefaultListableInterval,
+		declineTTL:       DefaultDeclineTTL,
 		leases:           make(map[string]*imageLease),
+		declined:         make(map[string]time.Time),
+		inflight:         make(map[string]*inflightPrep),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -242,7 +272,10 @@ func NewSOCI(opts ...Option) (*Driver, error) {
 		snapshotterName:  "soci",
 		listableTimeout:  DefaultListableTimeout,
 		listableInterval: DefaultListableInterval,
+		declineTTL:       DefaultDeclineTTL,
 		leases:           make(map[string]*imageLease),
+		declined:         make(map[string]time.Time),
+		inflight:         make(map[string]*inflightPrep),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -349,22 +382,48 @@ func (d *Driver) getSocketPath() string {
 	return resolveSocketPath(d.socket)
 }
 
-// CanStream checks whether the remote snapshotter daemon socket is available.
+func (d *Driver) isDeclinedLocked(ref string, now time.Time) bool {
+	if ref == "" {
+		return false
+	}
+	exp, ok := d.declined[ref]
+	if !ok {
+		return false
+	}
+	if !now.Before(exp) {
+		delete(d.declined, ref)
+		return false
+	}
+	return true
+}
+
+// CanStream checks whether the image was recently declined and whether the
+// remote snapshotter daemon answers a bounded Probe RPC.
 func (d *Driver) CanStream(ctx context.Context, req *imagestreaming.StreamRequest) (bool, error) {
-	if d.snapshotsClient != nil {
-		return true, nil
+	d.mu.Lock()
+	if req != nil && req.ImageRef != "" {
+		if lease, ok := d.leases[req.ImageRef]; !ok || lease.refCount <= 0 {
+			if d.isDeclinedLocked(req.ImageRef, time.Now()) {
+				d.mu.Unlock()
+				return false, nil
+			}
+		}
 	}
+	injected := d.clientInjected
+	d.mu.Unlock()
+
 	sock := d.getSocketPath()
-	if _, err := os.Stat(sock); err != nil {
-		return false, nil
+	if !injected {
+		if _, err := os.Stat(sock); err != nil {
+			return false, nil
+		}
 	}
-	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-	conn, err := dialer.DialContext(ctx, "unix", sock)
-	if err != nil {
+	probeCtx, cancel := context.WithTimeout(ctx, DefaultProbeTimeout)
+	defer cancel()
+	if err := d.Probe(probeCtx); err != nil {
 		slog.Debug("remote snapshotter socket present but unreachable", "provider", d.name, "socket", sock, "error", err)
 		return false, nil
 	}
-	_ = conn.Close()
 	return true, nil
 }
 
@@ -374,7 +433,7 @@ const probeKey = "ate-streaming-probe"
 // Probe reports whether the snapshotter answers Snapshots.v1 requests. It
 // calls Stat on a key that doesn't exist and expects NotFound. If the driver
 // has no client yet, Probe uses a temporary connection rather than caching
-// one, because CanStream skips its socket check once a client is cached.
+// one.
 func (d *Driver) Probe(ctx context.Context) error {
 	d.mu.Lock()
 	client := d.snapshotsClient
@@ -405,16 +464,20 @@ func (d *Driver) Probe(ctx context.Context) error {
 }
 
 // PrepareLayers asks the remote snapshotter to provide each layer in the image
-// and returns read-only views of them. If the snapshotter declines any layer,
-// it returns an error wrapping imagestreaming.ErrNotStreamable.
+// and returns read-only views of them. Concurrent calls for the same image are
+// coalesced so only one goroutine prepares the views while waiters share the
+// resulting lease and increment its reference count. If the snapshotter
+// declines any layer, it returns an error wrapping
+// imagestreaming.ErrNotStreamable and remembers the decline for d.declineTTL.
 func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
 	if req == nil || req.ImageRef == "" {
 		return nil, errors.New("image reference is required")
 	}
 
+	var flight *inflightPrep
 	d.mu.Lock()
-	if lease, ok := d.leases[req.ImageRef]; ok && lease.refCount > 0 {
-		if lease.config != nil {
+	for {
+		if lease, ok := d.leases[req.ImageRef]; ok && lease.refCount > 0 && lease.config != nil {
 			lease.refCount++
 			res := &imagestreaming.StreamResult{
 				ImageDigest: lease.digest,
@@ -424,9 +487,44 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 			d.mu.Unlock()
 			return res, nil
 		}
+		if d.isDeclinedLocked(req.ImageRef, time.Now()) {
+			d.mu.Unlock()
+			return nil, fmt.Errorf("previously declined by snapshotter: %w", imagestreaming.ErrNotStreamable)
+		}
+		if existingFlight, ok := d.inflight[req.ImageRef]; ok {
+			d.mu.Unlock()
+			select {
+			case <-existingFlight.done:
+				if existingFlight.err != nil {
+					return nil, existingFlight.err
+				}
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			d.mu.Lock()
+			continue
+		}
+		flight = &inflightPrep{done: make(chan struct{})}
+		d.inflight[req.ImageRef] = flight
+		d.mu.Unlock()
+		break
 	}
+
+	res, err := d.prepareLayersCold(ctx, req)
+
+	d.mu.Lock()
+	if errors.Is(err, imagestreaming.ErrNotStreamable) && d.declineTTL > 0 {
+		d.declined[req.ImageRef] = time.Now().Add(d.declineTTL)
+	}
+	flight.err = err
+	delete(d.inflight, req.ImageRef)
+	close(flight.done)
 	d.mu.Unlock()
 
+	return res, err
+}
+
+func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
 	client, err := d.getClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to snapshotter %s: %w", d.name, err)

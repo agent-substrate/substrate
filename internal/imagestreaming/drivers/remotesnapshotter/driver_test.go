@@ -738,3 +738,203 @@ func TestReconcileLeases_RestoresMetadataAndSweepsOrphans(t *testing.T) {
 		t.Errorf("removedKeys after final release = %v, want 2 view keys (orphan + active)", removedFinal)
 	}
 }
+
+func TestDeclineTTL_SkipsRepeatLookupUntilExpired(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+	driver.declineTTL = 60 * time.Millisecond
+
+	diffID := "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	var resolverCalls int
+	driver.imageResolver = func(_ context.Context, _ string, _ *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		resolverCalls++
+		return "sha256:declined", &v1.Config{}, []string{diffID}, []string{"sha256:l1"}, nil
+	}
+
+	req := &imagestreaming.StreamRequest{ImageRef: "docker.io/library/unstreamable:v1"}
+
+	// 1. First attempt is declined by the snapshotter.
+	if _, err := driver.PrepareLayers(ctx, req); !errors.Is(err, imagestreaming.ErrNotStreamable) {
+		t.Fatalf("first PrepareLayers error = %v, want ErrNotStreamable", err)
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("resolverCalls = %d, want 1", resolverCalls)
+	}
+	srv.mu.Lock()
+	prepCount1 := len(srv.preparedKeys)
+	srv.mu.Unlock()
+	if prepCount1 != 1 {
+		t.Fatalf("preparedKeys = %d, want 1", prepCount1)
+	}
+
+	// 2. While the decline TTL is active, CanStream returns false and
+	// PrepareLayers returns ErrNotStreamable without calling imageResolver or Prepare.
+	can, err := driver.CanStream(ctx, req)
+	if err != nil {
+		t.Fatalf("CanStream error: %v", err)
+	}
+	if can {
+		t.Errorf("CanStream = true while decline TTL active, want false")
+	}
+	if _, err := driver.PrepareLayers(ctx, req); !errors.Is(err, imagestreaming.ErrNotStreamable) {
+		t.Fatalf("cached PrepareLayers error = %v, want ErrNotStreamable", err)
+	}
+	if resolverCalls != 1 {
+		t.Errorf("resolverCalls after cached decline = %d, want 1 (no extra registry lookup)", resolverCalls)
+	}
+	srv.mu.Lock()
+	prepCount2 := len(srv.preparedKeys)
+	srv.mu.Unlock()
+	if prepCount2 != 1 {
+		t.Errorf("preparedKeys after cached decline = %d, want 1", prepCount2)
+	}
+
+	// 3. Once the decline TTL expires, CanStream returns true and PrepareLayers tries again.
+	time.Sleep(80 * time.Millisecond)
+	can, err = driver.CanStream(ctx, req)
+	if err != nil {
+		t.Fatalf("CanStream after TTL expiry error: %v", err)
+	}
+	if !can {
+		t.Errorf("CanStream = false after decline TTL expired, want true")
+	}
+	if _, err := driver.PrepareLayers(ctx, req); !errors.Is(err, imagestreaming.ErrNotStreamable) {
+		t.Fatalf("PrepareLayers after TTL expiry error = %v, want ErrNotStreamable", err)
+	}
+	if resolverCalls != 2 {
+		t.Errorf("resolverCalls after TTL expiry = %d, want 2", resolverCalls)
+	}
+}
+
+func TestCanStream_ChecksLivenessAfterClientCached(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+
+	mountDir := t.TempDir()
+	diffID := "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	srv.remoteMounts = map[string][]*snapshots.Mount{
+		diffID: {{Type: "bind", Source: mountDir}},
+	}
+	driver.imageResolver = func(_ context.Context, _ string, _ *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		return "sha256:ok", &v1.Config{Cmd: []string{"/app"}}, []string{diffID}, []string{"sha256:l1"}, nil
+	}
+
+	// Warm up driver.snapshotsClient via PrepareLayers.
+	if _, err := driver.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: "example.com/warm:v1"}); err != nil {
+		t.Fatalf("PrepareLayers: %v", err)
+	}
+	driver.mu.Lock()
+	hasClient := driver.snapshotsClient != nil
+	driver.mu.Unlock()
+	if !hasClient {
+		t.Fatal("expected driver.snapshotsClient to be cached after PrepareLayers")
+	}
+
+	// Simulate the snapshotter daemon becoming unavailable after the client was cached.
+	srv.mu.Lock()
+	srv.statFunc = func(context.Context, *snapshots.StatSnapshotRequest) (*snapshots.StatSnapshotResponse, error) {
+		return nil, status.Error(codes.Unavailable, "daemon unhealthy")
+	}
+	srv.mu.Unlock()
+
+	can, err := driver.CanStream(ctx, &imagestreaming.StreamRequest{ImageRef: "example.com/other:v1"})
+	if err != nil {
+		t.Fatalf("CanStream error: %v", err)
+	}
+	if can {
+		t.Errorf("CanStream = true when cached client's daemon is Unavailable, want false")
+	}
+}
+
+func TestPrepareLayers_ConcurrentDeduplication(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+
+	mountDir := t.TempDir()
+	diffID := "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	srv.remoteMounts = map[string][]*snapshots.Mount{
+		diffID: {{Type: "bind", Source: mountDir}},
+	}
+
+	const numCallers = 8
+	resolverEntered := make(chan struct{})
+	releaseResolver := make(chan struct{})
+	var resolverMu sync.Mutex
+	var resolverCalls int
+
+	driver.imageResolver = func(_ context.Context, _ string, _ *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		resolverMu.Lock()
+		resolverCalls++
+		callNum := resolverCalls
+		resolverMu.Unlock()
+		if callNum == 1 {
+			close(resolverEntered)
+			<-releaseResolver
+		}
+		return "sha256:concurrent", &v1.Config{Cmd: []string{"/concurrent-app"}}, []string{diffID}, []string{"sha256:l1"}, nil
+	}
+
+	ref := "example.com/concurrent:v1"
+	results := make([]*imagestreaming.StreamResult, numCallers)
+	errs := make([]error, numCallers)
+
+	var wg sync.WaitGroup
+	for i := range numCallers {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			results[idx], errs[idx] = driver.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ref})
+		}(i)
+	}
+
+	// Wait until the leader goroutine is inside imageResolver, give the other
+	// goroutines a moment to queue on d.inflight[ref], then release the leader.
+	<-resolverEntered
+	time.Sleep(20 * time.Millisecond)
+	close(releaseResolver)
+	wg.Wait()
+
+	for i := range numCallers {
+		if errs[i] != nil {
+			t.Fatalf("caller %d PrepareLayers error: %v", i, errs[i])
+		}
+		if results[i] == nil || results[i].Config == nil || !slices.Equal(results[i].Config.Cmd, []string{"/concurrent-app"}) {
+			t.Errorf("caller %d result = %+v, want Cmd=[/concurrent-app]", i, results[i])
+		}
+	}
+
+	if resolverCalls != 1 {
+		t.Errorf("resolverCalls = %d, want 1", resolverCalls)
+	}
+	srv.mu.Lock()
+	prepCalls := len(srv.preparedKeys)
+	viewCalls := len(srv.viewedKeys)
+	srv.mu.Unlock()
+	if prepCalls != 1 || viewCalls != 1 {
+		t.Errorf("Prepare/View calls = %d/%d, want 1/1", prepCalls, viewCalls)
+	}
+
+	driver.mu.Lock()
+	refCount := driver.leases[ref].refCount
+	workDir := driver.leases[ref].workDir
+	driver.mu.Unlock()
+	if refCount != numCallers {
+		t.Fatalf("lease refCount = %d, want %d", refCount, numCallers)
+	}
+
+	// Releasing numCallers-1 times keeps the lease active; the final release cleans up.
+	for i := range numCallers - 1 {
+		if err := driver.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ref}); err != nil {
+			t.Fatalf("ReleaseLayers(%d): %v", i, err)
+		}
+	}
+	if _, err := os.Stat(workDir); err != nil {
+		t.Fatalf("workDir removed with 1 active reference remaining: %v", err)
+	}
+	if err := driver.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ref}); err != nil {
+		t.Fatalf("final ReleaseLayers: %v", err)
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("workDir %s still exists after final release: err=%v", workDir, err)
+	}
+}
