@@ -128,7 +128,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 	// select the pool's workers are gone.
 	inline, blocks := fixtureSubstitutions(bucket, name)
 	poolManifest := renderManifest(t, manifests.Pool, inline, blocks)
-	koApply(t, poolManifest)
+	KoApply(t, poolManifest)
 	t.Cleanup(func() {
 		delArgs := []string{"delete", "--ignore-not-found", "-f", poolManifest}
 		if KubeContext != "" {
