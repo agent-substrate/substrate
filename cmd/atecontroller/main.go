@@ -22,6 +22,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -174,6 +175,11 @@ func main() {
 	}
 
 	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
+	ctbs, err := clustertrustbundle.New(k8sClient)
+	if err != nil {
+		setupLog.Error(err, "discovering ClusterTrustBundle API")
+		os.Exit(1)
+	}
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
 	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
@@ -222,6 +228,7 @@ func main() {
 
 	if err = (&controllers.EgressMITMTrustReconciler{
 		Client:          mgr.GetClient(),
+		CTBv1:           ctbs.V1(),
 		SystemNamespace: systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EgressMITMTrust")

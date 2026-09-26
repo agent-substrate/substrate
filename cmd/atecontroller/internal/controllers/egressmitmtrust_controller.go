@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"strings"
 
+	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	certsv1ac "k8s.io/client-go/applyconfigurations/certificates/v1"
 	certsv1beta1ac "k8s.io/client-go/applyconfigurations/certificates/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -40,6 +42,7 @@ import (
 // CA pool.
 type EgressMITMTrustReconciler struct {
 	client.Client
+	CTBv1 bool
 
 	// SystemNamespace is the namespace holding the egress MITM CA pool Secret.
 	SystemNamespace string
@@ -80,17 +83,22 @@ func (r *EgressMITMTrustReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("failed to derive the egress MITM trust bundle from %q: %w", req.NamespacedName, err)
 	}
 
-	ctbAC := buildEgressMITMTrustBundleApplyConfig(trustBundle)
-
 	// Server-side apply rather than get-then-update: it creates and updates
 	// through one call, and it reverts hand edits to the fields owned here
 	// without clobbering anything a different manager legitimately set.
 	const egressMITMTrustFieldOwner = "ate-egress-mitm-trust"
-	if err := r.Apply(ctx, ctbAC, client.FieldOwner(egressMITMTrustFieldOwner), client.ForceOwnership); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterTrustBundle %q: %w", *ctbAC.Name, err)
+	if r.CTBv1 {
+		ctbAC := buildEgressMITMTrustBundleApplyConfigV1(trustBundle)
+		err = r.Apply(ctx, ctbAC, client.FieldOwner(egressMITMTrustFieldOwner), client.ForceOwnership)
+	} else {
+		ctbAC := buildEgressMITMTrustBundleApplyConfig(trustBundle)
+		err = r.Apply(ctx, ctbAC, client.FieldOwner(egressMITMTrustFieldOwner), client.ForceOwnership)
+	}
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterTrustBundle %q: %w", egressMITMTrustBundleName, err)
 	}
 	log.Info("reconciled the egress MITM trust bundle",
-		"name", *ctbAC.Name,
+		"name", egressMITMTrustBundleName,
 		"secret", req.NamespacedName.String())
 
 	return ctrl.Result{}, nil
@@ -107,6 +115,16 @@ func buildEgressMITMTrustBundleApplyConfig(trustBundle string) *certsv1beta1ac.C
 			"podcert.ate.dev/canarying": "live",
 		}).
 		WithSpec(certsv1beta1ac.ClusterTrustBundleSpec().
+			WithSignerName(egressMITMSignerName).
+			WithTrustBundle(trustBundle))
+}
+
+func buildEgressMITMTrustBundleApplyConfigV1(trustBundle string) *certsv1ac.ClusterTrustBundleApplyConfiguration {
+	return certsv1ac.ClusterTrustBundle(egressMITMTrustBundleName).
+		WithLabels(map[string]string{
+			"podcert.ate.dev/canarying": "live",
+		}).
+		WithSpec(certsv1ac.ClusterTrustBundleSpec().
 			WithSignerName(egressMITMSignerName).
 			WithTrustBundle(trustBundle))
 }
@@ -144,7 +162,10 @@ func egressMITMTrustBundlePEM(secret *corev1.Secret) (string, error) {
 func (r *EgressMITMTrustReconciler) deleteTrustBundle(ctx context.Context) error {
 	log := log.FromContext(ctx)
 
-	ctb := &certsv1beta1.ClusterTrustBundle{}
+	var ctb client.Object = &certsv1beta1.ClusterTrustBundle{}
+	if r.CTBv1 {
+		ctb = &certsv1.ClusterTrustBundle{}
+	}
 	if err := r.Get(ctx, types.NamespacedName{Name: egressMITMTrustBundleName}, ctb); err != nil {
 		if k8errors.IsNotFound(err) {
 			return nil
@@ -152,12 +173,19 @@ func (r *EgressMITMTrustReconciler) deleteTrustBundle(ctx context.Context) error
 		return fmt.Errorf("failed to get ClusterTrustBundle %q: %w", egressMITMTrustBundleName, err)
 	}
 
-	if ctb.Spec.SignerName != egressMITMSignerName {
+	var signer string
+	if r.CTBv1 {
+		signer = ctb.(*certsv1.ClusterTrustBundle).Spec.SignerName
+	} else {
+		signer = ctb.(*certsv1beta1.ClusterTrustBundle).Spec.SignerName
+	}
+	if signer != egressMITMSignerName {
 		return fmt.Errorf("refusing to delete ClusterTrustBundle %q: signer is %q, not %q",
-			egressMITMTrustBundleName, ctb.Spec.SignerName, egressMITMSignerName)
+			egressMITMTrustBundleName, signer, egressMITMSignerName)
 	}
 
-	if err := r.Delete(ctx, ctb, client.Preconditions{UID: &ctb.UID}); err != nil && !k8errors.IsNotFound(err) {
+	uid := ctb.GetUID()
+	if err := r.Delete(ctx, ctb, client.Preconditions{UID: &uid}); err != nil && !k8errors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete ClusterTrustBundle %q: %w", egressMITMTrustBundleName, err)
 	}
 	log.Info("deleted the egress MITM trust bundle; its CA pool is gone", "name", egressMITMTrustBundleName)
@@ -166,6 +194,10 @@ func (r *EgressMITMTrustReconciler) deleteTrustBundle(ctx context.Context) error
 
 func (r *EgressMITMTrustReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	poolRef := EgressMITMCAPoolRef(r.SystemNamespace)
+	var ctb client.Object = &certsv1beta1.ClusterTrustBundle{}
+	if r.CTBv1 {
+		ctb = &certsv1.ClusterTrustBundle{}
+	}
 
 	// The pool Secret is the only object reconciled from. The bundle is watched
 	// as well so that deleting or hand-editing the derived object is reverted
@@ -175,7 +207,7 @@ func (r *EgressMITMTrustReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&corev1.Secret{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
 			return obj.GetNamespace() == poolRef.Namespace && obj.GetName() == poolRef.Name
 		}))).
-		Watches(&certsv1beta1.ClusterTrustBundle{},
+		Watches(ctb,
 			handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: poolRef}}
 			}),

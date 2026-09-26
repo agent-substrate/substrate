@@ -23,7 +23,10 @@ import (
 	"testing"
 	"time"
 
+	certsv1 "k8s.io/api/certificates/v1"
+	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 )
@@ -139,7 +142,52 @@ func TestRolloutStatusGivesUpOnAPersistentlyMissingWorkload(t *testing.T) {
 	if err == nil {
 		t.Fatal("RolloutStatus() succeeded, want an error")
 	}
+
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("RolloutStatus() error = %v, want it to say the deployment was not found", err)
+	}
+}
+
+func TestWaitClusterTrustBundles(t *testing.T) {
+	for _, tc := range []struct {
+		name, version string
+	}{
+		{name: "stable", version: "v1"},
+		{name: "beta", version: "v1beta1"},
+		{name: "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kc := kubefake.NewSimpleClientset()
+			if tc.version != "" {
+				kc.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/" + tc.version,
+					APIResources: []metav1.APIResource{{Name: "clustertrustbundles"}}}}
+				if tc.version == "v1" {
+					if _, err := kc.CertificatesV1().ClusterTrustBundles().Create(t.Context(),
+						&certsv1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: "identity"}}, metav1.CreateOptions{}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if _, err := kc.CertificatesV1beta1().ClusterTrustBundles().Create(t.Context(),
+						&certsv1beta1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: "identity"}}, metav1.CreateOptions{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			c := &Client{Typed: kc}
+			checkErr := c.CheckClusterTrustBundleAPI()
+			err := c.WaitClusterTrustBundles(t.Context(), []string{"identity"}, time.Second)
+			if tc.version == "" {
+				if checkErr == nil || !strings.Contains(checkErr.Error(), "neither v1 nor v1beta1") {
+					t.Fatalf("prerequisite: %v", checkErr)
+				}
+				if err == nil || !strings.Contains(err.Error(), "neither v1 nor v1beta1") {
+					t.Fatalf("missing API: %v", err)
+				}
+			} else if checkErr != nil {
+				t.Fatal(checkErr)
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

@@ -69,17 +69,16 @@ required Kubernetes beta APIs, and Managed OpenTelemetry enabled, and the
 Filestore CSI driver disabled).
 
 > [!WARNING]
-> Agent Substrate requires two Kubernetes beta APIs —
-> `certificates.k8s.io/v1beta1/podcertificaterequests` and
-> `certificates.k8s.io/v1beta1/clustertrustbundles` — which constrains the
-> supported GKE versions to exactly two configurations:
+> Agent Substrate requires PodCertificateRequest and ClusterTrustBundle, each
+> served at either `certificates.k8s.io/v1` or `v1beta1` (preferring v1).
+> This constrains supported GKE versions to exactly two configurations:
 >
 > * **GKE 1.36 with the beta APIs enabled at cluster creation.** GKE only
 >   honors `enableK8sBetaApis` **at creation time**. Enabling the APIs later
 >   on an existing cluster is not recoverable in place: the tool's reconcile
 >   path issues the update, but the APIs do not become served — the cluster
 >   must be **recreated** with them enabled.
-> * **GKE 1.37 or higher**, where the APIs are served by default and no beta
+> * **GKE 1.37 or higher**, where the v1 APIs are served by default and no beta
 >   enablement is needed.
 >
 > Versions below 1.36 are not supported. `create cluster` handles the
@@ -91,9 +90,8 @@ Filestore CSI driver disabled).
 >   --enable-kubernetes-unstable-apis=certificates.k8s.io/v1beta1/podcertificaterequests,certificates.k8s.io/v1beta1/clustertrustbundles
 > ```
 >
-> The symptom of a cluster without the APIs: the install hangs at "Waiting for
-> podcertificate ClusterTrustBundles to be ready" and `kubectl get
-> clustertrustbundles` reports the resource type is not served.
+> On a cluster without either version of ClusterTrustBundle, installation
+> reports the missing API instead of waiting for bundles.
 
 > [!WARNING]
 > **Turn node auto-upgrade off on any node pool that runs workers, and do not
