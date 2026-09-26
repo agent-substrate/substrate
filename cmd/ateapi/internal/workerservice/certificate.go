@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -87,6 +88,17 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
+	}
+	// The agentgateway egress dataplane resolves the actor from the
+	// ActorIdentity extension, not from the URI. Transitional: drop it once
+	// agentgateway reads the ateom-for-actor SPIFFE URI.
+	if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{
+		Atespace:  dbActor.GetMetadata().GetAtespace(),
+		ActorName: dbActor.GetMetadata().GetName(),
+		ActorUid:  dbActor.GetMetadata().GetUid(),
+		Purpose:   "atunnel",
+	}, template); err != nil {
+		return nil, fmt.Errorf("while adding the ActorIdentity extension: %w", err)
 	}
 
 	// Sign and return the actor cert.
