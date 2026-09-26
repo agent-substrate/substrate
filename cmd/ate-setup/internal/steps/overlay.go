@@ -52,6 +52,12 @@ const cordonControlPlaneComponent = installDir + "/components/cordon-control-pla
 // variants, and the sandboxconfig files, all of which have their own apply
 // steps.
 func SystemOverlay(cfg *config.Config) string {
+	// ATE_SYSTEM_OVERLAY: absolute overlay directory overriding the built-in
+	// selection — lets non-kind, non-GKE clusters ship their own overlay
+	// (e.g. base minus the managed-otel monitoring manifest).
+	if v := os.Getenv("ATE_SYSTEM_OVERLAY"); v != "" {
+		return v
+	}
 	switch {
 	case cfg.Router == config.RouterAgentgateway && cfg.Kind:
 		return installDir + "/kind-agentgateway"
