@@ -35,9 +35,12 @@ func TestSchedule(t *testing.T) {
 		wantPod     string // "" means ErrNoCapacity expected
 	}{
 		{
+			// Two full workers precede w-free so pair sampling cannot reach w-free
+			// unless full workers are filtered out.
 			name: "picks the only eligible free worker",
 			fleet: fleet{
-				worker("w-busy", "gvisor", "node-a", tierTwo, assigned("demo", "other")),
+				worker("w-busy-1", "gvisor", "node-a", tierTwo, assigned("demo", "other-1")),
+				worker("w-busy-2", "gvisor", "node-a", tierTwo, assigned("demo", "other-2")),
 				worker("w-free", "gvisor", "node-a", tierTwo),
 			},
 			constraints: Constraints{SandboxClass: "gvisor"},
@@ -218,6 +221,93 @@ func TestSchedule(t *testing.T) {
 			},
 			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 4<<30)},
 			wantPod:     "w-half",
+		},
+		{
+			name: "prefers less-loaded worker when first sample is busier",
+			fleet: fleet{
+				worker("w-busy", "gvisor", "node-a", tierTwo, withMaxActors(4), assigned("demo", "a"), assigned("demo", "b")),
+				worker("w-idle", "gvisor", "node-b", tierTwo, withMaxActors(4)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-idle",
+		},
+		{
+			name: "keeps first sample when it is already less loaded than second",
+			fleet: fleet{
+				worker("w-idle", "gvisor", "node-a", tierTwo, withMaxActors(4)),
+				worker("w-busy", "gvisor", "node-b", tierTwo, withMaxActors(4), assigned("demo", "a")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-idle",
+		},
+		{
+			name: "compares actor utilization across heterogeneous worker capacities",
+			fleet: fleet{
+				// 1/2 (50%) vs 2/16 (12.5%): w-large has more actors but lower utilization.
+				worker("w-small", "gvisor", "node-a", tierTwo, withMaxActors(2), assigned("demo", "a")),
+				worker("w-large", "gvisor", "node-b", tierTwo, withMaxActors(16), assigned("demo", "b"), assigned("demo", "c")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-large",
+		},
+		{
+			name: "breaks actor-utilization ties using compute resource utilization",
+			fleet: fleet{
+				worker("w-heavy", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "a", resources.CPUMemory(1000, 6<<30))),
+				worker("w-light", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "b", resources.CPUMemory(1000, 1<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(500, 1<<30)},
+			wantPod:     "w-light",
+		},
+		{
+			name: "prefers worker with known resource utilization over unreported capacity",
+			fleet: fleet{
+				worker("w-unreported", "gvisor", "node-a", tierTwo, withMaxActors(4), assigned("demo", "a")),
+				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-known",
+		},
+		{
+			name: "prefers worker with known resource utilization over malformed allocated quantities",
+			fleet: fleet{
+				worker("w-malformed", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					func(w *ateapipb.Worker) {
+						w.Status.Allocated = &ateapipb.WorkerResources{
+							Actors:    1,
+							Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
+						}
+					}),
+				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-known",
+		},
+		{
+			name: "breaks utilization ties using remaining actor slots",
+			fleet: fleet{
+				// Both workers are at 50% actor-slot utilization (1/2 vs 4/8) and
+				// equal compute utilization, so w-large wins with 4 free slots vs 1.
+				worker("w-small", "gvisor", "node-a", tierTwo, withMaxActors(2), assigned("demo", "a")),
+				worker("w-large", "gvisor", "node-b", tierTwo, withMaxActors(8),
+					assigned("demo", "b"), assigned("demo", "c"), assigned("demo", "d"), assigned("demo", "e")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-large",
+		},
+		{
+			name: "skips idle worker that lacks resource room and picks busier worker with room",
+			fleet: fleet{
+				worker("w-idle-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30), withMaxActors(4)),
+				worker("w-busy-big", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "a", resources.CPUMemory(1000, 2<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 2<<30)},
+			wantPod:     "w-busy-big",
 		},
 	}
 
@@ -414,5 +504,34 @@ func TestAppliesIgnoresRoom(t *testing.T) {
 	}
 }
 
-// firstIntn always picks the first candidate, making Schedule deterministic.
+// firstIntn always returns 0, sampling candidates[0] and candidates[1] when >=2 exist.
 func firstIntn(int) int { return 0 }
+
+func TestSchedulePowerOfTwoChoicesTieBreaking(t *testing.T) {
+	f := fleet{
+		worker("w-0", "gvisor", "node-a", nil, withMaxActors(4), assigned("demo", "a")),
+		worker("w-1", "gvisor", "node-b", nil, withMaxActors(4), assigned("demo", "b")),
+		worker("w-2", "gvisor", "node-c", nil, withMaxActors(4), assigned("demo", "c")),
+	}
+	constraints := Constraints{SandboxClass: "gvisor"}
+
+	// On equal utilization, Schedule must preserve the first sampled candidate so
+	// every tied worker remains reachable via the random source.
+	for wantIdx, wantPod := range []string{"w-0", "w-1", "w-2"} {
+		calls := 0
+		s := New(f, WithIntn(func(n int) int {
+			calls++
+			if calls == 1 {
+				return wantIdx
+			}
+			return 0
+		}))
+		got, err := s.Schedule(context.Background(), constraints)
+		if err != nil {
+			t.Fatalf("Schedule() for index %d error = %v", wantIdx, err)
+		}
+		if got.GetWorkerPod() != wantPod {
+			t.Fatalf("Schedule() for index %d = %q, want %q", wantIdx, got.GetWorkerPod(), wantPod)
+		}
+	}
+}
