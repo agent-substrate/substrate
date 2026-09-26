@@ -139,6 +139,18 @@ func TestBuild_Capabilities(t *testing.T) {
 	}
 }
 
+// The resolved identity is what the process starts as; zero for both is root.
+func TestBuild_ProcessUser(t *testing.T) {
+	spec := Build(Options{Args: []string{"/app"}, UID: 65532, GID: 65534})
+	if spec.Process.User.UID != 65532 || spec.Process.User.GID != 65534 {
+		t.Errorf("Process.User = %d:%d, want 65532:65534", spec.Process.User.UID, spec.Process.User.GID)
+	}
+	root := Build(Options{Args: []string{"/app"}})
+	if root.Process.User.UID != 0 || root.Process.User.GID != 0 {
+		t.Errorf("Process.User = %d:%d, want 0:0", root.Process.User.UID, root.Process.User.GID)
+	}
+}
+
 // The pause container gets no capabilities.
 func TestBuild_NoCapabilitiesForPause(t *testing.T) {
 	spec := Build(Options{Args: []string{"/pause"}})

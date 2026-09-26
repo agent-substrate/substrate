@@ -17,9 +17,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
@@ -123,13 +125,17 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return err
 	}
 
-	// Argv and env need only the image config; resolve them before writing
-	// any spec so an invalid container config fails fast.
+	// Argv, env and user need only the image config; resolve them before
+	// writing any spec so an invalid container config fails fast.
 	resolvedArgs, err := resolveProcessArgs(&img.Config, command, args)
 	if err != nil {
 		return fmt.Errorf("while resolving process args for container %q: %w", containerName, err)
 	}
 	resolvedEnv := resolveActorEnv(&img.Config, env)
+	uid, gid, err := resolveUser(&img.Config)
+	if err != nil {
+		return fmt.Errorf("while resolving user for container %q: %w", containerName, err)
+	}
 
 	// Every bind target must exist in the rootfs for the mount to attach;
 	// ateom creates them through the mounted overlay (they land in the
@@ -160,6 +166,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		VolumesDir:                ateletpath.VolumesDir(actorUID),
 		SystemInfoVolumeRootsDir:  ateletpath.SystemInfoVolumeRootsDir(actorUID),
 		BundlePath:                bundlePath,
+		UID:                       uid,
+		GID:                       gid,
 	})); err != nil {
 		return fmt.Errorf("while writing OCI spec: %w", err)
 	}
@@ -264,4 +272,39 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 		return nil, fmt.Errorf("no command specified: image defines neither ENTRYPOINT nor CMD and the container sets neither command nor args")
 	}
 	return argv, nil
+}
+
+// resolveUser reads the identity a container starts as from the image's own
+// Config.User, "user[:group]" as Docker's USER sets it. Absent means root, as
+// under every other runtime. Numeric ids only, bounded to int32 as containerd
+// and runc bound them; no group, or an empty one, means gid 0, containerd's
+// fallback when the image has no passwd entry; "root" is 0. Any other name
+// is an error rather than a silent fall back to root: resolving it needs the
+// image's passwd and group files, which nothing here reads.
+func resolveUser(imageCfg *v1.Config) (uid, gid uint32, err error) {
+	if imageCfg == nil || imageCfg.User == "" {
+		return 0, 0, nil
+	}
+	user, group, _ := strings.Cut(imageCfg.User, ":")
+	if uid, err = parseID(user); err != nil {
+		return 0, 0, fmt.Errorf("image User %q: %w", imageCfg.User, err)
+	}
+	if group == "" {
+		return uid, 0, nil
+	}
+	if gid, err = parseID(group); err != nil {
+		return 0, 0, fmt.Errorf("image User %q: %w", imageCfg.User, err)
+	}
+	return uid, gid, nil
+}
+
+func parseID(s string) (uint32, error) {
+	if s == "root" {
+		return 0, nil
+	}
+	id, err := strconv.ParseUint(s, 10, 32)
+	if err != nil || id > math.MaxInt32 {
+		return 0, fmt.Errorf("%q is not a numeric id in [0, %d]; names are not resolved from the image", s, math.MaxInt32)
+	}
+	return uint32(id), nil
 }

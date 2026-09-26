@@ -106,6 +106,37 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	}
 }
 
+// Both shapers leave the process identity as Build set it.
+func TestShapers_PreserveProcessUser(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		shape   func(*specs.Spec) error
+	}{{
+		runtime: "gvisor",
+		shape: func(s *specs.Spec) error {
+			ShapeGVisor(s, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
+			return nil
+		},
+	}, {
+		runtime: "microvm",
+		shape: func(s *specs.Spec) error {
+			return ShapeMicroVM(s, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"})
+		},
+	}} {
+		t.Run(tc.runtime, func(t *testing.T) {
+			opts := parityOptions
+			opts.UID, opts.GID = 65532, 65534
+			spec := Build(opts)
+			if err := tc.shape(spec); err != nil {
+				t.Fatalf("shaping the spec: %v", err)
+			}
+			if spec.Process.User.UID != 65532 || spec.Process.User.GID != 65534 {
+				t.Errorf("Process.User = %d:%d after shaping, want 65532:65534", spec.Process.User.UID, spec.Process.User.GID)
+			}
+		})
+	}
+}
+
 // ShapeMicroVM rewrites bind sources to their guest share paths.
 func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 	spec := Build(parityOptions)

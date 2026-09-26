@@ -162,3 +162,14 @@ func TestSpecToAgentPB_NonPositiveCPUValuesAreDropped(t *testing.T) {
 		})
 	}
 }
+
+// The agent starts the process as the user it is sent; a dropped identity
+// would run the workload as root in the guest.
+func TestSpecToAgentPB_ForwardsProcessUser(t *testing.T) {
+	got := SpecToAgentPB(&specs.Spec{
+		Process: &specs.Process{User: specs.User{UID: 65532, GID: 65534}},
+	})
+	if got.Process == nil || got.Process.User == nil || got.Process.User.UID != 65532 || got.Process.User.GID != 65534 {
+		t.Fatalf("Process.User = %v, want 65532:65534", got.GetProcess().GetUser())
+	}
+}
