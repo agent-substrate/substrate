@@ -18,7 +18,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
+
+func TestSnapshotCacheDirSharesActorsMount(t *testing.T) {
+	// The snapshot cache serves hits as hard links into per-actor restore
+	// dirs, and link(2) requires one filesystem, so both must sit under
+	// BasePath (one mount in the atelet pod).
+	for name, dir := range map[string]string{"SnapshotCacheDir": SnapshotCacheDir, "ActorsDir": nodepath.ActorsDir} {
+		if !strings.HasPrefix(dir, nodepath.BasePath+"/") {
+			t.Errorf("%s = %q, want it under %q so snapshot cache hard links can reach restore dirs", name, dir, nodepath.BasePath)
+		}
+	}
+}
 
 func TestActorDirs(t *testing.T) {
 	const actorUID = "actor-uid-1"
