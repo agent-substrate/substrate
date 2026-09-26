@@ -17,6 +17,8 @@ package lint
 import (
 	"regexp"
 	"strings"
+
+	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
 
 var pascalBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
@@ -31,4 +33,17 @@ func fieldNameForResource(resourceName string) string {
 
 func repeatedFieldNameForList(methodName string) string {
 	return snakeCase(strings.TrimPrefix(methodName, "List"))
+}
+
+// locatorResourceName returns the resource a Get/Delete request should
+// identify by ObjectRef: resourceName itself for a top-level resource, or
+// its parent for a sub-resource - a sub-resource's Get/Delete request
+// identifies the parent, since the sub-resource itself has a fixed, implied
+// name (for example, GetActorEgressPolicyRequest carries an "actor" field,
+// not an "egress_policy" one).
+func locatorResourceName(resourceName string) string {
+	if parent, ok := model.ParentResourceName(resourceName); ok {
+		return parent
+	}
+	return resourceName
 }

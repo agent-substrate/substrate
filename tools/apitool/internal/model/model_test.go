@@ -251,6 +251,52 @@ message Worker { string name = 1; }
 	}
 }
 
+// TestResources_SubResource confirms a sub-resource's methods (named
+// "{Verb}{Parent}{Resource}", e.g. GetActorEgressPolicy) group under the
+// sub-resource, not the parent, since "EgressPolicy" is a longer, more
+// specific match than "Actor" (see resourceNames/subResourceParents).
+func TestResources_SubResource(t *testing.T) {
+	api := buildAPI(t, `
+service FixtureService {
+  rpc GetActor(GetActorRequest) returns (Actor);
+  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy);
+}
+
+message GetActorRequest { string name = 1; }
+message GetActorEgressPolicyRequest { string name = 1; }
+
+message Actor { string name = 1; }
+message EgressPolicy { string name = 1; }
+`)
+
+	groups, err := model.Resources(api)
+	if err != nil {
+		t.Fatalf("Resources() error = %v", err)
+	}
+
+	var egressPolicyGroup *model.Resource
+	for i := range groups {
+		if groups[i].Message.Name == "EgressPolicy" {
+			egressPolicyGroup = &groups[i]
+		}
+	}
+	if egressPolicyGroup == nil {
+		t.Fatalf("no Resource for EgressPolicy; groups = %+v", groups)
+	}
+	if len(egressPolicyGroup.Methods) != 1 || egressPolicyGroup.Methods[0].Name != "GetActorEgressPolicy" {
+		t.Errorf("EgressPolicy group methods = %+v, want just [GetActorEgressPolicy]", egressPolicyGroup.Methods)
+	}
+}
+
+func TestParentResourceName(t *testing.T) {
+	if parent, ok := model.ParentResourceName("EgressPolicy"); !ok || parent != "Actor" {
+		t.Errorf(`ParentResourceName("EgressPolicy") = (%q, %v), want ("Actor", true)`, parent, ok)
+	}
+	if parent, ok := model.ParentResourceName("Actor"); ok {
+		t.Errorf(`ParentResourceName("Actor") = (%q, %v), want ok = false for a top-level resource`, parent, ok)
+	}
+}
+
 func TestResources_InvalidMethodName(t *testing.T) {
 	tests := []struct {
 		name       string

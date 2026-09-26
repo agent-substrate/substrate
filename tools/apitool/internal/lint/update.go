@@ -41,6 +41,7 @@ func checkUpdateRequestShape(api *model.API) ([]Finding, error) {
 
 	var findings []Finding
 	for _, rg := range resources {
+		parentName, isSubResource := model.ParentResourceName(rg.Message.Name)
 		for _, m := range rg.Methods {
 			verb, ok := standardVerbFor(m.Name, rg.Message.Name)
 			if !ok || verb != "Update" {
@@ -54,7 +55,7 @@ func checkUpdateRequestShape(api *model.API) ([]Finding, error) {
 				continue
 			}
 
-			var resourceFields int
+			var resourceFields, parentFields int
 			for _, f := range req.Fields {
 				switch {
 				case f.TypeKind == "message" && f.TypeFullName == rg.Message.FullName:
@@ -65,12 +66,24 @@ func checkUpdateRequestShape(api *model.API) ([]Finding, error) {
 							Message: fmt.Sprintf("resource field is named %q, want %q", f.Name, want),
 						})
 					}
+				case isSubResource && f.TypeKind == "message" && f.TypeFullName == objectRefTypeFullName:
+					parentFields++
+					if want := fieldNameForResource(parentName); f.Name != want {
+						findings = append(findings, Finding{
+							Subject: subject,
+							Message: fmt.Sprintf("parent field is named %q, want %q", f.Name, want),
+						})
+					}
 				case f.TypeKind == "message" && f.TypeFullName == fieldMaskTypeFullName:
 					// Field masks are being phased out; not policed by this rule.
 				default:
+					wantTypes := rg.Message.FullName
+					if isSubResource {
+						wantTypes = fmt.Sprintf("%s or %s", rg.Message.FullName, objectRefTypeFullName)
+					}
 					findings = append(findings, Finding{
 						Subject: subject,
-						Message: fmt.Sprintf("field %q is %s, want %s - non-resource control fields belong elsewhere", f.Name, fieldTypeDescription(f), rg.Message.FullName),
+						Message: fmt.Sprintf("field %q is %s, want %s - non-resource control fields belong elsewhere", f.Name, fieldTypeDescription(f), wantTypes),
 					})
 				}
 			}
@@ -78,6 +91,12 @@ func checkUpdateRequestShape(api *model.API) ([]Finding, error) {
 				findings = append(findings, Finding{
 					Subject: subject,
 					Message: fmt.Sprintf("request has %d field(s) of type %s, want exactly 1 embedding the resource", resourceFields, rg.Message.FullName),
+				})
+			}
+			if isSubResource && parentFields != 1 {
+				findings = append(findings, Finding{
+					Subject: subject,
+					Message: fmt.Sprintf("request has %d field(s) of type %s identifying the parent %s, want exactly 1", parentFields, objectRefTypeFullName, parentName),
 				})
 			}
 		}
