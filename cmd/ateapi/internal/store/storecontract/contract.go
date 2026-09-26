@@ -486,6 +486,85 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 	})
 
+	for _, scenario := range []struct {
+		name string
+		want error
+	}{
+		{"success", nil},
+		{"missing UID", store.ErrPreconditionRequired},
+		{"deleted template", store.ErrNotFound},
+		{"recreated template", store.ErrUIDConflict},
+		{"wrong UID", store.ErrUIDConflict},
+		{"duplicate actor", store.ErrAlreadyExists},
+		{"missing atespace", store.ErrFailedPrecondition},
+	} {
+		t.Run("CreateActorWithTemplate/"+scenario.name, func(t *testing.T) {
+			s := setup(t)
+			ctx := t.Context()
+			mustCreateAtespace(t, s, testAtespace)
+			mustCreateAtespace(t, s, "templates")
+			tmpl := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "templates", Name: "tmpl"}}
+			storedTemplate, err := s.CreateActorTemplate(ctx, tmpl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := resources.ActorTemplateRefFromActorTemplate(storedTemplate)
+			uid := storedTemplate.GetMetadata().GetUid()
+			actor := newTestSuspendedActor(testAtespace, "actor")
+			actor.ActorTemplate = ref.ToObjectRef()
+			switch scenario.name {
+			case "missing UID":
+				uid = ""
+			case "wrong UID":
+				uid = foreignUID
+			case "deleted template", "recreated template":
+				if _, err := s.DeleteActorTemplate(ctx, ref, store.DeletePreconditions{}); err != nil {
+					t.Fatal(err)
+				}
+				if scenario.name == "recreated template" {
+					if _, err := s.CreateActorTemplate(ctx, tmpl); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "duplicate actor":
+				if _, err := s.CreateActorWithTemplate(ctx, actor, uid); err != nil {
+					t.Fatal(err)
+				}
+			case "missing atespace":
+				actor.Metadata.Atespace = "absent"
+			}
+			before := proto.CloneOf(actor)
+			created, err := s.CreateActorWithTemplate(ctx, actor, uid)
+			if !errors.Is(err, scenario.want) {
+				t.Fatalf("CreateActorWithTemplate = %v, want %v", err, scenario.want)
+			}
+			if diff := cmp.Diff(before, actor, protocmp.Transform()); diff != "" {
+				t.Errorf("input mutated (-before +after):\n%s", diff)
+			}
+			if err != nil {
+				if created != nil {
+					t.Errorf("rejected create returned an actor: %v", created)
+				}
+				if scenario.name != "duplicate actor" {
+					if _, err := s.GetActor(ctx, resources.ActorRefFromActor(actor)); !errors.Is(err, store.ErrNotFound) {
+						t.Fatalf("GetActor = %v, want ErrNotFound after rejected create", err)
+					}
+				}
+				return
+			}
+			if created.GetMetadata().GetUid() == "" || created.GetMetadata().GetVersion() != 1 {
+				t.Fatalf("incorrect server-assigned metadata: %v", created.GetMetadata())
+			}
+			got, err := s.GetActor(ctx, resources.ActorRefFromActor(actor))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+				t.Errorf("return differs from stored actor (-created +stored):\n%s", diff)
+			}
+		})
+	}
+
 	t.Run("CreateActor_AlreadyExists", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
