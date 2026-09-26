@@ -940,7 +940,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			}
 		}
 	}()
-	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
+	checkpointDir := req.GetActorDirs().GetRestoreDir()
 
 	if hasDurableVolumes(req.GetSpec().GetContainers()) {
 		if err := untarDurableVolumes(ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointDir); err != nil {

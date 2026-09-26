@@ -15,8 +15,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -25,9 +27,12 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/google/go-cmp/cmp"
+	"github.com/klauspost/compress/zstd"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -234,6 +239,9 @@ func TestLocalSnapshotGC(t *testing.T) {
 	if got := ateom.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for ateom, want the pause snapshot's %q", got, "guest-memory")
 	}
+	if entries, err := os.ReadDir(ateletpath.RestoreStateDir(actorUID)); err != nil || len(entries) != 0 {
+		t.Fatalf("expected RestoreStateDir to remain empty on local pause restore, got entries=%v err=%v", entries, err)
+	}
 
 	// Terminate: the actor is gone, and so should its snapshot be.
 	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
@@ -248,10 +256,14 @@ func TestLocalSnapshotGC(t *testing.T) {
 		t.Fatalf("Terminate: %v", err)
 	}
 
-	// Every RPC hands ateom the same directory set; the fake already relied
-	// on checkpoint_dir and restore_dir above to place and find the snapshot.
-	want := ateletpath.ActorDirs(actorUID)
+	// Every RPC hands ateom the same directory set, except that a local
+	// restore points restore_dir at the pause snapshot; the fake already
+	// relied on checkpoint_dir and restore_dir above to place and find it.
 	for _, rpc := range []string{"RunWorkload", "CheckpointWorkload", "RestoreWorkload", "TerminateWorkload"} {
+		want := ateletpath.ActorDirs(actorUID)
+		if rpc == "RestoreWorkload" {
+			want.RestoreDir = ateletpath.LocalSnapshotDir(actorUID, snapshotName)
+		}
 		if got := ateom.actorDirs[rpc]; !proto.Equal(got, want) {
 			t.Errorf("%s carried actor actorDirs %v, want %v", rpc, got, want)
 		}
@@ -394,5 +406,145 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	}
 	if got.PauseImage != restorePause {
 		t.Errorf("restored actor pause image = %q, want the request's %q", got.PauseImage, restorePause)
+	}
+}
+
+// TestLocalDataOnGoldenRestore verifies that a local DATA_ON_GOLDEN restore
+// stages both the local pause snapshot files and the golden-only files into
+// RestoreStateDir, leaving LocalSnapshotDir untouched by the golden download.
+func TestLocalDataOnGoldenRestore(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "actor-uid-1"
+		ateomUID     = "ateom-uid-1"
+		snapshotName = "pause-snap-1"
+	)
+
+	ateom := &fakeAteom{
+		snapshotFiles: map[string]string{
+			"durable-dir.tar": "actor-durable-data",
+			"config.json":     "golden-config",
+			"memory-ranges":   "golden-memory",
+		},
+	}
+	serveFakeAteom(t, ateom)
+
+	host := imageVolumeTestRegistry(t)
+	image := host + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+	zstdCompress := func(s string) []byte {
+		var buf bytes.Buffer
+		zw, err := zstd.NewWriter(&buf)
+		if err != nil {
+			t.Fatalf("zstd.NewWriter: %v", err)
+		}
+		if _, err := zw.Write([]byte(s)); err != nil {
+			t.Fatalf("zstd write: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("zstd close: %v", err)
+		}
+		return buf.Bytes()
+	}
+
+	goldenManifest, err := json.Marshal(sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    image,
+		SnapshotFiles: []string{"config.json", "memory-ranges", "durable-dir.tar"},
+		Scope:         ateattr.SnapshotScopeFull,
+	})
+	if err != nil {
+		t.Fatalf("marshaling golden manifest: %v", err)
+	}
+
+	runsc := []byte("runsc binary")
+	s := &AteomHerder{
+		ateomDialer:   newAteomDialer(1),
+		imageCache:    newImageVolumeStore(t),
+		anonGCSClient: fakeObjectStorage{data: runsc},
+		gcsClient: mapObjectStorage{objects: map[string][]byte{
+			goldenSnapshotPath + "/manifest.json":        goldenManifest,
+			goldenSnapshotPath + "/config.json.zstd":     zstdCompress("golden-config"),
+			goldenSnapshotPath + "/memory-ranges.zstd":   zstdCompress("golden-memory"),
+			goldenSnapshotPath + "/durable-dir.tar.zstd": zstdCompress("golden-durable-data (shadowed)"),
+		}},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+	}
+
+	localSnapDir := ateletpath.LocalSnapshotDir(actorUID, snapshotName)
+	writeLocalSnapshot(t, localSnapDir, sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    image,
+		SnapshotFiles: []string{"durable-dir.tar"},
+		Scope:         ateattr.SnapshotScopeData,
+	}, map[string]string{"durable-dir.tar": "actor-durable-data"})
+
+	sandboxAssets := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   image,
+		Assets: map[string]*ateletpb.ArchAssets{
+			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				runscAssetName: {
+					Url:    "gs://test-bucket/runsc",
+					Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+				},
+			}},
+		},
+	}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+
+	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		SandboxAssets:         sandboxAssets,
+		Spec:                  spec,
+		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Config: &ateletpb.RestoreRequest_LocalConfig{
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		},
+		GoldenSnapshotUri: goldenSnapshotURI,
+	}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	wantDirs := ateletpath.ActorDirs(actorUID)
+	wantDirs.RestoreDir = ateletpath.RestoreStateDir(actorUID)
+	if got := ateom.actorDirs["RestoreWorkload"]; !proto.Equal(got, wantDirs) {
+		t.Errorf("RestoreWorkload carried actorDirs %v, want %v", got, wantDirs)
+	}
+
+	wantRestored := map[string]string{
+		"durable-dir.tar": "actor-durable-data",
+		"config.json":     "golden-config",
+		"memory-ranges":   "golden-memory",
+	}
+	if diff := cmp.Diff(wantRestored, ateom.restored); diff != "" {
+		t.Errorf("restored files mismatch (-want +got):\n%s", diff)
+	}
+
+	// LocalSnapshotDir must not have been polluted with golden-only files.
+	entries, err := os.ReadDir(localSnapDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", localSnapDir, err)
+	}
+	var localFiles []string
+	for _, e := range entries {
+		localFiles = append(localFiles, e.Name())
+	}
+	wantLocalFiles := []string{"durable-dir.tar", sandboxManifestName}
+	if diff := cmp.Diff(wantLocalFiles, localFiles); diff != "" {
+		t.Errorf("LocalSnapshotDir entries mismatch (-want +got):\n%s", diff)
 	}
 }
