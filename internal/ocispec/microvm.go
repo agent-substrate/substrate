@@ -44,9 +44,10 @@ type MicroVMOptions struct {
 }
 
 // ShapeMicroVM replaces host system mounts with guest mounts, repoints volume
-// bind mounts to guest share paths, and fills in kata's default resources. It
-// must run on an unshaped spec, and errors on a bind it cannot place in the
-// guest.
+// bind mounts to guest share paths, fills in kata's default resources, and
+// applies the guest-only security defaults gVisor already provides:
+// no_new_privileges and unprivileged low ports. It must run on an unshaped
+// spec, and errors on a bind it cannot place in the guest.
 func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	// Translate volume bind mounts into guest share paths.
 	volumes := make([]specs.Mount, 0, len(spec.Mounts))
@@ -69,6 +70,13 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 		volumes = append(volumes, m)
 	}
 	spec.Mounts = append(guestSystemMounts(), volumes...)
+
+	if spec.Process != nil {
+		// runsc denies setuid elevation by default (--allow-suid=false); the
+		// kata agent needs the flag to do the same. Not in Build: runsc restore
+		// compares Process with the checkpoint-time spec.
+		spec.Process.NoNewPrivileges = true
+	}
 
 	if spec.Linux == nil {
 		spec.Linux = &specs.Linux{}

@@ -275,6 +275,7 @@ Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, 
 - **`ALL` in `add` is rejected.** Kubernetes accepts it in the API and relies on PodSecurity admission to deny it; Substrate has no equivalent policy layer yet, so it is refused at admission instead. Name the capabilities the container needs.
 - **Ambient capabilities are not supported** ([gvisor#3166](https://github.com/google/gvisor/issues/3166)).
 - **Low ports on micro-VM.** A container that drops `NET_BIND_SERVICE` can still bind a port below 1024 in a micro-VM actor: the guest sets `net.ipv4.ip_unprivileged_port_start=0`, matching gVisor, whose network stack does not enforce the limit.
+- **No new privileges on micro-VM.** Every container in a micro-VM actor runs with `no_new_privileges` set, so a setuid binary cannot raise the process above the container's own capabilities. gVisor already denies setuid elevation for every actor (`runsc --allow-suid` defaults to false); this brings the micro-VM class to parity.
 
 The sandbox — gVisor or micro-VM — remains the isolation boundary; capabilities constrain the workload *inside* it.
 

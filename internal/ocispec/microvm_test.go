@@ -179,3 +179,17 @@ func TestShapeMicroVM_AllowsLowPortsInTheGuest(t *testing.T) {
 		t.Errorf("%s = %q, want the caller's value kept", portStart, v)
 	}
 }
+
+// Guest-only for the same reason as the sysctl above.
+func TestShapeMicroVM_SetsNoNewPrivileges(t *testing.T) {
+	spec := Build(Options{Args: []string{"/app"}})
+	if spec.Process.NoNewPrivileges {
+		t.Error("Build() set NoNewPrivileges; it must be micro-VM only")
+	}
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"}); err != nil {
+		t.Fatalf("ShapeMicroVM() = %v", err)
+	}
+	if !spec.Process.NoNewPrivileges {
+		t.Error("NoNewPrivileges = false, want true")
+	}
+}
