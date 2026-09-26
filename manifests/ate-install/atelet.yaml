@@ -161,19 +161,24 @@ spec:
         - --drain-timeout=5m
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
-        # /var/lib/ateom-gvisor hostPath as root, so it needs no Linux
-        # capabilities. (Unpacking arbitrary actor images can require writing into
-        # image-defined read-only dirs; the untar in cmd/atelet/oci.go extracts
-        # directories writable then restores the image's modes, and removal makes
-        # them writable again first, so root suffices without CAP_DAC_OVERRIDE.)
-        # runAsUser is pinned explicitly rather than relying on the base image's
-        # default user.
+        # /var/lib/ateom-gvisor hostPath as root, the node state root that the
+        # worker pods of both sandbox classes mount too. It needs
+        # CAP_DAC_OVERRIDE for one thing: a non-root actor process can create
+        # its own directories inside a durable-dir volume (they are 0777), and
+        # plain root cannot remove files from a directory another uid owns.
+        # Without it, resetActorDirs fails after every checkpoint of such an
+        # actor and the suspend never completes. (Image unpacking does not need
+        # it: cmd/atelet/oci.go extracts as root and makes its own directories
+        # writable before removal.) runAsUser is pinned explicitly rather than
+        # relying on the base image's default user.
         securityContext:
           runAsUser: 0
           runAsGroup: 0
           capabilities:
             drop:
             - ALL
+            add:
+            - DAC_OVERRIDE
         # Keep per-node reservations small; omit limits to allow usage to grow
         # with the number of hosted actors.
         resources:
