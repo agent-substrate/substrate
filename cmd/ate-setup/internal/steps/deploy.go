@@ -206,6 +206,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 // reason: one apply means one rollout, and the rollout wait sees the pod that
 // will actually serve.
 func (e *Env) DeployPodCertificateController(ctx context.Context) error {
+	if err := e.Kube.CheckClusterTrustBundleAPI(); err != nil {
+		return err
+	}
 	path := e.Cfg.Manifest("pod-certificate-controller.yaml")
 	if e.Cfg.Size10() {
 		path = e.Cfg.Manifest("podcert-size10")

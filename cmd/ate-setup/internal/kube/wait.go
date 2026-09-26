@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,14 +37,6 @@ const (
 	KindDaemonSet   = "daemonset"
 	KindStatefulSet = "statefulset"
 )
-
-// clusterTrustBundleGVK identifies the certificates.k8s.io ClusterTrustBundle
-// the podcertificate controller publishes.
-var clusterTrustBundleGVK = schema.GroupVersionKind{
-	Group:   "certificates.k8s.io",
-	Version: "v1beta1",
-	Kind:    "ClusterTrustBundle",
-}
 
 // RolloutStatus blocks until a workload has finished rolling out, replacing
 // `kubectl rollout status <kind>/<name> -n <ns> --timeout=<t>`. The readiness
@@ -241,26 +234,36 @@ func (c *Client) WaitCondition(ctx context.Context, gvk schema.GroupVersionKind,
 func (c *Client) WaitClusterTrustBundles(ctx context.Context, names []string, timeout time.Duration) error {
 	defer log.Elapsed(time.Now(), "wait for clustertrustbundles")
 	deadline := time.Now().Add(timeout)
+	ctbs, err := clustertrustbundle.New(c.Typed)
+	if err != nil {
+		return fmt.Errorf("waiting for ClusterTrustBundles: %w", err)
+	}
+
 	for _, name := range names {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return fmt.Errorf("waiting for ClusterTrustBundle %s: the %s budget was spent on the bundles before it", name, timeout)
 		}
-		var lastErr error
 		err := poll(ctx, remaining, func(ctx context.Context) (bool, error) {
-			ok, err := c.Exists(ctx, clusterTrustBundleGVK, "", name)
-			if err != nil {
-				lastErr = err
+			_, err := ctbs.Get(ctx, name)
+			if apierrors.IsNotFound(err) {
 				return false, nil
 			}
-			return ok, nil
+			return err == nil, err
 		})
 		if err != nil {
-			if lastErr != nil {
-				return fmt.Errorf("waiting for ClusterTrustBundle %s: %w (last discovery error: %v)", name, err, lastErr)
-			}
 			return fmt.Errorf("waiting for ClusterTrustBundle %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+// CheckClusterTrustBundleAPI fails before deploying a controller that cannot
+// start without a served ClusterTrustBundle API.
+func (c *Client) CheckClusterTrustBundleAPI() error {
+	_, err := clustertrustbundle.New(c.Typed)
+	if err != nil {
+		return fmt.Errorf("ClusterTrustBundle prerequisite: %w", err)
 	}
 	return nil
 }
