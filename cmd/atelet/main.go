@@ -1027,6 +1027,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
+	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL && req.GetScope() != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
+		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
+	}
 
 	// Fetch the snapshot manifest stored beside the checkpoint images
 	// first: it lists the checkpoint files to download and records the actor
@@ -1111,8 +1114,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
 	// fetch + image unpack hides whichever leg is shorter, and on a cold node
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
-	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
-	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
@@ -1141,26 +1142,35 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			if combineWithGolden && goldenRec == nil {
 				return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
 			}
-			// A local (pause) checkpoint may still combine with the golden
-			// snapshot: the actor's files come from the local checkpoint dir,
-			// the golden's from object storage, concurrently.
-			gLocal, gLocalCtx := errgroup.WithContext(gctx)
-			gLocal.Go(func() error {
-				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
-					return err
-				}
-				return nil
-			})
 			if combineWithGolden {
+				// A local (pause) checkpoint may still combine with the golden
+				// snapshot: the actor's files come from the local checkpoint dir,
+				// the golden's from object storage, concurrently into RestoreStateDir.
+				gLocal, gLocalCtx := errgroup.WithContext(gctx)
+				gLocal.Go(func() error {
+					if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+						return err
+					}
+					return nil
+				})
 				gLocal.Go(func() error {
 					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
 						return err
 					}
 					return nil
 				})
-			}
-			if err := gLocal.Wait(); err != nil {
-				return err
+				if err := gLocal.Wait(); err != nil {
+					return err
+				}
+			} else {
+				// Pure local (pause) checkpoint: files are already on disk in
+				// LocalSnapshotDir; verify they exist and restore directly from
+				// there without copying into RestoreStateDir.
+				for _, fileName := range sandboxRec.SnapshotFiles {
+					if _, err := os.Stat(filepath.Join(checkpointDir, fileName)); err != nil {
+						return wrapFileSystemErr("while checking local checkpoint file", err)
+					}
+				}
 			}
 		}
 		return nil
@@ -1209,6 +1219,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
 	}
 
+	actorDirs := ateletpath.ActorDirs(actorUID)
+	actorDirs.RestoreDir = checkpointDir
+
 	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
 	// this call as "Actor restore phases".
 	tAteom := time.Now()
@@ -1222,7 +1235,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              req.GetActorUid(),
-		ActorDirs:             ateletpath.ActorDirs(actorUID),
+		ActorDirs:             actorDirs,
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
