@@ -56,6 +56,10 @@ var defaultTLSPaths = tlsPaths{
 type Plugin struct {
 	client           *Client
 	stagingDirPrefix string
+
+	capMu                    sync.RWMutex
+	hasCapabilities          bool
+	supportsPublishUnpublish bool
 }
 
 // Ensure Plugin implements volume.VolumePluginControlPlane and VolumePluginWorkerPlane
@@ -121,8 +125,63 @@ func (p *Plugin) DeleteVolume(ctx context.Context, volumeID string) error {
 	return nil
 }
 
+// InitControllerCapabilities queries the CSI Controller service for its supported capabilities
+// and caches them on the Plugin.
+func (p *Plugin) InitControllerCapabilities(ctx context.Context) error {
+	p.capMu.Lock()
+	defer p.capMu.Unlock()
+	if p.hasCapabilities {
+		return nil
+	}
+
+	resp, err := p.client.ControllerGetCapabilities(ctx, &csi.ControllerGetCapabilitiesRequest{})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			p.hasCapabilities = true
+			p.supportsPublishUnpublish = false
+			return nil
+		}
+		return fmt.Errorf("CSI ControllerGetCapabilities failed: %w", err)
+	}
+
+	for _, cap := range resp.GetCapabilities() {
+		if rpc := cap.GetRpc(); rpc != nil {
+			if rpc.GetType() == csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME {
+				p.supportsPublishUnpublish = true
+			}
+		}
+	}
+	p.hasCapabilities = true
+	return nil
+}
+
+// SupportsPublishUnpublish returns whether the CSI driver supports ControllerPublishVolume
+// and ControllerUnpublishVolume.
+func (p *Plugin) SupportsPublishUnpublish() bool {
+	p.capMu.RLock()
+	defer p.capMu.RUnlock()
+	return p.supportsPublishUnpublish
+}
+
+func (p *Plugin) ensureControllerCapabilities(ctx context.Context) error {
+	p.capMu.RLock()
+	initialized := p.hasCapabilities
+	p.capMu.RUnlock()
+	if initialized {
+		return nil
+	}
+	return p.InitControllerCapabilities(ctx)
+}
+
 // AttachVolume maps to CSI Controller ControllerPublishVolume.
 func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string) error {
+	if err := p.ensureControllerCapabilities(ctx); err != nil {
+		return err
+	}
+	if !p.SupportsPublishUnpublish() {
+		return nil
+	}
+
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId:         volumeID,
 		NodeId:           node,
@@ -132,8 +191,6 @@ func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string)
 
 	resp, err := p.client.ControllerPublishVolume(ctx, req)
 	if err != nil {
-		// TODO: Query CSI driver capabilities ahead of time (e.g. during plugin initialization)
-		// to avoid calling unimplemented methods and generating spammy logs.
 		if status.Code(err) == codes.Unimplemented {
 			slog.WarnContext(ctx, "CSI ControllerPublishVolume is unimplemented by driver; skipping attach", slog.String("volume_id", volumeID), slog.String("node", node))
 			return nil
@@ -155,6 +212,13 @@ func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string)
 
 // DetachVolume maps to CSI Controller ControllerUnpublishVolume.
 func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string) error {
+	if err := p.ensureControllerCapabilities(ctx); err != nil {
+		return err
+	}
+	if !p.SupportsPublishUnpublish() {
+		return nil
+	}
+
 	req := &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: volumeID,
 		NodeId:   node,
@@ -320,6 +384,13 @@ func newCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLis
 	if reportedName != driverName {
 		csiClient.Close()
 		return nil, fmt.Errorf("reported driver name %q does not match requested name %q", reportedName, driverName)
+	}
+
+	if isController {
+		if err := csiPlugin.InitControllerCapabilities(ctx); err != nil {
+			csiClient.Close()
+			return nil, fmt.Errorf("failed to query controller capabilities for %q: %w", driverName, err)
+		}
 	}
 
 	return csiPlugin, nil

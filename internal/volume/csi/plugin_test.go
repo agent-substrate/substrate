@@ -36,6 +36,7 @@ type mockCSIDriver struct {
 	deleteVolumeFunc              func(context.Context, *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error)
 	controllerPublishVolumeFunc   func(context.Context, *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error)
 	controllerUnpublishVolumeFunc func(context.Context, *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error)
+	controllerGetCapabilitiesFunc func(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error)
 	nodeStageVolumeFunc           func(context.Context, *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error)
 	nodeUnstageVolumeFunc         func(context.Context, *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error)
 	nodePublishVolumeFunc         func(context.Context, *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error)
@@ -107,6 +108,23 @@ func (m *mockCSIDriver) ControllerUnpublishVolume(ctx context.Context, req *csi.
 		return m.controllerUnpublishVolumeFunc(ctx, req)
 	}
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+func (m *mockCSIDriver) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	if m.controllerGetCapabilitiesFunc != nil {
+		return m.controllerGetCapabilitiesFunc(ctx, req)
+	}
+	return &csi.ControllerGetCapabilitiesResponse{
+		Capabilities: []*csi.ControllerServiceCapability{
+			{
+				Type: &csi.ControllerServiceCapability_Rpc{
+					Rpc: &csi.ControllerServiceCapability_RPC{
+						Type: csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
+					},
+				},
+			},
+		},
+	}, nil
 }
 
 func (m *mockCSIDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
@@ -406,5 +424,101 @@ func TestClient_Identity(t *testing.T) {
 	_, err = client.Probe(ctx, &csi.ProbeRequest{})
 	if err != nil {
 		t.Fatalf("Probe failed: %v", err)
+	}
+}
+
+func TestPlugin_Capabilities_SkipAttachDetach(t *testing.T) {
+	driver := &mockCSIDriver{}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	// Configure driver to report no PUBLISH_UNPUBLISH_VOLUME capability.
+	driver.controllerGetCapabilitiesFunc = func(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+		return &csi.ControllerGetCapabilitiesResponse{
+			Capabilities: []*csi.ControllerServiceCapability{
+				{
+					Type: &csi.ControllerServiceCapability_Rpc{
+						Rpc: &csi.ControllerServiceCapability_RPC{
+							Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+						},
+					},
+				},
+			},
+		}, nil
+	}
+
+	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		t.Fatalf("ControllerPublishVolume should not be called when capability is missing")
+		return nil, nil
+	}
+	driver.controllerUnpublishVolumeFunc = func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		t.Fatalf("ControllerUnpublishVolume should not be called when capability is missing")
+		return nil, nil
+	}
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	ctx := context.Background()
+
+	if err := plugin.InitControllerCapabilities(ctx); err != nil {
+		t.Fatalf("InitControllerCapabilities failed: %v", err)
+	}
+
+	if plugin.SupportsPublishUnpublish() {
+		t.Errorf("expected SupportsPublishUnpublish to be false, got true")
+	}
+
+	if err := plugin.AttachVolume(ctx, "test-vol", "node-1"); err != nil {
+		t.Errorf("AttachVolume failed: %v", err)
+	}
+
+	if err := plugin.DetachVolume(ctx, "test-vol", "node-1"); err != nil {
+		t.Errorf("DetachVolume failed: %v", err)
+	}
+}
+
+func TestPlugin_Capabilities_Unimplemented(t *testing.T) {
+	driver := &mockCSIDriver{}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	// Driver returns Unimplemented for ControllerGetCapabilities.
+	driver.controllerGetCapabilitiesFunc = func(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+		return nil, status.Error(codes.Unimplemented, "unimplemented")
+	}
+
+	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		t.Fatalf("ControllerPublishVolume should not be called when capabilities are unimplemented")
+		return nil, nil
+	}
+	driver.controllerUnpublishVolumeFunc = func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		t.Fatalf("ControllerUnpublishVolume should not be called when capabilities are unimplemented")
+		return nil, nil
+	}
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	ctx := context.Background()
+
+	if err := plugin.AttachVolume(ctx, "test-vol", "node-1"); err != nil {
+		t.Errorf("AttachVolume failed: %v", err)
+	}
+
+	if plugin.SupportsPublishUnpublish() {
+		t.Errorf("expected SupportsPublishUnpublish to be false when ControllerGetCapabilities is unimplemented")
+	}
+
+	if err := plugin.DetachVolume(ctx, "test-vol", "node-1"); err != nil {
+		t.Errorf("DetachVolume failed: %v", err)
 	}
 }
