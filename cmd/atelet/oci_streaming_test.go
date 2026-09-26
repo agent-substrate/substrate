@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/imagestreaming"
 	"github.com/agent-substrate/substrate/internal/imagestreaming/mock"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -459,4 +461,199 @@ func TestEnsureContainerImage_WithKeychain(t *testing.T) {
 	if len(kc.resolved) == 0 {
 		t.Errorf("keychain was never consulted during fetchImageConfig")
 	}
+}
+
+func TestEnsureContainerImage_LocalCacheHitSkipsStreamer(t *testing.T) {
+	ctx := context.Background()
+	regHost := imageVolumeTestRegistry(t)
+	tagRef := regHost + "/prewarmed:v1"
+	pushTestImage(t, tagRef, singleFileLayer(t, "file.txt", "cached"))
+
+	store, err := imagecache.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("imagecache.New: %v", err)
+	}
+	warmed, err := store.EnsureImage(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("store.EnsureImage: %v", err)
+	}
+
+	m := mock.New()
+	digestRef := regHost + "/prewarmed@" + warmed.Digest.String()
+	img, err := ensureContainerImage(ctx, store, m, nil, nil, digestRef)
+	if err != nil {
+		t.Fatalf("ensureContainerImage: %v", err)
+	}
+	if !slices.Equal(img.LayerDirs, warmed.LayerDirs) {
+		t.Errorf("img.LayerDirs = %v, want %v", img.LayerDirs, warmed.LayerDirs)
+	}
+	if len(m.CanStreamCalls) != 0 {
+		t.Errorf("CanStream called %d times on local cache hit, want 0", len(m.CanStreamCalls))
+	}
+	if len(m.PrepareLayersCalls) != 0 {
+		t.Errorf("PrepareLayers called %d times on local cache hit, want 0", len(m.PrepareLayersCalls))
+	}
+}
+
+func TestPrepareOCIBundles_PauseUsesImageCache(t *testing.T) {
+	root := t.TempDir()
+	origActors := ateompath.ActorsDir
+	ateompath.ActorsDir = filepath.Join(root, "actors")
+	t.Cleanup(func() {
+		ateompath.ActorsDir = origActors
+	})
+
+	ctx := context.Background()
+	regHost := imageVolumeTestRegistry(t)
+	pauseRef := regHost + "/pause:3.10.2"
+	pushTestImage(t, pauseRef, singleFileLayer(t, "pause", "bin"))
+
+	store, err := imagecache.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("imagecache.New: %v", err)
+	}
+
+	m := mock.New()
+	m.CanStreamFunc = func(ctx context.Context, req *imagestreaming.StreamRequest) (bool, error) {
+		return true, nil
+	}
+	m.PrepareLayersFunc = func(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
+		return &imagestreaming.StreamResult{
+			ImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+			Config:      &v1.Config{Cmd: []string{"/app"}},
+			LayerDirs:   []string{"/streamed/app-layer"},
+		}, nil
+	}
+
+	herder := &AteomHerder{
+		imageCache:    store,
+		imageStreamer: m,
+	}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{
+			{Name: "app", Image: "example.com/app:v1"},
+		},
+	}
+
+	actorUID := "actor-pause-test"
+	if err := herder.prepareOCIBundles(ctx, actorUID, resources.ActorRef{Atespace: "ns", Name: "a1"}, spec, pauseRef, "ateom-1"); err != nil {
+		t.Fatalf("prepareOCIBundles: %v", err)
+	}
+
+	if len(m.PrepareLayersCalls) != 1 || m.PrepareLayersCalls[0].ImageRef != "example.com/app:v1" {
+		t.Errorf("PrepareLayersCalls = %+v, want only [example.com/app:v1]", m.PrepareLayersCalls)
+	}
+
+	pauseSpec, err := imagecache.ReadSpec(ateompath.OCIBundlePath(actorUID, ocispec.PauseContainer))
+	if err != nil || pauseSpec == nil {
+		t.Fatalf("ReadSpec(pause): spec=%v, err=%v", pauseSpec, err)
+	}
+	appSpec, err := imagecache.ReadSpec(ateompath.OCIBundlePath(actorUID, "app"))
+	if err != nil || appSpec == nil {
+		t.Fatalf("ReadSpec(app): spec=%v, err=%v", appSpec, err)
+	}
+	if !slices.Equal(appSpec.Layers, []string{"/streamed/app-layer"}) {
+		t.Errorf("appSpec.Layers = %v, want [/streamed/app-layer]", appSpec.Layers)
+	}
+}
+
+func TestDetectImageStreamer(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	nonSocketDir := filepath.Join(dir, "gcfs-dir")
+	if err := os.MkdirAll(nonSocketDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	regularFile := filepath.Join(dir, "regular.file")
+	if err := os.WriteFile(regularFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	sockA := filepath.Join(dir, "a.sock")
+	lnA, err := net.Listen("unix", sockA)
+	if err != nil {
+		t.Fatalf("net.Listen(a): %v", err)
+	}
+	t.Cleanup(func() { _ = lnA.Close() })
+
+	sockB := filepath.Join(dir, "b.sock")
+	lnB, err := net.Listen("unix", sockB)
+	if err != nil {
+		t.Fatalf("net.Listen(b): %v", err)
+	}
+	t.Cleanup(func() { _ = lnB.Close() })
+
+	for _, name := range []string{"detect-a", "detect-b"} {
+		provider := name
+		imagestreaming.Register(provider, func(ctx context.Context, cfg imagestreaming.Config) (imagestreaming.ImageStreamer, error) {
+			s := mock.New()
+			s.NameVal = provider
+			return s, nil
+		})
+	}
+
+	t.Run("skips directory and regular file", func(t *testing.T) {
+		got := detectImageStreamer(ctx, []streamerSocket{
+			{provider: "detect-a", path: nonSocketDir},
+			{provider: "detect-b", path: regularFile},
+			{provider: "detect-b", path: filepath.Join(dir, "missing.sock")},
+		})
+		if got != nil {
+			t.Errorf("detectImageStreamer = %v, want nil", got)
+		}
+	})
+
+	t.Run("falls through to second socket", func(t *testing.T) {
+		got := detectImageStreamer(ctx, []streamerSocket{
+			{provider: "detect-a", path: nonSocketDir},
+			{provider: "detect-b", path: sockB},
+		})
+		if got == nil || got.Name() != "detect-b" {
+			t.Errorf("detectImageStreamer = %v, want detect-b", got)
+		}
+	})
+
+	t.Run("prefers first socket in priority order", func(t *testing.T) {
+		got := detectImageStreamer(ctx, []streamerSocket{
+			{provider: "detect-a", path: sockA},
+			{provider: "detect-b", path: sockB},
+		})
+		if got == nil || got.Name() != "detect-a" {
+			t.Errorf("detectImageStreamer = %v, want detect-a", got)
+		}
+	})
+}
+
+func TestInitImageStreamer_SocketFlagValidation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	imagestreaming.Register("flag-test", func(ctx context.Context, cfg imagestreaming.Config) (imagestreaming.ImageStreamer, error) {
+		s := mock.New()
+		s.NameVal = "flag-test"
+		return s, nil
+	})
+
+	t.Run("none ignores socket flag", func(t *testing.T) {
+		s, err := initImageStreamer(ctx, "none", "/unused/socket.sock")
+		if err != nil || s != nil {
+			t.Errorf("initImageStreamer(none, socket) = (%v, %v), want (nil, nil)", s, err)
+		}
+	})
+
+	t.Run("named provider requires socket flag", func(t *testing.T) {
+		if _, err := initImageStreamer(ctx, "flag-test", ""); err == nil {
+			t.Error("expected error when --image-streamer-socket is empty for named provider")
+		}
+	})
+
+	t.Run("named provider rejects missing or non-socket path", func(t *testing.T) {
+		if _, err := initImageStreamer(ctx, "flag-test", filepath.Join(dir, "missing.sock")); err == nil {
+			t.Error("expected error for missing socket path")
+		}
+		if _, err := initImageStreamer(ctx, "flag-test", dir); err == nil {
+			t.Error("expected error when socket path is a directory")
+		}
+	})
 }

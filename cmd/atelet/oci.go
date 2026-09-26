@@ -276,10 +276,16 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 }
 
 // ensureContainerImage resolves and prepares layers for an image.
-// If an ImageStreamer is provided and supports streaming the image, it mounts
-// the virtual layer directories via the streaming provider without full layer download/untar.
-// If streaming fails or is unsupported, it falls back to imageCache.EnsureImage.
+// If the image is already unpacked on disk in imageCache, it returns the cached
+// image directly. Otherwise, if an ImageStreamer is provided and supports
+// streaming the image, it mounts the virtual layer directories via the streaming
+// provider without full layer download/untar, falling back to imageCache.EnsureImage.
 func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, keychain authn.Keychain, instruments *Instruments, ref string) (*imagecache.Image, error) {
+	if imageCache != nil && streamer != nil {
+		if img, err := imageCache.CachedImage(ctx, ref); err == nil && img != nil {
+			return img, nil
+		}
+	}
 	t0 := time.Now()
 	if streamer != nil {
 		req := &imagestreaming.StreamRequest{ImageRef: ref}

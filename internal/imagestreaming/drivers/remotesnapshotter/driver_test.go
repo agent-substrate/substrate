@@ -578,3 +578,60 @@ func TestNewFromConfig_PropagatesKeychainFromContext(t *testing.T) {
 		t.Errorf("got driver keychain = %v, want %v", d.keychain, kc)
 	}
 }
+
+func TestProbe(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("reachable returns NotFound", func(t *testing.T) {
+		srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+		if err := driver.Probe(ctx); err != nil {
+			t.Fatalf("Probe() = %v, want nil", err)
+		}
+		srv.mu.Lock()
+		gotKeys := slices.Clone(srv.statKeys)
+		srv.mu.Unlock()
+		if !slices.Equal(gotKeys, []string{probeKey}) {
+			t.Errorf("Stat keys = %v, want [%s]", gotKeys, probeKey)
+		}
+		// Probe before any PrepareLayers uses a temporary connection and
+		// leaves d.snapshotsClient unset.
+		driver.mu.Lock()
+		cachedClient := driver.snapshotsClient
+		driver.mu.Unlock()
+		if cachedClient != nil {
+			t.Errorf("driver.snapshotsClient = %v after cold Probe, want nil", cachedClient)
+		}
+	})
+
+	t.Run("snapshotter error surfaces", func(t *testing.T) {
+		srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+		srv.mu.Lock()
+		srv.statFunc = func(context.Context, *snapshots.StatSnapshotRequest) (*snapshots.StatSnapshotResponse, error) {
+			return nil, status.Error(codes.Unavailable, "daemon shutting down")
+		}
+		srv.mu.Unlock()
+
+		if err := driver.Probe(ctx); status.Code(err) != codes.Unavailable {
+			t.Fatalf("Probe() = %v, want Unavailable", err)
+		}
+	})
+
+	t.Run("dead socket fails within context deadline", func(t *testing.T) {
+		sockPath := filepath.Join(t.TempDir(), "dead.sock")
+		ln, err := net.Listen("unix", sockPath)
+		if err != nil {
+			t.Fatalf("net.Listen: %v", err)
+		}
+		_ = ln.Close()
+
+		d, err := New(WithName(ProviderRiptide), WithSocketPath(sockPath))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		defer cancel()
+		if err := d.Probe(probeCtx); err == nil {
+			t.Fatal("Probe() on closed socket = nil, want error")
+		}
+	})
+}
