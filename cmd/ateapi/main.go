@@ -28,13 +28,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
@@ -151,7 +151,7 @@ func main() {
 
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
-	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
+	authenticationConfig, err := apiauthn.LoadAuthenticationConfig(*authenticationConfigFile)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to load authentication config", err)
 	}
@@ -282,7 +282,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
-	if err := ateapiauth.ValidateServerConfig(authCfg); err != nil {
+	if err := apiauthn.ValidateServerConfig(authCfg); err != nil {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
@@ -297,13 +297,13 @@ func main() {
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
 		grpc.ChainUnaryInterceptor(
-			ateapiauth.UnaryServerInterceptor(authCfg),
+			apiauthn.UnaryServerInterceptor(authCfg),
 			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 			ateinterceptors.ServerUnaryInterceptor,
 			ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		),
 		grpc.ChainStreamInterceptor(
-			ateapiauth.StreamServerInterceptor(authCfg),
+			apiauthn.StreamServerInterceptor(authCfg),
 		),
 	)
 	reflection.Register(mux)
@@ -506,15 +506,15 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 	}), nil
 }
 
-func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig) (ateapiauth.ServerConfig, error) {
-	var serverCfg ateapiauth.ServerConfig
+func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) (apiauthn.ServerConfig, error) {
+	var serverCfg apiauthn.ServerConfig
 	for _, providerCfg := range cfg.JWTProviders {
 		httpClient, err := oidcjwt.NewHTTPClient(providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile)
 		if err != nil {
-			return ateapiauth.ServerConfig{}, fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
+			return apiauthn.ServerConfig{}, fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
 		}
 		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
-		serverCfg.JWTProviders = append(serverCfg.JWTProviders, ateapiauth.JWTProvider{
+		serverCfg.JWTProviders = append(serverCfg.JWTProviders, apiauthn.JWTProvider{
 			Name:   providerCfg.Name,
 			Issuer: providerCfg.Issuer,
 			Verify: func(ctx context.Context, bearer string) (string, error) {

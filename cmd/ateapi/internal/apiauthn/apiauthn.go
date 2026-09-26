@@ -12,12 +12,12 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-// Package ateapiauth authenticates clients of the ateapi gRPC server, and
+// Package apiauthn authenticates clients of the ateapi gRPC server, and
 // provides a matching client dial helper. The server interceptor takes
 // identity from the transport-layer mTLS credentials when the client
 // presented a certificate, and otherwise requires an authorization
 // header `Bearer <JWT Token>`. Requests with no credentials are rejected.
-package ateapiauth
+package apiauthn
 
 import (
 	"context"
