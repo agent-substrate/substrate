@@ -42,6 +42,30 @@ func scanActiveStreamedLeases(actorsDir string) ([]*imagestreaming.ActiveLease, 
 	}
 
 	activeMap := make(map[string]*imagestreaming.ActiveLease)
+	recordLease := func(imageRef, imageDigest string, layers []string) {
+		if len(layers) == 0 || !isStreamedLayerSet(layers) {
+			return
+		}
+		key := imageRef
+		if key == "" {
+			key = imageDigest
+		}
+		if key == "" {
+			return
+		}
+		lease, ok := activeMap[key]
+		if !ok {
+			lease = &imagestreaming.ActiveLease{
+				ImageRef:    imageRef,
+				ImageDigest: imageDigest,
+				LayerDirs:   append([]string(nil), layers...),
+				RefCount:    0,
+			}
+			activeMap[key] = lease
+		}
+		lease.RefCount++
+	}
+
 	for _, actor := range actorEntries {
 		if !actor.IsDir() {
 			continue
@@ -61,33 +85,13 @@ func scanActiveStreamedLeases(actorsDir string) ([]*imagestreaming.ActiveLease, 
 				continue
 			}
 			spec, err := imagecache.ReadSpec(filepath.Join(bundlesDir, bundle.Name()))
-			if err != nil || spec == nil || len(spec.Layers) == 0 {
+			if err != nil || spec == nil {
 				continue
 			}
-			// Only streamed layers are tracked by the image streamer.
-			if !isStreamedLayerSet(spec.Layers) {
-				continue
+			recordLease(spec.ImageRef, spec.ImageDigest, spec.Layers)
+			for _, vol := range spec.ImageVolumes {
+				recordLease(vol.ImageRef, vol.ImageDigest, vol.Layers)
 			}
-
-			key := spec.ImageRef
-			if key == "" {
-				key = spec.ImageDigest
-			}
-			if key == "" {
-				continue
-			}
-
-			lease, ok := activeMap[key]
-			if !ok {
-				lease = &imagestreaming.ActiveLease{
-					ImageRef:    spec.ImageRef,
-					ImageDigest: spec.ImageDigest,
-					LayerDirs:   append([]string(nil), spec.Layers...),
-					RefCount:    0,
-				}
-				activeMap[key] = lease
-			}
-			lease.RefCount++
 		}
 	}
 
@@ -111,7 +115,8 @@ func isStreamedLayerSet(layers []string) bool {
 }
 
 // reconcileStreamingLeases discovers all active streamed images mounted by
-// running or sleeping actors on this node, and restores their leases in the ImageStreamer.
+// running or sleeping actors on this node, restores their leases in the
+// ImageStreamer, and sweeps orphaned streaming workdirs.
 func reconcileStreamingLeases(ctx context.Context, streamer imagestreaming.ImageStreamer, actorsDir string) error {
 	if streamer == nil {
 		return nil
@@ -120,12 +125,12 @@ func reconcileStreamingLeases(ctx context.Context, streamer imagestreaming.Image
 	if err != nil {
 		return fmt.Errorf("scanning active streamed leases: %w", err)
 	}
+	if err := streamer.ReconcileLeases(ctx, leases); err != nil {
+		return fmt.Errorf("reconciling leases with %s: %w", streamer.Name(), err)
+	}
 	if len(leases) == 0 {
 		slog.DebugContext(ctx, "No active streamed image leases to reconcile on startup", slog.String("provider", streamer.Name()))
 		return nil
-	}
-	if err := streamer.ReconcileLeases(ctx, leases); err != nil {
-		return fmt.Errorf("reconciling leases with %s: %w", streamer.Name(), err)
 	}
 	slog.InfoContext(ctx, "Successfully reconciled streamed image leases on startup",
 		slog.String("provider", streamer.Name()),

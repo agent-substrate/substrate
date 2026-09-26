@@ -126,7 +126,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 	})
 	g.Go(func() error {
 		var err error
-		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts)
+		imageVolumes, err = resolveImageVolumes(gctx, imageCache, streamer, keychain, instruments, volumes, volumeMounts)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -176,9 +176,9 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 	return nil
 }
 
-// resolveImageVolumes pulls the image behind every image-typed volume this
-// container mounts and returns what the overlay spec needs to compose each.
-func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
+// mountedImageVolumes returns the image-typed volumes mounted by volumeMounts,
+// in the template's volume order.
+func mountedImageVolumes(volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) []*ateletpb.Volume {
 	mounted := make(map[string]bool, len(volumeMounts))
 	for _, vm := range volumeMounts {
 		mounted[vm.GetName()] = true
@@ -191,6 +191,14 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 		}
 		wanted = append(wanted, vol)
 	}
+	return wanted
+}
+
+// resolveImageVolumes pulls or streams the image behind every image-typed
+// volume this container mounts and returns what the overlay spec needs to
+// compose each.
+func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, keychain authn.Keychain, instruments *Instruments, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
+	wanted := mountedImageVolumes(volumes, volumeMounts)
 
 	// Pull the volumes concurrently; each entry lands at its own index so the
 	// spec order stays the template order.
@@ -198,13 +206,15 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 	g, gctx := errgroup.WithContext(ctx)
 	for i, vol := range wanted {
 		g.Go(func() error {
-			img, err := imageCache.EnsureImage(gctx, vol.GetImage().GetReference())
+			ref := vol.GetImage().GetReference()
+			img, err := ensureContainerImage(gctx, imageCache, streamer, keychain, instruments, ref)
 			if err != nil {
-				return fmt.Errorf("in imageCache.EnsureImage for volume %q: %w", vol.GetName(), err)
+				return fmt.Errorf("in ensureContainerImage for volume %q: %w", vol.GetName(), err)
 			}
 			out[i] = imagecache.ImageVolumeOverlay{
 				Name:        vol.GetName(),
 				ImageDigest: img.Digest.String(),
+				ImageRef:    ref,
 				Layers:      img.LayerDirs,
 			}
 			return nil

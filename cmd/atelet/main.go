@@ -885,14 +885,21 @@ func (s *AteomHerder) releaseStreamedLayers(ctx context.Context, actorRef resour
 	if s.imageStreamer == nil || spec == nil {
 		return
 	}
+	releaseRef := func(ref string) {
+		if ref == "" {
+			return
+		}
+		if err := s.imageStreamer.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ref}); err != nil {
+			slog.WarnContext(ctx, "Failed to release streamed layers",
+				slog.String("actor", actorRef.String()),
+				slog.String("image", ref),
+				slog.Any("err", err))
+		}
+	}
 	for _, ctr := range spec.GetContainers() {
-		if ctr.GetImage() != "" {
-			if err := s.imageStreamer.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ctr.GetImage()}); err != nil {
-				slog.WarnContext(ctx, "Failed to release streamed layers",
-					slog.String("actor", actorRef.String()),
-					slog.String("image", ctr.GetImage()),
-					slog.Any("err", err))
-			}
+		releaseRef(ctr.GetImage())
+		for _, vol := range mountedImageVolumes(spec.GetVolumes(), ctr.GetVolumeMounts()) {
+			releaseRef(vol.GetImage().GetReference())
 		}
 	}
 }

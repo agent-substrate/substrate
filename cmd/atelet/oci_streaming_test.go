@@ -315,8 +315,22 @@ func TestReleaseStreamedLayers_CheckpointAndTerminate(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "test", Name: "actor1"}
 	spec := &ateletpb.WorkloadSpec{
+		Volumes: []*ateletpb.Volume{
+			{
+				Name:   "mounted-vol",
+				Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "registry.example.com/vol-mounted:v1"}},
+			},
+			{
+				Name:   "unmounted-vol",
+				Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "registry.example.com/vol-unused:v1"}},
+			},
+		},
 		Containers: []*ateletpb.Container{
-			{Name: "c1", Image: "registry.example.com/c1:v1"},
+			{
+				Name:         "c1",
+				Image:        "registry.example.com/c1:v1",
+				VolumeMounts: []*ateletpb.VolumeMount{{Name: "mounted-vol", MountPath: "/vol"}},
+			},
 			{Name: "c2", Image: "registry.example.com/c2:v1"},
 		},
 	}
@@ -324,20 +338,23 @@ func TestReleaseStreamedLayers_CheckpointAndTerminate(t *testing.T) {
 	// Verify release on checkpoint (Approach 1: active-only leases)
 	s.releaseStreamedLayers(ctx, actorRef, spec)
 
-	if len(m.ReleaseLayersCalls) != 2 {
-		t.Fatalf("ReleaseLayers called %d times on checkpoint, want 2", len(m.ReleaseLayersCalls))
+	if len(m.ReleaseLayersCalls) != 3 {
+		t.Fatalf("ReleaseLayers called %d times on checkpoint, want 3", len(m.ReleaseLayersCalls))
 	}
 	if m.ReleaseLayersCalls[0].ImageRef != "registry.example.com/c1:v1" {
 		t.Errorf("call 0: %q, want registry.example.com/c1:v1", m.ReleaseLayersCalls[0].ImageRef)
 	}
-	if m.ReleaseLayersCalls[1].ImageRef != "registry.example.com/c2:v1" {
-		t.Errorf("call 1: %q, want registry.example.com/c2:v1", m.ReleaseLayersCalls[1].ImageRef)
+	if m.ReleaseLayersCalls[1].ImageRef != "registry.example.com/vol-mounted:v1" {
+		t.Errorf("call 1: %q, want registry.example.com/vol-mounted:v1", m.ReleaseLayersCalls[1].ImageRef)
+	}
+	if m.ReleaseLayersCalls[2].ImageRef != "registry.example.com/c2:v1" {
+		t.Errorf("call 2: %q, want registry.example.com/c2:v1", m.ReleaseLayersCalls[2].ImageRef)
 	}
 
 	// Verify release on terminate is also safe and invokes releaseStreamedLayers
 	s.releaseStreamedLayers(ctx, actorRef, spec)
-	if len(m.ReleaseLayersCalls) != 4 {
-		t.Fatalf("ReleaseLayers total calls %d, want 4", len(m.ReleaseLayersCalls))
+	if len(m.ReleaseLayersCalls) != 6 {
+		t.Fatalf("ReleaseLayers total calls %d, want 6", len(m.ReleaseLayersCalls))
 	}
 }
 

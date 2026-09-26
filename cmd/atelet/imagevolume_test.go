@@ -17,6 +17,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -27,6 +28,8 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/imagestreaming"
+	"github.com/agent-substrate/substrate/internal/imagestreaming/mock"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
@@ -109,12 +112,15 @@ func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts)
+	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), nil, nil, nil, volumes, mounts)
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
 	if len(got) != 1 || got[0].Name != "agent" {
 		t.Fatalf("resolveImageVolumes = %+v, want one entry named %q", got, "agent")
+	}
+	if got[0].ImageRef != ref {
+		t.Errorf("imageRef = %q, want %q", got[0].ImageRef, ref)
 	}
 	if len(got[0].Layers) != 1 {
 		t.Errorf("layers = %v, want 1", got[0].Layers)
@@ -143,7 +149,7 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts)
+	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), nil, nil, nil, volumes, mounts)
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
@@ -165,11 +171,52 @@ func TestResolveImageVolumes_UnmountedVolumeNotPulled(t *testing.T) {
 		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"}},
 	}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, nil)
+	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), nil, nil, nil, volumes, nil)
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("resolveImageVolumes = %+v, want empty", got)
+	}
+}
+
+func TestResolveImageVolumes_UsesStreamer(t *testing.T) {
+	ref := "registry.example.com/weights:v1"
+	digest := "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	streamedLayers := []string{"/var/lib/ateom-gvisor/streaming/riptide/weights/layer-0"}
+
+	m := mock.New()
+	m.CanStreamFunc = func(ctx context.Context, req *imagestreaming.StreamRequest) (bool, error) {
+		return true, nil
+	}
+	m.PrepareLayersFunc = func(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
+		return &imagestreaming.StreamResult{
+			ImageDigest: digest,
+			Config:      &v1.Config{},
+			LayerDirs:   streamedLayers,
+		}, nil
+	}
+
+	volumes := []*ateletpb.Volume{{
+		Name:   "weights",
+		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: ref}},
+	}}
+	mounts := []*ateletpb.VolumeMount{{Name: "weights", MountPath: "/models"}}
+
+	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), m, nil, nil, volumes, mounts)
+	if err != nil {
+		t.Fatalf("resolveImageVolumes: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if got[0].Name != "weights" || got[0].ImageRef != ref || got[0].ImageDigest != digest {
+		t.Errorf("got[0] = %+v, want Name=weights ImageRef=%q ImageDigest=%q", got[0], ref, digest)
+	}
+	if len(got[0].Layers) != 1 || got[0].Layers[0] != streamedLayers[0] {
+		t.Errorf("got[0].Layers = %v, want %v", got[0].Layers, streamedLayers)
+	}
+	if len(m.PrepareLayersCalls) != 1 {
+		t.Errorf("PrepareLayersCalls = %d, want 1", len(m.PrepareLayersCalls))
 	}
 }

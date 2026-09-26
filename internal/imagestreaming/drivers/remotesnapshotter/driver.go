@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -548,6 +549,17 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 		layerDirs = append(layerDirs, layerDir)
 	}
 
+	if err := writeLeaseMetadata(imageWorkDir, &persistedLease{
+		ImageRef:     req.ImageRef,
+		Digest:       digest,
+		Config:       cfg,
+		SnapshotKeys: snapshotKeys,
+		LayerDirs:    layerDirs,
+	}); err != nil {
+		cleanupOnErr()
+		return nil, fmt.Errorf("writing lease metadata: %w", err)
+	}
+
 	d.mu.Lock()
 	d.leases[req.ImageRef] = &imageLease{
 		digest:       digest,
@@ -564,6 +576,36 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 		Config:      cfg,
 		LayerDirs:   layerDirs,
 	}, nil
+}
+
+const leaseMetadataFile = "lease.json"
+
+type persistedLease struct {
+	ImageRef     string     `json:"imageRef"`
+	Digest       string     `json:"digest,omitempty"`
+	Config       *v1.Config `json:"config,omitempty"`
+	SnapshotKeys []string   `json:"snapshotKeys,omitempty"`
+	LayerDirs    []string   `json:"layerDirs,omitempty"`
+}
+
+func writeLeaseMetadata(dir string, meta *persistedLease) error {
+	b, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, leaseMetadataFile), b, 0o600)
+}
+
+func readLeaseMetadata(dir string) (*persistedLease, error) {
+	b, err := os.ReadFile(filepath.Join(dir, leaseMetadataFile))
+	if err != nil {
+		return nil, err
+	}
+	var meta persistedLease
+	if err := json.Unmarshal(b, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
 }
 
 // viewLayer returns mounts for a read-only view of one layer, following
@@ -694,6 +736,9 @@ func (d *Driver) ReleaseLayers(ctx context.Context, req *imagestreaming.StreamRe
 		return nil
 	}
 	delete(d.leases, req.ImageRef)
+	if lease.digest != "" && d.leases[lease.digest] == lease {
+		delete(d.leases, lease.digest)
+	}
 	d.mu.Unlock()
 
 	client, err := d.getClient(ctx)
@@ -713,16 +758,19 @@ func (d *Driver) ReleaseLayers(ctx context.Context, req *imagestreaming.StreamRe
 		}
 	}
 
-	_ = os.RemoveAll(lease.workDir)
+	if lease.workDir != "" {
+		_ = os.RemoveAll(lease.workDir)
+	}
 	return nil
 }
 
 // ReconcileLeases restores active lease tracking and reference counts for
-// surviving actor workloads on node or process startup.
+// surviving actor workloads on node or process startup, and sweeps orphaned
+// wrapper directories and snapshot views not referenced by any active actor.
 func (d *Driver) ReconcileLeases(ctx context.Context, active []*imagestreaming.ActiveLease) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	activeWorkDirs := make(map[string]bool)
 
+	d.mu.Lock()
 	for _, al := range active {
 		if al == nil || (al.ImageRef == "" && al.ImageDigest == "") {
 			continue
@@ -731,6 +779,19 @@ func (d *Driver) ReconcileLeases(ctx context.Context, active []*imagestreaming.A
 		if key == "" {
 			key = al.ImageDigest
 		}
+
+		workDir := filepath.Join(d.workDir, sanitizePathKey(key))
+		if len(al.LayerDirs) > 0 {
+			workDir = filepath.Dir(al.LayerDirs[0])
+		}
+		activeWorkDirs[workDir] = true
+		activeWorkDirs[filepath.Join(d.workDir, sanitizePathKey(key))] = true
+
+		meta, _ := readLeaseMetadata(workDir)
+		if meta == nil {
+			meta, _ = readLeaseMetadata(filepath.Join(d.workDir, sanitizePathKey(key)))
+		}
+
 		existing, ok := d.leases[key]
 		if ok {
 			existing.refCount += al.RefCount
@@ -740,22 +801,87 @@ func (d *Driver) ReconcileLeases(ctx context.Context, active []*imagestreaming.A
 			if existing.digest == "" {
 				existing.digest = al.ImageDigest
 			}
+			if existing.workDir == "" {
+				existing.workDir = workDir
+			}
 		} else {
-			d.leases[key] = &imageLease{
+			existing = &imageLease{
 				refCount: al.RefCount,
 				digest:   al.ImageDigest,
 				layers:   append([]string(nil), al.LayerDirs...),
+				workDir:  workDir,
+			}
+			d.leases[key] = existing
+		}
+		if meta != nil {
+			if existing.config == nil {
+				existing.config = meta.Config
+			}
+			if len(existing.snapshotKeys) == 0 && len(meta.SnapshotKeys) > 0 {
+				existing.snapshotKeys = append([]string(nil), meta.SnapshotKeys...)
+			}
+			if existing.digest == "" {
+				existing.digest = meta.Digest
+			}
+			if len(existing.layers) == 0 && len(meta.LayerDirs) > 0 {
+				existing.layers = append([]string(nil), meta.LayerDirs...)
 			}
 		}
 		if al.ImageDigest != "" && al.ImageDigest != key {
-			d.leases[al.ImageDigest] = d.leases[key]
+			d.leases[al.ImageDigest] = existing
 		}
 		slog.InfoContext(ctx, "Reconciled active streamed image lease",
 			slog.String("provider", d.Name()),
 			slog.String("image", key),
-			slog.Int("refCount", d.leases[key].refCount))
+			slog.Int("refCount", existing.refCount))
 	}
+	for _, l := range d.leases {
+		if l != nil && l.refCount > 0 && l.workDir != "" {
+			activeWorkDirs[l.workDir] = true
+		}
+	}
+	d.mu.Unlock()
+
+	d.sweepOrphanWorkDirs(ctx, activeWorkDirs)
 	return nil
+}
+
+func (d *Driver) sweepOrphanWorkDirs(ctx context.Context, activeWorkDirs map[string]bool) {
+	if d.workDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(d.workDir)
+	if err != nil {
+		return
+	}
+	snapshotter := d.snapshotterName
+	if snapshotter == "" {
+		snapshotter = d.name
+	}
+	var client snapshots.SnapshotsClient
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirPath := filepath.Join(d.workDir, entry.Name())
+		if activeWorkDirs[dirPath] {
+			continue
+		}
+		if meta, err := readLeaseMetadata(dirPath); err == nil && meta != nil && len(meta.SnapshotKeys) > 0 {
+			if client == nil {
+				client, _ = d.getClient(ctx)
+			}
+			if client != nil {
+				for _, key := range meta.SnapshotKeys {
+					d.removeSnapshot(client, snapshotter, key)
+				}
+			}
+		}
+		_ = os.RemoveAll(dirPath)
+		slog.InfoContext(ctx, "Swept orphaned streamed image workdir",
+			slog.String("provider", d.Name()),
+			slog.String("workDir", dirPath))
+	}
 }
 
 // Close closes gRPC connection.

@@ -255,6 +255,7 @@ func Providers() []string
 
 ```
 /var/lib/ateom-gvisor/streaming/<driver>/<sanitized_image_key>/
+├── lease.json                                # Persisted config, digest, and snapshot view keys for restart recovery
 ├── layer-0/
 │   ├── fs -> /var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/<id>/fs
 │   │         (which for Riptide symlinks to /run/gcfsd/mnt/views/<diffID>/fs)
@@ -267,21 +268,32 @@ func Providers() []string
 
 - **`fs` Symlink:** Exposes the virtual layer filesystem tree to `ateom`'s overlay lowerdir. Both `/var/lib/containerd/io.containerd.snapshotter.v1.gcfs` (`RiptideSnapshotterRoot`), `/run/gcfsd` (`RiptideFUSERoot`), and `/var/lib/soci-snapshotter-grpc` (`SOCISnapshotterRoot`) are mounted into `atelet` and `ateom` with `HostToContainer` mount propagation so both pods can resolve the full symlink chain.
 - **`finalized` Marker:** Notifies `ateom` that the layer is immutable, instructing it to bypass whiteout materialization loops and mount directly.
+- **`lease.json` Metadata:** Records the resolved `v1.Config`, `digest`, `layerDirs`, and snapshotter `-view` keys so `ReconcileLeases` can reconstruct complete lease state across `atelet` restarts and sweep orphaned views.
 
-### 5.2. Pluggable Resolution with Automatic Fallback
+### 5.2. Pluggable Resolution with Local Cache Fast Path & Automatic Fallback
+Both container rootfs images (`containers[*].image`) and mounted OCI image volumes (`volumes[*].image` in `resolveImageVolumes`) resolve through `ensureContainerImage` in `cmd/atelet/oci.go`. The internal sandbox `pause` container (`ocispec.PauseContainer`) passes a `nil` streamer in `prepareOCIBundles` and always uses `imageCache`, avoiding a pointless streaming round-trip for the tiny (~300 KB) digest-pinned infrastructure image.
+
 In `cmd/atelet/oci.go`:
 ```go
 func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, streamer imagestreaming.ImageStreamer, ...) (*imagecache.Image, error) {
+    // 1. Local cache fast path: if a digest-pinned image is already unpacked in
+    // the local imageCache, return it immediately with zero network or gRPC I/O.
+    if imageCache != nil && streamer != nil {
+        if img, err := imageCache.CachedImage(ctx, ref); err == nil && img != nil {
+            return img, nil
+        }
+    }
+    // 2. Remote streaming path:
     if streamer != nil {
         if canStream, err := streamer.CanStream(ctx, req); err == nil && canStream {
             if res, err := streamer.PrepareLayers(ctx, req); err == nil && len(res.LayerDirs) > 0 {
                 instruments.RecordImageStreaming(ctx, streamer.Name(), "success", dur)
-                return &imagecache.Image{Digest: res.ImageDigest, Config: res.Config, LayerDirs: res.LayerDirs}, nil
+                return &imagecache.Image{Digest: res.ImageDigest, Config: *res.Config, LayerDirs: res.LayerDirs}, nil
             }
         }
-        instruments.RecordImageStreaming(ctx, streamer.Name(), "fallback", dur)
+        instruments.RecordImageStreaming(ctx, streamer.Name(), outcome, dur)
     }
-    // Fallback path: standard local cache download & untar
+    // 3. Fallback path: standard local cache download & untar
     return imageCache.EnsureImage(ctx, ref)
 }
 ```
@@ -293,8 +305,8 @@ Mounts and open file descriptors consume host kernel resources (VFS dentries, mo
 #### 5.3.1. Reference Counting & Garbage Collection
 The generic driver implements reference counting across actors sharing the same base images:
 - **Active-Only Leases in Prototype:** Our prototype's `leases` map tracks `refCount` for each image:
-  - **PrepareLayers on Run/Wake:** When an actor starts or resumes from sleep, `PrepareLayers` ensures layer mounts are active and increments the reference count (`refCount++`).
-  - **Release on Checkpoint / Sleep / Terminate:** When an actor transitions to Sleep/Paused state via `atelet.Checkpoint`, or when an actor terminates (`atelet.Terminate`), `atelet` releases its image lease (`ReleaseLayers`), decrementing `refCount`.
+  - **PrepareLayers on Run/Wake:** When an actor starts or resumes from sleep, `PrepareLayers` ensures layer mounts are active and increments the reference count (`refCount++`) for both container rootfs images and mounted OCI image volumes.
+  - **Release on Checkpoint / Sleep / Terminate:** When an actor transitions to Sleep/Paused state via `atelet.Checkpoint`, or when an actor terminates (`atelet.Terminate`), `atelet` releases its image leases (`ReleaseLayers`), decrementing `refCount` for each container image and mounted OCI image volume.
   - **Unmount on Zero RefCount:** Only when `refCount == 0` (no other running actor on the worker references the image) does the driver issue `RemoveSnapshot` and unmount the virtual directories from the host.
   - **Microsecond Warm Re-attachment:** Benchmarks confirm that warm layer re-attachment takes only **~1.8µs to 2ms** (the snapshotter daemon retains compressed chunks and metadata in local cache). Thus, waking actors incur negligible overhead while host mount tables remain clean.
 
@@ -315,10 +327,10 @@ The generic driver implements reference counting across actors sharing the same 
   1. `credentialprovider.New(...)` reloads the credential config immediately from the host (`/var/lib/kubelet/credential-provider-config.yaml`).
   2. The streaming daemon (Riptide Snapshotter `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` / SOCI Snapshotter `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`) is already running as a host service with its fresh metadata access.
   3. `reconcileStreamingLeases(streamer, actorsDir)` (in `cmd/atelet/streaming_reconcile.go`) scans surviving on-node bundle overlay specs (`ateompath.ActorsDir/*/bundles/*/rootfs-overlay.json`).
-  4. It parses each actor's `OverlaySpec.ImageRef` and layer directory mappings across all resident/running actors, aggregating them into `[]*ActiveLease` entries with exact live reference counts, and calls `streamer.ReconcileLeases(ctx, active)`.
-  5. Both `riptide` and `soci` drivers inspect live mounts on the host, reconnect to the remote snapshotter daemon socket, and restore their in-memory `d.leases` map with exact live reference counts (`refCount`) and layer paths.
-  6. Subsequent container creations or wakeups can immediately reuse warm mounts without redundant snapshotter RPCs. This approach is completely self-healing: even if an actor or `atelet` crashed midway through execution, the recovered state reflects actual filesystem ground truth rather than stale persisted counters.
-- **Orphan View Garbage Collection (Sweeper):** A periodic or startup background sweep queries the remote snapshotter daemon for mounted snapshot views. Any mounted view that does not correspond to an active actor directory on disk is safely unmounted and released, preventing mount table leakage over long cluster uptimes.
+  4. It parses each bundle's `OverlaySpec.ImageRef`/`Layers` and `ImageVolumes[*].ImageRef`/`Layers` across all resident/running actors, aggregating them into `[]*ActiveLease` entries with exact live reference counts, and calls `streamer.ReconcileLeases(ctx, active)`.
+  5. `Driver.ReconcileLeases` reads `lease.json` from each active image's wrapper directory (`/var/lib/ateom-gvisor/streaming/<driver>/<sanitized_image_key>/lease.json`) to restore the full `imageLease` (`refCount`, `digest`, `config`, `layers`, `workDir`, and `snapshotKeys`).
+  6. Subsequent container creations or wakeups can immediately reuse warm mounts without redundant snapshotter or registry RPCs, and when all surviving actors for an image later release their leases, `ReleaseLayers` has the full `snapshotKeys` and `workDir` needed for clean teardown.
+- **Orphan View Garbage Collection (Sweeper):** During `ReconcileLeases` (which runs on startup even when zero active leases are found), the driver scans `/var/lib/ateom-gvisor/streaming/<driver>/` for any wrapper directory not referenced by an active actor on disk, removes its `-view` snapshot keys from the remote snapshotter daemon (using its `lease.json`), and deletes the wrapper directory.
 
 ### 5.4. Cold-Start Reliability & Sandbox Warmup: Host-Side Enumeration Probing & Metadata Prefetch
 

@@ -635,3 +635,106 @@ func TestProbe(t *testing.T) {
 		}
 	})
 }
+
+func TestReconcileLeases_RestoresMetadataAndSweepsOrphans(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+
+	mountActive := t.TempDir()
+	mountOrphan := t.TempDir()
+	diffActive := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	diffOrphan := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	srv.remoteMounts = map[string][]*snapshots.Mount{
+		diffActive: {{Type: "bind", Source: mountActive}},
+		diffOrphan: {{Type: "bind", Source: mountOrphan}},
+	}
+
+	activeRef := "example.com/active:v1"
+	orphanRef := "example.com/orphan:v1"
+
+	driver.imageResolver = func(_ context.Context, ref string, _ *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		switch ref {
+		case activeRef:
+			return "sha256:1111", &v1.Config{Cmd: []string{"/active-app"}}, []string{diffActive}, []string{"sha256:l1"}, nil
+		case orphanRef:
+			return "sha256:2222", &v1.Config{Cmd: []string{"/orphan-app"}}, []string{diffOrphan}, []string{"sha256:l2"}, nil
+		default:
+			return "", nil, nil, nil, errors.New("unexpected ref")
+		}
+	}
+
+	activeRes, err := driver.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: activeRef})
+	if err != nil {
+		t.Fatalf("PrepareLayers(active): %v", err)
+	}
+	orphanRes, err := driver.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: orphanRef})
+	if err != nil {
+		t.Fatalf("PrepareLayers(orphan): %v", err)
+	}
+	activeWorkDir := filepath.Dir(activeRes.LayerDirs[0])
+	orphanWorkDir := filepath.Dir(orphanRes.LayerDirs[0])
+
+	// Simulate an atelet restart with a fresh Driver instance sharing workDir and socket.
+	restarted, err := NewRiptide(
+		WithSocketPath(driver.socket),
+		WithWorkDir(driver.workDir),
+		WithImageResolver(func(context.Context, string, *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+			return "", nil, nil, nil, errors.New("imageResolver must not be called for warm reconciled lease")
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewRiptide: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+
+	// Only activeRef is still mounted by a surviving actor; orphanRef has no actor.
+	if err := restarted.ReconcileLeases(ctx, []*imagestreaming.ActiveLease{{
+		ImageRef:    activeRef,
+		ImageDigest: activeRes.ImageDigest,
+		LayerDirs:   activeRes.LayerDirs,
+		RefCount:    1,
+	}}); err != nil {
+		t.Fatalf("ReconcileLeases: %v", err)
+	}
+
+	// 1. Orphan workDir should be swept and its view snapshot removed.
+	if _, err := os.Stat(orphanWorkDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("orphanWorkDir %s still exists after ReconcileLeases: err=%v", orphanWorkDir, err)
+	}
+	srv.mu.Lock()
+	removedAfterSweep := slices.Clone(srv.removedKeys)
+	srv.mu.Unlock()
+	if len(removedAfterSweep) != 1 || !strings.Contains(removedAfterSweep[0], "orphan") {
+		t.Errorf("removedKeys after sweep = %v, want 1 orphan view key", removedAfterSweep)
+	}
+
+	// 2. Active lease should have restored Config so a warm PrepareLayers succeeds without calling imageResolver.
+	warmRes, err := restarted.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: activeRef})
+	if err != nil {
+		t.Fatalf("warm PrepareLayers after reconcile: %v", err)
+	}
+	if warmRes.Config == nil || !slices.Equal(warmRes.Config.Cmd, []string{"/active-app"}) {
+		t.Errorf("warm PrepareLayers Config = %+v, want Cmd=[/active-app]", warmRes.Config)
+	}
+
+	// 3. Releasing both references should remove the active view snapshot and delete activeWorkDir.
+	if err := restarted.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: activeRef}); err != nil {
+		t.Fatalf("first ReleaseLayers: %v", err)
+	}
+	if _, err := os.Stat(activeWorkDir); err != nil {
+		t.Fatalf("activeWorkDir removed while refCount=1: %v", err)
+	}
+	if err := restarted.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: activeRef}); err != nil {
+		t.Fatalf("second ReleaseLayers: %v", err)
+	}
+	if _, err := os.Stat(activeWorkDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("activeWorkDir %s still exists after final ReleaseLayers: err=%v", activeWorkDir, err)
+	}
+	srv.mu.Lock()
+	removedFinal := slices.Clone(srv.removedKeys)
+	srv.mu.Unlock()
+	if len(removedFinal) != 2 {
+		t.Errorf("removedKeys after final release = %v, want 2 view keys (orphan + active)", removedFinal)
+	}
+}

@@ -67,11 +67,20 @@ func TestScanActiveStreamedLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Non-streamed image cache spec
+	// Non-streamed rootfs spec, but with a streamed ImageVolume
+	streamedVolRef := "us-docker.pkg.dev/test/vol-image:v1"
+	streamedVolDigest := "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	streamedVolLayers := []string{"/var/lib/ateom-gvisor/streaming/riptide/vol-v1/layer-0"}
 	if err := imagecache.WriteSpec(a2Bundle1, &imagecache.OverlaySpec{
 		ImageRef:    "docker.io/library/busybox:latest",
 		ImageDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		Layers:      []string{"/var/lib/atelet/image-cache/layers/layer0"},
+		ImageVolumes: []imagecache.ImageVolumeOverlay{{
+			Name:        "weights",
+			ImageRef:    streamedVolRef,
+			ImageDigest: streamedVolDigest,
+			Layers:      streamedVolLayers,
+		}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +102,8 @@ func TestScanActiveStreamedLeases(t *testing.T) {
 		t.Fatalf("scanActiveStreamedLeases failed: %v", err)
 	}
 
-	if len(leases) != 2 {
-		t.Fatalf("got %d active leases, want 2", len(leases))
+	if len(leases) != 3 {
+		t.Fatalf("got %d active leases, want 3", len(leases))
 	}
 
 	leaseMap := make(map[string]*imagestreaming.ActiveLease)
@@ -123,11 +132,30 @@ func TestScanActiveStreamedLeases(t *testing.T) {
 	if l2.RefCount != 1 {
 		t.Errorf("lease 2 RefCount = %d, want 1", l2.RefCount)
 	}
+
+	lVol, okVol := leaseMap[streamedVolRef]
+	if !okVol {
+		t.Fatalf("missing lease for image volume %s", streamedVolRef)
+	}
+	if lVol.RefCount != 1 {
+		t.Errorf("volume lease RefCount = %d, want 1", lVol.RefCount)
+	}
 }
 
 func TestReconcileStreamingLeases(t *testing.T) {
 	ctx := context.Background()
 	actorsDir := t.TempDir()
+
+	// Even with 0 active actors on disk, ReconcileLeases must be called so
+	// the driver sweeps any orphaned streaming workDirs.
+	emptyStreamer := mock.New()
+	emptyStreamer.NameVal = "riptide"
+	if err := reconcileStreamingLeases(ctx, emptyStreamer, actorsDir); err != nil {
+		t.Fatalf("reconcileStreamingLeases(empty) failed: %v", err)
+	}
+	if len(emptyStreamer.ReconcileLeasesCalls) != 1 || len(emptyStreamer.ReconcileLeasesCalls[0]) != 0 {
+		t.Fatalf("ReconcileLeasesCalls on empty actorsDir = %v, want 1 call with 0 leases", emptyStreamer.ReconcileLeasesCalls)
+	}
 
 	aBundle := filepath.Join(actorsDir, "act-1", "bundles", "c1")
 	if err := os.MkdirAll(aBundle, 0o755); err != nil {
