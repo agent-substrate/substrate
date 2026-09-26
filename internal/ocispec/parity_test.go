@@ -37,9 +37,9 @@ var parityOptions = Options{
 	BundlePath:                ateompath.OCIBundlePath(testActorUID, "app"),
 	Volumes: []*ateletpb.Volume{
 		durableVolume("data"),
-		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
-		{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
-		{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
+		{Name: "sysinfo", SystemInfo: &ateletpb.SystemInfoVolume{}},
+		{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
+		{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
 	},
 	VolumeMounts: []*ateletpb.VolumeMount{
 		{Name: "data", MountPath: "/var/data"},
