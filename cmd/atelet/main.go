@@ -1097,6 +1097,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
+	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
+	}
 
 	// Fetch the snapshot manifest stored beside the checkpoint images
 	// first: it lists the checkpoint files to download and records the actor
@@ -1157,8 +1160,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
 	// fetch + image unpack hides whichever leg is shorter, and on a cold node
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
-	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
-	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
@@ -1176,8 +1177,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				return err
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-			if err := s.copyLocalCheckpoint(gctx, ateletpath.ActorPath(actorUID), req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
-				return err
+			// Local (pause) checkpoint: files are already on disk in
+			// LocalSnapshotDir; verify they exist and restore directly from
+			// there without staging them into RestoreStateDir.
+			for _, fileName := range sandboxRec.SnapshotFiles {
+				if _, err := os.Stat(filepath.Join(checkpointDir, fileName)); err != nil {
+					return wrapFileSystemErr("while checking local checkpoint file", err)
+				}
 			}
 		}
 		return nil
@@ -1226,6 +1232,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
+	actorDirs := ateletpath.ActorDirs(actorUID)
+	actorDirs.RestoreDir = checkpointDir
+
 	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
 	// this call as "Actor restore phases".
 	tAteom := time.Now()
@@ -1239,7 +1248,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              req.GetActorUid(),
-		ActorDirs:             ateletpath.ActorDirs(actorUID),
+		ActorDirs:             actorDirs,
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
