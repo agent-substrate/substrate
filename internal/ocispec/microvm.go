@@ -44,9 +44,10 @@ type MicroVMOptions struct {
 }
 
 // ShapeMicroVM replaces host system mounts with guest mounts, repoints volume
-// bind mounts to guest share paths, and fills in kata's default resources. It
-// must run on an unshaped spec, and errors on a bind it cannot place in the
-// guest.
+// bind mounts to guest share paths, fills in kata's default resources, and
+// applies the guest-only security defaults gVisor already provides:
+// no_new_privileges and unprivileged low ports. It must run on an unshaped
+// spec, and errors on a bind it cannot place in the guest.
 func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	// Translate volume bind mounts into guest share paths.
 	volumes := make([]specs.Mount, 0, len(spec.Mounts))
@@ -70,8 +71,25 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	}
 	spec.Mounts = append(guestSystemMounts(), volumes...)
 
+	if spec.Process != nil {
+		// runsc denies setuid elevation by default (--allow-suid=false); the
+		// kata agent needs the flag to do the same. Not in Build: runsc restore
+		// compares Process with the checkpoint-time spec.
+		spec.Process.NoNewPrivileges = true
+	}
+
 	if spec.Linux == nil {
 		spec.Linux = &specs.Linux{}
+	}
+	// A container that drops NET_BIND_SERVICE could not bind a low port in the
+	// guest, while gVisor's netstack never enforced the limit. Kubernetes lists
+	// the key as safe. Not in Build: runsc restore rejects a Sysctl change
+	// against the checkpoint-time spec.
+	if spec.Linux.Sysctl == nil {
+		spec.Linux.Sysctl = map[string]string{}
+	}
+	if _, ok := spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"]; !ok {
+		spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"] = "0"
 	}
 	// The container's own declared limits survive the merge; StartRootfsContainer
 	// sets CgroupsPath.
