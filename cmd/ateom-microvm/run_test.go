@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -202,5 +203,53 @@ func TestWorkloadIDs(t *testing.T) {
 	got := workloadIDs(ctrs)
 	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
 		t.Errorf("workloadIDs() = %v, want %v", got, want)
+	}
+}
+
+func TestBuildVMConfigMemoryTHP(t *testing.T) {
+	cfg := buildVMConfig("actor-1", "/vmlinux", "/rootfs.img", "", "/console.log", 640, 2, true, false)
+	if !cfg.Memory.Shared {
+		t.Errorf("Memory.Shared = false, want true")
+	}
+	if !cfg.Memory.Thp {
+		t.Errorf("Memory.Thp = false, want true")
+	}
+	if want := int64(640) * 1024 * 1024; cfg.Memory.Size != want {
+		t.Errorf("Memory.Size = %d, want %d", cfg.Memory.Size, want)
+	}
+}
+
+func TestEnsureShmemTHP(t *testing.T) {
+	sysRoot := t.TempDir()
+	thpDir := filepath.Join(sysRoot, "kernel/mm/transparent_hugepage")
+	if err := os.MkdirAll(thpDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	shmemFile := filepath.Join(thpDir, "shmem_enabled")
+
+	// Case 1: initially [never] -> writes "within_size\n".
+	if err := os.WriteFile(shmemFile, []byte("always within_size advise [never] deny force\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := ensureShmemTHP(t.Context(), sysRoot); err != nil {
+		t.Fatalf("ensureShmemTHP() unexpected error: %v", err)
+	}
+	got, err := os.ReadFile(shmemFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "within_size\n" {
+		t.Errorf("shmem_enabled after write = %q, want %q", string(got), "within_size\n")
+	}
+
+	// Case 2: already [within_size] -> no-op even if read-only.
+	if err := os.WriteFile(shmemFile, []byte("always [within_size] advise never deny force\n"), 0o444); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(shmemFile, 0o444); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	if err := ensureShmemTHP(t.Context(), sysRoot); err != nil {
+		t.Fatalf("ensureShmemTHP() when already [within_size] returned error: %v", err)
 	}
 }

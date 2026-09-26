@@ -59,10 +59,12 @@ type CpusConfig struct {
 
 // MemoryConfig sets guest RAM. Shared=true makes CH back RAM with a memfd, which
 // is what lets vm.snapshot write a SPARSE image (the memory-only snapshot the
-// rest of ateom relies on).
+// rest of ateom relies on). Thp=true enables Transparent Huge Pages so the host
+// backs guest RAM with 2 MiB pages where supported.
 type MemoryConfig struct {
 	Size   int64 `json:"size"`
 	Shared bool  `json:"shared"`
+	Thp    bool  `json:"thp,omitempty"`
 }
 
 // PayloadConfig points at the guest kernel + its cmdline (initramfs/firmware
