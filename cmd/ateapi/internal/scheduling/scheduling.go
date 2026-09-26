@@ -96,7 +96,11 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 	return s
 }
 
-// Schedule filters the current worker fleet to find unassigned candidates matching the given constraints.
+// Schedule filters the current worker fleet to find candidates matching the
+// given constraints, then samples two at random (power of two choices) and
+// returns the less-loaded one. Sampling keeps selection resilient to stale
+// watch-cache snapshots under concurrent bursts while avoiding stacking actors
+// onto busy workers when lighter ones exist.
 func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
@@ -113,8 +117,70 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	if len(candidates) == 0 {
 		return nil, ErrNoCapacity
 	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
 
-	return candidates[s.intn(len(candidates))], nil
+	i := s.intn(len(candidates))
+	j := s.intn(len(candidates) - 1)
+	if j >= i {
+		j++
+	}
+	if lessLoaded(candidates[j], candidates[i]) {
+		return candidates[j], nil
+	}
+	return candidates[i], nil
+}
+
+// lessLoaded reports whether worker a is less loaded than worker b.
+// It compares actor-slot utilization (allocated/capacity) first, breaking ties
+// on dominant compute-resource utilization (CPU/memory) and then raw actor count.
+func lessLoaded(a, b *ateapipb.Worker) bool {
+	aAlloc := int64(a.GetStatus().GetAllocated().GetActors())
+	bAlloc := int64(b.GetStatus().GetAllocated().GetActors())
+	aCap := int64(a.GetStatus().GetCapacity().GetActors())
+	bCap := int64(b.GetStatus().GetCapacity().GetActors())
+
+	if aCap > 0 && bCap > 0 {
+		if lhs, rhs := aAlloc*bCap, bAlloc*aCap; lhs != rhs {
+			return lhs < rhs
+		}
+	}
+
+	if aRes, bRes := resourceUtilization(a), resourceUtilization(b); aRes != bRes {
+		return aRes < bRes
+	}
+
+	return aAlloc < bAlloc
+}
+
+// resourceUtilization returns the highest allocated/capacity ratio across the
+// worker's reported compute dimensions, or 0 when nothing is allocated or
+// capacity is unreported.
+func resourceUtilization(w *ateapipb.Worker) float64 {
+	capQ, err := resources.ParseQuantities(w.GetStatus().GetCapacity().GetResources())
+	if err != nil || len(capQ) == 0 {
+		return 0
+	}
+	usedQ, err := resources.ParseQuantities(w.GetStatus().GetAllocated().GetResources())
+	if err != nil || len(usedQ) == 0 {
+		return 0
+	}
+	var maxRatio float64
+	for name, capVal := range capQ {
+		capFloat := capVal.AsApproximateFloat64()
+		if capFloat <= 0 {
+			continue
+		}
+		usedVal, ok := usedQ[name]
+		if !ok {
+			continue
+		}
+		if r := usedVal.AsApproximateFloat64() / capFloat; r > maxRatio {
+			maxRatio = r
+		}
+	}
+	return maxRatio
 }
 
 func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {

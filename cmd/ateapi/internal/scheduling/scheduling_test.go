@@ -219,6 +219,55 @@ func TestSchedule(t *testing.T) {
 			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 4<<30)},
 			wantPod:     "w-half",
 		},
+		{
+			name: "prefers less-loaded worker when first sample is busier",
+			fleet: fleet{
+				worker("w-busy", "gvisor", "node-a", tierTwo, withMaxActors(4), assigned("demo", "a"), assigned("demo", "b")),
+				worker("w-idle", "gvisor", "node-b", tierTwo, withMaxActors(4)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-idle",
+		},
+		{
+			name: "keeps first sample when it is already less loaded than second",
+			fleet: fleet{
+				worker("w-idle", "gvisor", "node-a", tierTwo, withMaxActors(4)),
+				worker("w-busy", "gvisor", "node-b", tierTwo, withMaxActors(4), assigned("demo", "a")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-idle",
+		},
+		{
+			name: "compares actor utilization across heterogeneous worker capacities",
+			fleet: fleet{
+				// 1/2 (50%) vs 2/16 (12.5%): w-large has more actors but lower utilization.
+				worker("w-small", "gvisor", "node-a", tierTwo, withMaxActors(2), assigned("demo", "a")),
+				worker("w-large", "gvisor", "node-b", tierTwo, withMaxActors(16), assigned("demo", "b"), assigned("demo", "c")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-large",
+		},
+		{
+			name: "breaks actor-utilization ties using compute resource utilization",
+			fleet: fleet{
+				worker("w-heavy", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "a", resources.CPUMemory(1000, 6<<30))),
+				worker("w-light", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "b", resources.CPUMemory(1000, 1<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(500, 1<<30)},
+			wantPod:     "w-light",
+		},
+		{
+			name: "skips idle worker that lacks resource room and picks busier worker with room",
+			fleet: fleet{
+				worker("w-idle-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30), withMaxActors(4)),
+				worker("w-busy-big", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
+					assignedFor("demo", "a", resources.CPUMemory(1000, 2<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 2<<30)},
+			wantPod:     "w-busy-big",
+		},
 	}
 
 	for _, tc := range tests {
@@ -416,3 +465,32 @@ func TestAppliesIgnoresRoom(t *testing.T) {
 
 // firstIntn always picks the first candidate, making Schedule deterministic.
 func firstIntn(int) int { return 0 }
+
+func TestSchedulePowerOfTwoChoicesTieBreaking(t *testing.T) {
+	f := fleet{
+		worker("w-0", "gvisor", "node-a", nil, withMaxActors(4), assigned("demo", "a")),
+		worker("w-1", "gvisor", "node-b", nil, withMaxActors(4), assigned("demo", "b")),
+		worker("w-2", "gvisor", "node-c", nil, withMaxActors(4), assigned("demo", "c")),
+	}
+	constraints := Constraints{SandboxClass: "gvisor"}
+
+	// On equal utilization, Schedule must preserve the first sampled candidate so
+	// every tied worker remains reachable via the random source.
+	for wantIdx, wantPod := range []string{"w-0", "w-1", "w-2"} {
+		calls := 0
+		s := New(f, WithIntn(func(n int) int {
+			calls++
+			if calls == 1 {
+				return wantIdx
+			}
+			return 0
+		}))
+		got, err := s.Schedule(context.Background(), constraints)
+		if err != nil {
+			t.Fatalf("Schedule() for index %d error = %v", wantIdx, err)
+		}
+		if got.GetWorkerPod() != wantPod {
+			t.Fatalf("Schedule() for index %d = %q, want %q", wantIdx, got.GetWorkerPod(), wantPod)
+		}
+	}
+}
