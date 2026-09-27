@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -31,6 +32,16 @@ const (
 	// seed their Actor in a single call, before a real UID exists.
 	someActorUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
 )
+
+// setPreviewForTest sets all preview gates on or off for the duration of t.
+func setPreviewForTest(t *testing.T, enabled bool) {
+	t.Helper()
+	if enabled {
+		preview.InitForTest(t, "*")
+	} else {
+		preview.InitForTest(t)
+	}
+}
 
 func selectorLabelsOfSize(n int) map[string]string {
 	labels := make(map[string]string, n)

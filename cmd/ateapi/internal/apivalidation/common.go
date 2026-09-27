@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/netip"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -39,6 +40,16 @@ func validateSingletonName(fldPath *field.Path, name string) field.ErrorList {
 		return nil
 	}
 	return field.ErrorList{field.Invalid(fldPath, name, fmt.Sprintf("must be %q", resources.SingletonName)).WithOrigin("custom=default")}
+}
+
+// MakeCreateOp returns an operation.Operation for a create operation.
+func MakeCreateOp() operation.Operation {
+	return operation.Operation{Type: operation.Create, Options: preview.AsMap()}
+}
+
+// MakeUpdateOp returns an operation.Operation for an update operation.
+func MakeUpdateOp() operation.Operation {
+	return operation.Operation{Type: operation.Update, Options: preview.AsMap()}
 }
 
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,
