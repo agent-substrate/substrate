@@ -162,3 +162,15 @@ func TestSpecToAgentPB_NonPositiveCPUValuesAreDropped(t *testing.T) {
 		})
 	}
 }
+
+// The agent applies sysctls from the spec it is sent; a dropped map leaves
+// the guest at its defaults.
+func TestSpecToAgentPB_ForwardsSysctl(t *testing.T) {
+	const key = "net.ipv4.ip_unprivileged_port_start"
+	got := SpecToAgentPB(&specs.Spec{
+		Linux: &specs.Linux{Sysctl: map[string]string{key: "0"}},
+	})
+	if got.Linux == nil || got.Linux.Sysctl[key] != "0" {
+		t.Fatalf("Linux.Sysctl = %v, want %s=0 carried through", got.GetLinux().GetSysctl(), key)
+	}
+}
