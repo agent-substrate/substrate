@@ -11,7 +11,7 @@
 ## 1. Context & Motivation
 Agent Substrate’s goal is sub-500ms agent startup. Profiling shows that container image downloading and unpacking (taking 1.5 to 4+ minutes for 2GB–50GB images) is the primary bottleneck.
 
-Image streaming addresses this by replacing upfront layer downloads with on-demand demand paging over FUSE: because agent workloads typically touch only 5%–15% of their rootfs during startup, streaming reduces image ready time from **>100s down to <2.5s** (a 38x–94x speedup).
+Image streaming addresses this by replacing upfront layer downloads with lazy loading over FUSE: because agent workloads typically touch only 5%–15% of their rootfs during startup (and restored actors load their application memory pages from Golden Snapshots), streaming reduces cold-node actor restore (`AteomHerder/Restore`) from **28.5s down to 1.36s–3.70s** (a **7.7x–21.0x** end-to-end restore speedup, based on the benchmark using a 1.19 GB compressed / ~3.5 GB unpacked `demos/sandbox` workload image built on `gcr.io/cloud-builders/gcloud:latest`).
 
 However, Substrate clusters operate across heterogeneous cloud environments, for example:
 - **Google Cloud (GKE):** Riptide Snapshotter (`/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`).
@@ -26,7 +26,7 @@ The new `internal/imagestreaming` API is intentionally architected to serve as a
 1. **Google Internal Streaming Adoption:** First-class support for Google Cloud / internal GKE streaming infrastructure powered by **Google Riptide** and Google Cloud Artifact Registry streaming metadata, unlocking sub-second cold starts on GKE TPU/GPU and CPU worker fleets.
 2. **External Streaming Product Adoption:** Native adoption of external, industry-standard streaming products, anchored in this design by **AWS Seekable OCI (SOCI)** (`soci-snapshotter-grpc`). The same interface readily accommodates broader open-source OCI streaming standards (such as eStargz, Nydus, or Dragonfly) without modifying Substrate's core scheduling or execution paths.
 
-By standardizing both **internal Google Riptide** and **external AWS SOCI** on the open CNCF Remote Snapshotter standard, we prove that Agent Substrate delivers a vendor-agnostic streaming runtime: workloads achieve equivalent 38x–94x cold boot latency reductions whether deployed on Google Cloud, AWS, or multi-cloud infrastructures.
+By standardizing both **internal Google Riptide** and **external AWS SOCI** on the open CNCF Remote Snapshotter standard, we prove that Agent Substrate delivers a vendor-agnostic streaming runtime: workloads achieve multi-fold cold boot latency reductions whether deployed on Google Cloud, AWS, or multi-cloud infrastructures.
 
 ### 1.2. Problem Statement
 Substrate requires a unified, provider-agnostic Go API that:
@@ -82,6 +82,15 @@ ateapi (Substrate Control Plane)
 2. **Reusing Ecosystem Snapshotter Capabilities:** Rather than reimplementing layer mounting, deduplication, chunk caching, and view management inside Substrate, Substrate leverages the robust, production-hardened remote snapshotter plugins maintained by Google and AWS.
 3. **Preserving the Actor Multiplexing Model:** Substrate continues to bypass the Kubernetes control plane and `containerd.sock` CRI engine. Worker Pods remain pre-warmed and long-running. Connecting directly to the local snapshotter UNIX socket avoids containerd CRI daemon lock contention, namespace metadata sweeps, and Pod lifecycle delays.
 4. **Direct Overlay LowerDir Integration:** Snapshot mounts returned by `Prepare` / `View` are directly integrated into `ateom`'s sandbox lowerdir overlay spec (`layerN/fs:...:layer0/fs`), matching traditional unpacked layers.
+
+#### Generality: Onboarding a New OSS Streaming Provider (e.g., eStargz or Nydus)
+Because layer preparation, lease tracking, startup reconciliation, decline fallback, and `ateom` overlay composition are implemented once in the generic `remotesnapshotter` driver (`internal/imagestreaming/drivers/remotesnapshotter`), onboarding a new CNCF-compliant OSS streaming product that is not yet implemented (such as **eStargz** `containerd-stargz-grpc` or **Nydus** `containerd-nydus-grpc`) requires **zero changes to core driver logic or the `atelet`/`ateom` runtime path**. Any compliant daemon can already be targeted out-of-the-box via `--image-streamer=remotesnapshotter --image-streamer-socket=<socket-path>` once its socket and FUSE mount root are mounted into `atelet` and `ateom`. Promoting a new OSS snapshotter to a first-class named and auto-discovered provider alongside `riptide` and `soci` requires only four small, declarative wiring additions:
+1. **Driver Preset (~15 LoC in `internal/imagestreaming/drivers/remotesnapshotter`):** Register the provider name (e.g., `"stargz"`), default Unix socket path (`/run/containerd-stargz-grpc/address`), and snapshotter name (`"stargz"`).
+2. **Auto-Discovery Entry (`cmd/atelet/streamer.go`):** Append the provider and its default socket path to `autoStreamerCandidates` so `--image-streamer=auto` detects it automatically.
+3. **Pod Mount Propagation (`manifests/ate-install/atelet.yaml` & `cmd/atecontroller/internal/atecontroller/workerpool.go`):** Add `hostPath` volume mounts for the daemon's socket directory and FUSE snapshot root (with `HostToContainer` mount propagation) on the `atelet` and `ateom` containers so both pods can resolve `layer-N/fs` symlinks.
+4. **Metric Registry Enum (`docs/metrics/registry/metrics.yaml`):** Add the provider identifier to the `ate.imagestreaming.provider` attribute enum.
+
+See [Section 9](#9-future-work-zero-code-provider-parameterization) for how these four declarative additions can be parameterized so that onboarding any new CNCF remote snapshotter is completely flag- and configuration-driven with zero Go code changes.
 
 ### 3.2. Structural Alignment: Google Riptide & AWS SOCI
 
@@ -346,33 +355,33 @@ When streaming container images over FUSE, workloads encounter two distinct cold
        │
        ├── 2. Return StreamResult (Ready in <2.5s) ────────► ateom boots actor sandbox immediately
        │
-       └── 3. Background Goroutine (warmRootfsMetadata) ───► Host-side WalkDir(lstat) prefetches inode metadata
+       └── 3. Background Goroutine (warmLayerMetadata) ────► Host-side WalkDir(lstat) prefetches inode metadata
                                                              (eliminates gVisor Sentry/Gofer latency stalls)
 ```
 
 #### 1. Synchronous Enumeration Probe: Eliminating the Cold-Start `ENOENT` Race
 * **The Failure Mode:** Immediately after the snapshotter creates a FUSE view for a newly pulled layer, lookups for specific known file paths (e.g., `/bin/sh`) succeed instantly, but its internal directory index loads asynchronously. During this brief sub-second window, directory enumerations (`getdents64` / `readdir`) through the FUSE mount may either return empty or fail with `ENOENT`. If an actor starts during this window and scans directories (such as Python inspecting `sys.path` or Node.js module resolution), the application crashes on boot.
-* **The Probe Mechanism:** In the driver, immediately after creating the layer view, the driver performs a quick listability probe on the host:
+* **The Probe Mechanism:** In the driver, immediately after creating the layer view, `probeListable` performs a quick listability probe on the host (`DefaultListableTimeout = 10s`, `DefaultListableInterval = 50ms`):
   ```go
-  probeStart := time.Now()
-  for attempt := 1; ; attempt++ {
-      entries, err := os.ReadDir(viewPath)
+  deadline := time.Now().Add(d.listableTimeout)
+  for {
+      entries, err := os.ReadDir(mountDir)
       if err == nil && len(entries) > 0 {
-          break
+          return nil
       }
-      if time.Since(probeStart) > listableTimeout {
-          return nil, fmt.Errorf("layer view %q not listable within %s: %w", viewPath, listableTimeout, err)
+      if time.Now().After(deadline) {
+          return fmt.Errorf("mount directory %s did not become listable within %s (last err: %v)", mountDir, d.listableTimeout, lastErr)
       }
-      time.Sleep(100 * time.Millisecond)
+      time.Sleep(d.listableInterval)
   }
   ```
-* **Performance Impact:** On a warm node where the image was previously mounted, `os.ReadDir` returns in **<1ms** on the first try. On a completely cold layer, it absorbs the 200ms–400ms index initialization window on the host, guaranteeing that `ateom` never mounts a half-initialized rootfs.
+* **Performance Impact:** On a warm node where the image was previously mounted, `os.ReadDir` returns in **<1ms** on the first try. On a completely cold layer, it absorbs the index initialization window on the host, guaranteeing that `ateom` never mounts a half-initialized rootfs.
 
 #### 2. Background Host-Side Metadata Warmup: Eliminating gVisor Sentry/Gofer Stalls
 * **The Sandbox Bottleneck:** Substrate runs actors inside gVisor sandboxes. Unlike standard containers where syscalls go directly to the host kernel, filesystem operations inside gVisor traverse the **Sentry (guest kernel) $\rightarrow$ Gofer (9P/virtiofs server) $\rightarrow$ Host VFS $\rightarrow$ FUSE $\rightarrow$ Registry**. If metadata is resolved lazily, every `stat(2)` or `access(2)` during application initialization pays heavy sandbox round-trip penalties while waiting on remote FUSE reads.
-* **The Host-Side Solution:** Because the snapshotter's metadata cache operates at the **host node level**, walking the directory tree directly on the host pre-populates the in-memory index for all containers on that machine. Right after `PrepareLayers` succeeds, `atelet` triggers an asynchronous background walker:
+* **The Host-Side Solution:** Because the snapshotter's metadata cache operates at the **host node level**, walking the directory tree directly on the host pre-populates the in-memory index for all containers on that machine. Right after `PrepareLayers` verifies each layer mount, the driver triggers an asynchronous background walker:
   ```go
-  go warmLayerMetadata(viewPath)
+  go warmLayerMetadata(mountDir)
   ```
   ```go
   func warmLayerMetadata(root string) {
@@ -412,13 +421,11 @@ flowchart TD
     end
 ```
 
-#### 5.5.1. Control Plane: Unifying with PR #917
-- **Problem in Current Code:** In our initial prototype branch, `defaultImageResolver` had `google.Keychain` hardcoded, and `fetchImageConfig` pulled anonymously. This breaks on EKS, AKS, or non-GCP registries.
-- **Solution using PR #917:**
-  - PR #917 adds `cmd/atelet/internal/credentialprovider`, which implements `authn.Keychain` by reading `/var/lib/kubelet/credential-provider-config.yaml` and executing the node's local credential binaries over stdio.
-  - We update the `ImageStreamer` interface / `remotesnapshotter` driver to accept `WithKeychain(keychain authn.Keychain)` (propagated ambiently via `WithKeychainContext` and `KeychainFromContext`).
-  - `atelet` passes its initialized `authn.Keychain` directly into `remotesnapshotter` and `fetchImageConfig`.
-  - **Result:** Resolving manifests, configs, and diffIDs for Artifact Registry, AWS ECR, and Azure ACR uses the exact same node-level credential mechanism without compiling any cloud provider SDKs into `atelet`.
+#### 5.5.1. Control Plane: Node Keychain Integration (`cmd/atelet/internal/credentialprovider`)
+- `cmd/atelet/internal/credentialprovider` implements `authn.Keychain` by reading `/var/lib/kubelet/credential-provider-config.yaml` and executing the node's local credential binaries over stdio (with an in-memory token cache).
+- The `remotesnapshotter` driver accepts `WithKeychain(keychain authn.Keychain)` (also propagated via `WithKeychainContext` and `KeychainFromContext` during `imagestreaming.Get`).
+- `atelet` passes its initialized `authn.Keychain` directly into both `remotesnapshotter` and `fetchImageConfig` (as well as `imagecache.Store`).
+- **Result:** Resolving manifests, configs, and diffIDs for Artifact Registry, AWS ECR, and Azure ACR uses the exact same node-level credential mechanism without compiling cloud-specific SDKs into `atelet`.
 
 #### 5.5.2. Data Plane: Token Refresh & Expiration
 - **Question:** How does credential refreshing and timeout handling work when a workload runs for a long time or survives a restart?
@@ -579,12 +586,35 @@ Use the `ate.imagestreaming.requests` counter to measure streaming across a node
 
 ## 8. Verified Performance Impact
 
-Empirically validated on live GKE cluster `kuiyue-stream-test`:
+Empirically validated end-to-end on live GKE cluster `substrate-stream-test` against the **exact same 1.19 GB compressed (~3.5 GB unpacked, 9 layers) workload image** — `gcr.io/cloud-builders/gcloud:latest` (Google's official Cloud SDK image, 8 layers) with Substrate's `demos/sandbox` binary added as a tiny (~2 MB) 9th entrypoint layer via `ko` and pushed with a SOCI index to `us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e` — with `pause:3.10.2` pre-pulled in `image-cache`:
 
-| Metric | Traditional Baseline | Riptide (1.88 GB AXLearn) | SOCI (3.14 GB TensorFlow) |
-| :--- | :--- | :--- | :--- |
-| **Total Image Ready Time** | 100.65s – 164.85s | **2.63s (38.2x speedup)** | **1.75s (94.3x speedup)** |
-| **Warm View Attachment** | 100.65s – 164.85s | **1.86 µs** | **2.23 µs** |
-| **Demand Paging Throughput** | Local Disk Speed | 1.69 MB/s (uncached) | 6.20 MB/s (uncached) |
-| **Cached Re-Read Throughput** | Local Disk Speed | 22.93 MB/s (VFS cache) | 43.96 MB/s (VFS cache) |
-| **Data Integrity** | 100% | 100% (0 errors) | 100% (0 errors) |
+| Operation / Phase | Mode 1: Without Streaming (`none`) | Mode 2: Google Riptide (`riptide`) | Mode 3: AWS SOCI (`soci`) | Speedup (`riptide` vs `none`) | Speedup (`soci` vs `none`) |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| **Cold-Node `resume actor` (`restore.duration.oci_unpack`)** | `26,955.96 ms` | **`1,135.43 ms`** | **`3,468.99 ms`** | **23.7x faster** | **7.8x faster** |
+| **Cold-Node `resume actor` (`AteomHerder/Restore` total)** | `28,463.45 ms` | **`1,357.44 ms`** | **`3,696.12 ms`** | **21.0x faster** | **7.7x faster** |
+| **Cold-Node `kubectl-ate resume actor` Wall-Clock** | `29,561 ms` | **`2,317 ms`** | **`4,656 ms`** | **12.8x faster** | **6.3x faster** |
+| **Warm-Node `resume actor` (`AteomHerder/Restore` total)** | `288.69 ms` (`oci_unpack`: `1.41 ms`) | **`265.25 ms`** (`oci_unpack`: `2.96 ms`) | **`244.53 ms`** (`oci_unpack`: `1.14 ms`) | **No FUSE penalty** | **No FUSE penalty** |
+| **Cold `create actor-template` (`AteomHerder/Run` RPC)** | `27,840.00 ms` | **`1,147.23 ms`** | **`4,600.23 ms`** | **24.3x faster** | **6.1x faster** |
+
+---
+
+## 9. Future Work: Zero-Code Provider Parameterization
+
+While the current implementation keeps `riptide` and `soci` as explicit named presets across the four declarative touchpoints described in [Section 3.1](#generality-onboarding-a-new-oss-streaming-provider-eg-estargz-or-nydus), all four can be parameterized so that onboarding any future CNCF remote snapshotter (such as eStargz or Nydus) requires **zero Go code changes**:
+
+### 9.1. Driver Preset & Auto-Discovery (`remotesnapshotter` & `cmd/atelet/streamer.go`)
+Currently, `riptide.go` / `soci.go` define thin constructor wrappers and `cmd/atelet/streamer.go` maintains a `switch` statement alongside `autoStreamerCandidates`. These two touchpoints can be collapsed into a single declarative provider table plus flag-driven fallback:
+- **Unified Built-in Registry:** Define a single table of well-known presets (`{Name, DefaultSocket, SnapshotterName}`) used by both `--image-streamer=<name>` lookup and `--image-streamer=auto` socket probing.
+- **Arbitrary Provider Names via CLI Flags:** Instead of rejecting unknown `--image-streamer=<name>` values, treat any non-built-in name (when paired with `--image-streamer-socket=<path>` and an optional `--image-streamer-snapshotter=<name>` flag that defaults to `<name>`) as a `remotesnapshotter.New(WithName(name), WithSocket(socket), WithSnapshotterName(snap))` instance.
+- **Configurable Auto-Discovery Candidates:** Allow `--image-streamer-socket` (or a comma-separated `--image-streamer-candidates=stargz=/run/containerd-stargz-grpc/address,...`) to extend `autoStreamerCandidates` at runtime without recompiling `atelet`.
+
+### 9.2. Pod Mount Propagation (`manifests/ate-install/atelet.yaml` & `workerpool.go`)
+Currently, `atelet` and `ateom` pods mount provider-specific host directories (`/var/lib/containerd/io.containerd.snapshotter.v1.gcfs`, `/run/gcfsd`, and `/var/lib/soci-snapshotter-grpc`) because `layer-N/fs` is a symlink pointing to the snapshotter daemon's host mount path (`mount.Source`), which both `atelet` (for whiteout scanning) and `ateom` (for `runsc` overlay composition) must resolve inside their respective mount namespaces. This per-provider manifest wiring can be eliminated in one of three ways:
+1. **Option A — Shared Host Snapshotter Parent Directory (Recommended):** Pre-mount a single canonical parent directory on both `atelet` and `ateom` with `HostToContainer` mount propagation (e.g., `/var/lib/ateom-gvisor/snapshotters` for FUSE roots and `/run/ate-snapshotters` for UNIX sockets). Any new OSS snapshotter daemon installed on the node simply sets its `--root` and `--address` under those pre-mounted parent directories (e.g., `--root=/var/lib/ateom-gvisor/snapshotters/stargz`), making its socket and FUSE mounts automatically visible to both `atelet` and `ateom` with zero manifest or `workerpool.go` changes.
+2. **Option B — Parameterized `atecontroller` Host Mounts Flag:** Add a `--worker-extra-host-mounts=/var/lib/containerd-stargz-grpc` flag to `atecontroller` so `workerpool.go` dynamically injects `HostToContainer` volume mounts into worker pods at deployment time rather than hardcoding paths in Go.
+3. **Option C — Bind-Mounting `mount.Source` onto `layer-N/fs`:** Have `atelet` bind-mount `mount.Source` (with `MS_BIND | MS_REC`) directly onto `/var/lib/ateom-gvisor/streaming/<driver>/<imgKey>/layer-N/fs` (which is already shared with `ateom` via `/var/lib/ateom-gvisor` with `Bidirectional` / `HostToContainer` propagation) instead of creating a symlink. Note the security trade-off: `os.Symlink` works in an unprivileged `atelet` container, whereas `mount(MS_BIND)` requires `CAP_SYS_ADMIN` in `atelet` plus host-root visibility of the daemon's FUSE mount point.
+
+### 9.3. Metric Registry Enum (`docs/metrics/registry/metrics.yaml`)
+Currently, `ate.imagestreaming.provider` in `docs/metrics/registry/metrics.yaml` uses a strict Weaver enum (`none`, `riptide`, `soci`, `remotesnapshotter`) enforced by `hack/verify/metrics.sh`. To support arbitrary provider names without editing `metrics.yaml`:
+- **Option A — Keep Enum & Normalize Custom Providers:** Emit `ate.imagestreaming.provider="remotesnapshotter"` for any custom flag-configured snapshotter not in the built-in preset list, preserving strict compile-time enum validation in OpenTelemetry Weaver.
+- **Option B — Relax Type to `string` with Bounded Cardinality Rule:** Change `ate.imagestreaming.provider` in `docs/metrics/registry/metrics.yaml` from an enum to `type: string`, and record in `docs/metrics/substrate.yaml` that its cardinality is $O(1)$ per node (bounded by the operator-configured `--image-streamer` startup flag, never by workload or user input).
