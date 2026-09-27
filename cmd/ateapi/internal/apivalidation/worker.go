@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
@@ -25,25 +26,25 @@ import (
 )
 
 func ValidateListWorkerActorAssignmentsRequest(ctx context.Context, req *ateapipb.ListWorkerActorAssignmentsRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_ListWorkerActorAssignmentsRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListWorkersRequest(ctx context.Context, req *ateapipb.ListWorkersRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_ListWorkersRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetWorkerRequest(ctx context.Context, req *ateapipb.GetWorkerRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_GetWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateCreateWorkerRequest(ctx context.Context, req *ateapipb.CreateWorkerRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_CreateWorkerRequest(ctx, op, nil, req, nil)
 }
 
@@ -53,7 +54,7 @@ func ValidateUpdateWorkerRequest(ctx context.Context, req *ateapipb.UpdateWorker
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_UpdateWorkerRequest(ctx, op, nil, req, nil)
 }
 
@@ -61,13 +62,13 @@ func ValidateDeleteWorkerRequest(ctx context.Context, req *ateapipb.DeleteWorker
 	// Call the generated validation. The preconditions in options are each
 	// optional: a zero value waives that guard, so only non-zero values are
 	// checked for shape.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_DeleteWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDrainWorkerRequest(ctx context.Context, req *ateapipb.DrainWorkerRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_DrainWorkerRequest(ctx, op, nil, req, nil)
 }
 
@@ -86,7 +87,7 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.Reque
 // against.
 func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Worker, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := operation.Operation{Type: operation.Update, Options: preview.AsMap()}
 	errs := Validate_Worker(ctx, op, fldPath, newVal, oldVal)
 	if requireStatus {
 		// Status is optional in the schema, but is actually required to be set

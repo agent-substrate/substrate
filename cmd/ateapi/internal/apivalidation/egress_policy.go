@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -28,23 +29,28 @@ import (
 )
 
 func ValidateCreateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) field.ErrorList {
-	return Validate_CreateActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
+	return Validate_CreateActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) field.ErrorList {
-	return Validate_GetActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
+	return Validate_GetActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateUpdateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest) field.ErrorList {
-	return Validate_UpdateActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
+	return Validate_UpdateActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorEgressPolicyRequest(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) field.ErrorList {
-	return Validate_DeleteActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
+	return Validate_DeleteActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldVal *ateapipb.EgressPolicy) field.ErrorList {
-	return Validate_EgressPolicy(ctx, operation.Operation{Type: operation.Update}, p, newVal, oldVal)
+	op := operation.Operation{Type: operation.Update, Options: preview.AsMap()}
+	return Validate_EgressPolicy(ctx, op, p, newVal, oldVal)
 }
 
 func ValidateCustom_CreateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateActorEgressPolicyRequest) field.ErrorList {

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -980,7 +981,7 @@ func TestValidateActorTemplate(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(tmpl)
 			}
-			op := operation.Operation{Type: operation.Create}
+			op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 			assertValidateErr(t, Validate_ActorTemplate(context.Background(), op, nil, tmpl, nil), tt.want)
 		})
 	}

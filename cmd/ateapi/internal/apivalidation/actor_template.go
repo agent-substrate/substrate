@@ -22,6 +22,7 @@ import (
 
 	"github.com/distribution/reference"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volumepath"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -33,31 +34,31 @@ import (
 
 func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_CreateActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := operation.Operation{Type: operation.Update, Options: preview.AsMap()}
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 

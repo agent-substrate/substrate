@@ -37,6 +37,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/types"
@@ -93,7 +94,8 @@ var (
 		"Burst queries allowed against the Kubernetes API. 0 keeps the client-go default.",
 	)
 
-	showVersion = pflag.Bool("version", false, "Print version and exit.")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -105,6 +107,10 @@ func main() {
 		return
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	if err := preview.Init(*previewFlags...); err != nil {
+		slog.ErrorContext(ctx, "Invalid --preview", slog.Any("err", err))
+		os.Exit(1)
+	}
 	slog.InfoContext(ctx, "podcertcontroller starting", slog.String("version", version.Version))
 
 	var kconfig *rest.Config

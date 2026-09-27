@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
@@ -27,19 +28,19 @@ import (
 
 func ValidateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorRequest(ctx context.Context, req *ateapipb.GetActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_GetActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorsRequest(ctx context.Context, req *ateapipb.ListActorsRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_ListActorsRequest(ctx, op, nil, req, nil)
 }
 
@@ -49,60 +50,60 @@ func ValidateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_UpdateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_PauseActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_ResumeActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRevertActorRequest(ctx context.Context, req *ateapipb.RevertActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_RevertActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintActorJWTRequest(ctx context.Context, req *ateapipb.MintActorJWTRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_MintActorJWTRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintActorCertificateRequest(ctx context.Context, req *ateapipb.MintActorCertificateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintAteomActorCertificateRequest(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: preview.AsMap()}
 	return Validate_MintAteomActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := operation.Operation{Type: operation.Update, Options: preview.AsMap()}
 	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
 	if requireStatus {
 		// Status is optional in the schema, but is actually required to be set
