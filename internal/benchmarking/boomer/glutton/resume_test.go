@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
+	"github.com/agent-substrate/substrate/internal/controlclienttest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -30,15 +31,15 @@ func conflictErr() error {
 	return status.Error(codes.Aborted, concurrentUpdateMsg)
 }
 
-func newResumeTestActor(t *testing.T, resumeErrs ...error) (*gluttonActor, *fakeControlClient) {
+func newResumeTestActor(t *testing.T, resumeErrs ...error) (*gluttonActor, *controlclienttest.Fake) {
 	t.Helper()
-	fakeCtrl := &fakeControlClient{resumeErrs: resumeErrs}
+	fakeCtrl := &controlclienttest.Fake{ResumeActorFunc: resumeActorFunc(resumeErrs...)}
 	cfg := newTestConfig(t, &fake.Server{}, &userclass.Config{APIStub: fakeCtrl})
 	return &gluttonActor{cfg: cfg, actorName: "resumeactor"}, fakeCtrl
 }
 
-func resumeCalls(f *fakeControlClient) int {
-	return len(slices.DeleteFunc(f.recordedCalls(), func(c string) bool { return c != "ResumeActor" }))
+func resumeCalls(f *controlclienttest.Fake) int {
+	return len(slices.DeleteFunc(f.RecordedCalls(), func(c string) bool { return c != "ResumeActor" }))
 }
 
 func TestResumeRetriesConcurrentUpdateConflict(t *testing.T) {

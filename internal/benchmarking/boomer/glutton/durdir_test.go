@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
+	"github.com/agent-substrate/substrate/internal/controlclienttest"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 )
 
@@ -63,7 +64,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &fake.Server{Data: []byte("seq content")}
-			fakeCtrl := &fakeControlClient{}
+			fakeCtrl := &controlclienttest.Fake{}
 			cfg := &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.NewHolder(dynconfig.Config{
@@ -77,7 +78,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			dynCfg := cfg.Dyn.Load()
 			du.step(context.Background(), dynCfg)
 
-			if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
+			if got := fakeCtrl.RecordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
 			}
 			if got := srv.RecordedPaths(); !reflect.DeepEqual(got, tc.wantHTTPCall) {
@@ -192,7 +193,7 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &fake.Server{Data: []byte("data")}
-			fakeCtrl := &fakeControlClient{}
+			fakeCtrl := &controlclienttest.Fake{}
 			cfg := newTestConfig(t, srv, &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.NewHolder(dynconfig.Config{
@@ -207,10 +208,10 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 				t.Fatalf("startUser failed: %v", err)
 			}
 
-			calls := fakeCtrl.recordedCalls()
+			calls := fakeCtrl.RecordedCalls()
 			gotResumeActor := slices.Contains(calls, "ResumeActor")
 			if gotResumeActor != tc.wantResumeActor {
-				t.Errorf("ResumeActor in recordedCalls: got %v, want %v (calls = %v)", gotResumeActor, tc.wantResumeActor, calls)
+				t.Errorf("ResumeActor in RecordedCalls: got %v, want %v (calls = %v)", gotResumeActor, tc.wantResumeActor, calls)
 			}
 		})
 	}
@@ -218,7 +219,7 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 
 func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 	srv := &fake.Server{Status: http.StatusInternalServerError}
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub: fakeCtrl,
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
@@ -233,14 +234,14 @@ func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 		t.Fatalf("startUser expected error on failing server, got nil")
 	}
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
+		t.Errorf("RecordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
 	}
 }
 
 func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := &userclass.Config{
 		APIStub: fakeCtrl,
 	}
@@ -250,18 +251,18 @@ func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
 	rt.users.Store(boomerutil.GoroutineID(), du)
 	rt.shutdown(context.Background())
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
+		t.Errorf("RecordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
 	}
-	reqs := fakeCtrl.recordedDeleteRequests()
+	reqs := fakeCtrl.RecordedDeleteActorRequests()
 	if len(reqs) == 0 || !reqs[0].GetAnyState() {
 		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
 	}
 }
 
 func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := &userclass.Config{
 		APIStub: fakeCtrl,
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
@@ -274,11 +275,11 @@ func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
 	rt.users.Store(boomerutil.GoroutineID(), du)
 	rt.shutdown(context.Background())
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "PauseActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
+		t.Errorf("RecordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
 	}
-	reqs := fakeCtrl.recordedDeleteRequests()
+	reqs := fakeCtrl.RecordedDeleteActorRequests()
 	if len(reqs) == 0 || !reqs[0].GetAnyState() {
 		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
 	}
