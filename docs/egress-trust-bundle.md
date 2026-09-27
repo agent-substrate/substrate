@@ -15,6 +15,12 @@ public roots.
 This guide covers how to project the gateway's CA into an actor's filesystem
 and how to add it to the actor's trust store without losing the public roots.
 
+Substrate discovers the ClusterTrustBundle API at startup, preferring
+`certificates.k8s.io/v1` and using `certificates.k8s.io/v1beta1` only when
+the stable resource is not served. The API must be enabled on the cluster;
+discovery errors stop startup rather than trigger a fallback. Trust-bundle
+reads, writes, and watches use the discovered version.
+
 ## DNS and egress policy
 
 Actors send DNS queries to a relay at their sandbox's default gateway. The

@@ -28,10 +28,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
-
-	"sync"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
@@ -40,6 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atelet"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -79,9 +79,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/lru"
 )
 
@@ -272,19 +272,21 @@ func main() {
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	clusterTrustBundleInformerFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 24*time.Hour,
-		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
-			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
-		}))
-	clusterTrustBundles := clusterTrustBundleInformerFactory.Certificates().V1beta1().ClusterTrustBundles()
-	systemInfoVolumes := newSystemInfoVolumeRefresher(clusterTrustBundles.Lister(), clusterTrustBundles.Informer())
+	trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
+		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "Error discovering ClusterTrustBundle API", slog.Any("err", err))
+		os.Exit(1)
+	}
+	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundles.GetCached, trustBundles.Informer())
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	ateFactory.Start(stopCh)
-	clusterTrustBundleInformerFactory.Start(stopCh)
+	go trustBundles.Informer().Run(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
-	clusterTrustBundleInformerFactory.WaitForCacheSync(stopCh)
+	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
 	wmService := NewService(
 		ctx,

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -143,10 +144,14 @@ func createEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients, 
 // assertion ever flakes, this lag is the first suspect.
 func waitForEgressTrustBundle(t *testing.T, ctx context.Context, clients *Clients, want string) {
 	t.Helper()
+	bundles, err := clustertrustbundle.NewClient(clients.K8s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var last string
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		ctb, err := clients.K8s.CertificatesV1beta1().ClusterTrustBundles().Get(ctx, EgressTrustBundleObjectName, metav1.GetOptions{})
+		ctb, err := bundles.Get(ctx, EgressTrustBundleObjectName, metav1.GetOptions{})
 		if err == nil {
 			if got := ctb.Spec.TrustBundle; got == want || (want == "" && got != "") {
 				return
