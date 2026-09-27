@@ -84,7 +84,7 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
 	st := &leaseCountingStore{Interface: persistence}
-	w := &ActorWorkflow{store: st}
+	w := &ActorWorkflow{impl: st}
 
 	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
@@ -111,7 +111,7 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING},
 	})
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{impl: persistence}
 
 	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
@@ -138,7 +138,7 @@ func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
 	persistence := newTestPersistence(t)
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &bindErrorStore{Interface: persistence, err: store.ErrNotFound}
-	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{impl: st, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
 
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
@@ -159,7 +159,7 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	persistence := newTestPersistence(t)
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &bindErrorStore{Interface: persistence, err: store.ErrVersionConflict}
-	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{impl: st, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
 
 	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
@@ -201,7 +201,7 @@ func TestAssignWorkerAttempt_StampsSubstrateTemplateRef(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{impl: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "sub-tmpl"},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
@@ -250,7 +250,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{impl: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "actor-uid"},
 	}
@@ -321,7 +321,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{impl: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 	}
@@ -393,7 +393,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{impl: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 	}
@@ -531,7 +531,7 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 				}
 			}}
 
-			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+			w := &ActorWorkflow{impl: st, workerCache: wc, scheduler: scheduling.New(wc)}
 			tmpl := &ateapipb.ActorTemplate{
 				SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 			}
@@ -881,7 +881,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 
 			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING)
 
-			w := &ActorWorkflow{store: persistence, scheduler: scheduling.New(nil)}
+			w := &ActorWorkflow{impl: persistence, scheduler: scheduling.New(nil)}
 			resumingActor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "own-actor-uid"},
 				Status: &ateapipb.ActorStatus{
@@ -944,7 +944,7 @@ func TestLoadActorForResume_DoesNotDefaultGolden(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{impl: persistence}
 	_, _, src, err := w.loadActorForResume(ctx, actorRef)
 	if err != nil || !src.SnapshotURI.IsZero() {
 		t.Fatalf("source = %+v, err = %v; want cold boot", src, err)
@@ -1020,7 +1020,7 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 			}
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, seedOpts...)
 
-			w := &ActorWorkflow{store: persistence}
+			w := &ActorWorkflow{impl: persistence}
 			_, _, src, err := w.loadActorForResume(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("loadActorForResume: %v", err)
@@ -1042,7 +1042,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	// to fetch either.
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "missing-tmpl", ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{impl: persistence}
 
 	actor, tmpl, src, err := w.loadActorForResume(ctx, actorRef)
 	if err != nil {
@@ -1158,7 +1158,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 		},
 	}})
 
-	return &ActorWorkflow{store: persistence, dialer: dialer, sandboxConfigLister: lister}, fake
+	return &ActorWorkflow{impl: persistence, dialer: dialer, sandboxConfigLister: lister}, fake
 }
 
 // TestResumeActor_AteletWireRequest is the characteristic test for the

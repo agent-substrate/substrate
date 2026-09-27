@@ -65,7 +65,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 // directly rather than going through newTestActorWorkflow.
 func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
 	objects := objectstoretest.New()
-	return &ActorWorkflow{store: persistence, objectStore: objects}, objects
+	return &ActorWorkflow{impl: persistence, objectStore: objects}, objects
 }
 
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under

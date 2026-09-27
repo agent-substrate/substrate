@@ -597,7 +597,7 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 		t.Fatalf("UpdateWorker: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{impl: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
 	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {

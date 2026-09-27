@@ -61,7 +61,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	var errs []error
 	// Cleanup stays best-effort: an unresolvable template is recorded and
 	// the remaining steps run without it, like a missing one.
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.impl, actor)
 	if errors.Is(err, errActorTemplateNotFound) {
 		actorTemplate, err = nil, nil
 	}
@@ -110,7 +110,7 @@ func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resourc
 	ctx, done := stepSpan(ctx, "LoadActorForDelete")
 	defer func() { err = done(err) }()
 
-	actor, err := w.store.GetActor(ctx, actorRef)
+	actor, err := w.impl.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
@@ -135,7 +135,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		// Ask whether the worker still HOSTS this actor, not whether its one
 		// assignment happens to be this actor: a worker hosting several is the
 		// ordinary case, and the others are none of this delete's business.
-		hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
+		hosted, err := workerHostsActor(ctx, w.impl, workerName, actor.GetMetadata().GetUid())
 		if err != nil {
 			return err
 		}
@@ -202,7 +202,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
 			return nil
 		}
-		return handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
+		return handleAteletError(ctx, w.impl, actorRef, opName, "Terminate", true, err)
 	}
 
 	return nil
@@ -213,7 +213,7 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, "delete")
+	return detachActorVolumes(ctx, w.impl, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.
@@ -222,7 +222,7 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 // most Actors reaching here really were released already.
 func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, actor *ateapipb.Actor) error {
 	actorUID := actor.GetMetadata().GetUid()
-	workerName, err := w.store.FindWorkerHostingActor(ctx, actorUID)
+	workerName, err := w.impl.FindWorkerHostingActor(ctx, actorUID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			markSkipped(ctx, "worker already released")
@@ -233,7 +233,7 @@ func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, ac
 
 	// Read only to learn whether the Worker is still there; the release itself
 	// is guarded by the assignment key.
-	if _, err := w.store.GetWorker(ctx, workerName); err != nil {
+	if _, err := w.impl.GetWorker(ctx, workerName); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			markSkipped(ctx, "worker already released")
 			return nil
@@ -243,7 +243,7 @@ func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, ac
 
 	slog.InfoContext(ctx, "Releasing an assignment the Actor does not reference",
 		slog.String("worker", workerName), slog.String("actor_uid", actorUID))
-	_, err = w.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
+	_, err = w.impl.ReleaseActorFromWorker(ctx, workerName, actorUID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
@@ -267,23 +267,23 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		return actor, w.releaseAssignmentWithoutBacklink(ctx, actor)
 	}
 
-	latestActor, err := w.store.GetActor(ctx, actorRef)
+	latestActor, err := w.impl.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
 
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		_, _, err := releaseWorker(ctx, w.store, latestActor)
+		_, _, err := releaseWorker(ctx, w.impl, latestActor)
 		if err != nil {
 			return nil, err
 		}
 
-		latestActor, err = w.store.GetActor(ctx, actorRef)
+		latestActor, err = w.impl.GetActor(ctx, actorRef)
 		if err != nil {
 			return nil, err
 		}
 
-		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
+		updatedActor, err := w.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
 			if dbActor.Status != nil {
 				dbActor.Status.LocalSnapshot = nil
 				dbActor.Status.WorkerAssignment = nil
@@ -326,7 +326,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, st)
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 		for _, vol := range toUpdate.GetStatus().GetActorVolumes() {
 			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
@@ -431,7 +431,7 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapipb.Act
 
 	actorRef := resources.ActorRefFromActor(actor)
 	precondition := store.DeletePreconditions{UID: actor.GetMetadata().GetUid(), Version: actor.GetMetadata().GetVersion()}
-	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
+	deleted, err := w.impl.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
