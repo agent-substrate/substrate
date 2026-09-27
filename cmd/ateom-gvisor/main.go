@@ -48,6 +48,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -73,6 +74,7 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
@@ -117,6 +119,9 @@ func do(ctx context.Context) error {
 	serverboot.InitLoggerWithWriter(syncedWriter)
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		return err
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		return fmt.Errorf("invalid --preview: %w", err)
 	}
 
 	slog.InfoContext(ctx, "ateom booting", slog.String("version", version.Version))

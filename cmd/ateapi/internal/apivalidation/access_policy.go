@@ -35,7 +35,7 @@ var (
 )
 
 func ValidateCreateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp()
 	errs := Validate_CreateGlobalAccessPolicyRequest(ctx, op, nil, req, nil)
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles)...)
 }
@@ -49,7 +49,7 @@ func ValidateGetGlobalAccessPolicyRequest(_ context.Context, _ *ateapipb.GetGlob
 func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.UpdateGlobalAccessPolicyRequest) field.ErrorList {
 	// Modeled as a create: this validates the request itself. The result is
 	// validated against the stored value by ValidateGlobalAccessPolicyUpdate.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp()
 	errs := Validate_UpdateGlobalAccessPolicyRequest(ctx, op, nil, req, nil)
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles)...)
 }
@@ -57,26 +57,26 @@ func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.
 // ValidateGlobalAccessPolicyUpdate validates an updated global policy against
 // the stored one.
 func ValidateGlobalAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.AccessPolicy) field.ErrorList {
-	op := operation.Operation{Type: operation.Update}
+	op := MakeUpdateOp()
 	errs := Validate_AccessPolicy(ctx, op, fldPath, newVal, oldVal)
 	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validGlobalRoles)...)
 }
 
 func ValidateCreateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.CreateAtespaceAccessPolicyRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp()
 	errs := Validate_CreateAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles)...)
 }
 
 func ValidateGetAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.GetAtespaceAccessPolicyRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp()
 	return Validate_GetAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.UpdateAtespaceAccessPolicyRequest) field.ErrorList {
 	// Modeled as a create: this validates the request itself. The result is
 	// validated against the stored value by ValidateAtespaceAccessPolicyUpdate.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp()
 	errs := Validate_UpdateAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles)...)
 }
@@ -84,13 +84,13 @@ func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapip
 // ValidateAtespaceAccessPolicyUpdate validates an updated atespace policy
 // against the stored one.
 func ValidateAtespaceAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.AccessPolicy) field.ErrorList {
-	op := operation.Operation{Type: operation.Update}
+	op := MakeUpdateOp()
 	errs := Validate_AccessPolicy(ctx, op, fldPath, newVal, oldVal)
 	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validAtespaceRoles)...)
 }
 
 func ValidateDeleteAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.DeleteAtespaceAccessPolicyRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp()
 	return Validate_DeleteAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 }
 
