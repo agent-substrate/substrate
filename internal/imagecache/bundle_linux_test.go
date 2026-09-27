@@ -208,6 +208,48 @@ func TestSetupBundleRootfs_ImplicitDirMetadataRepair(t *testing.T) {
 	}
 }
 
+// The merged rootfs root is the container's "/"; at 0700 a non-root container
+// cannot search it and can exec nothing.
+func TestSetupBundleRootfs_RootIsSearchableByNonRoot(t *testing.T) {
+	assertSearchable := func(t *testing.T, rootfs string) {
+		t.Helper()
+		fi, err := os.Stat(rootfs)
+		if err != nil {
+			t.Fatalf("stat merged rootfs root: %v", err)
+		}
+		if perm := fi.Mode().Perm(); perm&0o005 != 0o005 {
+			t.Errorf("merged rootfs root mode = %04o, want world read+search", perm)
+		}
+	}
+
+	t.Run("zero layers", func(t *testing.T) {
+		bundle := t.TempDir()
+		if err := WriteSpec(bundle, &OverlaySpec{Layers: nil}); err != nil {
+			t.Fatalf("WriteSpec: %v", err)
+		}
+		if err := SetupBundleRootfs(bundle); err != nil {
+			t.Fatalf("SetupBundleRootfs: %v", err)
+		}
+		assertSearchable(t, filepath.Join(bundle, "rootfs"))
+	})
+
+	t.Run("overlay", func(t *testing.T) {
+		roottest.Require(t, "mount/unmount")
+		layer := t.TempDir()
+		writeLayer(t, layer, map[string]string{"bin/app": "x"}, nil)
+
+		bundle := t.TempDir()
+		if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{layer}}); err != nil {
+			t.Fatalf("WriteSpec: %v", err)
+		}
+		if err := SetupBundleRootfs(bundle); err != nil {
+			t.Fatalf("SetupBundleRootfs: %v", err)
+		}
+		t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+		assertSearchable(t, filepath.Join(bundle, "rootfs"))
+	})
+}
+
 // Full overlay mount + UnmountAllUnder round trip; needs CAP_SYS_ADMIN.
 func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
 	roottest.Require(t, "mount/unmount")
