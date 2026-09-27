@@ -14,34 +14,33 @@ Agent Substrate’s goal is sub-500ms agent startup. Profiling shows that contai
 Image streaming addresses this by replacing upfront layer downloads with lazy loading over FUSE: because agent workloads typically touch only 5%–15% of their rootfs during startup (and restored actors load their application memory pages from Golden Snapshots), streaming reduces cold-node actor restore (`AteomHerder/Restore`) from **28.5s down to 1.36s–3.70s** (a **7.7x–21.0x** end-to-end restore speedup, based on the benchmark using a 1.19 GB compressed / ~3.5 GB unpacked `demos/sandbox` workload image built on `gcr.io/cloud-builders/gcloud:latest`).
 
 However, Substrate clusters operate across heterogeneous cloud environments, for example:
-- **Google Cloud (GKE):** Riptide Snapshotter (`/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`).
+- **Google Cloud (GKE):** Riptide Snapshotter v2 (`/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`).
 - **AWS (EKS):** Seekable OCI snapshotter (`/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock`).
 - **Bare Metal / Local Dev:** No streaming daemon available (traditional local cache required).
 
-### 1.1. Dual-Adoption Strategic Vision: Google Internal & External Industry Streaming
+### 1.1. Phased Strategic Vision: Riptide v2 at GA, Extensible to External OSS Streaming
 
-A foundational architectural requirement for Agent Substrate is **hybrid and multi-cloud workload portability**. Substrate cannot be coupled exclusively to proprietary Google infrastructure, nor can it sacrifice the deep performance optimizations available within Google Cloud.
+A foundational architectural requirement for Agent Substrate is **hybrid and multi-cloud workload portability** while meeting a tight GA timeline. Substrate cannot be coupled exclusively to proprietary Google client libraries, nor can it delay GA to accommodate every implementation quirk across third-party snapshotter daemons.
 
-The new `internal/imagestreaming` API is intentionally architected to serve as a **dual-adoption bridge**:
-1. **Google Internal Streaming Adoption:** First-class support for Google Cloud / internal GKE streaming infrastructure powered by **Google Riptide** and Google Cloud Artifact Registry streaming metadata, unlocking sub-second cold starts on GKE TPU/GPU and CPU worker fleets.
-2. **External Streaming Product Adoption:** Native adoption of external, industry-standard streaming products, anchored in this design by **AWS Seekable OCI (SOCI)** (`soci-snapshotter-grpc`). The same interface readily accommodates broader open-source OCI streaming standards (such as eStargz, Nydus, or Dragonfly) without modifying Substrate's core scheduling or execution paths.
-
-By standardizing both **internal Google Riptide** and **external AWS SOCI** on the open CNCF Remote Snapshotter standard, we prove that Agent Substrate delivers a vendor-agnostic streaming runtime: workloads achieve multi-fold cold boot latency reductions whether deployed on Google Cloud, AWS, or multi-cloud infrastructures.
+The `internal/imagestreaming` API is therefore architected around a **phased dual-adoption model**:
+1. **GA Scope — Full Production Support for Google Riptide v2 (`--enable-v2`) on GKE:** First-class, production-hardened support for Google Cloud GKE streaming infrastructure powered by **Google Riptide Snapshotter v2** (`containerd-gcfs-grpc` with `--enable-v2`) and Google Cloud Artifact Registry streaming metadata, unlocking sub-second cold starts on GKE TPU/GPU and CPU worker fleets.
+2. **Post-GA Extensibility — External & OSS Streaming Products (AWS SOCI, eStargz, Nydus):** Rather than coupling `atelet` to a Riptide-specific protocol, `internal/imagestreaming` standardizes on the open CNCF Remote Snapshotter gRPC interface (`containerd.services.snapshots.v1.Snapshots`). We have already validated an end-to-end **AWS Seekable OCI (SOCI)** driver preset (`soci-snapshotter-grpc`) against fully-indexed SOCI images (`--min-layer-size=0`), and documented the exact driver extensions required post-GA to support arbitrary OSS snapshotters (such as hybrid local unpack + `Commit` for partially-indexed SOCI images, and OCI layer annotation forwarding for Nydus — see [Section 3.2.1](#321-subtle-behavioral-differences-across-cncf-remote-snapshotter-implementations) and [Section 9](#9-future-work-full-oss-snapshotter-support--zero-code-provider-parameterization)).
 
 ### 1.2. Problem Statement
 Substrate requires a unified, provider-agnostic Go API that:
 1. Decouples the actor lifecycle engine (`cmd/atelet`) from cloud-specific streaming implementations.
-2. Composes streamed layers into Substrate’s capability-less OCI overlay bundle architecture.
-3. Provides automatic socket discovery with seamless, zero-disruption fallback to traditional image download and untar.
-4. Preserves workload isolation and emits end-to-end OpenTelemetry telemetry.
+2. Fully supports **Google Riptide Snapshotter v2** at GA while remaining cleanly extensible to OSS remote snapshotters (AWS SOCI, eStargz, Nydus).
+3. Composes streamed layers into Substrate’s capability-less OCI overlay bundle architecture.
+4. Provides automatic socket discovery with seamless, zero-disruption fallback to traditional image download and untar.
+5. Preserves workload isolation and emits end-to-end OpenTelemetry telemetry.
 
 ---
 
 ## 2. Goals & Non-Goals
 
 ### Goals
-- **Dual-Adoption Portability:** Unify Google internal streaming (Riptide) and external cloud products (AWS SOCI) behind an identical contract, enabling seamless multi-cloud deployment without vendor lock-in.
-- **Provider-Agnostic Abstraction:** A clean `ImageStreamer` Go interface in `internal/imagestreaming` supporting pluggable backends.
+- **Riptide v2 Production Readiness at GA:** Full production support for Google Riptide Snapshotter v2 (`--enable-v2`) on GKE.
+- **Extensible Multi-Cloud Architecture:** Unify Google Riptide and external CNCF remote snapshotters (such as AWS SOCI, validated in our benchmark PoC) behind a clean `ImageStreamer` Go interface in `internal/imagestreaming`.
 - **Sub-Second Ready Time:** Enable virtual layer mount paths in `<2.5s` cold, and `<5µs` warm.
 - **Overlayfs Drop-In Compatibility:** Deliver layer paths directly consumable by `ateom`'s read-only lowerdir overlay composition (`layerN/fs:...:layer0/fs`).
 - **Zero-Disruption Fallback:** Transparently fall back to standard `imagecache.Store` (full layer untar) on unsupported images or daemon faults.
@@ -50,6 +49,7 @@ Substrate requires a unified, provider-agnostic Go API that:
 
 ### Non-Goals
 - **In-Process FUSE Implementation:** Substrate does not implement custom FUSE filesystems in Go; it interfaces with host-level snapshotter daemons via gRPC/UNIX sockets.
+- **Riptide v1 Legacy Quirks or Full OSS Edge-Case Parity at GA:** Supporting legacy Riptide v1 (which lacks `chainID`-keyed mounts and inline `Remove`) or hybrid partial-layer `Commit` for unindexed sub-layers in OSS snapshotters is outside GA scope and tracked as future work (Section 3.2.1, Section 9).
 - **Replacing Local Cache:** Traditional image caching (`internal/imagecache`) remains the authoritative baseline for non-streamable images.
 
 ---
@@ -72,48 +72,51 @@ Kubelet (Node Agent)
 ateapi (Substrate Control Plane)
   └── atelet (Worker Node Daemon)
         └── internal/imagestreaming/drivers/remotesnapshotter
-              └── Remote Snapshotter Daemon (Riptide Snapshotter / SOCI Snapshotter)
+              └── Remote Snapshotter Daemon (Riptide Snapshotter v2; extensible to SOCI / OSS)
                     └── FUSE mounts
                           └── ateom (Substrate Sandbox Overlay Manager)
 ```
 
 #### Why Standardize on CNCF Remote Snapshotters:
-1. **Clean CloudProvider Extraction:** Substrate core avoids importing proprietary vendor client libraries or custom protocol buffers. By speaking the standard CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, a single unified driver (`remotesnapshotter`) connects identically to the Google Riptide Snapshotter (`containerd-gcfs-grpc`), AWS SOCI Snapshotter (`soci-snapshotter-grpc`), eStargz (`containerd-stargz-grpc`), or Nydus.
-2. **Reusing Ecosystem Snapshotter Capabilities:** Rather than reimplementing layer mounting, deduplication, chunk caching, and view management inside Substrate, Substrate leverages the robust, production-hardened remote snapshotter plugins maintained by Google and AWS.
-3. **Preserving the Actor Multiplexing Model:** Substrate continues to bypass the Kubernetes control plane and `containerd.sock` CRI engine. Worker Pods remain pre-warmed and long-running. Connecting directly to the local snapshotter UNIX socket avoids containerd CRI daemon lock contention, namespace metadata sweeps, and Pod lifecycle delays.
+1. **Clean CloudProvider Extraction:** Substrate core avoids importing proprietary vendor client libraries or custom protocol buffers. By speaking the standard CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, a single driver (`remotesnapshotter`) supports the Google Riptide Snapshotter v2 (`containerd-gcfs-grpc`) at GA and serves as the foundation for AWS SOCI (`soci-snapshotter-grpc`), eStargz (`containerd-stargz-grpc`), and Nydus.
+2. **Reusing Ecosystem Snapshotter Capabilities:** Rather than reimplementing layer mounting, deduplication, chunk caching, and view management inside Substrate, Substrate leverages the production-hardened remote snapshotter daemons maintained by cloud providers and the CNCF ecosystem.
+3. **Preserving the Actor Multiplexing Model:** Substrate continues to bypass the Kubernetes control plane and `containerd.sock` CRI engine on the actor launch/restore path. Worker Pods remain pre-warmed and long-running. Connecting directly to the local snapshotter UNIX socket avoids containerd CRI daemon lock contention, namespace metadata sweeps, and Pod lifecycle delays.
 4. **Direct Overlay LowerDir Integration:** Snapshot mounts returned by `Prepare` / `View` are directly integrated into `ateom`'s sandbox lowerdir overlay spec (`layerN/fs:...:layer0/fs`), matching traditional unpacked layers.
 
-#### Generality: Onboarding a New OSS Streaming Provider (e.g., eStargz or Nydus)
-Because layer preparation, lease tracking, startup reconciliation, decline fallback, and `ateom` overlay composition are implemented once in the generic `remotesnapshotter` driver (`internal/imagestreaming/drivers/remotesnapshotter`), onboarding a new CNCF-compliant OSS streaming product that is not yet implemented (such as **eStargz** `containerd-stargz-grpc` or **Nydus** `containerd-nydus-grpc`) requires **zero changes to core driver logic or the `atelet`/`ateom` runtime path**. Any compliant daemon can already be targeted out-of-the-box via `--image-streamer=remotesnapshotter --image-streamer-socket=<socket-path>` once its socket and FUSE mount root are mounted into `atelet` and `ateom`. Promoting a new OSS snapshotter to a first-class named and auto-discovered provider alongside `riptide` and `soci` requires only four small, declarative wiring additions:
-1. **Driver Preset (~15 LoC in `internal/imagestreaming/drivers/remotesnapshotter`):** Register the provider name (e.g., `"stargz"`), default Unix socket path (`/run/containerd-stargz-grpc/address`), and snapshotter name (`"stargz"`).
-2. **Auto-Discovery Entry (`cmd/atelet/streamer.go`):** Append the provider and its default socket path to `autoStreamerCandidates` so `--image-streamer=auto` detects it automatically.
-3. **Pod Mount Propagation (`manifests/ate-install/atelet.yaml` & `cmd/atecontroller/internal/atecontroller/workerpool.go`):** Add `hostPath` volume mounts for the daemon's socket directory and FUSE snapshot root (with `HostToContainer` mount propagation) on the `atelet` and `ateom` containers so both pods can resolve `layer-N/fs` symlinks.
-4. **Metric Registry Enum (`docs/metrics/registry/metrics.yaml`):** Add the provider identifier to the `ate.imagestreaming.provider` attribute enum.
+### 3.2. Structural Alignment & Subtle Implementation Differences Across Snapshotters
 
-See [Section 9](#9-future-work-zero-code-provider-parameterization) for how these four declarative additions can be parameterized so that onboarding any new CNCF remote snapshotter is completely flag- and configuration-driven with zero Go code changes.
+At the gRPC surface, Google Riptide v2 and AWS SOCI share the same CNCF Remote Snapshotter interface:
 
-### 3.2. Structural Alignment: Google Riptide & AWS SOCI
-
-By standardizing on the CNCF Remote Snapshotter interface, Google Riptide and AWS SOCI share an identical integration contract:
-
-| Architectural Dimension | Google Cloud Riptide (`riptide`) | AWS Seekable OCI (`soci`) |
+| Architectural Dimension | Google Cloud Riptide v2 (`riptide` — **GA Supported**) | AWS Seekable OCI (`soci` — **PoC / Future Production**) |
 | :--- | :--- | :--- |
-| **Daemon Endpoint** | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` (Riptide Snapshotter) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` (SOCI Snapshotter) |
+| **Daemon Endpoint** | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` (`--enable-v2`) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` |
 | **Interface Protocol** | `containerd.services.snapshots.v1.Snapshots` | `containerd.services.snapshots.v1.Snapshots` |
 | **Runtime Interaction** | **Bypasses containerd CRI:** speaks direct snapshotter gRPC | **Bypasses containerd CRI:** speaks direct snapshotter gRPC |
-| **FUSE Mount Location** | `/var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/<id>/fs` $\to$ `/run/gcfsd/mnt/views/<diffID>/fs` | `/var/lib/soci-snapshotter-grpc/snapshotter/snapshots/<id>/fs` |
+| **FUSE Mount Location** | `/var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/<id>/fs` $\to$ `/run/gcfsd/mnt/views/<chainID>/fs` | `/var/lib/soci-snapshotter-grpc/snapshotter/snapshots/<id>/fs` |
 | **Layer View RPC** | `Prepare` / `View` with remote labels | `Prepare` / `View` with remote labels |
 | **Metadata Index** | Google Cloud Artifact Registry (GAR) Streaming Manifests | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) |
-| **Registry Scope** | **GAR / GCR exclusively** (external registries fall back to non-streaming) | Any OCI registry supporting SOCI index artifacts (ECR, etc.) |
+| **Registry Scope** | **GAR / GCR exclusively** (external registries fall back to non-streaming) | Any OCI registry supporting SOCI index artifacts (ECR, GAR, etc.) |
 | **Authentication Source** | Ambient Node Identity via GCE Metadata Service (`169.254.169.254`) | Ambient Node Identity via EC2 Instance Profile / link-local metadata |
 
 #### Special Characteristics and Encapsulation Boundaries
 
 1. **Riptide Snapshotter Encapsulation & CNCF gRPC Standard:**
-   Substrate communicates directly with the **Riptide Snapshotter** (`containerd-gcfs-grpc`) over its local UNIX domain socket. Substrate does not manage, monitor, or communicate with any underlying or low-level FUSE daemon; all layer virtualization, chunk demand-paging, and mount lifecycles are entirely encapsulated within the Riptide Snapshotter. While the Riptide Snapshotter implements the CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API, it possesses Google-specific optimizations and out-of-band mechanisms (such as internal FUSE mounting engines and specialized metadata indexing for Google Cloud Artifact Registry) that are not part of the upstream CNCF remote snapshotter specification. From Substrate's perspective, `cmd/atelet` interfaces with the Riptide Snapshotter strictly through the standard CNCF `Snapshots.v1` gRPC contract (Section 3.4).
-
+   Substrate communicates directly with the **Riptide Snapshotter** (`containerd-gcfs-grpc`) over its local UNIX domain socket. Substrate does not manage, monitor, or communicate with `gcfsd` directly; all layer virtualization, chunk demand-paging, and mount lifecycles are encapsulated behind `containerd-gcfs-grpc` through the standard CNCF `Snapshots.v1` gRPC contract (Section 3.4).
 2. **Registry Scope: Google Artifact Registry (GAR) Exclusivity:**
-   Google Riptide is exclusively designed to stream container images hosted in Google Artifact Registry (GAR) or Google Container Registry (GCR). Riptide acceleration relies on server-side streaming manifests and layer transformations generated within Google Cloud. External registries (such as Docker Hub, Quay.io, or AWS ECR) do not contain Riptide streaming metadata. When an image from an external registry is targeted on GKE, the Riptide Snapshotter declines each layer's `Prepare` (Section 3.4), and Substrate falls back to traditional non-streaming local caching (`imagecache.EnsureImage`).
+   Google Riptide exclusively streams container images hosted in Google Artifact Registry (GAR) or Google Container Registry (GCR). External registries (such as Docker Hub, Quay.io, or AWS ECR) do not contain Riptide streaming metadata. When an image from an external registry is targeted on GKE, the Riptide Snapshotter declines `Prepare` (Section 3.4), and Substrate falls back to traditional non-streaming local caching (`imagecache.EnsureImage`).
+
+#### 3.2.1. Subtle Behavioral Differences Across CNCF Remote Snapshotter Implementations
+
+Although Riptide v2, Riptide v1, AWS SOCI, eStargz, and Nydus all implement the CNCF `containerd.services.snapshots.v1.Snapshots` gRPC service and containerd's remote snapshotter label conventions, **the gRPC protobuf alone does not guarantee identical runtime behavior when called directly without containerd's unpacker**. Auditing the Riptide codebase (`snapshot/v2/snapshotter.go` vs. legacy `snapshot/snapshot.go`), AWS SOCI (`soci-snapshotter-grpc`), and Nydus reveals six critical behavioral differences that explain why **GA is scoped to Riptide v2 (`--enable-v2`)** and what extensions are needed for full OSS parity:
+
+| Behavioral Dimension | Riptide v2 (`--enable-v2`, **GA Target**) | Riptide v1 (Legacy) | AWS SOCI (`soci-snapshotter-grpc`) | eStargz (`containerd-stargz-grpc`) | Nydus (`containerd-nydus-grpc`) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1. Sub-Layer Decline & `Commit` Requirement** | Streams **all** layers of an imported GAR image (mounts keyed by `chainID`). Never declines individual sub-layers of a streamable image. | Declines the 2nd copy of any duplicate `DiffID` (`walkParentChainToFindDuplicateLayers`) because `gcfsd` v1 keys views by `diffID` and Linux `overlayfs` rejects duplicate symlink targets in `lowerdir`. Requires local unpack + `Commit` for the duplicate layer. | By default, `soci create` skips zTOCs for layers $<$ `--min-layer-size` (default **10 MiB**). `Prepare` declines small layers and expects caller to unpack + `Commit(chainID, key)` locally. All-or-nothing streaming works only when indexed with `--min-layer-size=0`. | Streams any layer formatted as eStargz; declines non-eStargz layers. | Streams all layers via Nydus bootstrap metadata. |
+| **2. `cri.image-layers` & Early-Abort Behavior** | Expects shrinking suffix (`layers[i:]`) so top layer has `len == 1`. Uses a time-based backoff in `gcfsdClient.createSnapshot` on import errors; **safe to abort on first declined layer**. | Expects shrinking suffix (`layers[i:]`). On `ErrImageNotAvailable` at layer 0, adds `imageRef` to `o.nonImportedImages` and **only clears it when `Prepare` is called on the top layer (`len == 1`)**. Aborting on layer 0 permanently blocks the image until daemon restart. | Ignores `cri.image-layers`; safe to abort on first declined layer. | Ignores `cri.image-layers`; safe to abort on first declined layer. | Ignores `cri.image-layers`. |
+| **3. `cri.image-ref` Tag vs. Digest Handling** | `filesystem.Mount` does **not** read `cri.manifest-digest`; passes `cri.image-ref` directly to `gcfsd`. Caller should pass a digest-pinned `cri.image-ref` (`repo@sha256:...`). | `convertTagToDigest` uses `cri.manifest-digest` to rewrite a tagged `cri.image-ref` into `repo@sha256:<manifest-digest>`. | Uses `cri.image-ref` and `cri.manifest-digest` to locate the OCI Referrers SOCI index. | Uses `cri.image-ref` and `cri.layer-digest`. | Uses `cri.image-ref` plus OCI layer annotations. |
+| **4. Required `Prepare` Labels** | `containerd.io/snapshot.ref` + `containerd.io/snapshot/cri.*` (`image-ref`, `manifest-digest`, `layer-digest`, `image-layers`). | Same as Riptide v2. | Same as Riptide v2. | Same as Riptide v2. | **Also requires OCI layer descriptor annotations** (`containerd.io/snapshot/nydus-bootstrap`, `nydus-blob`, etc.) forwarded from the manifest. |
+| **5. `View(key, chainID)` Return Value** | Layer 0: `bind` mount (`ro,rbind`). Layers $i \ge 1$: cumulative `overlay` mount (`lowerdir=<layer_i>:...:<layer_0>`). Driver extracts `parts[0]` (`<layer_i>`) for per-layer wrapper symlinks. | Same as Riptide v2 (`snapshot.go:L934-L957`). | Same as Riptide v2. | Same as Riptide v2. | Intermediate layers are dummy metadata entries; **only a `View` on the topmost (bootstrap) layer** yields a valid rootfs mount. |
+| **6. Snapshot Deletion (`Remove` vs. `Cleanup`)** | `Remove(key)` cleans up BoltDB and filesystem directories synchronously inline (`AsynchronousRemove` and `Cleanup` are no-ops). | Unconditionally enables `snbase.AsynchronousRemove` (`main.go:L218`). `Remove(key)` only deletes the BoltDB record; on-disk directories leak unless `Snapshots.Cleanup` RPC is called. | `Remove(key)` cleans up inline. | `Remove(key)` cleans up inline. | `Remove(key)` cleans up inline. |
 
 ### 3.3. Architecture Flow Diagram
 
@@ -127,13 +130,13 @@ flowchart TD
     subgraph SubstrateHost["Node Host (Image Streaming Subsystem)"]
         Atelet -->|1. Resolve Image| StreamerMux["imagestreaming.ImageStreamer<br/>(Registry / Auto-Discovery)"]
         
-        StreamerMux -->|Snapshots.v1 gRPC| GCFS["Riptide Snapshotter<br/>/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock"]
-        StreamerMux -->|Snapshots.v1 gRPC| SOCI["SOCI Snapshotter<br/>/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"]
+        StreamerMux -->|Snapshots.v1 gRPC| GCFS["Riptide Snapshotter v2 (GA)<br/>/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock"]
+        StreamerMux -.->|Snapshots.v1 gRPC (Extensible)| SOCI["SOCI / OSS Snapshotter<br/>/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"]
         
         StreamerMux -.->|Fallback on error| ImgCache["internal/imagecache<br/>(Full Download & Untar)"]
         
-        GCFS -->|FUSE Mount| LayerView1["/var/lib/containerd/.../snapshots/<id>/fs<br/>-> /run/gcfsd/mnt/views/<diffID>/fs"]
-        SOCI -->|FUSE Mount| LayerView2["/var/lib/soci-.../snapshots/<id>/fs"]
+        GCFS -->|FUSE Mount| LayerView1["/var/lib/containerd/.../snapshots/<id>/fs<br/>-> /run/gcfsd/mnt/views/<chainID>/fs"]
+        SOCI -.->|FUSE Mount| LayerView2["/var/lib/soci-.../snapshots/<id>/fs"]
     end
 
     subgraph ActorSandbox["Actor Sandbox"]
@@ -145,34 +148,47 @@ flowchart TD
     end
 ```
 
-### 3.4. The Snapshotter Contract
+### 3.4. The Snapshotter Contract (Riptide v2 GA Baseline)
 
-The generic driver (`internal/imagestreaming/drivers/remotesnapshotter`) depends on exactly two things:
+At GA, the generic driver (`internal/imagestreaming/drivers/remotesnapshotter`) implements the strict, all-or-nothing remote snapshotter contract tailored for **Riptide v2 (`--enable-v2`)** (and compatible with SOCI images where all layers are indexed):
 
-1. **The `containerd.services.snapshots.v1.Snapshots` gRPC API.** The driver calls `Stat`, `Prepare`, `View`, and `Remove`. It never calls `Commit`.
-2. **containerd's [remote snapshotter protocol](https://github.com/containerd/containerd/blob/main/docs/snapshotters/remote-snapshotter.md).** The driver labels each `Prepare` with the layer's chain ID (`containerd.io/snapshot.ref`) and the `containerd.io/snapshot/cri.*` labels (image reference, manifest digest, layer digest, and image layers). It reads the result the way containerd's unpacker does.
+1. **The `containerd.services.snapshots.v1.Snapshots` gRPC API.** The driver calls `Stat`, `Prepare`, `View`, and `Remove`. It never calls `Commit` at GA (see [Section 9.1](#91-driver-protocol-extensions-for-full-production-oss-snapshotter-support) for post-GA hybrid `Commit`).
+2. **containerd's [remote snapshotter label protocol](https://github.com/containerd/containerd/blob/main/docs/snapshotters/remote-snapshotter.md).** For each layer $i$ ($0 \le i < N$), the driver labels `Prepare` with:
+   - `containerd.io/snapshot.ref`: the layer's `chainID_i`.
+   - `containerd.io/snapshot/cri.image-ref`: the canonical digest-pinned image reference (`<repo>@<manifest-digest>`), ensuring Riptide v2's `filesystem.Mount` (which does not rewrite tags via `cri.manifest-digest`) always passes a digest-pinned reference to `gcfsd`.
+   - `containerd.io/snapshot/cri.manifest-digest`: the resolved OCI manifest digest (`sha256:<hex>`).
+   - `containerd.io/snapshot/cri.layer-digest`: the compressed layer blob digest (`layerDigests[i]`).
+   - `containerd.io/snapshot/cri.image-layers`: the **shrinking suffix** of comma-separated layer digests from the current layer to the top layer (`strings.Join(layerDigests[i:], ",")`), so Riptide detects the topmost layer when `len == 1`.
 
-Nothing else is part of the contract. The driver doesn't read provider-specific labels (such as the Riptide Snapshotter's streaming labels on `Stat`), match provider-specific errors, or use side channels such as credential sockets or CRI proxies. Any snapshotter that follows the protocol, including the Riptide Snapshotter, SOCI, eStargz, and Nydus, works with the same driver.
-
-The driver handles each layer, bottom to top, as follows:
+The driver handles each layer $i$, bottom to top, while holding a **per-`chainID` mutex (`d.chainLock(chainID_i)`)** around `Stat` + `Prepare`:
 
 | Call | Result | Driver Action |
 | :--- | :--- | :--- |
-| `Stat(chainID)` | Found | The layer is already on the node. Create a read-only `View` with the chain ID as its parent. |
-| `Stat(chainID)` | `NotFound` | Call `Prepare` with a unique key, the parent layer's chain ID, and the labels above. |
-| `Prepare` | `AlreadyExists` | The snapshotter provided the layer and committed it under the chain ID. Confirm with `Stat(chainID)`, then create a `View`. The snapshotter has consumed the prepare key, so the driver leaves it alone. |
-| `Prepare` | Mounts with a nil error | **Declined.** The snapshotter can't provide the layer and expects the caller to unpack it into the mounts and commit it. The driver removes the prepared snapshot without committing it and returns `imagestreaming.ErrNotStreamable`. |
-| Any call | Any other error | The driver removes the prepared snapshot, if it created one, and returns the error. |
+| `Stat(chainID_i)` | Found (`OK`) | The layer is already committed in the snapshotter (and in Riptide, `Stat` has verified/self-healed its mount). Unlock `chainID_i` and create a read-only `View` with `chainID_i` as its parent. |
+| `Stat(chainID_i)` | `NotFound` | While still holding the `chainID_i` lock, call `Prepare` with a unique `prepKey`, `parent = chainID_{i-1}`, and the labels above. |
+| `Prepare` | `AlreadyExists` | The snapshotter mounted the layer and committed `prepKey` under `chainID_i`. Confirm with `Stat(chainID_i)`, unlock `chainID_i`, and create a `View`. The snapshotter consumed `prepKey`, so the driver does not remove it. |
+| `Prepare` | Mounts with a `nil` error | **Declined.** The snapshotter cannot stream the layer and returned writable mounts expecting the caller to unpack and `Commit` it. The driver removes `prepKey` without committing it, unlocks `chainID_i`, removes any views created for earlier layers, and returns `imagestreaming.ErrNotStreamable`. |
+| Any call | Any other error | The driver removes `prepKey` (if created) and any views created for earlier layers, and returns the error. |
 
-The driver calls `Stat(chainID)` before `Prepare` for the same reasons containerd's unpacker does:
-- **The layer may already be on the node.** An earlier pull, another image built on the same layers, or a Pod whose image the snapshotter provided to containerd may have committed it under its chain ID. One `Stat` finds it, and the driver skips `Prepare`. `Stat` doesn't find layers that containerd unpacked itself, because containerd commits those under its own snapshot names.
-- **`Prepare` can't report that a layer is already on the node.** It either provides the layer (`AlreadyExists`) or declines it (mounts). A snapshotter that can't stream a layer may decline it even when the layer is already committed locally, and the driver would then pull the whole image unnecessarily.
+#### Why `Stat(chainID)` + Per-`chainID` Locking Before `Prepare` Is Mandatory:
+Unlike containerd v2's `Unpacker` (which checks containerd's own local `meta.db` before calling `Prepare` on the remote snapshotter), `atelet` talks directly to the snapshotter socket without containerd. Calling `Stat(chainID)` under a per-`chainID` lock before `Prepare` is required for three reasons:
+1. **Preventing Riptide's `storage.CommitActive` Active-Snapshot Leak on Duplicate/Concurrent `Prepare`:**
+   In Riptide (both v1 `snapshot/snapshot.go:L439-L447` and v2 `snapshot/v2/snapshotter.go:L383-L388`), if `chainID` is already committed in BoltDB and `Prepare(prepKey, parent, labels)` is called anyway, Riptide mounts the layer and calls `o.Commit(ctx, chainID, prepKey)`. Inside `storage.CommitActive`, `CreateBucket([]byte(chainID))` fails with `ErrBucketExists`, rolling back the BoltDB transaction **before deleting the active snapshot `prepKey`**, yet Riptide treats `ErrAlreadyExists` as success and returns `codes.AlreadyExists` without calling `Remove(prepKey)`. Without a prior `Stat(chainID)` check **and** a per-`chainID` lock (to serialize concurrent pulls of different images that share base layers), the losing `Prepare` leaks an unconsumed Active snapshot in `metadata.db` and on disk, which also permanently pins its `parent` snapshot.
+2. **Mount Self-Healing (`fs.Check`):**
+   In Riptide (v1 `snapshot.go:L265-L288` and v2 `snapshotter.go:L231-L255`), `Stat(chainID)` is not passive: it invokes `fs.Check` on the layer and automatically remounts the view if `gcfsd` restarted.
+3. **Reusing Layers Committed by Earlier Pulls:**
+   If an earlier actor image (or another image sharing the same base layers) already committed `chainID` in the snapshotter, `Stat(chainID)` finds it in one local gRPC call and skips `Prepare`. After `Prepare` returns `AlreadyExists`, the driver calls `Stat(chainID)` a second time to verify that `chainID` itself exists (rather than `prepKey` colliding).
 
-After `AlreadyExists`, the driver calls `Stat(chainID)` again, because `AlreadyExists` can also mean that the prepare key already exists. The second `Stat` confirms that the layer is under its chain ID before the driver uses it as the parent of a `View`.
+#### How `View(viewKey, chainID_i)` Mounts Are Extracted and Pinned:
+- **Cumulative Overlay vs. Single-Layer Extraction:** In the CNCF Snapshotter API (including Riptide v2 `mounts.go:L110-L125`, Riptide v1 `snapshot.go:L934-L957`, and SOCI), `View(viewKey, chainID_0)` on the bottom layer returns a read-only `bind` mount (`ro,rbind`) pointing to `<root>/snapshots/<id_0>/fs`. For every upper layer ($i \ge 1$), `View(viewKey, chainID_i)` returns a cumulative `overlay` mount with `lowerdir=<layer_i>:<layer_{i-1}>:...:<layer_0>`. Because `ateom` composes its own final sandbox overlay across all layers, `extractMountDir` in `driver.go` extracts `parts[0]` (`<layer_i>`, the topmost entry of `lowerdir=`) for each layer's `layer-i/fs` symlink.
+- **BoltDB Parent Pinning:** In BoltDB (`storage.Remove`), every active `View` (`viewKey`) is recorded as a child of its `chainID_i` parent. As long as an image lease holds `viewKey`, any attempt to `Remove(chainID_i)` fails with `ErrFailedPrecondition` (`cannot remove snapshot with child`), guaranteeing that underlying layer snapshots cannot be garbage-collected out from under running actors.
 
-If any layer is declined or fails, the driver removes the views it created for the image, and atelet pulls the whole image with `imagecache.EnsureImage` (Section 5.6). Layers committed under their chain IDs stay on the node for later pulls.
+#### Operational Considerations When Running `containerd-gcfs-grpc` Without Containerd CRI:
+- **`--enable-v2` Required:** GKE nodes running Substrate must run `containerd-gcfs-grpc` with `--enable-v2` (default on modern GKE COS nodes) so views are mounted by `chainID`, transient import misses use time-based backoff, and `Remove` cleans up snapshot directories inline without needing `Snapshots.Cleanup`.
+- **`--enable-image-proxy-keychain-client=false`:** Must remain `false` (its default in `cmd/containerd-gcfs-grpc/main.go:L76`), as enabling it starts the CRI `ImageService` proxy which requires containerd CRI and kubeconfig.
+- **Background `containerd.sock` Client & `imageStreamingStatusMap`:** Even when only the `Snapshots` gRPC service is used, `containerd-gcfs-grpc` (`main.go:L130`) initializes a `containerdclient.Client` against `/run/containerd/containerd.sock` (which is present on GKE nodes to run system/worker pods) and records one small status string per unique streamed image in `imageStreamingStatusMap` (`AddImageStreamingStatus`) that is only cleared on containerd `ContainerCreate` events. Because the number of distinct actor images per node is small, this in-memory map entry (~100 bytes per unique image) is benign.
 
-The contract has two limits:
+The contract has two additional boundaries:
 - **`AlreadyExists` means the layer is on the node, not that it is streamed.** A snapshotter may also provide a layer from local content, such as a GKE secondary boot disk. The driver treats both the same because the content is valid.
 - **The contract carries no credentials.** See Section 5.5.3.
 
@@ -553,10 +569,10 @@ A socket file doesn't prove that the snapshotter is running, because the file ca
 
 ## 6. Provider Driver Implementations
 
-| Provider | Host Socket | Protocol | Image Indexing & Registry Scope | Control Plane Auth (atelet) | Data Plane Auth (Streaming Daemon) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`riptide`** (Google) | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` (Riptide Snapshotter) | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests (**GAR/GCR only**) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
-| **`soci`** (AWS) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` (SOCI Snapshotter) | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| Provider | Support Status | Host Socket | Protocol | Image Indexing & Registry Scope | Control Plane Auth (atelet) | Data Plane Auth (Streaming Daemon) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`riptide`** (Google Riptide v2) | **GA Supported (`--enable-v2`)** | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests (**GAR/GCR only**) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| **`soci`** (AWS SOCI) | **Benchmark PoC / Post-GA Production** (currently requires all layers indexed via `--min-layer-size=0`; see Section 9.1) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
 
 ---
 
@@ -586,7 +602,7 @@ Use the `ate.imagestreaming.requests` counter to measure streaming across a node
 
 ## 8. Verified Performance Impact
 
-Empirically validated end-to-end on live GKE cluster `substrate-stream-test` against the **exact same 1.19 GB compressed (~3.5 GB unpacked, 9 layers) workload image** — `gcr.io/cloud-builders/gcloud:latest` (Google's official Cloud SDK image, 8 layers) with Substrate's `demos/sandbox` binary added as a tiny (~2 MB) 9th entrypoint layer via `ko` and pushed with a SOCI index to `us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e` — with `pause:3.10.2` pre-pulled in `image-cache`:
+Empirically validated end-to-end on live GKE cluster `substrate-stream-test` against the **exact same 1.19 GB compressed (~3.5 GB unpacked, 9 layers) workload image** — `gcr.io/cloud-builders/gcloud:latest` (Google's official Cloud SDK image, 8 layers) with Substrate's `demos/sandbox` binary added as a tiny (~2 MB) 9th entrypoint layer via `ko` and pushed with a SOCI index (`--min-layer-size=0`) to `us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e` — with `pause:3.10.2` pre-pulled in `image-cache`:
 
 | Operation / Phase | Mode 1: Without Streaming (`none`) | Mode 2: Google Riptide (`riptide`) | Mode 3: AWS SOCI (`soci`) | Speedup (`riptide` vs `none`) | Speedup (`soci` vs `none`) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
@@ -598,23 +614,37 @@ Empirically validated end-to-end on live GKE cluster `substrate-stream-test` aga
 
 ---
 
-## 9. Future Work: Zero-Code Provider Parameterization
+## 9. Future Work: Full OSS Snapshotter Support & Zero-Code Provider Parameterization
 
-While the current implementation keeps `riptide` and `soci` as explicit named presets across the four declarative touchpoints described in [Section 3.1](#generality-onboarding-a-new-oss-streaming-provider-eg-estargz-or-nydus), all four can be parameterized so that onboarding any future CNCF remote snapshotter (such as eStargz or Nydus) requires **zero Go code changes**:
+While GA is intentionally scoped to **Google Riptide Snapshotter v2 (`--enable-v2`)**, the `ImageStreamer` abstraction and `remotesnapshotter` driver are designed to evolve post-GA in two dimensions: **(1) protocol extensions to accommodate the behavioral differences of OSS remote snapshotters** (documented in [Section 3.2.1](#321-subtle-behavioral-differences-across-cncf-remote-snapshotter-implementations)), and **(2) declarative configuration parameterization** so new providers require zero Go code changes.
 
-### 9.1. Driver Preset & Auto-Discovery (`remotesnapshotter` & `cmd/atelet/streamer.go`)
-Currently, `riptide.go` / `soci.go` define thin constructor wrappers and `cmd/atelet/streamer.go` maintains a `switch` statement alongside `autoStreamerCandidates`. These two touchpoints can be collapsed into a single declarative provider table plus flag-driven fallback:
+### 9.1. Driver Protocol Extensions for Full Production OSS Snapshotter Support
+
+To graduate OSS snapshotters (AWS SOCI, eStargz, Nydus) from the GA all-or-nothing contract (Section 3.4) to full production parity across arbitrary community images:
+
+1. **Hybrid Local Unpack + `Snapshots.Commit` for Declined Sub-Layers (Required for Default AWS SOCI Images):**
+   - **Why needed:** By default, `soci create` only generates zTOCs for layers $\ge$ `--min-layer-size` (default 10 MiB). When `soci-snapshotter-grpc` receives `Prepare` for a smaller unindexed layer (such as a small entrypoint or config layer), it declines remote mounting by returning writable local directory mounts (`Mounts`, `err == nil`) and expects the caller to unpack the layer blob into that directory and call `Snapshots.Commit(Name: chainID, Key: prepKey)` so subsequent upper streamed layers have `parent = chainID` in `metadata.db`.
+   - **Post-GA extension:** When `Prepare` returns `codes.OK` (mounts) on layer $i$ of an image that has at least one streamable layer (or a valid SOCI index), instead of immediately aborting the entire image with `ErrNotStreamable`, `remotesnapshotter.Driver` can download and unpack that single small layer blob into the returned mount path (reusing `imagecache`'s layer unpacker with whiteout conversion) and call `client.Commit(ctx, &CommitSnapshotRequest{Snapshotter: snapshotter, Name: c.ChainID, Key: prepKey})`.
+2. **Forwarding OCI Layer Descriptor Annotations (Required for Nydus):**
+   - **Why needed:** `containerd-nydus-grpc` requires OCI manifest layer annotations (`containerd.io/snapshot/nydus-bootstrap`, `containerd.io/snapshot/nydus-blob`, etc.) in `PrepareSnapshotRequest.Labels` (matching containerd's `snapshots.FilterInheritedLabels`).
+   - **Post-GA extension:** Extend `ImageResolverFunc` to return `manifest.Layers[i].Annotations` and copy any annotation prefixed with `containerd.io/snapshot/` into `PrepareSnapshotRequest.Labels`.
+3. **Top-Layer-Only `View` Mode (Required for Nydus):**
+   - **Why needed:** Unlike Riptide, SOCI, and eStargz (where every layer $i$ materializes a FUSE directory on the host), Nydus treats intermediate layers ($0 \le i < N-1$) as metadata-only records and mounts the complete merged rootfs only when `View` is called on the topmost bootstrap layer (`chainID_{N-1}`).
+   - **Post-GA extension:** Add a `TopLayerViewOnly` driver option for Nydus that calls `Prepare` across all layers $0 \dots N-1$ to register layer metadata, but calls `View` and `probeListable` only on `chainID_{N-1}`, returning a single-element `LayerDirs` slice to `ateom`.
+
+### 9.2. Driver Preset & Auto-Discovery (`remotesnapshotter` & `cmd/atelet`)
+Currently, `drivers/riptide` and `drivers/soci` register thin constructor presets and `cmd/atelet` maintains `autoStreamerCandidates`. These touchpoints can be collapsed into a single declarative provider table plus flag-driven fallback:
 - **Unified Built-in Registry:** Define a single table of well-known presets (`{Name, DefaultSocket, SnapshotterName}`) used by both `--image-streamer=<name>` lookup and `--image-streamer=auto` socket probing.
-- **Arbitrary Provider Names via CLI Flags:** Instead of rejecting unknown `--image-streamer=<name>` values, treat any non-built-in name (when paired with `--image-streamer-socket=<path>` and an optional `--image-streamer-snapshotter=<name>` flag that defaults to `<name>`) as a `remotesnapshotter.New(WithName(name), WithSocket(socket), WithSnapshotterName(snap))` instance.
-- **Configurable Auto-Discovery Candidates:** Allow `--image-streamer-socket` (or a comma-separated `--image-streamer-candidates=stargz=/run/containerd-stargz-grpc/address,...`) to extend `autoStreamerCandidates` at runtime without recompiling `atelet`.
+- **Arbitrary Provider Names via CLI Flags:** Instead of rejecting unknown `--image-streamer=<name>` values, treat any non-built-in name (when paired with `--image-streamer-socket=<path>` and an optional `--image-streamer-snapshotter=<name>` flag that defaults to `<name>`) as a `remotesnapshotter.New(WithName(name), WithSocketPath(socket), WithSnapshotterName(snap))` instance.
+- **Configurable Auto-Discovery Candidates:** Allow a comma-separated `--image-streamer-candidates=stargz=/run/containerd-stargz-grpc/address,...` flag to extend `autoStreamerCandidates` at runtime without recompiling `atelet`.
 
-### 9.2. Pod Mount Propagation (`manifests/ate-install/atelet.yaml` & `workerpool.go`)
-Currently, `atelet` and `ateom` pods mount provider-specific host directories (`/var/lib/containerd/io.containerd.snapshotter.v1.gcfs`, `/run/gcfsd`, and `/var/lib/soci-snapshotter-grpc`) because `layer-N/fs` is a symlink pointing to the snapshotter daemon's host mount path (`mount.Source`), which both `atelet` (for whiteout scanning) and `ateom` (for `runsc` overlay composition) must resolve inside their respective mount namespaces. This per-provider manifest wiring can be eliminated in one of three ways:
+### 9.3. Pod Mount Propagation (`manifests/ate-install/atelet.yaml` & `workerpool.go`)
+Currently, `atelet` and `ateom` pods mount provider-specific host directories (`/var/lib/containerd/io.containerd.snapshotter.v1.gcfs`, `/run/gcfsd`, and `/var/lib/soci-snapshotter-grpc`) because `layer-N/fs` is a symlink pointing to the snapshotter daemon's host mount path (`mount.Source`), which both `atelet` and `ateom` must resolve inside their respective mount namespaces. This per-provider manifest wiring can be eliminated in one of three ways:
 1. **Option A — Shared Host Snapshotter Parent Directory (Recommended):** Pre-mount a single canonical parent directory on both `atelet` and `ateom` with `HostToContainer` mount propagation (e.g., `/var/lib/ateom-gvisor/snapshotters` for FUSE roots and `/run/ate-snapshotters` for UNIX sockets). Any new OSS snapshotter daemon installed on the node simply sets its `--root` and `--address` under those pre-mounted parent directories (e.g., `--root=/var/lib/ateom-gvisor/snapshotters/stargz`), making its socket and FUSE mounts automatically visible to both `atelet` and `ateom` with zero manifest or `workerpool.go` changes.
 2. **Option B — Parameterized `atecontroller` Host Mounts Flag:** Add a `--worker-extra-host-mounts=/var/lib/containerd-stargz-grpc` flag to `atecontroller` so `workerpool.go` dynamically injects `HostToContainer` volume mounts into worker pods at deployment time rather than hardcoding paths in Go.
 3. **Option C — Bind-Mounting `mount.Source` onto `layer-N/fs`:** Have `atelet` bind-mount `mount.Source` (with `MS_BIND | MS_REC`) directly onto `/var/lib/ateom-gvisor/streaming/<driver>/<imgKey>/layer-N/fs` (which is already shared with `ateom` via `/var/lib/ateom-gvisor` with `Bidirectional` / `HostToContainer` propagation) instead of creating a symlink. Note the security trade-off: `os.Symlink` works in an unprivileged `atelet` container, whereas `mount(MS_BIND)` requires `CAP_SYS_ADMIN` in `atelet` plus host-root visibility of the daemon's FUSE mount point.
 
-### 9.3. Metric Registry Enum (`docs/metrics/registry/metrics.yaml`)
-Currently, `ate.imagestreaming.provider` in `docs/metrics/registry/metrics.yaml` uses a strict Weaver enum (`none`, `riptide`, `soci`, `remotesnapshotter`) enforced by `hack/verify/metrics.sh`. To support arbitrary provider names without editing `metrics.yaml`:
+### 9.4. Metric Registry Enum (`docs/metrics/registry/metrics.yaml`)
+Currently, `ate.imagestreaming.provider` in `docs/metrics/registry/metrics.yaml` uses a strict Weaver enum (`riptide`, `soci`, `remotesnapshotter`) enforced by `hack/verify/metrics.sh`. To support arbitrary provider names without editing `metrics.yaml`:
 - **Option A — Keep Enum & Normalize Custom Providers:** Emit `ate.imagestreaming.provider="remotesnapshotter"` for any custom flag-configured snapshotter not in the built-in preset list, preserving strict compile-time enum validation in OpenTelemetry Weaver.
 - **Option B — Relax Type to `string` with Bounded Cardinality Rule:** Change `ate.imagestreaming.provider` in `docs/metrics/registry/metrics.yaml` from an enum to `type: string`, and record in `docs/metrics/substrate.yaml` that its cardinality is $O(1)$ per node (bounded by the operator-configured `--image-streamer` startup flag, never by workload or user input).

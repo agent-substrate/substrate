@@ -208,11 +208,12 @@ type Driver struct {
 	clientInjected  bool
 	imageResolver   ImageResolverFunc
 
-	mu       sync.Mutex
-	conn     *grpc.ClientConn
-	leases   map[string]*imageLease
-	declined map[string]time.Time
-	inflight map[string]*inflightPrep
+	mu         sync.Mutex
+	conn       *grpc.ClientConn
+	leases     map[string]*imageLease
+	declined   map[string]time.Time
+	inflight   map[string]*inflightPrep
+	chainLocks map[string]*sync.Mutex
 }
 
 // New creates a generic remote snapshotter driver.
@@ -228,6 +229,7 @@ func New(opts ...Option) (*Driver, error) {
 		leases:           make(map[string]*imageLease),
 		declined:         make(map[string]time.Time),
 		inflight:         make(map[string]*inflightPrep),
+		chainLocks:       make(map[string]*sync.Mutex),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -252,6 +254,7 @@ func NewRiptide(opts ...Option) (*Driver, error) {
 		leases:           make(map[string]*imageLease),
 		declined:         make(map[string]time.Time),
 		inflight:         make(map[string]*inflightPrep),
+		chainLocks:       make(map[string]*sync.Mutex),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -276,6 +279,7 @@ func NewSOCI(opts ...Option) (*Driver, error) {
 		leases:           make(map[string]*imageLease),
 		declined:         make(map[string]time.Time),
 		inflight:         make(map[string]*inflightPrep),
+		chainLocks:       make(map[string]*sync.Mutex),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -577,7 +581,7 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		_ = os.RemoveAll(imageWorkDir)
 	}
 
-	allLayersStr := strings.Join(layerDigests, ",")
+	criImageRef := canonicalImageRef(req.ImageRef, digest)
 	runID := fmt.Sprintf("%x", time.Now().UnixNano())
 
 	for i, c := range chainInfos {
@@ -585,14 +589,14 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		viewKey := fmt.Sprintf("%s-%s-l%d-view", imgKey, runID, i)
 		labels := map[string]string{
 			"containerd.io/snapshot.ref":                 c.ChainID,
-			"containerd.io/snapshot/cri.image-ref":       req.ImageRef,
+			"containerd.io/snapshot/cri.image-ref":       criImageRef,
 			"containerd.io/snapshot/cri.manifest-digest": digest,
 		}
 		if i < len(layerDigests) {
 			labels["containerd.io/snapshot/cri.layer-digest"] = layerDigests[i]
-		}
-		if allLayersStr != "" {
-			labels["containerd.io/snapshot/cri.image-layers"] = allLayersStr
+			if rem := strings.Join(layerDigests[i:], ","); rem != "" {
+				labels["containerd.io/snapshot/cri.image-layers"] = rem
+			}
 		}
 
 		mounts, err := d.viewLayer(ctx, client, snapshotter, c, prepKey, viewKey, labels)
@@ -706,18 +710,35 @@ func readLeaseMetadata(dir string) (*persistedLease, error) {
 	return &meta, nil
 }
 
+func (d *Driver) chainLock(chainID string) *sync.Mutex {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.chainLocks == nil {
+		d.chainLocks = make(map[string]*sync.Mutex)
+	}
+	lk, ok := d.chainLocks[chainID]
+	if !ok {
+		lk = &sync.Mutex{}
+		d.chainLocks[chainID] = lk
+	}
+	return lk
+}
+
 // viewLayer returns mounts for a read-only view of one layer, following
 // containerd's remote snapshotter protocol. On error, the caller only needs
 // to clean up earlier layers.
 func (d *Driver) viewLayer(ctx context.Context, client snapshots.SnapshotsClient, snapshotter string, c chainInfo, prepKey, viewKey string, labels map[string]string) ([]*snapshots.Mount, error) {
+	// Serialize Stat + Prepare per chainID so concurrent pulls of different
+	// images sharing a base layer do not race Prepare for the same chainID.
+	lk := d.chainLock(c.ChainID)
+	lk.Lock()
 	committed, err := d.hasSnapshot(ctx, client, snapshotter, c.ChainID)
+	if err == nil && !committed {
+		err = d.prepareLayer(ctx, client, snapshotter, c, prepKey, labels)
+	}
+	lk.Unlock()
 	if err != nil {
 		return nil, err
-	}
-	if !committed {
-		if err := d.prepareLayer(ctx, client, snapshotter, c, prepKey, labels); err != nil {
-			return nil, err
-		}
 	}
 	resp, err := client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
 		Snapshotter: snapshotter,
@@ -1080,6 +1101,21 @@ func sanitizePathKey(ref string) string {
 	s = strings.ReplaceAll(s, ":", "_")
 	s = strings.ReplaceAll(s, "@", "_")
 	return s
+}
+
+// canonicalImageRef returns a digest-pinned image reference (<repo>@<digest>)
+// when digest is non-empty and imageRef can be parsed. Riptide v2 passes
+// containerd.io/snapshot/cri.image-ref directly to gcfsd without rewriting
+// tags via cri.manifest-digest, so pinning cri.image-ref to the resolved
+// manifest digest ensures gcfsd always receives a canonical digest reference.
+func canonicalImageRef(imageRef, digest string) string {
+	if digest == "" || strings.Contains(imageRef, "@") {
+		return imageRef
+	}
+	if ref, err := name.ParseReference(imageRef); err == nil {
+		return ref.Context().Name() + "@" + digest
+	}
+	return imageRef
 }
 
 func (d *Driver) defaultImageResolver(ctx context.Context, refStr string, authConfig *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {

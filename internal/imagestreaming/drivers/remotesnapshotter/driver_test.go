@@ -938,3 +938,120 @@ func TestPrepareLayers_ConcurrentDeduplication(t *testing.T) {
 		t.Errorf("workDir %s still exists after final release: err=%v", workDir, err)
 	}
 }
+
+func TestPrepareLayers_CRILabels(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+
+	diff0 := "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	diff1 := "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	chain := computeChainIDs([]string{diff0, diff1})
+
+	mount0 := t.TempDir()
+	mount1 := t.TempDir()
+	driver.imageResolver = func(context.Context, string, *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		return "sha256:manifestdigest", &v1.Config{}, []string{diff0, diff1}, []string{"sha256:blob0", "sha256:blob1"}, nil
+	}
+
+	var gotLabels []map[string]string
+	srv.prepareFunc = func(_ context.Context, req *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error) {
+		gotLabels = append(gotLabels, req.GetLabels())
+		target := req.GetLabels()["containerd.io/snapshot.ref"]
+		switch target {
+		case chain[0].ChainID:
+			srv.commitLocked(target, []*snapshots.Mount{{Type: "bind", Source: mount0}})
+		case chain[1].ChainID:
+			srv.commitLocked(target, []*snapshots.Mount{{Type: "bind", Source: mount1}})
+		}
+		return nil, status.Errorf(codes.AlreadyExists, "target snapshot %q: already exists", target)
+	}
+
+	req := &imagestreaming.StreamRequest{ImageRef: "us-docker.pkg.dev/proj/repo/image:tag"}
+	if _, err := driver.PrepareLayers(ctx, req); err != nil {
+		t.Fatalf("PrepareLayers error: %v", err)
+	}
+	if len(gotLabels) != 2 {
+		t.Fatalf("got %d Prepare calls, want 2", len(gotLabels))
+	}
+
+	wantImageRef := "us-docker.pkg.dev/proj/repo/image@sha256:manifestdigest"
+	if got := gotLabels[0]["containerd.io/snapshot/cri.image-ref"]; got != wantImageRef {
+		t.Errorf("layer 0 cri.image-ref = %q, want %q", got, wantImageRef)
+	}
+	if got := gotLabels[0]["containerd.io/snapshot/cri.image-layers"]; got != "sha256:blob0,sha256:blob1" {
+		t.Errorf("layer 0 cri.image-layers = %q, want %q", got, "sha256:blob0,sha256:blob1")
+	}
+	if got := gotLabels[1]["containerd.io/snapshot/cri.image-layers"]; got != "sha256:blob1" {
+		t.Errorf("layer 1 cri.image-layers = %q, want shrinking suffix %q", got, "sha256:blob1")
+	}
+}
+
+func TestPrepareLayers_ConcurrentSharedBaseLayerLocking(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+
+	baseDiff := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	topDiffA := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	topDiffB := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	chainA := computeChainIDs([]string{baseDiff, topDiffA})
+	chainB := computeChainIDs([]string{baseDiff, topDiffB})
+
+	mountBase := t.TempDir()
+	mountTopA := t.TempDir()
+	mountTopB := t.TempDir()
+
+	driver.imageResolver = func(_ context.Context, ref string, _ *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		switch ref {
+		case "example.com/app-a:v1":
+			return "sha256:digesta", &v1.Config{}, []string{baseDiff, topDiffA}, []string{"sha256:base", "sha256:topa"}, nil
+		case "example.com/app-b:v1":
+			return "sha256:digestb", &v1.Config{}, []string{baseDiff, topDiffB}, []string{"sha256:base", "sha256:topb"}, nil
+		default:
+			return "", nil, nil, nil, errors.New("unexpected ref")
+		}
+	}
+
+	var basePrepareCalls int
+	srv.prepareFunc = func(_ context.Context, req *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error) {
+		target := req.GetLabels()["containerd.io/snapshot.ref"]
+		switch target {
+		case chainA[0].ChainID:
+			basePrepareCalls++
+			// Hold the first Prepare on the shared base layer briefly so the
+			// second image pull would race Prepare if chainID locking were missing.
+			srv.mu.Unlock()
+			time.Sleep(30 * time.Millisecond)
+			srv.mu.Lock()
+			srv.commitLocked(target, []*snapshots.Mount{{Type: "bind", Source: mountBase}})
+		case chainA[1].ChainID:
+			srv.commitLocked(target, []*snapshots.Mount{{Type: "bind", Source: mountTopA}})
+		case chainB[1].ChainID:
+			srv.commitLocked(target, []*snapshots.Mount{{Type: "bind", Source: mountTopB}})
+		}
+		return nil, status.Errorf(codes.AlreadyExists, "target snapshot %q: already exists", target)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	refs := []string{"example.com/app-a:v1", "example.com/app-b:v1"}
+	for i, r := range refs {
+		wg.Add(1)
+		go func(idx int, imageRef string) {
+			defer wg.Done()
+			_, errs[idx] = driver.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: imageRef})
+		}(i, r)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("PrepareLayers(%s) error: %v", refs[i], err)
+		}
+	}
+	srv.mu.Lock()
+	gotBasePrepares := basePrepareCalls
+	srv.mu.Unlock()
+	if gotBasePrepares != 1 {
+		t.Errorf("shared base layer Prepare called %d times, want 1 (per-chainID lock should prevent duplicate Prepare)", gotBasePrepares)
+	}
+}
