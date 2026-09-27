@@ -48,9 +48,9 @@ type MicroVMOptions struct {
 }
 
 // ShapeMicroVM replaces host system mounts with guest mounts, repoints volume
-// bind mounts to guest share paths, and fills in kata's default resources. It
-// must run on an unshaped spec, and errors on a bind it cannot place in the
-// guest.
+// bind mounts to guest share paths, fills in kata's default resources, and
+// lifts the guest's privileged-port limit. It must run on an unshaped spec,
+// and errors on a bind it cannot place in the guest.
 func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	// Translate volume bind mounts into guest share paths.
 	volumes := make([]specs.Mount, 0, len(spec.Mounts))
@@ -76,6 +76,13 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 
 	if spec.Linux == nil {
 		spec.Linux = &specs.Linux{}
+	}
+	// gVisor has no privileged-port limit, and runsc ignores this key.
+	if spec.Linux.Sysctl == nil {
+		spec.Linux.Sysctl = map[string]string{}
+	}
+	if _, ok := spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"]; !ok {
+		spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"] = "0"
 	}
 	// The container's own declared limits survive the merge; StartRootfsContainer
 	// sets CgroupsPath.
