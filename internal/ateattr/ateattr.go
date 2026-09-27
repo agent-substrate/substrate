@@ -238,6 +238,25 @@ const (
 	ImageCacheOutcomeTimeout   = "timeout"
 )
 
+// Values for RouterOutcomeKey. RouterOutcomeNoCapacity is the fleet having no
+// free worker, the same condition scheduling.ErrNoCapacity reports; it is a
+// capacity problem, not a defect. Everything else that denies a request
+// without a matching gRPC code, such as a full parking lot, a denied
+// request, or a failed dependency lookup, is RouterOutcomeUnavailable or one
+// of the other values below, never no_capacity.
+const (
+	RouterOutcomeOK                 = "ok"
+	RouterOutcomeCancelled          = "cancelled"
+	RouterOutcomeTimeout            = "timeout"
+	RouterOutcomeNoCapacity         = "no_capacity"
+	RouterOutcomeFailedPrecondition = "failed_precondition"
+	RouterOutcomeLockConflict       = "lock_conflict"
+	RouterOutcomeNotFound           = "not_found"
+	RouterOutcomeUnavailable        = "unavailable"
+	RouterOutcomeRateLimited        = "rate_limited"
+	RouterOutcomeResumeError        = "resume_error"
+)
+
 // ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
 // ate.*): failures are reported on the same instrument via this key, its absence
 // meaning success, never as a parallel _failures counter.
