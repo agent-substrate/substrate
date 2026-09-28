@@ -5057,7 +5057,7 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if claims.Issuer != testActorJWTIssuer {
 		t.Errorf("iss = %q, want %q", claims.Issuer, testActorJWTIssuer)
 	}
-	if want := "atespaces:" + testAtespace + ":actors:id1"; claims.Subject != want {
+	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
 	}
 	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)

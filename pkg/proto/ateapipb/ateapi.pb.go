@@ -5480,7 +5480,7 @@ type MintActorJWTResponse struct {
 	//
 	// * iss: The issuer URL. Relying parties fetch
 	//   `<iss>/.well-known/openid-configuration` to find the signing keys.
-	// * sub: `atespaces:<atespace>:actors:<name>`.
+	// * sub: `actor/<atespace>/<name>`.
 	// * aud: The requested audiences, always a JSON array.
 	// * exp, nbf, iat: Numeric Unix timestamps. nbf is five minutes before iat
 	//   to allow for clock skew.

@@ -538,7 +538,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
 		Issuer:     s.actorJWTIssuer,
-		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudience(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
