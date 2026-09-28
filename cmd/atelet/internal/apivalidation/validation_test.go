@@ -298,6 +298,19 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	}
 }
 
+// TestValidateSetWorkerCapacityRequestEdge covers the handler-facing
+// wrapper: valid passes, invalid comes back as InvalidArgument.
+func TestValidateSetWorkerCapacityRequestEdge(t *testing.T) {
+	valid := &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}}
+	if err := ValidateSetWorkerCapacityRequest(context.Background(), valid); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	err := ValidateSetWorkerCapacityRequest(context.Background(), &ateletpb.SetWorkerCapacityRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty request error = %v, want InvalidArgument", err)
+	}
+}
+
 func TestValidateVolume(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.Volume)) *ateletpb.Volume {
 		v := &ateletpb.Volume{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}

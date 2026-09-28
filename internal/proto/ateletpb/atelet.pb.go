@@ -210,8 +210,10 @@ type SetWorkerCapacityRequest struct {
 	// What the worker can supply, in the same vocabulary the control plane
 	// records and an ActorTemplate asks in.
 	//
+	// Control plane validates the capacity when atelet forwards it.
+	//
 	// +k8s:required
-	// +k8s:opaqueType # cross-package type; descending into ateapipb is not wired up yet
+	// +k8s:opaqueType
 	Capacity      *ateapipb.WorkerResources `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

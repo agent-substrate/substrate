@@ -113,6 +113,12 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 	if err != nil {
 		return nil, err
 	}
+	// Reject malformed requests here rather than forwarding them for the
+	// control plane to reject after a round trip. After authentication, so an
+	// unauthenticated caller learns nothing but Unauthenticated.
+	if err := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); err != nil {
+		return nil, err
+	}
 	// Forwarded as reported: the worker speaks the vocabulary the control plane
 	// records, so there is nothing to translate.
 	if _, err := s.workers.SetWorkerCapacity(ctx, &ateapipb.SetWorkerCapacityRequest{

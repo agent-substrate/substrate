@@ -45,6 +45,14 @@ func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateReques
 	return toInvalidArgument(Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
 }
 
+// ValidateSetWorkerCapacityRequest validates req at the RPC edge. A non-nil
+// return is the InvalidArgument error the handler responds with. The
+// capacity's contents are opaque here (see the proto); the control plane
+// fully validates them when the report is forwarded.
+func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) error {
+	return toInvalidArgument(Validate_SetWorkerCapacityRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
+}
+
 func toInvalidArgument(errs field.ErrorList) error {
 	if len(errs) == 0 {
 		return nil
