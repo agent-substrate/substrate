@@ -27,20 +27,42 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func validRequestActorSuspendRequest(mutate ...func(*ateletpb.RequestActorSuspendRequest)) *ateletpb.RequestActorSuspendRequest {
-	r := &ateletpb.RequestActorSuspendRequest{
-		ActorAtespace: "team-a",
-		ActorName:     "actor-1",
-		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
+const testDigestImage = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+var createOp = operation.Operation{Type: operation.Create}
+
+func expectErrors(t *testing.T, want, got field.ErrorList) {
+	t.Helper()
+	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
+}
+
+// expectEdge checks the handler-facing wrapper: a valid request passes and an
+// invalid one comes back as InvalidArgument.
+func expectEdge(t *testing.T, err error, wantInvalid bool) {
+	t.Helper()
+	if !wantInvalid {
+		if err != nil {
+			t.Errorf("valid request rejected: %v", err)
+		}
+		return
 	}
-	for _, m := range mutate {
-		m(r)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("error = %v, want InvalidArgument", err)
 	}
-	return r
 }
 
 func TestValidateRequestActorSuspendRequest(t *testing.T) {
-	valid := validRequestActorSuspendRequest
+	valid := func(mutate ...func(*ateletpb.RequestActorSuspendRequest)) *ateletpb.RequestActorSuspendRequest {
+		r := &ateletpb.RequestActorSuspendRequest{
+			ActorAtespace: "team-a",
+			ActorName:     "actor-1",
+			ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
 
 	tests := []struct {
 		name string
@@ -76,40 +98,25 @@ func TestValidateRequestActorSuspendRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_RequestActorSuspendRequest(context.Background(), op, nil, tt.obj, nil))
+			expectErrors(t, tt.want, Validate_RequestActorSuspendRequest(context.Background(), createOp, nil, tt.obj, nil))
+			expectEdge(t, ValidateRequestActorSuspendRequest(context.Background(), tt.obj), len(tt.want) > 0)
 		})
 	}
 }
 
-// TestValidateRequestActorSuspendRequestEdge covers the handler-facing
-// wrapper: valid passes, invalid comes back as InvalidArgument.
-func TestValidateRequestActorSuspendRequestEdge(t *testing.T) {
-	if err := ValidateRequestActorSuspendRequest(context.Background(), validRequestActorSuspendRequest()); err != nil {
-		t.Fatalf("valid request rejected: %v", err)
-	}
-	err := ValidateRequestActorSuspendRequest(context.Background(), &ateletpb.RequestActorSuspendRequest{})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("empty request error = %v, want InvalidArgument", err)
-	}
-}
-
-func validMintActorCertificateRequest(mutate ...func(*ateletpb.MintActorCertificateRequest)) *ateletpb.MintActorCertificateRequest {
-	r := &ateletpb.MintActorCertificateRequest{
-		ActorAtespace:             "team-a",
-		ActorName:                 "actor-1",
-		ActorUid:                  "01234567-89ab-cdef-0123-456789abcdef",
-		CertificateSigningRequest: []byte("der-bytes"),
-	}
-	for _, m := range mutate {
-		m(r)
-	}
-	return r
-}
-
 func TestValidateMintActorCertificateRequest(t *testing.T) {
-	valid := validMintActorCertificateRequest
+	valid := func(mutate ...func(*ateletpb.MintActorCertificateRequest)) *ateletpb.MintActorCertificateRequest {
+		r := &ateletpb.MintActorCertificateRequest{
+			ActorAtespace:             "team-a",
+			ActorName:                 "actor-1",
+			ActorUid:                  "01234567-89ab-cdef-0123-456789abcdef",
+			CertificateSigningRequest: []byte("der-bytes"),
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
 
 	tests := []struct {
 		name string
@@ -160,46 +167,31 @@ func TestValidateMintActorCertificateRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_MintActorCertificateRequest(context.Background(), op, nil, tt.obj, nil))
+			expectErrors(t, tt.want, Validate_MintActorCertificateRequest(context.Background(), createOp, nil, tt.obj, nil))
+			expectEdge(t, ValidateMintActorCertificateRequest(context.Background(), tt.obj), len(tt.want) > 0)
 		})
 	}
 }
 
-// TestValidateMintActorCertificateRequestEdge covers the handler-facing
-// wrapper: valid passes, invalid comes back as InvalidArgument.
-func TestValidateMintActorCertificateRequestEdge(t *testing.T) {
-	if err := ValidateMintActorCertificateRequest(context.Background(), validMintActorCertificateRequest()); err != nil {
-		t.Fatalf("valid request rejected: %v", err)
-	}
-	err := ValidateMintActorCertificateRequest(context.Background(), &ateletpb.MintActorCertificateRequest{})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("empty request error = %v, want InvalidArgument", err)
-	}
-}
-
-func validTerminateRequest(mutate ...func(*ateletpb.TerminateRequest)) *ateletpb.TerminateRequest {
-	r := &ateletpb.TerminateRequest{
-		TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
-		Atespace:              "team-a",
-		ActorName:             "actor-1",
-		ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
-		ActorTemplateAtespace: "team-a",
-		ActorTemplateName:     "tmpl-1",
-		Spec:                  &ateletpb.WorkloadSpec{},
-	}
-	for _, m := range mutate {
-		m(r)
-	}
-	return r
-}
-
 // TestValidateTerminateRequest exercises the identity header shared by every
-// AteomHerder request; the other herder requests reuse the same generated
-// checks for those fields.
+// AteomHerder request. The spec's own rules are covered by
+// TestValidateWorkloadSpec; one case here proves the spec is validated.
 func TestValidateTerminateRequest(t *testing.T) {
-	valid := validTerminateRequest
+	valid := func(mutate ...func(*ateletpb.TerminateRequest)) *ateletpb.TerminateRequest {
+		r := &ateletpb.TerminateRequest{
+			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			Atespace:              "team-a",
+			ActorName:             "actor-1",
+			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+			ActorTemplateAtespace: "team-a",
+			ActorTemplateName:     "tmpl-1",
+			Spec:                  &ateletpb.WorkloadSpec{},
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
 
 	tests := []struct {
 		name string
@@ -243,18 +235,9 @@ func TestValidateTerminateRequest(t *testing.T) {
 	}, {
 		name: "reserved container name inside the spec",
 		obj: valid(func(r *ateletpb.TerminateRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
-				Name:  "pause",
-				Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-			}}}
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "pause", Image: testDigestImage}}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "")},
-	}, {
-		name: "volume with no source inside the spec",
-		obj: valid(func(r *ateletpb.TerminateRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{{Name: "data"}}}
-		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("spec", "volumes").Index(0), nil, "").WithOrigin("union")},
 	}, {
 		name: "unset template identity is allowed",
 		obj: valid(func(r *ateletpb.TerminateRequest) {
@@ -267,23 +250,27 @@ func TestValidateTerminateRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_TerminateRequest(context.Background(), op, nil, tt.obj, nil))
+			expectErrors(t, tt.want, Validate_TerminateRequest(context.Background(), createOp, nil, tt.obj, nil))
+			expectEdge(t, ValidateTerminateRequest(context.Background(), tt.obj), len(tt.want) > 0)
 		})
 	}
 }
 
 func TestValidateSetWorkerCapacityRequest(t *testing.T) {
+	withLimits := func(limits ...*ateapipb.Limits) *ateletpb.SetWorkerCapacityRequest {
+		return &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{Limits: limits}},
+		}
+	}
+	limitsPath := field.NewPath("capacity", "resources", "limits")
+
 	tests := []struct {
 		name string
 		obj  *ateletpb.SetWorkerCapacityRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{},
-		},
+		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{}},
 	}, {
 		name: "missing capacity",
 		obj:  &ateletpb.SetWorkerCapacityRequest{},
@@ -297,278 +284,88 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 		},
 	}, {
 		name: "negative actors",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Actors: -1},
-		},
+		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: -1}},
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "unsupported resource name",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}},
-			}},
-		},
-		want: field.ErrorList{field.NotSupported[string](field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, nil)},
+		obj:  withLimits(&ateapipb.Limits{Name: "gpu", Quantity: "1"}),
+		want: field.ErrorList{field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil)},
 	}, {
 		name: "missing resource name",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Quantity: "1"}},
-			}},
-		},
+		obj:  withLimits(&ateapipb.Limits{Quantity: "1"}),
 		want: field.ErrorList{
-			field.Required(field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), ""),
-			field.NotSupported[string](field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, nil),
+			field.Required(limitsPath.Index(0).Child("name"), ""),
+			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
 		},
 	}, {
 		name: "resource name too long",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: strings.Repeat("x", 17), Quantity: "1"}},
-			}},
-		},
+		obj:  withLimits(&ateapipb.Limits{Name: strings.Repeat("x", 17), Quantity: "1"}),
 		want: field.ErrorList{
-			field.TooLong(field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, 16).WithOrigin("maxLength"),
-			field.NotSupported[string](field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, nil),
+			field.TooLong(limitsPath.Index(0).Child("name"), nil, 16).WithOrigin("maxLength"),
+			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
 		},
 	}, {
 		name: "quantity too long",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "memory", Quantity: strings.Repeat("1", 33)}},
-			}},
-		},
-		want: field.ErrorList{
-			field.TooLong(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength"),
-		},
+		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: strings.Repeat("1", 33)}),
+		want: field.ErrorList{field.TooLong(limitsPath.Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength")},
 	}, {
 		name: "duplicate resource name",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "cpu", Quantity: "2"}},
-			}},
-		},
-		want: field.ErrorList{field.Duplicate(field.NewPath("capacity", "resources", "limits").Index(1), nil)},
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1"}, &ateapipb.Limits{Name: "cpu", Quantity: "2"}),
+		want: field.ErrorList{field.Duplicate(limitsPath.Index(1), nil)},
 	}, {
 		name: "missing quantity",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "cpu"}},
-			}},
-		},
-		want: field.ErrorList{field.Required(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), "")},
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu"}),
+		want: field.ErrorList{field.Required(limitsPath.Index(0).Child("quantity"), "")},
 	}, {
 		name: "malformed quantity",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "not-a-quantity"}},
-			}},
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "not-a-quantity"}),
+		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
 		name: "negative quantity",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "-1Gi"}},
-			}},
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: "-1Gi"}),
+		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
 		name: "zero quantity",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "0"}},
-			}},
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: "0"}),
+		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
 		name: "cpu at the bound",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1000"}},
-			}},
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1000"}),
+		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
 		name: "too many limits",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}, {Name: "cpu", Quantity: "2"}},
-			}},
-		},
-		want: field.ErrorList{field.TooMany(field.NewPath("capacity", "resources", "limits"), 3, 2).WithOrigin("maxItems")},
+		obj: withLimits(
+			&ateapipb.Limits{Name: "cpu", Quantity: "1"},
+			&ateapipb.Limits{Name: "memory", Quantity: "1Gi"},
+			&ateapipb.Limits{Name: "cpu", Quantity: "2"},
+		),
+		want: field.ErrorList{field.TooMany(limitsPath, 3, 2).WithOrigin("maxItems")},
 	}, {
 		name: "nil limit entry",
-		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{nil},
-			}},
-		},
-		want: field.ErrorList{field.Required(field.NewPath("capacity", "resources", "limits").Index(0), "")},
+		obj:  withLimits(nil),
+		want: field.ErrorList{field.Required(limitsPath.Index(0), "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_SetWorkerCapacityRequest(context.Background(), op, nil, tt.obj, nil))
+			expectErrors(t, tt.want, Validate_SetWorkerCapacityRequest(context.Background(), createOp, nil, tt.obj, nil))
+			expectEdge(t, ValidateSetWorkerCapacityRequest(context.Background(), tt.obj), len(tt.want) > 0)
 		})
 	}
 }
 
-// TestValidateSetWorkerCapacityRequestEdge covers the handler-facing
-// wrapper: valid passes, invalid comes back as InvalidArgument.
-func TestValidateSetWorkerCapacityRequestEdge(t *testing.T) {
-	valid := &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}}
-	if err := ValidateSetWorkerCapacityRequest(context.Background(), valid); err != nil {
-		t.Fatalf("valid request rejected: %v", err)
+// TestValidateWorkloadSpec covers the rules WorkloadSpec owns: the volumes and
+// containers lists. One nested case per list proves the element validators
+// run; their own rules are covered by TestValidateVolume and
+// TestValidateContainer.
+func TestValidateWorkloadSpec(t *testing.T) {
+	ctr := func(name string) *ateletpb.Container {
+		return &ateletpb.Container{Name: name, Image: testDigestImage}
 	}
-	err := ValidateSetWorkerCapacityRequest(context.Background(), &ateletpb.SetWorkerCapacityRequest{})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("empty request error = %v, want InvalidArgument", err)
-	}
-}
-
-func TestValidateVolume(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.Volume)) *ateletpb.Volume {
-		v := &ateletpb.Volume{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}
-		for _, m := range mutate {
-			m(v)
-		}
-		return v
-	}
-
-	tests := []struct {
-		name string
-		obj  *ateletpb.Volume
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  valid(),
-	}, {
-		name: "missing name",
-		obj:  valid(func(v *ateletpb.Volume) { v.Name = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
-	}, {
-		name: "invalid name: uppercase",
-		obj:  valid(func(v *ateletpb.Volume) { v.Name = "Data" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		name: "no source set",
-		obj:  valid(func(v *ateletpb.Volume) { v.DurableDir = nil }),
-		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
-	}, {
-		name: "two sources set",
-		obj: valid(func(v *ateletpb.Volume) {
-			v.External = &ateletpb.ExternalVolumeSource{StorageVolumeId: "vol-1"}
-		}),
-		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
-	}, {
-		name: "system-info source alone",
-		obj: valid(func(v *ateletpb.Volume) {
-			v.DurableDir = nil
-			v.SystemInfo = &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
-				{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "trust/bundle.pem"}},
-			}}
-		}),
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_Volume(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-func TestValidateSystemInfoDataSource(t *testing.T) {
-	tests := []struct {
-		name string
-		obj  *ateletpb.SystemInfoDataSource
-		want field.ErrorList
-	}{{
-		name: "trust bundle alone",
-		obj:  &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"}},
-	}, {
-		name: "actor metadata alone",
-		obj: &ateletpb.SystemInfoDataSource{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-			{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
-		}}},
-	}, {
-		name: "neither set",
-		obj:  &ateletpb.SystemInfoDataSource{},
-		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
-	}, {
-		name: "both set",
-		obj: &ateletpb.SystemInfoDataSource{
-			ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-				{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
-			}},
-			TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"},
-		},
-		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_SystemInfoDataSource(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-func TestValidateSystemInfoVolume(t *testing.T) {
-	ds := func(path string) *ateletpb.SystemInfoDataSource {
-		return &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "podcert", Path: path}}
-	}
-	tests := []struct {
-		name string
-		obj  *ateletpb.SystemInfoVolume
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj: &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
-			ds("a.pem"), ds("b.pem"),
-			{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-				{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
-			}}},
-		}},
-	}, {
-		name: "duplicate path across trust bundles",
-		obj:  &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{ds("a.pem"), ds("a.pem")}},
-		want: field.ErrorList{field.Duplicate(field.NewPath("data_sources").Index(1).Child("trust_bundle", "path"), nil)},
-	}, {
-		name: "duplicate path between bundle and metadata item",
-		obj: &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
-			ds("name"),
-			{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-				{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "name"},
-			}}},
-		}},
-		want: field.ErrorList{field.Duplicate(field.NewPath("data_sources").Index(1).Child("actor_metadata", "items").Index(0).Child("path"), nil)},
-	}, {
-		name: "too many data sources",
-		obj: &ateletpb.SystemInfoVolume{DataSources: []*ateletpb.SystemInfoDataSource{
-			ds("a"), ds("b"), ds("c"), ds("d"), ds("e"), ds("f"), ds("g"), ds("h"), ds("i"),
-		}},
-		want: field.ErrorList{field.TooMany(field.NewPath("data_sources"), 9, 8).WithOrigin("maxItems")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_SystemInfoVolume(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-// TestValidateWorkloadSpecVolumes exercises the volumes list through the
-// parent, as the control plane's template tests do, so the union and
-// uniqueness errors are asserted at their real field paths.
-func TestValidateWorkloadSpecVolumes(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.WorkloadSpec)) *ateletpb.WorkloadSpec {
-		s := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{
-			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
-		}}
+		s := &ateletpb.WorkloadSpec{
+			Volumes:    []*ateletpb.Volume{{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}},
+			Containers: []*ateletpb.Container{ctr("main"), ctr("sidecar")},
+		}
 		for _, m := range mutate {
 			m(s)
 		}
@@ -583,355 +380,281 @@ func TestValidateWorkloadSpecVolumes(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "no volumes: the delete flow may send containers only",
+		name: "empty spec",
 		obj:  &ateletpb.WorkloadSpec{},
 	}, {
-		name: "volume with no source",
-		obj:  valid(func(s *ateletpb.WorkloadSpec) { s.Volumes[0].DurableDir = nil }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "one of").WithOrigin("union")},
-	}, {
-		name: "volume with two sources",
-		obj: valid(func(s *ateletpb.WorkloadSpec) {
-			s.Volumes[0].SystemInfo = &ateletpb.SystemInfoVolume{}
-		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "one of").WithOrigin("union")},
+		name: "no volumes: the delete flow may send containers only",
+		obj:  valid(func(s *ateletpb.WorkloadSpec) { s.Volumes = nil }),
 	}, {
 		name: "duplicate volume names",
 		obj: valid(func(s *ateletpb.WorkloadSpec) {
 			s.Volumes = append(s.Volumes, &ateletpb.Volume{Name: "data", SystemInfo: &ateletpb.SystemInfoVolume{}})
 		}),
 		want: field.ErrorList{field.Duplicate(field.NewPath("volumes").Index(1), nil)},
+	}, {
+		name: "duplicate container names",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Containers = []*ateletpb.Container{ctr("main"), ctr("main")}
+		}),
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(1), nil)},
+	}, {
+		name: "volume errors surface at the volume's path",
+		obj:  valid(func(s *ateletpb.WorkloadSpec) { s.Volumes[0].DurableDir = nil }),
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "").WithOrigin("union")},
+	}, {
+		name: "container errors surface at the container's path",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Containers[0].Resources = &ateletpb.ResourceLimits{CpuMillis: -1}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_WorkloadSpec(context.Background(), op, nil, tt.obj, nil))
+			expectErrors(t, tt.want, Validate_WorkloadSpec(context.Background(), createOp, nil, tt.obj, nil))
 		})
 	}
 }
 
-func TestValidateExternalVolumeSource(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.ExternalVolumeSource)) *ateletpb.ExternalVolumeSource {
-		v := &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "projects/p/zones/z/disks/vol-1",
-			VolumeType:      "substrate.io/mock",
-			VolumeContext:   map[string]string{"fsType": "ext4"},
-		}
+// TestValidateVolume covers Volume and every source it can hold, with errors
+// asserted at their paths under the volume.
+func TestValidateVolume(t *testing.T) {
+	durable := func(mutate ...func(*ateletpb.Volume)) *ateletpb.Volume {
+		v := &ateletpb.Volume{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}
 		for _, m := range mutate {
 			m(v)
 		}
 		return v
 	}
-
-	tests := []struct {
-		name string
-		obj  *ateletpb.ExternalVolumeSource
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  valid(),
-	}, {
-		name: "missing storage_volume_id",
-		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.StorageVolumeId = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("storage_volume_id"), "")},
-	}, {
-		name: "storage_volume_id with a control character",
-		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.StorageVolumeId = "vol\x01" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
-		name: "storage_volume_id too long",
-		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.StorageVolumeId = strings.Repeat("x", 257) }),
-		want: field.ErrorList{field.TooLong(field.NewPath("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
-	}, {
-		name: "unset volume_type is allowed",
-		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.VolumeType = "" }),
-	}, {
-		name: "volume_type without the prefix",
-		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.VolumeType = "pd.csi.storage.gke.io" }),
-	}, {
-		name: "invalid volume_type: uppercase",
-		obj:  valid(func(v *ateletpb.ExternalVolumeSource) { v.VolumeType = "substrate.io/Mock" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
-	}, {
-		name: "volume_context key too long",
-		obj: valid(func(v *ateletpb.ExternalVolumeSource) {
-			v.VolumeContext = map[string]string{strings.Repeat("k", 129): "v"}
-		}),
-		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 128).WithOrigin("maxLength")},
-	}, {
-		name: "volume_context value too long",
-		obj: valid(func(v *ateletpb.ExternalVolumeSource) {
-			v.VolumeContext = map[string]string{"k": strings.Repeat("v", 257)}
-		}),
-		want: field.ErrorList{field.TooLong(field.NewPath("volume_context").Key("k"), nil, 256).WithOrigin("maxLength")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_ExternalVolumeSource(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-func TestValidateImageVolumeSource(t *testing.T) {
-	tests := []struct {
-		name string
-		obj  *ateletpb.ImageVolumeSource
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  &ateletpb.ImageVolumeSource{Reference: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
-	}, {
-		name: "missing reference",
-		obj:  &ateletpb.ImageVolumeSource{},
-		want: field.ErrorList{field.Required(field.NewPath("reference"), "")},
-	}, {
-		name: "reference not pinned by digest",
-		obj:  &ateletpb.ImageVolumeSource{Reference: "example.com/app:v1"},
-		want: field.ErrorList{field.Invalid(field.NewPath("reference"), nil, "")},
-	}, {
-		name: "reference with a malformed digest",
-		obj:  &ateletpb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"},
-		want: field.ErrorList{field.Invalid(field.NewPath("reference"), nil, "")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_ImageVolumeSource(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-func TestValidateResourceLimits(t *testing.T) {
-	tests := []struct {
-		name string
-		obj  *ateletpb.ResourceLimits
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  &ateletpb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500},
-	}, {
-		name: "zero means unset",
-		obj:  &ateletpb.ResourceLimits{},
-	}, {
-		name: "negative memory_bytes",
-		obj:  &ateletpb.ResourceLimits{MemoryBytes: -1},
-		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
-	}, {
-		name: "negative cpu_millis",
-		obj:  &ateletpb.ResourceLimits{CpuMillis: -1},
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_millis"), nil, "").WithOrigin("minimum")},
-	}, {
-		name: "cpu_millis at the cap",
-		obj:  &ateletpb.ResourceLimits{CpuMillis: 999999},
-	}, {
-		name: "cpu_millis above the cap",
-		obj:  &ateletpb.ResourceLimits{CpuMillis: 1000000},
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_millis"), nil, "").WithOrigin("maximum")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_ResourceLimits(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-// TestValidateSecurityContext exercises the capability rules through the
-// parent, so errors carry their real paths.
-func TestValidateSecurityContext(t *testing.T) {
-	sc := func(add, drop []string) *ateletpb.SecurityContext {
-		return &ateletpb.SecurityContext{Capabilities: &ateletpb.Capabilities{Add: add, Drop: drop}}
-	}
-	capsPath := func(kind string) *field.Path { return field.NewPath("capabilities", kind).Index(0) }
-
-	tests := []struct {
-		name string
-		obj  *ateletpb.SecurityContext
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  sc([]string{"NET_BIND_SERVICE"}, []string{"ALL"}),
-	}, {
-		name: "empty",
-		obj:  &ateletpb.SecurityContext{},
-	}, {
-		name: "add does not accept ALL",
-		obj:  sc([]string{"ALL"}, nil),
-		want: field.ErrorList{field.Invalid(capsPath("add"), nil, "")},
-	}, {
-		name: "drop accepts ALL",
-		obj:  sc(nil, []string{"ALL"}),
-	}, {
-		name: "CAP_ prefix rejected",
-		obj:  sc([]string{"CAP_NET_BIND_SERVICE"}, nil),
-		want: field.ErrorList{field.Invalid(capsPath("add"), nil, "")},
-	}, {
-		name: "lowercase rejected",
-		obj:  sc(nil, []string{"net_bind_service"}),
-		want: field.ErrorList{field.Invalid(capsPath("drop"), nil, "")},
-	}, {
-		name: "duplicate capability rejected by the set",
-		obj:  sc([]string{"SYS_TIME", "SYS_TIME"}, nil),
-		want: field.ErrorList{field.Duplicate(field.NewPath("capabilities", "add").Index(1), nil)},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_SecurityContext(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-// TestValidateWorkloadSpecContainers exercises the newly keyed containers
-// list through the parent, as with volumes.
-func TestValidateWorkloadSpecContainers(t *testing.T) {
-	ctr := func(name string) *ateletpb.Container {
-		return &ateletpb.Container{Name: name, Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
-	}
-	tests := []struct {
-		name string
-		obj  *ateletpb.WorkloadSpec
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("main"), ctr("sidecar")}},
-	}, {
-		name: "missing container name",
-		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("")}},
-		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("name"), "")},
-	}, {
-		name: "invalid container name: uppercase",
-		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("Main")}},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		name: "duplicate container names",
-		obj:  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{ctr("main"), ctr("main")}},
-		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(1), nil)},
-	}, {
-		name: "negative limits surface through the container",
-		obj: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
-			Name:      "main",
-			Image:     "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-			Resources: &ateletpb.ResourceLimits{CpuMillis: -1},
-		}}},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_WorkloadSpec(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-func TestValidateEnvEntry(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.EnvEntry)) *ateletpb.EnvEntry {
-		e := &ateletpb.EnvEntry{Name: "PORT", Value: "8080"}
+	external := func(mutate ...func(*ateletpb.ExternalVolumeSource)) *ateletpb.Volume {
+		e := &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "projects/p/zones/z/disks/vol-1",
+			VolumeType:      "substrate.io/mock",
+			VolumeContext:   map[string]string{"fsType": "ext4"},
+		}
 		for _, m := range mutate {
 			m(e)
 		}
-		return e
+		return &ateletpb.Volume{Name: "data", External: e}
 	}
-	tests := []struct {
-		name string
-		obj  *ateletpb.EnvEntry
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  valid(),
-	}, {
-		name: "missing name",
-		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
-	}, {
-		name: "name with equals sign",
-		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "A=B" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
-	}, {
-		name: "name with spaces and punctuation is allowed",
-		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "weird name!" }),
-	}, {
-		name: "name with a non-ASCII rune",
-		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = "café" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
-	}, {
-		name: "name too long",
-		obj:  valid(func(e *ateletpb.EnvEntry) { e.Name = strings.Repeat("N", 257) }),
-		want: field.ErrorList{field.TooLong(field.NewPath("name"), nil, 256).WithOrigin("maxLength")},
-	}, {
-		name: "empty value is allowed",
-		obj:  valid(func(e *ateletpb.EnvEntry) { e.Value = "" }),
-	}, {
-		name: "value too long",
-		obj:  valid(func(e *ateletpb.EnvEntry) { e.Value = strings.Repeat("v", 32769) }),
-		want: field.ErrorList{field.TooLong(field.NewPath("value"), nil, 32768).WithOrigin("maxLength")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_EnvEntry(context.Background(), op, nil, tt.obj, nil))
-		})
+	image := func(ref string) *ateletpb.Volume {
+		return &ateletpb.Volume{Name: "data", Image: &ateletpb.ImageVolumeSource{Reference: ref}}
 	}
-}
+	systemInfo := func(ds ...*ateletpb.SystemInfoDataSource) *ateletpb.Volume {
+		return &ateletpb.Volume{Name: "data", SystemInfo: &ateletpb.SystemInfoVolume{DataSources: ds}}
+	}
+	bundle := func(name, path string) *ateletpb.SystemInfoDataSource {
+		return &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: name, Path: path}}
+	}
+	item := func(f ateletpb.ActorMetadataField, path string) *ateletpb.ActorMetadataItem {
+		return &ateletpb.ActorMetadataItem{Field: f, Path: path}
+	}
+	metadata := func(items ...*ateletpb.ActorMetadataItem) *ateletpb.SystemInfoDataSource {
+		return &ateletpb.SystemInfoDataSource{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: items}}
+	}
+	fieldName := ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME
 
-func TestValidateVolumeMount(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.VolumeMount)) *ateletpb.VolumeMount {
-		m := &ateletpb.VolumeMount{Name: "data", MountPath: "/var/data"}
-		for _, mu := range mutate {
-			mu(m)
-		}
-		return m
-	}
-	badPath := func(p string) *ateletpb.VolumeMount {
-		return valid(func(m *ateletpb.VolumeMount) { m.MountPath = p })
-	}
-	invalidPath := field.ErrorList{field.Invalid(field.NewPath("mount_path"), nil, "")}
+	extPath := field.NewPath("external")
+	dsPath := field.NewPath("system_info", "data_sources")
+	bundlePath := dsPath.Index(0).Child("trust_bundle")
+	itemsPath := dsPath.Index(0).Child("actor_metadata", "items")
 
 	tests := []struct {
 		name string
-		obj  *ateletpb.VolumeMount
+		obj  *ateletpb.Volume
 		want field.ErrorList
 	}{
-		{name: "valid", obj: valid()},
-		{name: "missing name", obj: valid(func(m *ateletpb.VolumeMount) { m.Name = "" }),
-			want: field.ErrorList{field.Required(field.NewPath("name"), "")}},
-		{name: "invalid name: uppercase", obj: valid(func(m *ateletpb.VolumeMount) { m.Name = "Data" }),
-			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")}},
-		{name: "missing mount_path", obj: badPath(""),
-			want: field.ErrorList{field.Required(field.NewPath("mount_path"), "")}},
-		{name: "relative mount_path", obj: badPath("var/data"), want: invalidPath},
-		{name: "root mount_path", obj: badPath("/"), want: invalidPath},
-		{name: "trailing slash", obj: badPath("/var/data/"), want: invalidPath},
-		{name: "double slash", obj: badPath("/var//data"), want: invalidPath},
-		{name: "colon", obj: badPath("/var/da:ta"), want: invalidPath},
-		{name: "dot-dot segment", obj: badPath("/var/../etc"), want: invalidPath},
-		{name: "control character", obj: badPath("/var/da\x01ta"), want: invalidPath},
+		// Volume.
+		{
+			name: "valid durable dir",
+			obj:  durable(),
+		}, {
+			name: "missing name",
+			obj:  durable(func(v *ateletpb.Volume) { v.Name = "" }),
+			want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+		}, {
+			name: "invalid name: uppercase",
+			obj:  durable(func(v *ateletpb.Volume) { v.Name = "Data" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+		}, {
+			name: "no source set",
+			obj:  durable(func(v *ateletpb.Volume) { v.DurableDir = nil }),
+			want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+		}, {
+			name: "two sources set",
+			obj: durable(func(v *ateletpb.Volume) {
+				v.External = &ateletpb.ExternalVolumeSource{StorageVolumeId: "vol-1"}
+			}),
+			want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+		},
+
+		// ExternalVolumeSource.
+		{
+			name: "valid external",
+			obj:  external(),
+		}, {
+			name: "external: missing storage_volume_id",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "" }),
+			want: field.ErrorList{field.Required(extPath.Child("storage_volume_id"), "")},
+		}, {
+			name: "external: storage_volume_id with a control character",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "vol\x01" }),
+			want: field.ErrorList{field.Invalid(extPath.Child("storage_volume_id"), nil, "")},
+		}, {
+			name: "external: storage_volume_id too long",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = strings.Repeat("x", 257) }),
+			want: field.ErrorList{field.TooLong(extPath.Child("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
+		}, {
+			name: "external: unset volume_type is allowed",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "" }),
+		}, {
+			name: "external: volume_type without the prefix",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "pd.csi.storage.gke.io" }),
+		}, {
+			name: "external: invalid volume_type: uppercase",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "substrate.io/Mock" }),
+			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "")},
+		}, {
+			name: "external: volume_context key too long",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.VolumeContext = map[string]string{strings.Repeat("k", 129): "v"}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("volume_context"), nil, 128).WithOrigin("maxLength")},
+		}, {
+			name: "external: volume_context value too long",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 257)}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("volume_context").Key("k"), nil, 256).WithOrigin("maxLength")},
+		},
+
+		// ImageVolumeSource.
+		{
+			name: "valid image",
+			obj:  image(testDigestImage),
+		}, {
+			name: "image: missing reference",
+			obj:  image(""),
+			want: field.ErrorList{field.Required(field.NewPath("image", "reference"), "")},
+		}, {
+			name: "image: reference not pinned by digest",
+			obj:  image("example.com/app:v1"),
+			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
+		}, {
+			name: "image: reference with a malformed digest",
+			obj:  image("example.com/app@sha256:abc"),
+			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
+		},
+
+		// SystemInfoVolume and SystemInfoDataSource.
+		{
+			name: "valid system info",
+			obj:  systemInfo(bundle("podcert", "a.pem"), bundle("podcert", "b.pem"), metadata(item(fieldName, "name"))),
+		}, {
+			name: "system info: data source with neither set",
+			obj:  systemInfo(&ateletpb.SystemInfoDataSource{}),
+			want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
+		}, {
+			name: "system info: data source with both set",
+			obj: systemInfo(&ateletpb.SystemInfoDataSource{
+				ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{item(fieldName, "name")}},
+				TrustBundle:   &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"},
+			}),
+			want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
+		}, {
+			name: "system info: duplicate path across trust bundles",
+			obj:  systemInfo(bundle("podcert", "a.pem"), bundle("podcert", "a.pem")),
+			want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("trust_bundle", "path"), nil)},
+		}, {
+			name: "system info: duplicate path between bundle and metadata item",
+			obj:  systemInfo(bundle("podcert", "name"), metadata(item(fieldName, "name"))),
+			want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("actor_metadata", "items").Index(0).Child("path"), nil)},
+		}, {
+			name: "system info: too many data sources",
+			obj: systemInfo(
+				bundle("podcert", "a"), bundle("podcert", "b"), bundle("podcert", "c"),
+				bundle("podcert", "d"), bundle("podcert", "e"), bundle("podcert", "f"),
+				bundle("podcert", "g"), bundle("podcert", "h"), bundle("podcert", "i"),
+			),
+			want: field.ErrorList{field.TooMany(dsPath, 9, 8).WithOrigin("maxItems")},
+		},
+
+		// TrustBundleDataSource.
+		{
+			name: "trust bundle: missing path",
+			obj:  systemInfo(bundle("podcert", "")),
+			want: field.ErrorList{field.Required(bundlePath.Child("path"), "")},
+		}, {
+			name: "trust bundle: absolute path",
+			obj:  systemInfo(bundle("podcert", "/trust/bundle.pem")),
+			want: field.ErrorList{field.Invalid(bundlePath.Child("path"), nil, "")},
+		}, {
+			name: "trust bundle: path with a dot segment",
+			obj:  systemInfo(bundle("podcert", "trust/./bundle.pem")),
+			want: field.ErrorList{field.Invalid(bundlePath.Child("path"), nil, "")},
+		}, {
+			name: "trust bundle: path too long",
+			obj:  systemInfo(bundle("podcert", strings.Repeat("p", 256))),
+			want: field.ErrorList{field.TooLong(bundlePath.Child("path"), nil, 255).WithOrigin("maxLength")},
+		}, {
+			name: "trust bundle: missing name",
+			obj:  systemInfo(bundle("", "trust/bundle.pem")),
+			want: field.ErrorList{field.Required(bundlePath.Child("name"), "")},
+		}, {
+			name: "trust bundle: name too long",
+			obj:  systemInfo(bundle(strings.Repeat("n", 254), "trust/bundle.pem")),
+			want: field.ErrorList{field.TooLong(bundlePath.Child("name"), nil, 253).WithOrigin("maxLength")},
+		},
+
+		// ActorMetadataDataSource.
+		{
+			name: "actor metadata: several fields",
+			obj: systemInfo(metadata(
+				item(fieldName, "name"),
+				item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, "ids/uid"),
+			)),
+		}, {
+			name: "actor metadata: empty items",
+			obj:  systemInfo(metadata()),
+			want: field.ErrorList{field.Required(itemsPath, "")},
+		}, {
+			name: "actor metadata: same field projected twice",
+			obj:  systemInfo(metadata(item(fieldName, "a"), item(fieldName, "b"))),
+			want: field.ErrorList{field.Duplicate(itemsPath.Index(1), nil)},
+		}, {
+			name: "actor metadata: unspecified field",
+			obj:  systemInfo(metadata(item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED, "a"))),
+			want: field.ErrorList{field.Required(itemsPath.Index(0).Child("field"), "")},
+		}, {
+			name: "actor metadata: field outside the enum",
+			obj:  systemInfo(metadata(item(ateletpb.ActorMetadataField(4), "a"))),
+			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("field"), nil, "").WithOrigin("maximum")},
+		}, {
+			name: "actor metadata: absolute item path",
+			obj:  systemInfo(metadata(item(fieldName, "/etc/name"))),
+			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+		}, {
+			name: "actor metadata: escaping item path",
+			obj:  systemInfo(metadata(item(fieldName, "../name"))),
+			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_VolumeMount(context.Background(), op, nil, tt.obj, nil))
+			expectErrors(t, tt.want, Validate_Volume(context.Background(), createOp, nil, tt.obj, nil))
 		})
 	}
 }
 
-// TestValidateContainerMountsAndEnv exercises the newly keyed env and
-// volume_mounts lists through the parent, so errors carry real paths.
-func TestValidateContainerMountsAndEnv(t *testing.T) {
+// TestValidateContainer covers Container and every message it holds, with
+// errors asserted at their paths under the container.
+func TestValidateContainer(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.Container)) *ateletpb.Container {
 		c := &ateletpb.Container{
-			Name:  "main",
-			Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-			Env:   []*ateletpb.EnvEntry{{Name: "PORT", Value: "8080"}},
+			Name:    "main",
+			Image:   testDigestImage,
+			Command: []string{"/bin/app"},
+			Args:    []string{"--serve"},
+			Env:     []*ateletpb.EnvEntry{{Name: "PORT", Value: "8080"}},
 			VolumeMounts: []*ateletpb.VolumeMount{
 				{Name: "data", MountPath: "/data"},
 				{Name: "data", MountPath: "/mnt/data"},
@@ -942,108 +665,17 @@ func TestValidateContainerMountsAndEnv(t *testing.T) {
 		}
 		return c
 	}
-
-	tests := []struct {
-		name string
-		obj  *ateletpb.Container
-		want field.ErrorList
-	}{{
-		name: "valid: the same volume mounted at two paths",
-		obj:  valid(),
-	}, {
-		name: "duplicate env names",
-		obj: valid(func(c *ateletpb.Container) {
-			c.Env = append(c.Env, &ateletpb.EnvEntry{Name: "PORT", Value: "9"})
-		}),
-		want: field.ErrorList{field.Duplicate(field.NewPath("env").Index(1), nil)},
-	}, {
-		name: "duplicate mount paths",
-		obj: valid(func(c *ateletpb.Container) {
-			c.VolumeMounts[1].MountPath = "/data"
-		}),
-		want: field.ErrorList{field.Duplicate(field.NewPath("volume_mounts").Index(1), nil)},
-	}, {
-		name: "nested mount paths",
-		obj: valid(func(c *ateletpb.Container) {
-			c.VolumeMounts[1].MountPath = "/data/nested"
-		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
-	}, {
-		name: "nesting rejected regardless of order",
-		obj: valid(func(c *ateletpb.Container) {
-			c.VolumeMounts[0].MountPath = "/mnt/data/nested"
-		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
-	}, {
-		name: "sibling paths with a shared segment prefix are allowed",
-		obj: valid(func(c *ateletpb.Container) {
-			c.VolumeMounts[0].MountPath = "/data/a"
-			c.VolumeMounts[1].MountPath = "/data/ab"
-		}),
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_Container(context.Background(), op, nil, tt.obj, nil))
+	env := func(mutate func(*ateletpb.EnvEntry)) *ateletpb.Container {
+		return valid(func(c *ateletpb.Container) { mutate(c.Env[0]) })
+	}
+	// mount replaces the mounts with a single one, so the nesting check
+	// between mounts stays out of the way.
+	mount := func(name, path string) *ateletpb.Container {
+		return valid(func(c *ateletpb.Container) {
+			c.VolumeMounts = []*ateletpb.VolumeMount{{Name: name, MountPath: path}}
 		})
 	}
-}
-
-func TestValidateHTTPGetAction(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.HTTPGetAction)) *ateletpb.HTTPGetAction {
-		a := &ateletpb.HTTPGetAction{Path: "/healthz", Port: 8080}
-		for _, m := range mutate {
-			m(a)
-		}
-		return a
-	}
-	tests := []struct {
-		name string
-		obj  *ateletpb.HTTPGetAction
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  valid(),
-	}, {
-		name: "missing path",
-		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("path"), "")},
-	}, {
-		name: "path without a leading slash",
-		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "healthz" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
-	}, {
-		name: "path with a query string",
-		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "/healthz?verbose=1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
-	}, {
-		name: "path with a valid percent escape",
-		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "/health%20z" }),
-	}, {
-		name: "path with a malformed percent escape",
-		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Path = "/health%2" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
-	}, {
-		name: "missing port",
-		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Port = 0 }),
-		want: field.ErrorList{field.Required(field.NewPath("port"), "")},
-	}, {
-		name: "port above the range",
-		obj:  valid(func(a *ateletpb.HTTPGetAction) { a.Port = 65536 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("port"), nil, "").WithOrigin("maximum")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_HTTPGetAction(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
-
-func TestValidateWakeupProbe(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.WakeupProbe)) *ateletpb.WakeupProbe {
+	probe := func(mutate ...func(*ateletpb.WakeupProbe)) *ateletpb.Container {
 		p := &ateletpb.WakeupProbe{
 			HttpGet:        &ateletpb.HTTPGetAction{Path: "/healthz", Port: 8080},
 			TimeoutSeconds: 30,
@@ -1051,212 +683,247 @@ func TestValidateWakeupProbe(t *testing.T) {
 		for _, m := range mutate {
 			m(p)
 		}
-		return p
+		return valid(func(c *ateletpb.Container) { c.WakeupProbe = p })
 	}
-	tests := []struct {
-		name string
-		obj  *ateletpb.WakeupProbe
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  valid(),
-	}, {
-		name: "missing http_get",
-		obj:  valid(func(p *ateletpb.WakeupProbe) { p.HttpGet = nil }),
-		want: field.ErrorList{field.Required(field.NewPath("http_get"), "")},
-	}, {
-		name: "missing timeout",
-		obj:  valid(func(p *ateletpb.WakeupProbe) { p.TimeoutSeconds = 0 }),
-		want: field.ErrorList{field.Required(field.NewPath("timeout_seconds"), "")},
-	}, {
-		name: "timeout above the bound",
-		obj:  valid(func(p *ateletpb.WakeupProbe) { p.TimeoutSeconds = 3601 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("timeout_seconds"), nil, "").WithOrigin("maximum")},
-	}, {
-		name: "bad probe path surfaces through the probe",
-		obj:  valid(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/x?y" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("http_get", "path"), nil, "")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_WakeupProbe(context.Background(), op, nil, tt.obj, nil))
+	caps := func(add, drop []string) *ateletpb.Container {
+		return valid(func(c *ateletpb.Container) {
+			c.SecurityContext = &ateletpb.SecurityContext{Capabilities: &ateletpb.Capabilities{Add: add, Drop: drop}}
 		})
 	}
-}
-
-// TestValidateContainerNameAndProcess covers the fields that define what the
-// container runs: name (with the reserved "pause"), image, command, and args.
-func TestValidateContainerNameAndProcess(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.Container)) *ateletpb.Container {
-		c := &ateletpb.Container{
-			Name:    "main",
-			Image:   "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-			Command: []string{"/bin/app"},
-			Args:    []string{"--serve"},
-		}
-		for _, m := range mutate {
-			m(c)
-		}
-		return c
+	limits := func(r *ateletpb.ResourceLimits) *ateletpb.Container {
+		return valid(func(c *ateletpb.Container) { c.Resources = r })
 	}
+
+	envPath := field.NewPath("env").Index(0)
+	mountPath := field.NewPath("volume_mounts").Index(0)
+	httpGetPath := field.NewPath("wakeup_probe", "http_get")
+	capsPath := field.NewPath("security_context", "capabilities")
+	invalidMountPath := field.ErrorList{field.Invalid(mountPath.Child("mount_path"), nil, "")}
 
 	tests := []struct {
 		name string
 		obj  *ateletpb.Container
 		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  valid(),
-	}, {
-		name: "reserved name pause",
-		obj:  valid(func(c *ateletpb.Container) { c.Name = "pause" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
-	}, {
-		name: "missing image",
-		obj:  valid(func(c *ateletpb.Container) { c.Image = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("image"), "")},
-	}, {
-		name: "image not pinned by digest",
-		obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app:v1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
-	}, {
-		name: "image with a malformed digest",
-		obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app@sha256:abc" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
-	}, {
-		name: "empty command and args are allowed",
-		obj: valid(func(c *ateletpb.Container) {
-			c.Command = nil
-			c.Args = nil
-		}),
-	}, {
-		name: "too many command items",
-		obj: valid(func(c *ateletpb.Container) {
-			c.Command = make([]string, 65)
-		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("command"), 65, 64).WithOrigin("maxItems")},
-	}, {
-		name: "arg over the length guardrail",
-		obj: valid(func(c *ateletpb.Container) {
-			c.Args = []string{strings.Repeat("a", 4097)}
-		}),
-		want: field.ErrorList{field.TooLong(field.NewPath("args").Index(0), nil, 4096).WithOrigin("maxLength")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_Container(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
+	}{
+		// Container name, image, command, and args.
+		{
+			name: "valid: the same volume mounted at two paths",
+			obj:  valid(),
+		}, {
+			name: "missing name",
+			obj:  valid(func(c *ateletpb.Container) { c.Name = "" }),
+			want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+		}, {
+			name: "invalid name: uppercase",
+			obj:  valid(func(c *ateletpb.Container) { c.Name = "Main" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+		}, {
+			name: "reserved name pause",
+			obj:  valid(func(c *ateletpb.Container) { c.Name = "pause" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
+		}, {
+			name: "missing image",
+			obj:  valid(func(c *ateletpb.Container) { c.Image = "" }),
+			want: field.ErrorList{field.Required(field.NewPath("image"), "")},
+		}, {
+			name: "image not pinned by digest",
+			obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app:v1" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
+		}, {
+			name: "image with a malformed digest",
+			obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app@sha256:abc" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
+		}, {
+			name: "empty command and args are allowed",
+			obj: valid(func(c *ateletpb.Container) {
+				c.Command = nil
+				c.Args = nil
+			}),
+		}, {
+			name: "too many command items",
+			obj:  valid(func(c *ateletpb.Container) { c.Command = make([]string, 65) }),
+			want: field.ErrorList{field.TooMany(field.NewPath("command"), 65, 64).WithOrigin("maxItems")},
+		}, {
+			name: "arg over the length guardrail",
+			obj:  valid(func(c *ateletpb.Container) { c.Args = []string{strings.Repeat("a", 4097)} }),
+			want: field.ErrorList{field.TooLong(field.NewPath("args").Index(0), nil, 4096).WithOrigin("maxLength")},
+		},
 
-func TestValidateActorMetadataDataSource(t *testing.T) {
-	item := func(f ateletpb.ActorMetadataField, path string) *ateletpb.ActorMetadataItem {
-		return &ateletpb.ActorMetadataItem{Field: f, Path: path}
-	}
-	tests := []struct {
-		name string
-		obj  *ateletpb.ActorMetadataDataSource
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "name"),
-			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, "ids/uid"),
-		}},
-	}, {
-		name: "empty items",
-		obj:  &ateletpb.ActorMetadataDataSource{},
-		want: field.ErrorList{field.Required(field.NewPath("items"), "")},
-	}, {
-		name: "same field projected twice",
-		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "a"),
-			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "b"),
-		}},
-		want: field.ErrorList{field.Duplicate(field.NewPath("items").Index(1), nil)},
-	}, {
-		name: "unspecified field",
-		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED, "a"),
-		}},
-		want: field.ErrorList{field.Required(field.NewPath("items").Index(0).Child("field"), "")},
-	}, {
-		name: "field outside the enum",
-		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-			item(ateletpb.ActorMetadataField(4), "a"),
-		}},
-		want: field.ErrorList{field.Invalid(field.NewPath("items").Index(0).Child("field"), nil, "").WithOrigin("maximum")},
-	}, {
-		name: "absolute item path",
-		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "/etc/name"),
-		}},
-		want: field.ErrorList{field.Invalid(field.NewPath("items").Index(0).Child("path"), nil, "")},
-	}, {
-		name: "escaping item path",
-		obj: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{
-			item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, "../name"),
-		}},
-		want: field.ErrorList{field.Invalid(field.NewPath("items").Index(0).Child("path"), nil, "")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_ActorMetadataDataSource(context.Background(), op, nil, tt.obj, nil))
-		})
-	}
-}
+		// EnvEntry.
+		{
+			name: "duplicate env names",
+			obj: valid(func(c *ateletpb.Container) {
+				c.Env = append(c.Env, &ateletpb.EnvEntry{Name: "PORT", Value: "9"})
+			}),
+			want: field.ErrorList{field.Duplicate(field.NewPath("env").Index(1), nil)},
+		}, {
+			name: "env: missing name",
+			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "" }),
+			want: field.ErrorList{field.Required(envPath.Child("name"), "")},
+		}, {
+			name: "env: name with equals sign",
+			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "A=B" }),
+			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "")},
+		}, {
+			name: "env: name with spaces and punctuation is allowed",
+			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "weird name!" }),
+		}, {
+			name: "env: name with a non-ASCII rune",
+			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "café" }),
+			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "")},
+		}, {
+			name: "env: name too long",
+			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = strings.Repeat("N", 257) }),
+			want: field.ErrorList{field.TooLong(envPath.Child("name"), nil, 256).WithOrigin("maxLength")},
+		}, {
+			name: "env: empty value is allowed",
+			obj:  env(func(e *ateletpb.EnvEntry) { e.Value = "" }),
+		}, {
+			name: "env: value too long",
+			obj:  env(func(e *ateletpb.EnvEntry) { e.Value = strings.Repeat("v", 32769) }),
+			want: field.ErrorList{field.TooLong(envPath.Child("value"), nil, 32768).WithOrigin("maxLength")},
+		},
 
-func TestValidateTrustBundleDataSource(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.TrustBundleDataSource)) *ateletpb.TrustBundleDataSource {
-		tb := &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "trust/bundle.pem"}
-		for _, m := range mutate {
-			m(tb)
-		}
-		return tb
+		// VolumeMount.
+		{
+			name: "duplicate mount paths",
+			obj:  valid(func(c *ateletpb.Container) { c.VolumeMounts[1].MountPath = "/data" }),
+			want: field.ErrorList{field.Duplicate(field.NewPath("volume_mounts").Index(1), nil)},
+		}, {
+			name: "nested mount paths",
+			obj:  valid(func(c *ateletpb.Container) { c.VolumeMounts[1].MountPath = "/data/nested" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+		}, {
+			name: "nesting rejected regardless of order",
+			obj:  valid(func(c *ateletpb.Container) { c.VolumeMounts[0].MountPath = "/mnt/data/nested" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+		}, {
+			name: "sibling paths with a shared segment prefix are allowed",
+			obj: valid(func(c *ateletpb.Container) {
+				c.VolumeMounts[0].MountPath = "/data/a"
+				c.VolumeMounts[1].MountPath = "/data/ab"
+			}),
+		}, {
+			name: "mount: missing name",
+			obj:  mount("", "/var/data"),
+			want: field.ErrorList{field.Required(mountPath.Child("name"), "")},
+		}, {
+			name: "mount: invalid name: uppercase",
+			obj:  mount("Data", "/var/data"),
+			want: field.ErrorList{field.Invalid(mountPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+		}, {
+			name: "mount: missing mount_path",
+			obj:  mount("data", ""),
+			want: field.ErrorList{field.Required(mountPath.Child("mount_path"), "")},
+		},
+		{name: "mount: relative mount_path", obj: mount("data", "var/data"), want: invalidMountPath},
+		{name: "mount: root mount_path", obj: mount("data", "/"), want: invalidMountPath},
+		{name: "mount: trailing slash", obj: mount("data", "/var/data/"), want: invalidMountPath},
+		{name: "mount: double slash", obj: mount("data", "/var//data"), want: invalidMountPath},
+		{name: "mount: colon", obj: mount("data", "/var/da:ta"), want: invalidMountPath},
+		{name: "mount: dot-dot segment", obj: mount("data", "/var/../etc"), want: invalidMountPath},
+		{name: "mount: control character", obj: mount("data", "/var/da\x01ta"), want: invalidMountPath},
+
+		// WakeupProbe and HTTPGetAction.
+		{
+			name: "valid probe",
+			obj:  probe(),
+		}, {
+			name: "probe: missing http_get",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet = nil }),
+			want: field.ErrorList{field.Required(httpGetPath, "")},
+		}, {
+			name: "probe: missing timeout",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.TimeoutSeconds = 0 }),
+			want: field.ErrorList{field.Required(field.NewPath("wakeup_probe", "timeout_seconds"), "")},
+		}, {
+			name: "probe: timeout above the bound",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.TimeoutSeconds = 3601 }),
+			want: field.ErrorList{field.Invalid(field.NewPath("wakeup_probe", "timeout_seconds"), nil, "").WithOrigin("maximum")},
+		}, {
+			name: "probe: missing path",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "" }),
+			want: field.ErrorList{field.Required(httpGetPath.Child("path"), "")},
+		}, {
+			name: "probe: path without a leading slash",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "healthz" }),
+			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
+		}, {
+			name: "probe: path with a query string",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/healthz?verbose=1" }),
+			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
+		}, {
+			name: "probe: path with a valid percent escape",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/health%20z" }),
+		}, {
+			name: "probe: path with a malformed percent escape",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/health%2" }),
+			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
+		}, {
+			name: "probe: missing port",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Port = 0 }),
+			want: field.ErrorList{field.Required(httpGetPath.Child("port"), "")},
+		}, {
+			name: "probe: port above the range",
+			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Port = 65536 }),
+			want: field.ErrorList{field.Invalid(httpGetPath.Child("port"), nil, "").WithOrigin("maximum")},
+		},
+
+		// SecurityContext.
+		{
+			name: "valid capabilities",
+			obj:  caps([]string{"NET_BIND_SERVICE"}, []string{"ALL"}),
+		}, {
+			name: "empty security context",
+			obj:  valid(func(c *ateletpb.Container) { c.SecurityContext = &ateletpb.SecurityContext{} }),
+		}, {
+			name: "capabilities: add does not accept ALL",
+			obj:  caps([]string{"ALL"}, nil),
+			want: field.ErrorList{field.Invalid(capsPath.Child("add").Index(0), nil, "")},
+		}, {
+			name: "capabilities: drop accepts ALL",
+			obj:  caps(nil, []string{"ALL"}),
+		}, {
+			name: "capabilities: CAP_ prefix rejected",
+			obj:  caps([]string{"CAP_NET_BIND_SERVICE"}, nil),
+			want: field.ErrorList{field.Invalid(capsPath.Child("add").Index(0), nil, "")},
+		}, {
+			name: "capabilities: lowercase rejected",
+			obj:  caps(nil, []string{"net_bind_service"}),
+			want: field.ErrorList{field.Invalid(capsPath.Child("drop").Index(0), nil, "")},
+		}, {
+			name: "capabilities: duplicate rejected by the set",
+			obj:  caps([]string{"SYS_TIME", "SYS_TIME"}, nil),
+			want: field.ErrorList{field.Duplicate(capsPath.Child("add").Index(1), nil)},
+		},
+
+		// ResourceLimits.
+		{
+			name: "valid limits",
+			obj:  limits(&ateletpb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500}),
+		}, {
+			name: "limits: zero means unset",
+			obj:  limits(&ateletpb.ResourceLimits{}),
+		}, {
+			name: "limits: negative memory_bytes",
+			obj:  limits(&ateletpb.ResourceLimits{MemoryBytes: -1}),
+			want: field.ErrorList{field.Invalid(field.NewPath("resources", "memory_bytes"), nil, "").WithOrigin("minimum")},
+		}, {
+			name: "limits: negative cpu_millis",
+			obj:  limits(&ateletpb.ResourceLimits{CpuMillis: -1}),
+			want: field.ErrorList{field.Invalid(field.NewPath("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
+		}, {
+			name: "limits: cpu_millis at the cap",
+			obj:  limits(&ateletpb.ResourceLimits{CpuMillis: 999999}),
+		}, {
+			name: "limits: cpu_millis above the cap",
+			obj:  limits(&ateletpb.ResourceLimits{CpuMillis: 1000000}),
+			want: field.ErrorList{field.Invalid(field.NewPath("resources", "cpu_millis"), nil, "").WithOrigin("maximum")},
+		},
 	}
-	tests := []struct {
-		name string
-		obj  *ateletpb.TrustBundleDataSource
-		want field.ErrorList
-	}{{
-		name: "valid",
-		obj:  valid(),
-	}, {
-		name: "missing path",
-		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("path"), "")},
-	}, {
-		name: "absolute path",
-		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = "/trust/bundle.pem" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
-	}, {
-		name: "path with a dot segment",
-		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = "trust/./bundle.pem" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
-	}, {
-		name: "path too long",
-		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Path = strings.Repeat("p", 256) }),
-		want: field.ErrorList{field.TooLong(field.NewPath("path"), nil, 255).WithOrigin("maxLength")},
-	}, {
-		name: "missing name",
-		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Name = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
-	}, {
-		name: "name too long",
-		obj:  valid(func(tb *ateletpb.TrustBundleDataSource) { tb.Name = strings.Repeat("n", 254) }),
-		want: field.ErrorList{field.TooLong(field.NewPath("name"), nil, 253).WithOrigin("maxLength")},
-	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_TrustBundleDataSource(context.Background(), op, nil, tt.obj, nil))
+			expectErrors(t, tt.want, Validate_Container(context.Background(), createOp, nil, tt.obj, nil))
 		})
 	}
 }
