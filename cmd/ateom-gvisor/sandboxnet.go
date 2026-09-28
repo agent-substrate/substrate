@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
@@ -40,7 +41,7 @@ func actorResolvConf(actorUID string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("creating the actor directory: %w", err)
 	}
-	if err := os.WriteFile(path, ateomnet.SandboxResolvConf(pod), 0o644); err != nil {
+	if err := os.WriteFile(path, dns.SandboxResolvConf(ateomnet.ActorVethGateway, pod), 0o644); err != nil {
 		return "", fmt.Errorf("writing the actor resolv.conf: %w", err)
 	}
 	return path, nil

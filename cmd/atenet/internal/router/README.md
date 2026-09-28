@@ -73,30 +73,34 @@ name (`xds.filter_chain_name`) tells the handler which leg it is on:
 
 | Leg (filter chain) | Where | Sees | Decides |
 | --- | --- | --- | --- |
-| `egress` | outer CONNECT, both gateways | actor certificate, the `IP:port` the actor dialed | per TCP connection: identity, and the address rules for what the inner listener cannot read |
-| `egress_cleartext` | HTTP the actor sent in the clear, both gateways | `Host`, method, headers, the dialed `IP:port` | **every request**, all rules |
-| `egress_tls_mitm` | TLS the sdsmint gateway terminated | same as cleartext | **every request**, all rules |
+| `egress` | outer CONNECT, both gateways | actor certificate, the `IP:port` the actor dialed | per TCP connection: identity, and that the actor has a policy with rules |
+| `egress_cleartext` | HTTP the actor sent in the clear, both gateways | `Host`, method, headers, the dialed `IP:port` | **every request**, the `http` rules |
+| `egress_tls_mitm` | TLS the sdsmint gateway terminated | same as cleartext, plus the connection's SNI | **every request**, the `https` rules |
 
-A request leg evaluates the policy the way the API describes: the rules in
-order, over the request's `Host` and the address the actor dialed, and the
-first match decides. Its answer (`dev.ate.egress:dial`) also picks the route,
-so the bytes go to what the matching rule checked: a `hostnames` match is
-resolved and dialed by name through `dynamic_forward_proxy`, a `cidrs` or
-`all` match goes to the dialed address through an `ORIGINAL_DST` cluster. On
-the sdsmint gateway both routes re-originate TLS with the `Host` as SNI and
-verify the origin's certificate against it. There is no route without an
-answer.
+A request leg decides the request on its `Host`, a DNS name or an IP literal,
+and the port the actor dialed: the `http` rules on the cleartext chain, the
+`https` rules on the MITM chain, the most specific match winning as the API
+describes. On the MITM chain the connection's SNI and port must fall under an
+`https` rule first, which is the half of that rule the API evaluates at the
+ClientHello. The answer (`dev.ate.egress:dial`) picks the route, and there is
+only one today: the `Host` that was policed is resolved and dialed by name
+through `dynamic_forward_proxy`, with TLS re-originated to it on the sdsmint
+gateway. There is no route without an answer.
 
-The CONNECT leg answers with `dev.ate.egress:passthrough_destination`, the
-dialed address when an address rule allows it. The outer chain copies it into
-the `ORIGINAL_DST` filter state shared with the inner listener, which is what
-the by-address routes and the passthrough chains (TLS the plain gateway does
-not terminate, and anything neither inspector could classify) dial; with no
-address the passthrough chains close the connection before a byte is relayed.
-A CONNECT no address rule allows still opens when the policy has `hostnames`
-rules, because a request inside may be allowed by name; it is refused outright
-when the policy has none, and on a dataplane that calls out for the CONNECT
-alone (no chain name), which has no request leg to defer to.
+The port a rule names is the one the actor dialed, never a port in the
+request's `Host`. The outer chain shares the CONNECT authority with the inner
+listener as `dev.ate.connect.authority`, and the request legs match `ports`
+against it; a dataplane that does not share it gets no port enforcement.
+
+The CONNECT leg decides nothing about the destination yet: it opens the tunnel
+for any actor whose policy has rules, with nothing to dial, and refuses one
+without. That is the gap to the API. The gateway does not decide at the
+ClientHello, so every TLS connection is intercepted and a `tls_passthrough`
+rule matches nothing; a connection it names is decrypted and then denied
+unless an `https` rule covers it too. The `dev.ate.egress:passthrough_destination`
+answer, the `ORIGINAL_DST` filter state it feeds, and the passthrough chains
+that dial it are in place for when that decision exists; until then those
+chains close every connection.
 
 Identity on the request legs is `dev.ate.actor.identity`, the actor's SPIFFE
 ID that the outer chain set from the verified peer certificate and shares with
@@ -113,7 +117,7 @@ create, update or delete is visible to new requests within one TTL, and a
 deleted policy becomes a deny. Every policy denial answers a fixed
 `egress denied` body; the reason is in the sidecar's log.
 
-Credential injection (`inject_static_headers`) is not implemented yet: a
+Credential injection (`replace_headers`) is not implemented yet: a
 matched rule that declares one is denied with 501 rather than forwarded
 without the credential the policy promised.
 
@@ -126,9 +130,9 @@ a request are declared once, in `extproc/attributes.go`.
 | --- | --- | --- |
 | `dev.ate.actor.name` | ingress | carries the actor name across CONNECT re-entry |
 | `dev.ate.actor.atespace` | ingress | carries the atespace across CONNECT re-entry |
-| `dev.ate.connect.authority` | ingress | carries the outer CONNECT authority across re-entry for target-port selection |
+| `dev.ate.connect.authority` | ingress, egress | carries the outer CONNECT authority across re-entry: target-port selection on ingress, the dialed port the request legs match `ports` against on egress |
 | `dev.ate.actor.identity` | egress | carries the authenticated actor identity to the policy ext_proc, the logs and additional ext_proc services |
-| `dev.ate.egress:passthrough_destination` | egress | dynamic metadata: the CONNECT leg's answer, the dialed address an address rule allowed, copied into the ORIGINAL_DST filter state |
+| `dev.ate.egress:passthrough_destination` | egress | dynamic metadata: the CONNECT leg's answer, the dialed address a `tls_passthrough` rule allowed, copied into the ORIGINAL_DST filter state |
 | `dev.ate.egress:dial` | egress | dynamic metadata: a request leg's answer, `name` or `address`, which picks the route |
 | `dev.ate.extproc.direction` | egress | selects the egress handler for dataplanes without Envoy filter chains |
 

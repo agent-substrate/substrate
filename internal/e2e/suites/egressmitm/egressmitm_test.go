@@ -198,7 +198,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	}
 	// The gateway refuses every tunnel for an actor without a policy. Naming
 	// only the origin also lets the same actor show a denial.
-	e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHostnames(egressOriginHost))
+	e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHTTPS(egressOriginHost))
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {

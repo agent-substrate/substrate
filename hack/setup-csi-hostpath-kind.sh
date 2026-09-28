@@ -43,13 +43,13 @@ echo "Using Kind node: ${KIND_NODE}"
 if docker ps | grep -q "${KIND_NODE}"; then
   # Unmount any stale mounts to prevent "device or resource busy"
   docker exec "${KIND_NODE}" sh -c '
-    for mnt in $(mount | grep /var/lib/ateom-gvisor | awk "{print \$3}"); do
+    for mnt in $(mount | grep /var/lib/ate | awk "{print \$3}"); do
       echo "Unmounting stale mount: ${mnt}"
       umount -f "${mnt}" || true
     done
   ' || true
   # Only delete contents, keep the directory itself to preserve mounts of running pods (like atelet)
-  docker exec "${KIND_NODE}" sh -c 'rm -rf /var/lib/ateom-gvisor/*' || true
+  docker exec "${KIND_NODE}" sh -c 'rm -rf /var/lib/ate/*' || true
 else
   echo "Warning: Kind node ${KIND_NODE} not running. Skipping directory cleanup."
 fi
@@ -98,12 +98,12 @@ spec:
       - name: hostpath
         volumeMounts:
         - name: ateom-dir
-          mountPath: /var/lib/ateom-gvisor
+          mountPath: /var/lib/ate
           mountPropagation: Bidirectional
       volumes:
       - name: ateom-dir
         hostPath:
-          path: /var/lib/ateom-gvisor
+          path: /var/lib/ate
           type: DirectoryOrCreate
 "
 
