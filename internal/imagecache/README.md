@@ -214,9 +214,10 @@ percentage as `df` reports it.
    (after a freshness re-check under the same lock the cache-hit path
    holds), then retire each layer the removal left unreferenced. If any
    layer must be kept — still referenced by another record, rooted by a
-   spec, younger than min-age, or its retirement failed — the record is
-   restored byte-exact and the image simply is not evicted this pass: a
-   layer is never left on disk without a record explaining it.
+   spec, pinned by an in-flight pull, younger than min-age, or its
+   retirement failed — the record is restored byte-exact and the image
+   simply is not evicted this pass: a layer is never left on disk without
+   a record explaining it.
 
 The pass reaches layers **only through records**: a layer is deleted
 exactly when its last referencing record goes, never by an independent
@@ -229,14 +230,16 @@ refcounts and roots computed from partial data would retire layers that
 unread records still reference or running actors still mount. Dry-run
 mutates nothing at all — not even the lazy size-file backfill.
 
-**In-flight pulls need no separate protection.** `EnsureImage` writes
-the image record **before** unpacking (the way Go allocates black during
-GC and containerd creates its ingest record before the bytes land), so
-every layer a pull produces is referenced — and kept fresh by a
-per-layer progress touch — from before it exists on disk. An interrupted
-pull's record is resumable progress, not garbage: the next pull of that
-digest re-fetches only the missing layers, and a pull that never resumes
-ages out through ordinary LRU.
+**In-flight pulls.** `EnsureImage` writes the image record **before**
+unpacking (the way Go allocates black during GC and containerd creates
+its ingest record before the bytes land), so every layer a pull produces
+is referenced — and kept fresh by a per-layer progress touch — from
+before it exists on disk. The pull also pins each of its layers until it
+returns, and eviction never retires a pinned layer, so a layer the pull
+has unpacked or reused cannot be taken from under it even if its record
+ages out meanwhile. An interrupted pull's record is resumable progress,
+not garbage: the next pull of that digest re-fetches only the missing
+layers, and a pull that never resumes ages out through ordinary LRU.
 
 **Startup recovery.** A layer no record references can only be crash
 debris (eviction interrupted between record-delete and layer-rename) or
@@ -247,12 +250,13 @@ fails to read. There is no online whole-pool scan (ext4's split: bounded
 recovery at mount, fsck offline).
 
 **Deletion is two-phase.** A layer is atomically renamed to `.rm-*`
-inside the layer's singleflight (one `rename(2)` — eviction can never
-stall a pull), then removed asynchronously; a crash in between leaves
-the dir for the startup sweep. This matters because the kernel offers no
-protection here: deleting a directory that is a live overlay lowerdir in
-another mount namespace succeeds silently, leaves the overlay's behavior
-undefined, and doesn't even free the space until the mount goes away.
+under the pin lock, and never while a pull has it pinned (a pull waits
+on eviction for at most one stat and one `rename(2)`), then removed
+asynchronously; a crash in between leaves the dir for the startup sweep.
+This matters because the kernel offers no protection here: deleting a
+directory that is a live overlay lowerdir in another mount namespace
+succeeds silently, leaves the overlay's behavior undefined, and doesn't
+even free the space until the mount goes away.
 
 Deleting the cache root by hand (while no actors are starting) remains
 safe — the store re-pulls whatever is missing.
