@@ -157,7 +157,9 @@ usage() {
   echo ""
   echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
   echo "  --delete-benchmarks                    Delete the locust stack and workloads"
-  echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
+  echo "  --benchmark-worker-count N             Number of WorkerPool replicas when --benchmark-worker-pools is not set (default: 1)"
+  echo "  --benchmark-worker-pools LIST          Comma-separated name:count[:nodeSelectorKey=value] entries."
+  echo "                                         One WorkerPool per entry, labeled pool=<name>, with <count> replicas"
   echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                                         microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --benchmark-actor-memory SIZE          Memory limit for the benchmark ActorTemplates (default: 256Mi,"
@@ -308,6 +310,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
     --benchmark-worker-count)
       BENCHMARK_FLAGS+=("--worker-count=${prescan_args[i+1]:-1}")
       ;;
+    --benchmark-worker-pools=*) BENCHMARK_FLAGS+=("--worker-pools=${prescan_args[i]#*=}") ;;
+    --benchmark-worker-pools)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --benchmark-worker-pools requires a comma-separated name:count[:nodeSelectorKey=value] list" >&2
+        exit 1
+      fi
+      BENCHMARK_FLAGS+=("--worker-pools=${prescan_args[$((i + 1))]}")
+      ;;
     --benchmark-sandbox-class=*) BENCHMARK_FLAGS+=("--sandbox-class=${prescan_args[i]#*=}") ;;
     --benchmark-sandbox-class)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -347,12 +357,12 @@ while [[ "$#" -gt 0 ]]; do
     --cluster-size) shift ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --credential-provider) shift ;;
-    --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
+    --benchmark-worker-count|--benchmark-worker-pools|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
     --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
-    --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
+    --benchmark-worker-count=*|--benchmark-worker-pools=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
 
     --deploy-ate-system) ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" ;;
     --setup-csi=*) ate_setup setup csi "${SETUP_CSI}" ;;

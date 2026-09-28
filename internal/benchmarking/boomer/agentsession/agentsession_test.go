@@ -500,10 +500,11 @@ func TestThinkScaling(t *testing.T) {
 // SuspendActor with queued errors, in order, until each queue drains.
 type fakeControlClient struct {
 	ateapipb.ControlClient
-	mu          sync.Mutex
-	calls       []string
-	resumeErrs  []error
-	suspendErrs []error
+	mu            sync.Mutex
+	calls         []string
+	createdActors []*ateapipb.Actor
+	resumeErrs    []error
+	suspendErrs   []error
 	// sawDeadline is set when a call arrived with a context deadline.
 	sawDeadline bool
 	// templateMemory is the memory limit GetActorTemplate reports; "" means
@@ -545,6 +546,9 @@ func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.Cre
 
 func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.record(ctx, "CreateActor")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createdActors = append(f.createdActors, in.GetActor())
 	return &ateapipb.Actor{}, nil
 }
 
@@ -737,4 +741,44 @@ func TestBurnRatePerGoroutine(t *testing.T) {
 	if _, ok := burnRatePerGoroutine(op{kind: opBurnCPU, parallel: 1}, 5); ok {
 		t.Error("a zero-duration burn must not report a rate")
 	}
+}
+
+func TestStartUserPinsToPool(t *testing.T) {
+	start := func(t *testing.T, pools *userclass.PoolPicker) *fakeControlClient {
+		t.Helper()
+		ctl := &fakeControlClient{templateMemory: "1Gi"}
+		u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+		u.cfg.Pools = pools
+		rt := &runtime{cfg: u.cfg}
+		loaded, err := rt.loadScript()
+		if err != nil {
+			t.Fatalf("loadScript: %v", err)
+		}
+		if _, err := rt.startUser(context.Background(), loaded); err != nil {
+			t.Fatalf("startUser: %v", err)
+		}
+		if len(ctl.createdActors) != 1 {
+			t.Fatalf("createdActors = %d, want 1", len(ctl.createdActors))
+		}
+		return ctl
+	}
+
+	t.Run("nil pools leaves WorkerSelector nil", func(t *testing.T) {
+		ctl := start(t, nil)
+		if sel := ctl.createdActors[0].GetWorkerSelector(); sel != nil {
+			t.Errorf("WorkerSelector = %v, want nil", sel)
+		}
+	})
+
+	t.Run("configured pools sets WorkerSelector", func(t *testing.T) {
+		pools, err := userclass.NewPoolPicker([]userclass.Pool{{Name: "n4d", Weight: 1}})
+		if err != nil {
+			t.Fatalf("NewPoolPicker: %v", err)
+		}
+		ctl := start(t, pools)
+		got := ctl.createdActors[0].GetWorkerSelector().GetMatchLabels()[userclass.PoolLabelKey]
+		if got != "n4d" {
+			t.Errorf("WorkerSelector[%q] = %q, want %q", userclass.PoolLabelKey, got, "n4d")
+		}
+	})
 }

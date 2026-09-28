@@ -57,6 +57,7 @@ func main() {
 		spawnConcurrency        = flag.Int("spawn-concurrency", 1, "Number of actors created concurrently (spawn benchmark).")
 		actorDeadline           = flag.Float64("actor-deadline", 120, "Per-actor timeout in seconds covering CreateActor + ResumeActor + Ping (spawn benchmark).")
 		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
+		workerPools             = flag.String("worker-pools", "", "Comma-separated name:count list, e.g. \"n4d:50,c4:50\", spreading actors over several worker pools. Each actor draws one pool at creation, weighted by these values, and stays there via Actor.worker_selector, which the scheduler ANDs with the ActorTemplate's own selector. A name is matched against the worker's \"pool\" label. Empty leaves actors unpinned.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -183,6 +184,24 @@ func main() {
 			slog.Duration("poll_interval", *configPollInterval))
 	}
 
+	// Parsed up front: a bad spec otherwise surfaces as every actor failing to
+	// schedule, which is far harder to read than a startup error.
+	parsedPools, err := userclass.ParsePools(*workerPools)
+	if err != nil {
+		slog.Error("fatal: invalid --worker-pools", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	pools, err := userclass.NewPoolPicker(parsedPools)
+	if err != nil {
+		slog.Error("fatal: invalid --worker-pools", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	if pools != nil {
+		slog.Info("spreading actors over worker pools",
+			slog.String("label_key", userclass.PoolLabelKey),
+			slog.String("pools", strings.Join(pools.Names(), ",")))
+	}
+
 	cfg := &userclass.Config{
 		APIStub:          apiStub,
 		HTTPClient:       httpClient,
@@ -193,6 +212,7 @@ func main() {
 		TotalActors:      *totalActors,
 		SpawnConcurrency: *spawnConcurrency,
 		ActorDeadline:    time.Duration(*actorDeadline * float64(time.Second)),
+		Pools:            pools,
 	}
 
 	entry, ok := userclass.Lookup(class)

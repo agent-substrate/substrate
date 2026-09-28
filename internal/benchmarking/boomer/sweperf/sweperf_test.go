@@ -97,6 +97,7 @@ type fakeControlClient struct {
 	ateapipb.ControlClient
 	mu             sync.Mutex
 	calls          []string
+	createdActors  []*ateapipb.Actor
 	createSpaceErr error
 	createActorErr error
 	resumeErr      error
@@ -123,6 +124,7 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActor")
+	f.createdActors = append(f.createdActors, in.GetActor())
 	if f.createActorErr != nil {
 		return nil, f.createActorErr
 	}
@@ -990,4 +992,44 @@ func TestStepSyncExitSkipsResumeToFirstExec(t *testing.T) {
 	if !u.loopFailed {
 		t.Errorf("loopFailed = false after the command exited non-zero")
 	}
+}
+
+func TestSweperfStartUserPinsToPool(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(statusResponse{Status: "up"})
+	})
+
+	t.Run("nil pools leaves WorkerSelector nil", func(t *testing.T) {
+		cfg, _, fakeCtrl := newTestConfig(t, handler)
+		rt := &sweperfRuntime{cfg: cfg}
+		if _, err := rt.startUser(context.Background()); err != nil {
+			t.Fatalf("startUser: %v", err)
+		}
+		if len(fakeCtrl.createdActors) != 1 {
+			t.Fatalf("createdActors = %d, want 1", len(fakeCtrl.createdActors))
+		}
+		if sel := fakeCtrl.createdActors[0].GetWorkerSelector(); sel != nil {
+			t.Errorf("WorkerSelector = %v, want nil", sel)
+		}
+	})
+
+	t.Run("configured pools sets WorkerSelector", func(t *testing.T) {
+		cfg, _, fakeCtrl := newTestConfig(t, handler)
+		pools, err := userclass.NewPoolPicker([]userclass.Pool{{Name: "n4d", Weight: 1}})
+		if err != nil {
+			t.Fatalf("NewPoolPicker: %v", err)
+		}
+		cfg.Pools = pools
+		rt := &sweperfRuntime{cfg: cfg}
+		if _, err := rt.startUser(context.Background()); err != nil {
+			t.Fatalf("startUser: %v", err)
+		}
+		if len(fakeCtrl.createdActors) != 1 {
+			t.Fatalf("createdActors = %d, want 1", len(fakeCtrl.createdActors))
+		}
+		got := fakeCtrl.createdActors[0].GetWorkerSelector().GetMatchLabels()[userclass.PoolLabelKey]
+		if got != "n4d" {
+			t.Errorf("WorkerSelector[%q] = %q, want %q", userclass.PoolLabelKey, got, "n4d")
+		}
+	})
 }

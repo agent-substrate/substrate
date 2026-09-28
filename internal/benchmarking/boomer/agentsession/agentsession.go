@@ -357,10 +357,13 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 	u := &sessionUser{
 		cfg:       r.cfg,
 		actorName: "agent-" + uuid.NewString(),
+		pool:      r.cfg.Pools.Pick(),
 		steps:     loaded.Steps,
 		ingestBuf: loaded.ingestBuf,
 	}
-	slog.Info("Creating agent session", slog.String("actor", u.actorName))
+	slog.Info("Creating agent session",
+		slog.String("actor", u.actorName),
+		slog.String("pool", u.pool))
 	bmetrics.UpdateUsers(agentSessionUserClass, 1)
 
 	if err := u.ensureAtespace(ctx); err != nil {
@@ -394,6 +397,9 @@ func (r *runtime) shutdown(ctx context.Context) {
 type sessionUser struct {
 	cfg       *userclass.Config
 	actorName string
+	// pool is the worker pool this actor was assigned to at creation, or empty
+	// when the worker is running with a single pool.
+	pool      string
 	stepIndex int
 	cleanedUp bool
 	// steps is the script this session started on; a knob change mid-run
@@ -623,8 +629,9 @@ func (u *sessionUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName},
+				Metadata:       &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate:  &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName},
+				WorkerSelector: u.cfg.Pools.SelectorFor(u.pool),
 			},
 		}, grpc.Trailer(tr))
 		return err

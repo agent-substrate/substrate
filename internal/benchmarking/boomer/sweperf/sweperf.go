@@ -239,6 +239,7 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 		cfg:          r.cfg,
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
+		pool:         r.cfg.Pools.Pick(),
 		userClass:    sweperfUserClass,
 		chunks:       chunks,
 		cycleIndex:   0,
@@ -247,6 +248,7 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 	slog.Info("Creating new sweperf user session",
 		slog.String("actor", u.actorName),
 		slog.String("template", u.templateName),
+		slog.String("pool", u.pool),
 	)
 
 	bmetrics.UpdateUsers(u.userClass, 1)
@@ -295,10 +297,13 @@ type sweperfUser struct {
 	cfg          *userclass.Config
 	actorName    string
 	templateName string
-	userClass    string
-	chunks       []chunk
-	cycleIndex   int
-	cleanedUp    bool
+	// pool is the worker pool this actor was assigned to at creation, or empty
+	// when the worker is running with a single pool.
+	pool       string
+	userClass  string
+	chunks     []chunk
+	cycleIndex int
+	cleanedUp  bool
 	// awake is set while the actor is still running from pollLiveness; the
 	// next resume is then a no-op and its success samples are not recorded.
 	awake bool
@@ -348,8 +353,9 @@ func (u *sweperfUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: u.templateName},
+				Metadata:       &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate:  &ateapipb.ObjectRef{Atespace: templateNS, Name: u.templateName},
+				WorkerSelector: u.cfg.Pools.SelectorFor(u.pool),
 			},
 		}, grpc.Trailer(tr))
 		return err

@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 )
 
 // The benchmark and micro-VM stacks are still driven by shell. They orchestrate
@@ -36,8 +37,11 @@ const (
 
 // BenchmarkOptions shapes the benchmark WorkerPool.
 type BenchmarkOptions struct {
-	// WorkerCount is the number of WorkerPool replicas.
+	// WorkerCount is the number of WorkerPool replicas when WorkerPools is empty.
 	WorkerCount int
+	// WorkerPools is a comma-separated list of name:count[:nodeSelectorKey=value]
+	// entries passed to deploy_locust.sh as --worker-pools.
+	WorkerPools string
 	// SandboxClass is the sandbox runtime: gvisor or microvm.
 	SandboxClass string
 }
@@ -48,6 +52,22 @@ func (o BenchmarkOptions) Validate() error {
 	if o.WorkerCount < 1 {
 		return fmt.Errorf("--worker-count must be at least 1, got %d", o.WorkerCount)
 	}
+	if o.WorkerPools != "" {
+		if _, err := userclass.ParseWorkerPoolSpecs(o.WorkerPools); err != nil {
+			return fmt.Errorf("--worker-pools: %w", err)
+		}
+	}
+	return o.validateSandboxClass()
+}
+
+// ValidateForDelete checks only what teardown reads. Delete removes every
+// benchmark WorkerPool by label, so a malformed --worker-count or
+// --worker-pools must not block it.
+func (o BenchmarkOptions) ValidateForDelete() error {
+	return o.validateSandboxClass()
+}
+
+func (o BenchmarkOptions) validateSandboxClass() error {
 	switch o.SandboxClass {
 	case config.SandboxClassGvisor, config.SandboxClassMicrovm:
 		return nil
@@ -63,7 +83,8 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	if err := opts.Validate(); err != nil {
 		return err
 	}
-	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)
+	log.Stepf("deploy_benchmarks (worker_count=%d, worker_pools=%q, sandbox_class=%s)",
+		opts.WorkerCount, opts.WorkerPools, opts.SandboxClass)
 
 	// The microvm SandboxConfig lives outside the default set installed by
 	// `deploy ate-system`, which only installs gvisor-default. The workloads
@@ -79,7 +100,7 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 // deployLocustArgs builds the deploy_locust.sh argument list.
 //
 // The script reads these only as flags, never from the environment, so they
-// have to be passed explicitly. Both trailing flags are omitted when unset:
+// have to be passed explicitly. Optional flags are omitted when unset:
 // deploy_locust.sh rejects an empty --otlp-endpoint outright, and an empty
 // --actor-memory would override the workload default with nothing.
 func deployLocustArgs(opts BenchmarkOptions, otlpEndpoint, actorMemory string) []string {
@@ -87,6 +108,9 @@ func deployLocustArgs(opts BenchmarkOptions, otlpEndpoint, actorMemory string) [
 		"--deploy",
 		"--worker-count", strconv.Itoa(opts.WorkerCount),
 		"--sandbox-class", opts.SandboxClass,
+	}
+	if opts.WorkerPools != "" {
+		args = append(args, "--worker-pools", opts.WorkerPools)
 	}
 	// Send the actor telemetry to the same place as the control plane telemetry.
 	if otlpEndpoint != "" {
@@ -100,7 +124,7 @@ func deployLocustArgs(opts BenchmarkOptions, otlpEndpoint, actorMemory string) [
 
 // DeleteBenchmarks removes the locust stack and the benchmark workloads.
 func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error {
-	if err := opts.Validate(); err != nil {
+	if err := opts.ValidateForDelete(); err != nil {
 		return err
 	}
 	log.Stepf("delete_benchmarks (sandbox_class=%s)", opts.SandboxClass)

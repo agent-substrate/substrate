@@ -137,6 +137,16 @@ def parse_args() -> argparse.Namespace:
         help="Per-actor timeout in seconds (forwarded to boomer-worker).",
     )
     p.add_argument(
+        "--worker-pools",
+        default=None,
+        help=(
+            "Comma-separated name:count entries pinning each actor to one "
+            "WorkerPool, forwarded to boomer as --worker-pools. Use the names "
+            "and counts the pools were created with. Omit to leave actors "
+            "unpinned."
+        ),
+    )
+    p.add_argument(
         "--cluster-facts",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -373,6 +383,8 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
             boomer_cmd += ["--spawn-concurrency", str(args.spawn_concurrency)]
         if args.actor_deadline is not None:
             boomer_cmd += ["--actor-deadline", str(args.actor_deadline)]
+        if args.worker_pools:
+            boomer_cmd += ["--worker-pools", args.worker_pools]
         # Read the endpoint again at each spawn message. Thus a value that
         # changes while the run continues, such as the sample rate of a load
         # shape, reaches boomer at the change. boomer's --master-host default

@@ -51,5 +51,101 @@ class BuildAndPushTest(unittest.TestCase):
         self.assertEqual(push_cmd, ["docker", "push", "gcr.io/p/repo/img:tag"])
 
 
+class WorkerPoolsTest(unittest.TestCase):
+    def test_parse_and_boomer_worker_pools(self):
+        import orchestrator
+
+        spec = (
+            "n4d:50:cloud.google.com/machine-family=n4d,"
+            "c4:30:cloud.google.com/machine-family=c4,"
+            "default:20"
+        )
+        self.assertEqual(
+            orchestrator.parse_worker_pools(spec),
+            [
+                ("n4d", 50, "cloud.google.com/machine-family=n4d"),
+                ("c4", 30, "cloud.google.com/machine-family=c4"),
+                ("default", 20, ""),
+            ],
+        )
+        self.assertEqual(
+            orchestrator.boomer_worker_pools(spec),
+            "n4d:50,c4:30,default:20",
+        )
+
+    def test_parse_worker_pools_invalid(self):
+        import orchestrator
+
+        for bad in (
+            "",
+            "   ,  ",
+            "n4d",
+            ":10",
+            "PoolA:10",
+            "pool_a:10",
+            "-n4:10",
+            "n4-:10",
+            "a" * 48 + ":10",
+            "n4:10,n4:20",
+            "n4d:0",
+            "n4d:-5",
+            "n4d:abc",
+            "n4d:10:badselector",
+            "n4d:10:=val",
+            "n4d:10:key=",
+        ):
+            with self.assertRaises(ValueError, msg=f"expected ValueError for {bad!r}"):
+                orchestrator.parse_worker_pools(bad)
+
+    def test_validate_rejects_worker_pools_on_non_locust(self):
+        import orchestrator
+
+        with self.assertRaisesRegex(
+            ValueError, "workerPools is only supported for 'locust' tests"
+        ):
+            orchestrator.validate_and_normalize_tests(
+                [
+                    {
+                        "name": "nh",
+                        "type": "nighthawk-ingress",
+                        "targetCluster": "c1",
+                        "duration": "1m",
+                        "workerPools": "n4d:10,c4:10",
+                    }
+                ]
+            )
+
+    @mock.patch("orchestrator.run")
+    @mock.patch("orchestrator.run_no_check")
+    def test_deploy_and_teardown_workloads_worker_pools(self, teardown_mock, run_mock):
+        import orchestrator
+
+        spec = "n4d:50:cloud.google.com/machine-family=n4d,c4:50:cloud.google.com/machine-family=c4"
+        orchestrator.deploy_workloads(
+            worker_count=1,
+            sandbox_class="gvisor",
+            worker_pools=spec,
+        )
+        self.assertEqual(
+            run_mock.call_args.args[0],
+            [
+                "benchmarking/workloads/deploy.sh",
+                "--deploy",
+                "--worker-count",
+                "1",
+                "--sandbox-class",
+                "gvisor",
+                "--worker-pools",
+                spec,
+            ],
+        )
+
+        orchestrator.teardown_workloads()
+        self.assertEqual(
+            teardown_mock.call_args.args[0],
+            ["benchmarking/workloads/deploy.sh", "--delete"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

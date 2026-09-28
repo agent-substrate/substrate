@@ -149,13 +149,14 @@ restriction, but it does need the `nfsd` kernel module loaded on the nodes.
 | `deploy benchmarks` | `--deploy-benchmarks` |
 | `delete benchmarks` | `--delete-benchmarks` |
 | `--worker-count N` | `--benchmark-worker-count N` (default `1`) |
+| `--worker-pools LIST` | `--benchmark-worker-pools LIST` |
 | `--sandbox-class gvisor\|microvm` | `--benchmark-sandbox-class CLASS` (default `gvisor`) |
 | `BENCHMARK_ACTOR_MEMORY=SIZE` | `--benchmark-actor-memory SIZE` (default `256Mi`) |
 
 The memory limit has no flag: `benchmarking/workloads/deploy.sh` has always
 taken it from the environment, and the shim exports it.
 
-The other two flags are per-command in `ate-setup` and global in
+The other three flags are per-command in `ate-setup` and global in
 `hack/install-ate.sh`, which forwards them to whichever benchmark action runs.
 See
 [`benchmarking/README.md`](../../benchmarking/README.md).

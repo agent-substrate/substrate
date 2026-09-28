@@ -260,12 +260,15 @@ func TestShimTranslatesFlags(t *testing.T) {
 	}, {
 		name: "benchmark flags are renamed and apply to both benchmark actions",
 		args: []string{
-			"--benchmark-worker-count=4", "--deploy-benchmarks",
-			"--benchmark-sandbox-class", "microvm", "--delete-benchmarks",
+			"--benchmark-worker-count=4",
+			"--benchmark-worker-pools=n4d:50,c4:50",
+			"--deploy-benchmarks",
+			"--benchmark-sandbox-class", "microvm",
+			"--delete-benchmarks",
 		},
 		want: []string{
-			"deploy benchmarks --worker-count=4 --sandbox-class=microvm",
-			"delete benchmarks --worker-count=4 --sandbox-class=microvm",
+			"deploy benchmarks --worker-count=4 --worker-pools=n4d:50,c4:50 --sandbox-class=microvm",
+			"delete benchmarks --worker-count=4 --worker-pools=n4d:50,c4:50 --sandbox-class=microvm",
 		},
 	}, {
 		name: "demo flags drop the demo- prefix",

@@ -323,6 +323,25 @@ class ServerTelemetryTest(unittest.TestCase):
 
     @mock.patch("server_telemetry.query_prometheus_range")
     @mock.patch("server_telemetry.query_prometheus_instant")
+    def test_packing_query_spans_every_pool(self, mock_instant, mock_range):
+        # --worker-pools names each pool benchmark-ateom-<name>; packing must
+        # cover them all, summed per ateapi and state, not just the default.
+        mock_range.side_effect = ranges([])
+        mock_instant.return_value = []
+        harvest()
+
+        query = next(c.args[1] for c in mock_range.call_args_list
+                     if "ate_workerpool_workers" in c.args[1])
+        self.assertTrue(query.startswith(
+            "sum by (exported_instance, instance, ate_worker_state) ("))
+        pool_re = re.search(r'ate_workerpool_name=~"([^"]+)"', query).group(1)
+        for name in ("benchmark-ateom", "benchmark-ateom-n4d", "benchmark-ateom-c4"):
+            self.assertRegex(name, f"^(?:{pool_re})$")
+        for name in ("benchmark-ateomx", "benchmark-ateom-", "other"):
+            self.assertNotRegex(name, f"^(?:{pool_re})$")
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    @mock.patch("server_telemetry.query_prometheus_instant")
     def test_packing_ignores_exited_ateapi(self, mock_instant, mock_range):
         # A dead ateapi's idle=2 lingers until 105; the live one runs to 110.
         def series(instance, state, values):

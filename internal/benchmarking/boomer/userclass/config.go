@@ -53,4 +53,8 @@ type Config struct {
 	SpawnConcurrency int
 	// ActorDeadline is the per-actor timeout covering CreateActor + ResumeActor + Ping (spawn benchmark).
 	ActorDeadline time.Duration
+	// Pools spreads new actors over several worker pools, weighted by
+	// capacity, by setting Actor.worker_selector at create time. Nil leaves
+	// placement to the ActorTemplate's own workerSelector.
+	Pools *PoolPicker
 }
