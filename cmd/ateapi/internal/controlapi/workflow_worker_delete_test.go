@@ -24,7 +24,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -37,7 +39,7 @@ func newWorkerDeleteWorkflow(t *testing.T) (*WorkerWorkflow, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	return NewWorkerWorkflow(persistence), persistence
+	return NewWorkerWorkflow(persistence, nil), persistence
 }
 
 // apiActorRef names the Actor seedAPIActor stores.
@@ -87,7 +89,7 @@ func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")})
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")}, nil)
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
 		t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 	}
@@ -311,7 +313,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr})
+			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr}, nil)
 			_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
 			if err == nil {
 				t.Fatal("DeleteWorker() = nil error, want the release failure reported")
@@ -344,7 +346,7 @@ func TestDeleteWorkerWorkflow_ActorDeletedDuringRelease(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound})
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound}, nil)
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
@@ -367,6 +369,99 @@ func TestDeleteWorkerWorkflow_AbsentReportsNotFoundThroughStepWrap(t *testing.T)
 	}
 	if want := "step LoadWorkerForDelete"; !strings.Contains(err.Error(), want) {
 		t.Errorf("DeleteWorker() error = %q, want it to name the step it failed at (%q)", err, want)
+	}
+}
+
+// The Actor's volumes are detached while the Worker record still names their
+// node. A failed detach still crashes the Actor, since its pod is gone, and
+// still deletes the Worker, but keeps the Actor's WorkerAssignment as the
+// record of the node for DeleteActor or RevertActor to detach from.
+func TestDeleteWorkerWorkflow_DetachesBoundActorVolumes(t *testing.T) {
+	wantDetach := []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}}
+	tests := []struct {
+		name                 string
+		start                ateapipb.ActorState
+		detachErr            error
+		wantDetachCalls      []detachCall
+		wantState            ateapipb.ActorState
+		wantWorkerAssignment bool
+	}{
+		{
+			name:            "running actor",
+			start:           ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantDetachCalls: wantDetach,
+			wantState:       ateapipb.ActorState_ACTOR_STATE_CRASHED,
+		},
+		{
+			// A crash whose own teardown failed keeps the Worker booked.
+			name:            "crashed actor still holding the worker",
+			start:           ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantDetachCalls: wantDetach,
+			wantState:       ateapipb.ActorState_ACTOR_STATE_CRASHED,
+		},
+		{
+			// Suspend detached the volumes before it committed.
+			name:                 "suspended actor",
+			start:                ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantState:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantWorkerAssignment: true,
+		},
+		{
+			name:            "node already gone",
+			start:           ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			detachErr:       status.Error(codes.NotFound, "node not found"),
+			wantDetachCalls: wantDetach,
+			wantState:       ateapipb.ActorState_ACTOR_STATE_CRASHED,
+		},
+		{
+			name:                 "detach fails",
+			start:                ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			detachErr:            errors.New("detach failed"),
+			wantDetachCalls:      wantDetach,
+			wantState:            ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantWorkerAssignment: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, persistence := newWorkerDeleteWorkflow(t)
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			actor := seedAPIActor(t, ctx, persistence, tc.start, func(a *ateapipb.Actor) {
+				a.Status.ActorVolumes = []*ateapipb.ExternalVolume{
+					{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
+				}
+			})
+			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+
+			plugin := &mockDetachVolumePlugin{}
+			if tc.detachErr != nil {
+				plugin.detachErrs = map[string]error{"storage-vol-1": tc.detachErr}
+			}
+			registry := &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
+			wf := NewWorkerWorkflow(persistence, registry)
+
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker() failed: %v", err)
+			}
+			if diff := cmp.Diff(tc.wantDetachCalls, plugin.detachCalls); diff != "" {
+				t.Errorf("detach calls mismatch (-want +got):\n%s", diff)
+			}
+
+			got, err := persistence.GetActor(ctx, apiActorRef)
+			if err != nil {
+				t.Fatalf("GetActor() failed: %v", err)
+			}
+			if got.GetStatus().GetState() != tc.wantState {
+				t.Errorf("actor state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
+			}
+			if gotAssignment := got.GetStatus().GetWorkerAssignment() != nil; gotAssignment != tc.wantWorkerAssignment {
+				t.Errorf("actor has worker assignment = %v, want %v", gotAssignment, tc.wantWorkerAssignment)
+			}
+			if _, err := persistence.GetWorker(ctx, apiWorkerName); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetWorker() error = %v, want the worker deleted", err)
+			}
+		})
 	}
 }
 

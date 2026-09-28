@@ -749,11 +749,10 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 // recovery path loads the worker by pod name only, so the assignment may have
 // been cleared and the worker re-claimed by another actor in the meantime. On
 // a mismatch the actor is crashed and the worker — which is not ours — must
-// not be written.
+// not be written. A worker that is still ours is terminated and released.
 func TestValidateAssignedWorker(t *testing.T) {
 	ownAssignment := &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
-		ActorUid: "own-actor-uid",
+		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 	}
 	otherAssignment := &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-b", Name: "shared"},
@@ -783,6 +782,8 @@ func TestValidateAssignedWorker(t *testing.T) {
 		// version did not move (no write at all).
 		wantAssignment  *ateapipb.ActorAssignment
 		wantWorkerWrite bool
+		// wantTerminate is whether atelet is asked to terminate the workload.
+		wantTerminate bool
 	}{
 		{
 			name:             "crashes actor when worker is gone",
@@ -791,14 +792,16 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantCrashMessage: "resume failed: " + crashMessageWorkerGone,
 		},
 		{
-			name:             "crashes actor and leaves worker untouched when worker is draining",
+			name:             "terminates and releases own draining worker and crashes actor",
 			workerStatus:     drainingStatus,
 			sandboxClass:     "gvisor",
 			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
 			wantCrashMessage: "resume failed: " + crashMessageWorkerDraining,
-			wantAssignment:   ownAssignment,
+			wantAssignment:   nil,
+			wantWorkerWrite:  true,
+			wantTerminate:    true,
 		},
 		{
 			name:             "crashes actor and leaves worker untouched when assigned to another actor",
@@ -840,7 +843,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantAssignment: ownAssignment,
 		},
 		{
-			name:             "releases own ineligible worker and crashes actor",
+			name:             "terminates and releases own ineligible worker and crashes actor",
 			workerStatus:     activeStatus,
 			sandboxClass:     "microvm",
 			assignment:       ownAssignment,
@@ -849,6 +852,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantCrashMessage: "resume failed: " + crashMessageWorkerIneligible,
 			wantAssignment:   nil,
 			wantWorkerWrite:  true,
+			wantTerminate:    true,
 		},
 	}
 
@@ -856,6 +860,31 @@ func TestValidateAssignedWorker(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "shared"}
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING, func(a *ateapipb.Actor) {
+				a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+					WorkerPodUid:    testWorkerUID("pod-1"),
+					NodeName:        "node-1",
+				}
+			})
+			resumingActor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+
+			own := proto.CloneOf(ownAssignment)
+			own.ActorUid = resumingActor.GetMetadata().GetUid()
+			withOwnUID := func(a *ateapipb.ActorAssignment) *ateapipb.ActorAssignment {
+				if a == ownAssignment {
+					return own
+				}
+				return a
+			}
 
 			var seeded *ateapipb.Worker
 			if tt.workerStatus != nil {
@@ -870,38 +899,26 @@ func TestValidateAssignedWorker(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
-				seedAssignment(t, persistence, testWorkerUID("pod-1"), tt.assignment)
+				seedAssignment(t, persistence, testWorkerUID("pod-1"), withOwnUID(tt.assignment))
 				// Fetch the stored version so the no-write assertion below can
 				// detect any optimistic update.
-				var err error
 				if seeded, err = persistence.GetWorker(ctx, testWorkerUID("pod-1")); err != nil {
 					t.Fatalf("GetWorker: %v", err)
 				}
 			}
 
-			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING)
-
-			w := &ActorWorkflow{store: persistence, scheduler: scheduling.New(nil)}
-			resumingActor := &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "own-actor-uid"},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
-						WorkerNamespace: "worker-ns",
-						WorkerPool:      "pool",
-						WorkerPod:       "pod-1",
-						WorkerPodUid:    testWorkerUID("pod-1"),
-					},
-				},
-			}
+			w, atelet := newWireCaptureWorkflow(t, persistence)
+			w.scheduler = scheduling.New(nil)
 			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
-			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
+			_, err = w.validateAssignedWorker(ctx, actorRef, resumingActor, tmpl)
 			if got := status.Code(err); got != tt.wantCode {
 				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
+			if got := atelet.terminated() != nil; got != tt.wantTerminate {
+				t.Errorf("atelet Terminate called = %v, want %v", got, tt.wantTerminate)
+			}
 
-			actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
+			actor, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
@@ -919,8 +936,8 @@ func TestValidateAssignedWorker(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
-			if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); !proto.Equal(got, tt.wantAssignment) {
-				t.Errorf("stored worker assignment = %v, want %v", got, tt.wantAssignment)
+			if got, want := firstAssignment(t, persistence, testWorkerUID("pod-1")), withOwnUID(tt.wantAssignment); !proto.Equal(got, want) {
+				t.Errorf("stored worker assignment = %v, want %v", got, want)
 			}
 			if !tt.wantWorkerWrite && stored.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
 				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetMetadata().GetVersion(), stored.GetMetadata().GetVersion())
@@ -1233,14 +1250,17 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 }
 
-// capturingAtelet records the last Restore and Run request it receives, so a
-// test can assert on the exact wire request the resume workflow sends.
+// capturingAtelet records the last Restore, Run, and Terminate request it
+// receives, so a test can assert on the exact wire request a workflow sends.
 type capturingAtelet struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	mu      sync.Mutex
-	restore *ateletpb.RestoreRequest
-	run     *ateletpb.RunRequest
+	mu        sync.Mutex
+	restore   *ateletpb.RestoreRequest
+	run       *ateletpb.RunRequest
+	terminate *ateletpb.TerminateRequest
+	// failTerminate, when set, is returned by Terminate after recording it.
+	failTerminate error
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1255,6 +1275,34 @@ func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*a
 	defer f.mu.Unlock()
 	f.run = proto.Clone(req).(*ateletpb.RunRequest)
 	return &ateletpb.RunResponse{}, nil
+}
+
+func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.terminate = proto.CloneOf(req)
+	if f.failTerminate != nil {
+		return nil, f.failTerminate
+	}
+	return &ateletpb.TerminateResponse{}, nil
+}
+
+// setFailTerminate makes every later Terminate fail with err.
+func (f *capturingAtelet) setFailTerminate(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failTerminate = err
+}
+
+// terminated returns the last recorded Terminate request, nil if it was never
+// called.
+func (f *capturingAtelet) terminated() *ateletpb.TerminateRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.terminate == nil {
+		return nil
+	}
+	return proto.CloneOf(f.terminate)
 }
 
 // requests returns the recorded Restore and Run requests, nil for an RPC that

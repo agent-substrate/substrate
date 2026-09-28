@@ -69,6 +69,9 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while fetching actor template: %w", err))
 	}
 
+	// TODO: A PAUSED actor has no worker assignment, so its local snapshot is
+	// never removed from the node. Remove it through atelet.Terminate on
+	// LocalSnapshot.NodeVmsWithLocalSnapshots
 	var atletTerminatedErr, volumesDetachedErr error
 	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); err != nil {
 		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
@@ -140,6 +143,12 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			return err
 		}
 		if !hosted {
+			// TODO: A worker that is gone or no longer hosts the actor can still
+			// hold its sandbox or node state, left by a failed Restore or Run, or
+			// by a pod that died while its node stayed up. Terminate on
+			// assignment.GetNodeName() anyway. It is keyed by the actor and ateom
+			// UIDs, so it cannot touch other actors. A gone worker first needs
+			// Terminate to succeed with the ateom pod gone.
 			slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping atelet terminate request",
 				slog.String("worker", workerName),
 				slog.Any("actor", actorRef))
