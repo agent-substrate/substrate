@@ -50,8 +50,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						Name:   "home",
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -100,15 +100,19 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "system-info",
-						SystemInfo: &ateletpb.SystemInfoVolume{
-							DataSources: []*ateletpb.SystemInfoDataSource{
-								{ActorMetadata: &ateletpb.ActorMetadataDataSource{
-									Items: []*ateletpb.ActorMetadataItem{
-										{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
-										{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
-										{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
-									},
-								}},
+						Source: &ateletpb.Volume_SystemInfo{
+							SystemInfo: &ateletpb.SystemInfoVolume{
+								DataSources: []*ateletpb.SystemInfoDataSource{
+									{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+										ActorMetadata: &ateletpb.ActorMetadataDataSource{
+											Items: []*ateletpb.ActorMetadataItem{
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+											},
+										},
+									}},
+								},
 							},
 						},
 					},
@@ -146,12 +150,12 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						Name:   "home",
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 					{
-						Name:  "agent",
-						Image: &ateletpb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"},
+						Name:   "agent",
+						Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -196,9 +200,13 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "system-info",
-						SystemInfo: &ateletpb.SystemInfoVolume{
-							DataSources: []*ateletpb.SystemInfoDataSource{
-								{TrustBundle: &ateletpb.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"}},
+						Source: &ateletpb.Volume_SystemInfo{
+							SystemInfo: &ateletpb.SystemInfoVolume{
+								DataSources: []*ateletpb.SystemInfoDataSource{
+									{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
+										TrustBundle: &ateletpb.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"},
+									}},
+								},
 							},
 						},
 					},
@@ -235,8 +243,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						Name:   "home",
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -264,8 +272,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						Name:   "home",
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
 				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
@@ -433,10 +441,12 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Volumes: []*ateletpb.Volume{
 			{
 				Name: "vol-1",
-				External: &ateletpb.ExternalVolumeSource{
-					StorageVolumeId: "vol-gce-pd-123",
-					VolumeType:      "pd-standard",
-					VolumeContext:   map[string]string{"foo": "bar"},
+				Source: &ateletpb.Volume_External{
+					External: &ateletpb.ExternalVolumeSource{
+						StorageVolumeId: "vol-gce-pd-123",
+						VolumeType:      "pd-standard",
+						VolumeContext:   map[string]string{"foo": "bar"},
+					},
 				},
 			},
 		},

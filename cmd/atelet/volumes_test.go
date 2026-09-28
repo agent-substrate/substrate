@@ -88,21 +88,27 @@ func TestUnmountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		External: &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "mock-vol-1",
-			VolumeType:      "mock-driver",
+		Source: &ateletpb.Volume_External{
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-1",
+				VolumeType:      "mock-driver",
+			},
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		External: &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "mock-vol-2",
-			VolumeType:      "mock-driver",
+		Source: &ateletpb.Volume_External{
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-2",
+				VolumeType:      "mock-driver",
+			},
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name:       "durable-1",
-		DurableDir: &ateletpb.DurableDirVolume{},
+		Name: "durable-1",
+		Source: &ateletpb.Volume_DurableDir{
+			DurableDir: &ateletpb.DurableDirVolume{},
+		},
 	}
 
 	t.Run("success", func(t *testing.T) {
@@ -168,23 +174,29 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		External: &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "mock-vol-1",
-			VolumeType:      "mock-driver",
-			VolumeContext:   map[string]string{"key": "val1"},
+		Source: &ateletpb.Volume_External{
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-1",
+				VolumeType:      "mock-driver",
+				VolumeContext:   map[string]string{"key": "val1"},
+			},
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		External: &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "mock-vol-2",
-			VolumeType:      "mock-driver",
-			VolumeContext:   map[string]string{"key": "val2"},
+		Source: &ateletpb.Volume_External{
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-2",
+				VolumeType:      "mock-driver",
+				VolumeContext:   map[string]string{"key": "val2"},
+			},
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name:       "durable-1",
-		DurableDir: &ateletpb.DurableDirVolume{},
+		Name: "durable-1",
+		Source: &ateletpb.Volume_DurableDir{
+			DurableDir: &ateletpb.DurableDirVolume{},
+		},
 	}
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
@@ -260,9 +272,11 @@ func TestMountExternalVolumes(t *testing.T) {
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-unknown",
-				VolumeType:      "unknown-driver",
+			Source: &ateletpb.Volume_External{
+				External: &ateletpb.ExternalVolumeSource{
+					StorageVolumeId: "mock-vol-unknown",
+					VolumeType:      "unknown-driver",
+				},
 			},
 		}
 
@@ -377,16 +391,20 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		External: &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "mock-vol-1",
-			VolumeType:      "mock-driver",
+		Source: &ateletpb.Volume_External{
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-1",
+				VolumeType:      "mock-driver",
+			},
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		External: &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "mock-vol-2",
-			VolumeType:      "mock-driver",
+		Source: &ateletpb.Volume_External{
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-2",
+				VolumeType:      "mock-driver",
+			},
 		},
 	}
 

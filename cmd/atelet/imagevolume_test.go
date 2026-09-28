@@ -72,9 +72,7 @@ func singleFileLayer(t *testing.T, path, body string) v1.Layer {
 	return l
 }
 
-// pushTestImage pushes the image and returns its digest-pinned reference,
-// which is what validated workload specs carry.
-func pushTestImage(t *testing.T, ref string, layers ...v1.Layer) string {
+func pushTestImage(t *testing.T, ref string, layers ...v1.Layer) {
 	t.Helper()
 	img, err := mutate.AppendLayers(empty.Image, layers...)
 	if err != nil {
@@ -87,12 +85,6 @@ func pushTestImage(t *testing.T, ref string, layers ...v1.Layer) string {
 	if err := remote.Write(tag, img); err != nil {
 		t.Fatalf("remote.Write(%q): %v", ref, err)
 	}
-	digest, err := img.Digest()
-	if err != nil {
-		t.Fatalf("computing digest of %q: %v", ref, err)
-	}
-	pinned := tag.Context().Name() + "@" + digest.String()
-	return pinned
 }
 
 func newImageVolumeStore(t *testing.T) *imagecache.Store {
@@ -112,8 +104,8 @@ func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	pushTestImage(t, ref, singleFileLayer(t, "payload-binary", "binary"))
 
 	volumes := []*ateletpb.Volume{{
-		Name:  "agent",
-		Image: &ateletpb.ImageVolumeSource{Reference: ref},
+		Name:   "agent",
+		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: ref}},
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
@@ -146,8 +138,8 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 	)
 
 	volumes := []*ateletpb.Volume{{
-		Name:  "agent",
-		Image: &ateletpb.ImageVolumeSource{Reference: ref},
+		Name:   "agent",
+		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: ref}},
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
@@ -169,8 +161,8 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 // unused volume cannot fail the actor.
 func TestResolveImageVolumes_UnmountedVolumeNotPulled(t *testing.T) {
 	volumes := []*ateletpb.Volume{{
-		Name:  "agent",
-		Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"},
+		Name:   "agent",
+		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"}},
 	}}
 
 	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, nil)

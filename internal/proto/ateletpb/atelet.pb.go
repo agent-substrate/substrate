@@ -43,7 +43,7 @@ const (
 	ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED ActorMetadataField = 0
 	ActorMetadataField_ACTOR_METADATA_FIELD_NAME        ActorMetadataField = 1
 	ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE    ActorMetadataField = 2
-	ActorMetadataField_ACTOR_METADATA_FIELD_UID         ActorMetadataField = 3 // Keep this in sync with the maximums on fields of this type.
+	ActorMetadataField_ACTOR_METADATA_FIELD_UID         ActorMetadataField = 3
 )
 
 // Enum value maps for ActorMetadataField.
@@ -535,34 +535,16 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 }
 
 type TerminateRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	// +k8s:format=k8s-short-name
-	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	// +k8s:required
-	// +k8s:format=k8s-short-name
-	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:required
-	// +k8s:format=k8s-short-name
-	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:required
-	// +k8s:format=k8s-uuid
-	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// The template identity is carried for metrics attribution.
-	//
-	// +k8s:optional
-	// +k8s:format=k8s-short-name
-	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	// +k8s:optional
-	// +k8s:format=k8s-short-name
-	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// A nil spec is tolerated: the delete flow terminates template-less
-	// actors with a fallback spec.
-	//
-	// +k8s:optional
-	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *TerminateRequest) Reset() {
@@ -681,46 +663,24 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 }
 
 type RunRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	// +k8s:required
-	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:required
-	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:required
-	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// The template identity is carried for metrics attribution and is not
-	// validated today.
-	//
-	// +k8s:optional
-	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	// +k8s:optional
-	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// A nil spec is tolerated today; parity with the hand-written validation.
-	//
-	// +k8s:optional
-	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
-	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
 	// so a later Checkpoint can pin the same version into the snapshot manifest.
-	//
-	// +k8s:optional
-	// +k8s:opaqueType # tagged in a follow-up
 	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
-	//
-	// +k8s:optional
-	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. atelet
 	// passes these through to the sandbox so it is sized to the actor (not the
 	// whole host or worker pod). Zero means "unset": keep the runtime default.
-	//
-	// +k8s:optional
-	CpuMilli int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
-	// +k8s:optional
+	CpuMilli      int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
 	MemoryBytes   int64 `protobuf:"varint,11,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1053,23 +1013,9 @@ func (x *SandboxAssets) GetPauseImage() string {
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 type WorkloadSpec struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Tagged ahead of the rest of WorkloadSpec, like volumes below: the
-	// containers' type now carries validations.
-	//
-	// +k8s:optional
-	// +k8s:maxItems=10 # matches the template's containers bound
-	// +k8s:listType=map
-	// +k8s:listMapKey=name
-	Containers []*Container `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
-	// Tagged ahead of the rest of WorkloadSpec: volumes' type carries
-	// validations, so the generator requires a presence tag here.
-	//
-	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's volumes bound
-	// +k8s:listType=map
-	// +k8s:listMapKey=name
-	Volumes       []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Containers    []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	Volumes       []*Volume              `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1155,25 +1101,12 @@ func (*DurableDirVolume) Descriptor() ([]byte, []int) {
 }
 
 type ExternalVolumeSource struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Required, unlike the actor status counterpart: the control plane only
-	// sends volumes that finished provisioning.
-	//
-	// +k8s:required
-	// +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
-	// +k8s:customValidation # no control characters
-	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
-	// +k8s:optional
-	// +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
-	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
-	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
-	// +k8s:optional
-	// +k8s:maxProperties=32
-	// +k8s:eachKey=+k8s:maxLength=128
-	// +k8s:eachVal=+k8s:maxLength=256
-	VolumeContext map[string]string `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	StorageVolumeId string                 `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
+	VolumeType      string                 `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
+	VolumeContext   map[string]string      `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ExternalVolumeSource) Reset() {
@@ -1228,13 +1161,8 @@ func (x *ExternalVolumeSource) GetVolumeContext() map[string]string {
 }
 
 type ImageVolumeSource struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// reference is the OCI image reference, pinned by digest.
-	//
-	// +k8s:required
-	// +k8s:maxLength=512 # matches the template ImageVolumeSource.reference's bound
-	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
-	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reference     string                 `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1279,19 +1207,9 @@ func (x *ImageVolumeSource) GetReference() string {
 // ActorMetadataItem projects one actor identity field to one file at the
 // given path, relative to the root of the enclosing system-info volume.
 type ActorMetadataItem struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=3 # keep this in sync with the ActorMetadataField enum
-	Field ActorMetadataField `protobuf:"varint,1,opt,name=field,proto3,enum=atelet.ActorMetadataField" json:"field,omitempty"`
-	// path must be a clean relative Unix path; the rule is shared with the
-	// control plane through internal/volumepath.
-	//
-	// +k8s:required
-	// +k8s:minLength=1
-	// +k8s:maxLength=255
-	// +k8s:customValidation # projected-path rule, see internal/volumepath
-	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Field         ActorMetadataField     `protobuf:"varint,1,opt,name=field,proto3,enum=atelet.ActorMetadataField" json:"field,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1343,16 +1261,8 @@ func (x *ActorMetadataItem) GetPath() string {
 // ActorMetadataDataSource projects the actor's identity fields to files, one
 // per item. Values are written raw with no trailing newline.
 type ActorMetadataDataSource struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// items must not project the same field twice.
-	//
-	// +k8s:required
-	// +k8s:minItems=1
-	// +k8s:maxItems=8 # matches the template's items bound
-	// +k8s:listType=atomic
-	// +k8s:unique=map
-	// +k8s:listMapKey=field
-	Items         []*ActorMetadataItem `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*ActorMetadataItem   `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1401,19 +1311,9 @@ func (x *ActorMetadataDataSource) GetItems() []*ActorMetadataItem {
 // write time, sanitizing kubelet-style; an unsupported name or missing
 // bundle fails the actor start.
 type TrustBundleDataSource struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// path must be a clean relative Unix path; the rule is shared with the
-	// control plane through internal/volumepath.
-	//
-	// +k8s:required
-	// +k8s:minLength=1
-	// +k8s:maxLength=255
-	// +k8s:customValidation # projected-path rule, see internal/volumepath
-	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	// +k8s:required
-	// +k8s:minLength=1
-	// +k8s:maxLength=253 # matches the template's bundle-name bound
-	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1462,18 +1362,13 @@ func (x *TrustBundleDataSource) GetName() string {
 	return ""
 }
 
-// SystemInfoDataSource selects exactly one projection to place in the
-// volume.
 type SystemInfoDataSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Exactly one of actor_metadata / trust_bundle must be set.
+	// Types that are valid to be assigned to DataSource:
 	//
-	// +k8s:optional
-	// +k8s:unionMember
-	ActorMetadata *ActorMetadataDataSource `protobuf:"bytes,1,opt,name=actor_metadata,json=actorMetadata,proto3" json:"actor_metadata,omitempty"`
-	// +k8s:optional
-	// +k8s:unionMember
-	TrustBundle   *TrustBundleDataSource `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3" json:"trust_bundle,omitempty"`
+	//	*SystemInfoDataSource_ActorMetadata
+	//	*SystemInfoDataSource_TrustBundle
+	DataSource    isSystemInfoDataSource_DataSource `protobuf_oneof:"data_source"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1508,29 +1403,52 @@ func (*SystemInfoDataSource) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{20}
 }
 
+func (x *SystemInfoDataSource) GetDataSource() isSystemInfoDataSource_DataSource {
+	if x != nil {
+		return x.DataSource
+	}
+	return nil
+}
+
 func (x *SystemInfoDataSource) GetActorMetadata() *ActorMetadataDataSource {
 	if x != nil {
-		return x.ActorMetadata
+		if x, ok := x.DataSource.(*SystemInfoDataSource_ActorMetadata); ok {
+			return x.ActorMetadata
+		}
 	}
 	return nil
 }
 
 func (x *SystemInfoDataSource) GetTrustBundle() *TrustBundleDataSource {
 	if x != nil {
-		return x.TrustBundle
+		if x, ok := x.DataSource.(*SystemInfoDataSource_TrustBundle); ok {
+			return x.TrustBundle
+		}
 	}
 	return nil
 }
+
+type isSystemInfoDataSource_DataSource interface {
+	isSystemInfoDataSource_DataSource()
+}
+
+type SystemInfoDataSource_ActorMetadata struct {
+	ActorMetadata *ActorMetadataDataSource `protobuf:"bytes,1,opt,name=actor_metadata,json=actorMetadata,proto3,oneof"`
+}
+
+type SystemInfoDataSource_TrustBundle struct {
+	TrustBundle *TrustBundleDataSource `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3,oneof"`
+}
+
+func (*SystemInfoDataSource_ActorMetadata) isSystemInfoDataSource_DataSource() {}
+
+func (*SystemInfoDataSource_TrustBundle) isSystemInfoDataSource_DataSource() {}
 
 // SystemInfoVolume is a read-only volume whose files are generated by atelet
 // on every Run/Restore, so they carry the values of the actor actually being
 // started, whatever checkpointed state it boots from.
 type SystemInfoVolume struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:optional
-	// +k8s:maxItems=8 # matches the template's data_sources bound
-	// +k8s:listType=atomic
-	// +k8s:customValidation # paths unique across entries
+	state         protoimpl.MessageState  `protogen:"open.v1"`
 	DataSources   []*SystemInfoDataSource `protobuf:"bytes,1,rep,name=data_sources,json=dataSources,proto3" json:"data_sources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1573,27 +1491,16 @@ func (x *SystemInfoVolume) GetDataSources() []*SystemInfoDataSource {
 	return nil
 }
 
-// Volume names one volume and selects exactly one source for it.
-// +k8s:validation-gen=true
 type Volume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	// +k8s:format=k8s-short-name
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Exactly one of durable_dir / external / system_info / image must be set.
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Types that are valid to be assigned to Source:
 	//
-	// +k8s:optional
-	// +k8s:unionMember
-	DurableDir *DurableDirVolume `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
-	// +k8s:optional
-	// +k8s:unionMember
-	External *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
-	// +k8s:optional
-	// +k8s:unionMember
-	SystemInfo *SystemInfoVolume `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
-	// +k8s:optional
-	// +k8s:unionMember
-	Image         *ImageVolumeSource `protobuf:"bytes,5,opt,name=image,proto3" json:"image,omitempty"`
+	//	*Volume_DurableDir
+	//	*Volume_External
+	//	*Volume_SystemInfo
+	//	*Volume_Image
+	Source        isVolume_Source `protobuf_oneof:"source"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1635,47 +1542,81 @@ func (x *Volume) GetName() string {
 	return ""
 }
 
+func (x *Volume) GetSource() isVolume_Source {
+	if x != nil {
+		return x.Source
+	}
+	return nil
+}
+
 func (x *Volume) GetDurableDir() *DurableDirVolume {
 	if x != nil {
-		return x.DurableDir
+		if x, ok := x.Source.(*Volume_DurableDir); ok {
+			return x.DurableDir
+		}
 	}
 	return nil
 }
 
 func (x *Volume) GetExternal() *ExternalVolumeSource {
 	if x != nil {
-		return x.External
+		if x, ok := x.Source.(*Volume_External); ok {
+			return x.External
+		}
 	}
 	return nil
 }
 
 func (x *Volume) GetSystemInfo() *SystemInfoVolume {
 	if x != nil {
-		return x.SystemInfo
+		if x, ok := x.Source.(*Volume_SystemInfo); ok {
+			return x.SystemInfo
+		}
 	}
 	return nil
 }
 
 func (x *Volume) GetImage() *ImageVolumeSource {
 	if x != nil {
-		return x.Image
+		if x, ok := x.Source.(*Volume_Image); ok {
+			return x.Image
+		}
 	}
 	return nil
 }
 
+type isVolume_Source interface {
+	isVolume_Source()
+}
+
+type Volume_DurableDir struct {
+	DurableDir *DurableDirVolume `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3,oneof"`
+}
+
+type Volume_External struct {
+	External *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3,oneof"`
+}
+
+type Volume_SystemInfo struct {
+	SystemInfo *SystemInfoVolume `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3,oneof"`
+}
+
+type Volume_Image struct {
+	Image *ImageVolumeSource `protobuf:"bytes,5,opt,name=image,proto3,oneof"`
+}
+
+func (*Volume_DurableDir) isVolume_Source() {}
+
+func (*Volume_External) isVolume_Source() {}
+
+func (*Volume_SystemInfo) isVolume_Source() {}
+
+func (*Volume_Image) isVolume_Source() {}
+
 type VolumeMount struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// name must match the name of a Volume.
-	//
-	// +k8s:required
-	// +k8s:format=k8s-short-name
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// mount_path within the container. Must be a clean absolute Unix path.
-	//
-	// +k8s:required
-	// +k8s:maxLength=4096
-	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
-	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	MountPath     string                 `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1725,47 +1666,17 @@ func (x *VolumeMount) GetMountPath() string {
 }
 
 type Container struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # "pause" is reserved for sandbox infrastructure
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// +k8s:required
-	// +k8s:maxLength=512 # matches the template Container.image's bound
-	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
-	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
-	// +k8s:optional
-	// +k8s:maxItems=64
-	// +k8s:listType=atomic
-	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
-	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
-	// +k8s:optional
-	// +k8s:maxItems=64
-	// +k8s:listType=atomic
-	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
-	Args []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
-	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's env bound
-	// +k8s:listType=map # each variable is set at most once
-	// +k8s:listMapKey=name
-	Env []*EnvEntry `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
-	// +k8s:optional
-	WakeupProbe *WakeupProbe `protobuf:"bytes,5,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
-	// Keyed by mount_path: each path hosts exactly one mount, while a volume
-	// may be mounted at multiple paths.
-	//
-	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's volume_mounts bound
-	// +k8s:listType=map
-	// +k8s:listMapKey=mount_path
-	// +k8s:customValidation # mounts must not nest
-	VolumeMounts []*VolumeMount `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
-	// +k8s:optional
-	SecurityContext *SecurityContext `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Image           string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	Command         []string               `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
+	Args            []string               `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
+	Env             []*EnvEntry            `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
+	WakeupProbe     *WakeupProbe           `protobuf:"bytes,5,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
+	VolumeMounts    []*VolumeMount         `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
+	SecurityContext *SecurityContext       `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources are the cgroup limits for this container, resolved by
 	// ate-api-server from the ActorTemplate. Unset means no limits.
-	//
-	// +k8s:optional
 	Resources     *ResourceLimits `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1866,9 +1777,8 @@ func (x *Container) GetResources() *ResourceLimits {
 
 // SecurityContext holds security settings for a container's process.
 type SecurityContext struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:optional
-	Capabilities  *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Capabilities  *Capabilities          `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1913,17 +1823,9 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 // Capabilities adjusts a container's Linux capabilities relative to the default
 // set. Names carry no "CAP_" prefix; drop applies before add.
 type Capabilities struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:optional
-	// +k8s:maxItems=64
-	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar; "ALL" not accepted
-	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
-	// +k8s:optional
-	// +k8s:maxItems=64
-	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar
-	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Add           []string               `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
+	Drop          []string               `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1977,15 +1879,8 @@ func (x *Capabilities) GetDrop() []string {
 type ResourceLimits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// memory_bytes is the memory limit in bytes. 0 means unset.
-	//
-	// +k8s:optional
-	// +k8s:minimum=0
 	MemoryBytes int64 `protobuf:"varint,1,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	// cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
-	//
-	// +k8s:optional
-	// +k8s:minimum=0
-	// +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
 	CpuMillis     int64 `protobuf:"varint,2,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2036,16 +1931,9 @@ func (x *ResourceLimits) GetCpuMillis() int64 {
 }
 
 type EnvEntry struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// name may be any printable ASCII character except '='.
-	//
-	// +k8s:required
-	// +k8s:maxLength=256 # guardrail
-	// +k8s:customValidation # printable ASCII except '='
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// +k8s:optional
-	// +k8s:maxLength=32768 # guardrail
-	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2097,14 +1985,9 @@ func (x *EnvEntry) GetValue() string {
 // WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 type WakeupProbe struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// How long to keep polling before giving up and failing the actor start.
-	//
-	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=3600 # matches the template wakeup probe's bound
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -2158,16 +2041,8 @@ func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 type HTTPGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Path to access on the HTTP server.
-	//
-	// +k8s:required
-	// +k8s:maxLength=1024 # matches the template probe path's bound
-	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// TCP port to connect to (1..65535).
-	//
-	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=65535
 	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2398,37 +2273,19 @@ func (x *ExternalRestoreConfiguration) GetSnapshotUri() string {
 }
 
 type CheckpointRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	// +k8s:required
-	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:required
-	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:required
-	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// The template identity is carried for metrics attribution and is not
-	// validated today.
-	//
-	// +k8s:optional
-	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	// +k8s:optional
-	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on checkpoint: atelet uses the version the
 	// actor is currently running (recorded with the actor's on-node state at
 	// Run/Restore) and records it into the snapshot manifest.
-	//
-	// +k8s:optional
-	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
-	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// +k8s:required
+	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
-	//
-	// Declarative validation cannot express oneof members today (tags on them
-	// never reach the generator), so the type/config consistency checks stay in
-	// hand-written validation until they move to a message-level custom
-	// validation.
 	//
 	// Types that are valid to be assigned to Config:
 	//
@@ -2436,8 +2293,6 @@ type CheckpointRequest struct {
 	//	*CheckpointRequest_ExternalConfig
 	Config isCheckpointRequest_Config `protobuf_oneof:"config"`
 	// What should be included in the checkpoint.
-	//
-	// +k8s:required
 	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2614,35 +2469,23 @@ func (*CheckpointResponse) Descriptor() ([]byte, []int) {
 }
 
 type UploadPausedCheckpointRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:required
-	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:required
-	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Atespace  string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid  string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// For metrics attribution, like on CheckpointRequest.
-	//
-	// +k8s:optional
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	// +k8s:optional
-	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	ActorTemplateName     string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
 	// at pause time.
-	//
-	// +k8s:required
 	LocalSnapshotName string `protobuf:"bytes,6,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
-	//
-	// +k8s:required
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
 	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
 	// The scope the pause checkpoint captured is not sent: atelet reads it from
 	// the local snapshot's own manifest, which is authoritative. When they
 	// differ, atelet converts where possible (micro-VM FULL capture to a DATA
 	// upload by selecting the durable-dir tar) and rejects otherwise.
-	//
-	// +k8s:required
 	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2771,33 +2614,16 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 }
 
 type RestoreRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	// +k8s:required
-	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:required
-	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:required
-	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// The template identity is carried for metrics attribution and is not
-	// validated today.
-	//
-	// +k8s:optional
-	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	// +k8s:optional
-	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// +k8s:optional
-	// +k8s:opaqueType # opened up when Restore's validation is wired
-	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// +k8s:required
-	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	Type                  CheckpointType         `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
-	//
-	// Declarative validation cannot express oneof members today (tags on them
-	// never reach the generator), so the type/config consistency checks stay in
-	// hand-written validation until they move to a message-level custom
-	// validation.
 	//
 	// Types that are valid to be assigned to Config:
 	//
@@ -2805,36 +2631,22 @@ type RestoreRequest struct {
 	//	*RestoreRequest_ExternalConfig
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
 	// What content to restore from the checkpoint.
-	//
-	// +k8s:required
 	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	// The base guest state (memory + rootfs delta) combined with `config`'s
 	// durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
 	// field rather than part of the `config` oneof: the actor's snapshot may
 	// be local (a pause checkpoint) while the base is always external.
-	//
-	// +k8s:optional
-	// +k8s:opaqueType # tagged when Restore's validation is wired
 	BaseConfig *ExternalRestoreConfiguration `protobuf:"bytes,12,opt,name=base_config,json=baseConfig,proto3" json:"base_config,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
-	//
-	// +k8s:optional
-	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
 	// gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
 	// for a FULL micro-VM restore the size baked into the snapshot wins. Zero
 	// means "unset": keep the runtime default.
-	//
-	// +k8s:optional
-	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
-	// +k8s:optional
+	CpuMilli    int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
 	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// The sandbox binaries and pause image to restore with, resolved from the
 	// ActorTemplate's SandboxConfig. Required.
-	//
-	// +k8s:required
-	// +k8s:opaqueType # tagged in a follow-up
 	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3136,20 +2948,22 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"?\n" +
 	"\x15TrustBundleDataSource\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xa0\x01\n" +
-	"\x14SystemInfoDataSource\x12F\n" +
-	"\x0eactor_metadata\x18\x01 \x01(\v2\x1f.atelet.ActorMetadataDataSourceR\ractorMetadata\x12@\n" +
-	"\ftrust_bundle\x18\x02 \x01(\v2\x1d.atelet.TrustBundleDataSourceR\vtrustBundle\"S\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xb3\x01\n" +
+	"\x14SystemInfoDataSource\x12H\n" +
+	"\x0eactor_metadata\x18\x01 \x01(\v2\x1f.atelet.ActorMetadataDataSourceH\x00R\ractorMetadata\x12B\n" +
+	"\ftrust_bundle\x18\x02 \x01(\v2\x1d.atelet.TrustBundleDataSourceH\x00R\vtrustBundleB\r\n" +
+	"\vdata_source\"S\n" +
 	"\x10SystemInfoVolume\x12?\n" +
-	"\fdata_sources\x18\x01 \x03(\v2\x1c.atelet.SystemInfoDataSourceR\vdataSources\"\xfd\x01\n" +
+	"\fdata_sources\x18\x01 \x03(\v2\x1c.atelet.SystemInfoDataSourceR\vdataSources\"\x8f\x02\n" +
 	"\x06Volume\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
-	"\vdurable_dir\x18\x02 \x01(\v2\x18.atelet.DurableDirVolumeR\n" +
-	"durableDir\x128\n" +
-	"\bexternal\x18\x03 \x01(\v2\x1c.atelet.ExternalVolumeSourceR\bexternal\x129\n" +
-	"\vsystem_info\x18\x04 \x01(\v2\x18.atelet.SystemInfoVolumeR\n" +
-	"systemInfo\x12/\n" +
-	"\x05image\x18\x05 \x01(\v2\x19.atelet.ImageVolumeSourceR\x05image\"@\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12;\n" +
+	"\vdurable_dir\x18\x02 \x01(\v2\x18.atelet.DurableDirVolumeH\x00R\n" +
+	"durableDir\x12:\n" +
+	"\bexternal\x18\x03 \x01(\v2\x1c.atelet.ExternalVolumeSourceH\x00R\bexternal\x12;\n" +
+	"\vsystem_info\x18\x04 \x01(\v2\x18.atelet.SystemInfoVolumeH\x00R\n" +
+	"systemInfo\x121\n" +
+	"\x05image\x18\x05 \x01(\v2\x19.atelet.ImageVolumeSourceH\x00R\x05imageB\b\n" +
+	"\x06source\"@\n" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
@@ -3401,6 +3215,16 @@ func file_atelet_proto_init() {
 		return
 	}
 	file_atelet_proto_msgTypes[8].OneofWrappers = []any{}
+	file_atelet_proto_msgTypes[20].OneofWrappers = []any{
+		(*SystemInfoDataSource_ActorMetadata)(nil),
+		(*SystemInfoDataSource_TrustBundle)(nil),
+	}
+	file_atelet_proto_msgTypes[22].OneofWrappers = []any{
+		(*Volume_DurableDir)(nil),
+		(*Volume_External)(nil),
+		(*Volume_SystemInfo)(nil),
+		(*Volume_Image)(nil),
+	}
 	file_atelet_proto_msgTypes[35].OneofWrappers = []any{
 		(*CheckpointRequest_LocalConfig)(nil),
 		(*CheckpointRequest_ExternalConfig)(nil),

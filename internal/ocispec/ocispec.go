@@ -173,16 +173,15 @@ func Build(o Options) *specs.Spec {
 	for _, vm := range o.VolumeMounts {
 		var srcPath string
 		options := []string{"bind", "rw"}
-		vol := volumesByName[vm.GetName()]
-		switch {
-		case vol.GetDurableDir() != nil:
+		switch volumesByName[vm.GetName()].GetSource().(type) {
+		case *ateletpb.Volume_DurableDir:
 			srcPath = filepath.Join(o.DurableDirVolumeMountsDir, vm.GetName())
-		case vol.GetExternal() != nil:
+		case *ateletpb.Volume_External:
 			srcPath = filepath.Join(o.VolumesDir, vm.GetName())
-		case vol.GetSystemInfo() != nil:
+		case *ateletpb.Volume_SystemInfo:
 			srcPath = filepath.Join(o.SystemInfoVolumeRootsDir, vm.GetName())
 			options = []string{"bind", "ro"}
-		case vol.GetImage() != nil:
+		case *ateletpb.Volume_Image:
 			srcPath = imagecache.ImageVolumeMountPath(o.BundlePath, vm.GetName())
 			options = []string{"bind", "ro"}
 		default:
