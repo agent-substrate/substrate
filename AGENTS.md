@@ -45,6 +45,8 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Binaries**: `make build` (builds images and `kubectl-ate`) or `make build-atectl`
 - **Images**: `make build-images` (uses ko to build container images)
 - **Demos**: `make build-demos`
+- **Dockerfile images**: `make build-envoy-dataplane` (uses docker buildx; publishes the Envoy image a pre-built install needs)
+- **Release images**: `make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` (every image a pre-built install needs, all tagged `TAG`)
 
 ### Testing and Verification
 - **Run Unit Tests**: `make test`

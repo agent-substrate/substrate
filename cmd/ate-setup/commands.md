@@ -62,6 +62,12 @@ toolchain, and write access to a registry.
 `REPO` has to hold every component image the manifests reference, all under the
 same tag, which is how a release publishes them. A release that adds a component
 has to publish it alongside the others before a pre-built install can use it.
+That includes `envoy-dataplane`, the egress gateway's Envoy image. It is built
+from a Dockerfile rather than with `ko`, so `make build-images` does not publish
+it. `make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` publishes every
+image a pre-built install needs, this one included (`make build-envoy-dataplane`
+on its own), all tagged `TAG`. A build from source builds it with `docker
+buildx` instead, which is the one image that needs `docker` as well as `ko`.
 Each reference is then pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the
 cluster does.

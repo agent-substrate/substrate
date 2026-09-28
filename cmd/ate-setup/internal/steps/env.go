@@ -159,6 +159,35 @@ func (e *Env) koRunner() (*ko.Runner, error) {
 	return runner, nil
 }
 
+// dockerfileImage returns the reference to install an image built from a
+// Dockerfile rather than with ko, such as envoy-dataplane.
+//
+// A build from source builds contextDir with docker buildx and pushes it to
+// KO_DOCKER_REPO. A pre-built install builds nothing: --image-repo installs
+// images someone else published, and needs neither docker nor a registry to
+// push to, so the image is pinned from REPO/name:TAG like every ko image.
+// That only works if the release published it there, which the Makefile's
+// build-<name> target does.
+func (e *Env) dockerfileImage(ctx context.Context, name, contextDir string) (string, error) {
+	if !e.Cfg.Images.IsPrebuilt() {
+		return images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms)
+	}
+	resolver, err := e.imageResolver()
+	if err != nil {
+		return "", err
+	}
+	prebuilt, ok := resolver.(*images.Prebuilt)
+	if !ok {
+		return "", fmt.Errorf("image resolver is %T, not a pre-built resolver", resolver)
+	}
+	ref, err := prebuilt.Pin(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("%s is built from a Dockerfile, not with ko, so a release has to publish it "+
+			"alongside the other images (make build-%s): %w", name, name, err)
+	}
+	return ref, nil
+}
+
 // ResolveAndApply resolves the images in a manifest path and applies the
 // result. This is the run_ko apply of the shell scripts, split into its two
 // real steps.
