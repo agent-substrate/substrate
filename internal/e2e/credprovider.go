@@ -21,6 +21,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
+// TODO(yufan-su): Move these helpers into an internal/e2e/credprovider package.
+
 const (
 	// CredentialSecretsNamespace holds the fixture Secret and is the only
 	// namespace the credinject fixture's authorization policy allows the probe

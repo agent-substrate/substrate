@@ -312,25 +312,30 @@ func parseFetchHeaders(params []string) (http.Header, error) {
 	return headers, nil
 }
 
-// fetch GETs ?url= over the actor's normal egress path and reports the
-// outcome: the HTTP status plus the first 64 KiB of the response body, so a
-// suite can assert on what the origin received (e.g. an injected credential
-// echoed back by a headers-echo endpoint). TLS uses the trust anchors
-// selected by ?roots=: "bundle" (the default) loads the projected trust
-// bundle at trustFile, "system" uses the image's system roots.
-// TestActorEgressMITMTrust documents why each mode passes or fails.
+// fetch causes probe to issue an HTTP(S) GET to exercise the actor's egress
+// path. Parameters to the fetch are passed as URL query parameters:
 //
-// Repeatable ?header=<name>:<value> parameters are set on the request, so a
-// suite can pre-seed a header and observe whether the gateway overwrites it.
+//   - url=<URL to fetch>: required.
+//   - roots=bundle|system: the TLS trust anchors. "bundle" (the default)
+//     loads the projected trust bundle at trustFile; "system" uses the
+//     image's system roots. TestActorEgressMITMTrust documents why each mode
+//     passes or fails.
+//   - header=<name>:<value>: repeatable; set on the request, so a suite can
+//     pre-seed a header and observe whether the gateway overwrites it.
+//
+// The reply is a JSON object with the origin's "status" and the first 64 KiB
+// of its "body", so a suite can assert on what the origin received (e.g. an
+// injected credential echoed back by a headers-echo endpoint). Failures land
+// in "error" rather than the HTTP status: a TLS verification failure is a
+// result for the suite to assert on, not a broken probe.
 //
 // Redirects are not followed — a cross-scheme redirect would silently hop
 // between the gateway's cleartext and TLS legs, flipping the very behavior
 // (credential injection) some suites assert on — so the first response is
 // the result.
 //
-// TLS failures land in the "error" field rather than the HTTP status: a
-// verification failure is a result for the suite to assert on, not a broken
-// probe.
+// TODO: Accept the parameters as a JSON request body as well, which avoids
+// the escaping that query-string values need.
 func fetch(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]string{}
 	url := r.URL.Query().Get("url")

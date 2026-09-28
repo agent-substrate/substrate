@@ -96,7 +96,7 @@ jobs:
   e2e-test-matrix:
     name: E2E (${{ matrix.dataplane }})
     runs-on: ubuntu-latest
-    # Cluster bring-up, image builds and seven sequential lanes; generous, but far
+    # Cluster bring-up, image builds and six sequential lanes; generous, but far
     # short of the six-hour platform default a hung lane would otherwise consume.
     timeout-minutes: 120
     continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
@@ -122,7 +122,7 @@ jobs:
           ) }}
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      # E2E_JUNIT_FILE is set per step, not here: the seven lanes below share this
+      # E2E_JUNIT_FILE is set per step, not here: the six lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts
     steps:

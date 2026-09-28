@@ -24,6 +24,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+// TODO(yufan-su): Move these constructors into an internal/e2e/egresspolicy package.
+
 // EgressAllowAll is what a test that is not about egress policy gives its
 // actor, since the gateway denies an actor with no policy at all: every name
 // and address, as cleartext HTTP on any port and as intercepted HTTPS on 443.
