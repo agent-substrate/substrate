@@ -40,8 +40,8 @@ const (
 	SecretPostgresServerCA = "postgres-server-ca"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
-	// poolKeyID is the identifier given to the first CA and JWT key in a new
-	// pool, matching the --ca-id/--key-id the shell scripts passed.
+	// poolKeyID is the identifier given to the first CA in a new pool,
+	// matching the --ca-id the shell scripts passed.
 	poolKeyID = "1"
 )
 
@@ -259,18 +259,28 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 		return nil
 	}
 
-	authority, err := localjwtauthority.GenerateECDSAP256Authority(poolKeyID)
+	data, err := newJWTPoolSecretData()
 	if err != nil {
-		return fmt.Errorf("while generating the JWT authority for %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("while building the JWT pool for %s/%s: %w", namespace, name, err)
+	}
+	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, data)
+}
+
+// newJWTPoolSecretData generates a pool with one active RS256 authority, keyed
+// by its thumbprint.
+func newJWTPoolSecretData() (map[string][]byte, error) {
+	authority, err := localjwtauthority.GenerateAuthority("RS256", "")
+	if err != nil {
+		return nil, fmt.Errorf("while generating the JWT authority: %w", err)
 	}
 	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.ConcretePool{
 		Authorities:      []*localjwtauthority.Authority{authority},
-		ActiveForSigning: poolKeyID,
+		ActiveForSigning: authority.ID,
 	})
 	if err != nil {
-		return fmt.Errorf("while marshaling the JWT pool for %s/%s: %w", namespace, name, err)
+		return nil, fmt.Errorf("while marshaling the JWT pool: %w", err)
 	}
-	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, map[string][]byte{"pool": poolBytes})
+	return map[string][]byte{"pool": poolBytes}, nil
 }
 
 // createPoolSecret writes pool state.
