@@ -110,9 +110,8 @@ type ControlClient interface {
 	MintActorJWT(ctx context.Context, in *MintActorJWTRequest, opts ...grpc.CallOption) (*MintActorJWTResponse, error)
 	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
 	//
-	// * Called by atelet to provision an atunnel with a certificate for
-	//   communication with the egress gateway.  TODO(identity): Migrate this use
-	//   case to a distinct certificate to prevent actor/atunnel confusion.
+	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
+	//
 	// * Called by the egress gateway when actor client certificate injection is
 	//   configured for outbound requests.
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
@@ -564,9 +563,8 @@ type ControlServer interface {
 	MintActorJWT(context.Context, *MintActorJWTRequest) (*MintActorJWTResponse, error)
 	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
 	//
-	// * Called by atelet to provision an atunnel with a certificate for
-	//   communication with the egress gateway.  TODO(identity): Migrate this use
-	//   case to a distinct certificate to prevent actor/atunnel confusion.
+	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
+	//
 	// * Called by the egress gateway when actor client certificate injection is
 	//   configured for outbound requests.
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)

@@ -70,9 +70,8 @@ service Control {
 
   // Create a Substrate-issued SPIFFE certificate asserting the actor identity.
   //
-  // * Called by atelet to provision an atunnel with a certificate for
-  //   communication with the egress gateway.  TODO(identity): Migrate this use
-  //   case to a distinct certificate to prevent actor/atunnel confusion.
+  // SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
+  //
   // * Called by the egress gateway when actor client certificate injection is
   //   configured for outbound requests.
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
@@ -1616,24 +1615,8 @@ message MintActorCertificateRequest {
   // +k8s:maxBytes=16384
   bytes certificate_signing_request = 2;
 
-  // Purpose of the certificate.  Used to distinguish between system components
-  // acting on behalf of an actor, and the actor itself taking action.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=1 # keep this in sync with the ActorCertificatePurpose enum
-  ActorCertificatePurpose purpose = 4;
-}
-
-// Purpose of the certificate.  Used to distinguish between system components
-// acting on behalf of an actor, and the actor itself taking action.
-//
-// TODO(identity): This should be removed once ateom/atunnel certs are separated
-// from plain actor certs.
-enum ActorCertificatePurpose {
-  ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
-  ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
-  // Keep this in sync with MintCertRequest.purpose's maximum.
+  reserved 4;
+  reserved "purpose";
 }
 
 // Response message for MintActorCertificate.
