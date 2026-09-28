@@ -33,7 +33,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/atelet"
@@ -42,6 +41,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/pflag"
@@ -310,7 +310,7 @@ func TestDownloadExternalCheckpointRejectsSymlinkOutsideRoot(t *testing.T) {
 	if err := os.WriteFile(payload, []byte("replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ategcs.SendLocalFileToGCSWithZstd(context.Background(), store, testSnapshotURI+"/checkpoint.img.zstd", payload); err != nil {
+	if err := objectstorage.SendLocalFileToGCSWithZstd(context.Background(), store, testSnapshotURI+"/checkpoint.img.zstd", payload); err != nil {
 		t.Fatal(err)
 	}
 	err := (&AteomHerder{gcsClient: store}).downloadExternalCheckpoint(
@@ -753,11 +753,11 @@ func TestFetchAssetStreaming(t *testing.T) {
 	t.Run("missing object keeps the client's sentinel", func(t *testing.T) {
 		nodepath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
-		// The ategcs clients tag a missing object with ErrObjectNotFound.
-		notFound := fmt.Errorf("%w: no such object", ategcs.ErrObjectNotFound)
+		// The objectstorage clients tag a missing object with ErrObjectNotFound.
+		notFound := fmt.Errorf("%w: no such object", objectstorage.ErrObjectNotFound)
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
-		if !errors.Is(err, ategcs.ErrObjectNotFound) {
+		if !errors.Is(err, objectstorage.ErrObjectNotFound) {
 			t.Errorf("missing-object error lost the client's sentinel: %v", err)
 		}
 	})
@@ -766,7 +766,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		nodepath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open.
+		// Invalid percent-escape: url.Parse rejects it inside objectstorage.Open.
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted a malformed URL")
@@ -1395,7 +1395,7 @@ func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object str
 	defer r.mu.Unlock()
 	b, ok := r.objects[bucket+"/"+object]
 	if !ok {
-		return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ategcs.ErrObjectNotFound, bucket, object)
+		return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", objectstorage.ErrObjectNotFound, bucket, object)
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
 }

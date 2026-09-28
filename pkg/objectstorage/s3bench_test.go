@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ategcs
+package objectstorage
 
 import (
 	"context"
@@ -36,7 +36,7 @@ import (
 // is set, since it needs a server and a payload:
 //
 //	S3_BENCH_ENDPOINT=http://localhost:9000 S3_BENCH_BUCKET=bench \
-//	S3_BENCH_FILE=/path/to/memory-ranges go test ./cmd/atelet/internal/ategcs \
+//	S3_BENCH_FILE=/path/to/memory-ranges go test ./pkg/objectstorage \
 //	  -run TestS3UploadAgainstRealServer -v -count=3
 func TestS3UploadAgainstRealServer(t *testing.T) {
 	endpoint, bucket := os.Getenv("S3_BENCH_ENDPOINT"), os.Getenv("S3_BENCH_BUCKET")

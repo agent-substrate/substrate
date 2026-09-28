@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ategcs
+package objectstorage
 
 import (
 	"bytes"
@@ -32,7 +32,7 @@ import (
 // client honors STORAGE_EMULATOR_HOST, so:
 //
 //	docker run -d -p 4443:4443 fsouza/fake-gcs-server -scheme http -public-host localhost:4443
-//	STORAGE_EMULATOR_HOST=localhost:4443 go test ./cmd/atelet/internal/ategcs -run Composite
+//	STORAGE_EMULATOR_HOST=localhost:4443 go test ./pkg/objectstorage -run Composite
 func emulatorClient(t *testing.T) (*storage.Client, string) {
 	t.Helper()
 	if os.Getenv("STORAGE_EMULATOR_HOST") == "" {
@@ -44,7 +44,7 @@ func emulatorClient(t *testing.T) (*storage.Client, string) {
 		t.Fatalf("storage client: %v", err)
 	}
 	t.Cleanup(func() { client.Close() })
-	bucket := "ategcs-test"
+	bucket := "objectstorage-test"
 	if err := client.Bucket(bucket).Create(ctx, "test-project", nil); err != nil &&
 		!strings.Contains(err.Error(), "Conflict") && !strings.Contains(err.Error(), "exist") {
 		t.Logf("create bucket (ignored if it exists): %v", err)

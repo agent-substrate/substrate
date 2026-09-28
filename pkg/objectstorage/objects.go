@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ategcs
+package objectstorage
 
 import (
 	"bytes"
@@ -32,7 +32,7 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-var tracer = otel.Tracer("ategcs")
+var tracer = otel.Tracer("objectstorage")
 
 // ErrObjectNotFound reports the object or its bucket is absent from the
 // storage backend, as opposed to a transient fetch failure.
