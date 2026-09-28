@@ -14,15 +14,160 @@
 
 """Unit tests for orchestrator.py: python3 benchmarking/automation/test_orchestrator.py"""
 
+import contextlib
+import io
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import yaml
 
 import orchestrator
 from testtypes import locust
+
+
+class ParseArgsTest(unittest.TestCase):
+    # This checkout, relative to the test's cwd, which pytest and the
+    # unittest invocation in the docstring both make this directory.
+    CHECKOUT = os.path.relpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def parse(self, *argv):
+        return orchestrator.parse_args(["--dest", "gs://b", *argv])
+
+    def assertRejected(self, *argv):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.parse(*argv)
+
+    def test_repo_defaults(self):
+        args = self.parse("--repo", "r")
+        self.assertEqual(args.branch, "main")
+        self.assertEqual(args.target_cluster_dir, orchestrator.TARGET_CLUSTER_DIR)
+        self.assertIsNone(args.substrate_dir)
+        self.assertIsNone(args.env_file)
+
+    def test_repo_or_substrate_dir_required(self):
+        self.assertRejected()
+
+    def test_substrate_dir_rejects_clone_flags(self):
+        self.assertIsNone(self.parse("--substrate-dir", self.CHECKOUT).branch)
+        self.assertRejected("--substrate-dir", self.CHECKOUT, "--repo", "r")
+        self.assertRejected("--substrate-dir", self.CHECKOUT, "--branch", "b")
+
+    def test_substrate_dir_must_be_a_checkout(self):
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertRejected("--substrate-dir", empty)
+        self.assertRejected("--substrate-dir", "/nonexistent")
+
+    def test_env_file_rejects_target_cluster_dir(self):
+        self.assertIsNone(self.parse("--repo", "r", "--env-file", "e").target_cluster_dir)
+        self.assertRejected("--repo", "r", "--env-file", "e", "--target-cluster-dir", "d")
+
+    def test_paths_are_made_absolute(self):
+        # main chdirs into the checkout before reading most of them.
+        args = self.parse(
+            "--substrate-dir", self.CHECKOUT, "--env-file", "e", "--tests", "t.yaml",
+            "--manifests-dir", "m", "--junit-output", "out/j.xml",
+        )
+        for name in ("substrate_dir", "env_file", "tests", "manifests_dir", "junit_output"):
+            self.assertTrue(os.path.isabs(getattr(args, name)), name)
+        self.assertTrue(os.path.isabs(self.parse("--repo", "r").target_cluster_dir))
+
+
+ENV = (
+    "export PROJECT_ID=p\n"
+    "export CLUSTER_NAME=c\n"
+    "export CLUSTER_LOCATION=l\n"
+    "export KO_DOCKER_REPO=r/x\n"
+)
+
+
+class EnvFileTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.checkout = Path(tmp.name) / "substrate"
+        self.checkout.mkdir()
+        self.own = self.checkout / orchestrator.ENV_FILE_NAME
+        self.clusters = Path(tmp.name) / "clusters"
+        self.clusters.mkdir()
+        self.dev = self.clusters / "dev.sh"
+        self.dev.write_text(ENV)
+        patch = mock.patch.dict(os.environ, {}, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def args(self, **kw):
+        a = {"env_file": None, "target_cluster_dir": str(self.clusters), **kw}
+        return mock.Mock(**a)
+
+    def test_env_file_for(self):
+        test = {"targetCluster": "dev"}
+        self.assertEqual(orchestrator.env_file_for(test, self.args()), self.dev)
+        self.assertEqual(
+            orchestrator.env_file_for(test, self.args(env_file="/e")), Path("/e")
+        )
+
+    def test_target_cluster_file_is_copied_then_removed(self):
+        orchestrator.apply_env_file(self.dev, str(self.checkout))
+        self.assertEqual(self.own.read_text(), ENV)
+        self.assertEqual(os.environ["PROJECT_ID"], "p")
+        orchestrator.clear_env_file(self.dev, str(self.checkout))
+        self.assertFalse(self.own.exists())
+
+    def test_own_env_file_is_sourced_in_place_and_kept(self):
+        self.own.write_text(ENV)
+        orchestrator.apply_env_file(self.own, str(self.checkout))
+        self.assertEqual(os.environ["CLUSTER_NAME"], "c")
+        orchestrator.clear_env_file(self.own, str(self.checkout))
+        self.assertEqual(self.own.read_text(), ENV)
+
+    def test_missing_var(self):
+        self.dev.write_text("export PROJECT_ID=p\n")
+        with self.assertRaisesRegex(RuntimeError, "CLUSTER_NAME"):
+            orchestrator.apply_env_file(self.dev, str(self.checkout))
+
+    def test_exported_bash_function_does_not_pollute_env(self):
+        # env prints a two-statement function body over two lines, so a
+        # newline parser would turn the second into the key " Y".
+        self.dev.write_text(ENV + "f() {\n  X=1\n  Y=2\n}\nexport -f f\n")
+        orchestrator.apply_env_file(self.dev, str(self.checkout))
+        self.assertEqual(os.environ["KO_DOCKER_REPO"], "r/x")
+        self.assertNotIn(" Y", os.environ)
+        self.assertTrue(os.environ["BASH_FUNC_f%%"].endswith("}"))
+
+    def test_check_env_files(self):
+        dev = {"targetCluster": "dev"}
+        prod = {"targetCluster": "prod"}
+        checkout = str(self.checkout)
+        orchestrator.check_env_files([dev], self.args(), checkout)
+        with self.assertRaisesRegex(ValueError, "prod.sh"):
+            orchestrator.check_env_files([dev, prod], self.args(), checkout)
+        own = self.args(env_file=str(self.own))
+        with self.assertRaisesRegex(ValueError, "not found"):
+            orchestrator.check_env_files([dev], own, checkout)
+        self.own.write_text(ENV)
+        # --env-file overrides targetCluster, so prod.sh need not exist.
+        orchestrator.check_env_files([dev, prod], own, checkout)
+        # A copied file would overwrite the checkout's own.
+        with self.assertRaisesRegex(ValueError, "overwrite"):
+            orchestrator.check_env_files([dev], self.args(), checkout)
+
+
+class BuildTagTest(unittest.TestCase):
+    @mock.patch("orchestrator.subprocess.check_output")
+    def test_clean_tree_is_the_commit(self, check_output):
+        check_output.side_effect = ["abc123\n", ""]
+        self.assertEqual(orchestrator.build_tag("/s"), "abc123")
+
+    @mock.patch("orchestrator.subprocess.check_output")
+    def test_dirty_tree_gets_a_unique_suffix(self, check_output):
+        check_output.side_effect = ["abc123\n", " M x.py\n", "abc123\n", " M x.py\n"]
+        a, b = orchestrator.build_tag("/s"), orchestrator.build_tag("/s")
+        self.assertRegex(a, r"^abc123-dirty-[0-9a-f]{6}$")
+        self.assertNotEqual(a, b)
 
 
 class SelectTestsTest(unittest.TestCase):

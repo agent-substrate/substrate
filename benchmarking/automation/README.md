@@ -97,6 +97,49 @@ kubectl --context=<orchestration-cluster> -n substrate-benchmark \
 To change the schedule, edit `spec.schedule` in `scratch/cronjob.yaml` (the
 default is `0 3 * * *`, 3am UTC).
 
+## Running from a workstation
+
+Two flags replace the CronJob's clone and ConfigMap:
+
+- `--substrate-dir DIR` builds that checkout as it is, uncommitted changes
+  included, instead of cloning `--repo` at `--branch`. Passing `--repo` or
+  `--branch` with it is an error. A dirty tree tags its images and results
+  `<commit>-dirty-<random>`.
+- `--env-file FILE` sources that file for every test, whatever its
+  `targetCluster`, instead of `--target-cluster-dir/<targetCluster>.sh`.
+  Passing `--target-cluster-dir` with it is an error. The checkout's own `.ate-dev-env.sh` is sourced where it is and left
+  alone; any other file is copied in as `.ate-dev-env.sh` for each test and
+  removed after it, and the run refuses to start if that would overwrite the
+  checkout's own file.
+
+Every test runs `ate-setup delete ate-system` and
+`benchmarking/workloads/deploy.sh --delete` on the cluster the env file
+names, both before and after it runs. Do not point it at a cluster you
+share. The orchestrator runs `gcloud container clusters get-credentials`
+into a kubeconfig of its own under a temporary directory, so your kubectl
+context is not changed. It does run `gcloud auth configure-docker` for the
+env file's registry, which edits `~/.docker/config.json`.
+
+You need Python 3.10 or newer, `docker`, `git`, Go, `gcloud` with the
+`gke-gcloud-auth-plugin` component, and `kubectl` on the `PATH`. ko runs
+from `hack/tools/ko` through `go tool`. The orchestrator polls `docker info`
+first and fails if Docker is not running within 2 minutes. Relative paths
+in flags resolve against your current directory.
+
+```bash
+python3 -m venv benchmarking/automation/venv
+benchmarking/automation/venv/bin/pip install -r benchmarking/automation/requirements.txt
+benchmarking/automation/venv/bin/python -u benchmarking/automation/orchestrator.py \
+  --substrate-dir . --env-file .ate-dev-env.sh \
+  --dest gs://<DEST_BUCKET>/<PREFIX> \
+  --tests benchmarking/automation/tests.yaml --test-name <NAME>
+```
+
+[ateapi-cold-resume.md](ateapi-cold-resume.md) walks through a complete run
+of the cold resume tests this way. For a quicker loop that only rebuilds the
+runner against a cluster that already has substrate, see
+[benchmarking/nighthawk-ingress/run-dev.sh](../nighthawk-ingress/run-dev.sh).
+
 ## Test cluster prerequisites
 
 Create the test cluster with the substrate-required beta APIs, Workload

@@ -20,18 +20,19 @@ contract). The flow, with the type hooks marked:
 
   1. Pick the tests.yaml entries named by --test-name (default: all) and
      validate them before any other work [hook: validate].
-  2. Clone the substrate branch once; wait for the DIND sidecar.
+  2. Wait for docker; clone the substrate branch once, or build
+     --substrate-dir as it is.
   3. Per test entry:
-     a. Source the target cluster's env; gcloud/docker/kubectl setup and
-        the runner image build [hook: build_image] are cached per
-        target cluster.
+     a. Source the target cluster's env file, or --env-file; gcloud/
+        docker/kubectl setup and the runner image build [hook:
+        build_image] are cached per env file.
      b. Sweep leftovers, deploy substrate, let the type shape the
         cluster [hook: pre_test], deploy workloads (+ microvm deps when
         the sandbox class needs them).
      c. Render the type's Job template [hooks: job_tmpl, job_subs],
         submit it, wait, tail logs, delete the Job.
      d. Tear substrate + workloads down again so tests don't pollute
-        each other, then drop the env file so the next test can't
+        each other, then drop the copied env file so the next test can't
         inherit this one's cluster.
   4. Exit non-zero if any test didn't complete.
 """
@@ -43,6 +44,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -66,21 +68,28 @@ from util import (
 SUBSTRATE_DIR = "/workspace/substrate"
 TARGET_CLUSTER_DIR = "/etc/orchestrator/target-clusters"
 ENV_FILE_NAME = ".ate-dev-env.sh"
-MANIFESTS_DIR = "/opt/automation/manifests"
+# The runner Job templates ship next to this script, both in the image and
+# in the checkout.
+MANIFESTS_DIR = str(Path(__file__).resolve().parent / "manifests")
 NAMESPACE = "benchmarking"
 
 TEST_TYPES = tuple(TYPES)
 
-# Snapshot the process's initial env so apply_config can return to a known
-# baseline before sourcing the next config (avoids stale vars carrying over
-# from a prior test if that test's config defined keys the next one doesn't).
+# Snapshot the process's initial env so apply_env_file can return to a known
+# baseline before sourcing the next env file (avoids stale vars carrying over
+# from a prior test if that test's env file defined keys the next one doesn't).
 _ORIG_ENV = dict(os.environ)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--repo", required=True, help="Git URL of substrate repo to clone")
-    p.add_argument("--branch", default="main", help="Branch to benchmark")
+    p.add_argument("--repo", help="Git URL of substrate repo to clone")
+    p.add_argument("--branch", help="Branch to benchmark (default: main)")
+    p.add_argument(
+        "--substrate-dir",
+        help="Build this checkout as it is, uncommitted changes included, "
+        "instead of cloning --repo",
+    )
     p.add_argument(
         "--dest",
         required=True,
@@ -100,8 +109,14 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--target-cluster-dir",
-        default=TARGET_CLUSTER_DIR,
-        help="Directory containing target cluster configuration scripts (<cluster>.sh)",
+        help="Directory containing target cluster configuration scripts "
+        f"(<cluster>.sh); default {TARGET_CLUSTER_DIR}",
+    )
+    p.add_argument(
+        "--env-file",
+        help="Source this file for every test, whatever its targetCluster, "
+        "instead of --target-cluster-dir/<targetCluster>.sh; for example a "
+        f"checkout's own {ENV_FILE_NAME}",
     )
     p.add_argument(
         "--manifests-dir",
@@ -112,7 +127,62 @@ def parse_args() -> argparse.Namespace:
         "--junit-output",
         help="Path to write a JUnit XML report summarizing test results and durations",
     )
-    return p.parse_args()
+    args = p.parse_args(argv)
+    # Reject flags the chosen mode would ignore.
+    if args.substrate_dir:
+        if args.repo or args.branch:
+            p.error("--substrate-dir cannot be combined with --repo or --branch")
+        # .git is a file in a worktree, so test for either.
+        if not os.path.exists(os.path.join(args.substrate_dir, ".git")):
+            p.error(f"--substrate-dir {args.substrate_dir} is not a git checkout")
+    elif not args.repo:
+        p.error("one of --repo or --substrate-dir is required")
+    else:
+        args.branch = args.branch or "main"
+    if args.env_file:
+        if args.target_cluster_dir:
+            p.error("--env-file cannot be combined with --target-cluster-dir")
+    else:
+        args.target_cluster_dir = args.target_cluster_dir or TARGET_CLUSTER_DIR
+    # main chdirs into the substrate checkout, so keep paths relative to the
+    # caller's cwd meaning what the caller meant.
+    for name in (
+        "substrate_dir",
+        "tests",
+        "target_cluster_dir",
+        "env_file",
+        "manifests_dir",
+        "junit_output",
+    ):
+        if getattr(args, name):
+            setattr(args, name, os.path.abspath(getattr(args, name)))
+    return args
+
+
+def env_file_for(test: dict[str, Any], args: argparse.Namespace) -> Path:
+    """The env file a test runs with: --env-file, or the test's
+    targetCluster under --target-cluster-dir."""
+    if args.env_file:
+        return Path(args.env_file)
+    return Path(args.target_cluster_dir) / f"{test['targetCluster']}.sh"
+
+
+def check_env_files(
+    tests: list[dict[str, Any]], args: argparse.Namespace, substrate_dir: str
+) -> None:
+    """Fail fast (ValueError) before any docker or cluster work on an env
+    file that is missing, and on a checkout whose own .ate-dev-env.sh a
+    copied env file would overwrite."""
+    files = {env_file_for(t, args) for t in tests}
+    missing = sorted(str(f) for f in files if not f.exists())
+    if missing:
+        raise ValueError(f"env file(s) not found: {', '.join(missing)}")
+    own = Path(substrate_dir) / ENV_FILE_NAME
+    if own.exists() and any(not is_own_env_file(f, substrate_dir) for f in files):
+        raise ValueError(
+            f"{own} exists and a test would overwrite it; pass it as "
+            "--env-file or move it away"
+        )
 
 
 def select_tests(tests: list[dict], names: list[str]) -> list[dict]:
@@ -129,48 +199,48 @@ def select_tests(tests: list[dict], names: list[str]) -> list[dict]:
 
 
 def source_env(path: str) -> None:
+    # env -0: a developer shell exports multi-line bash functions, which
+    # newline splitting would turn into bogus keys.
     result = subprocess.run(
-        ["bash", "-c", f'set -a; source "{path}"; env'],
+        ["bash", "-c", f'set -a; source "{path}"; env -0'],
         check=True,
         capture_output=True,
         text=True,
     )
-    for line in result.stdout.splitlines():
-        if "=" not in line:
+    for entry in result.stdout.split("\0"):
+        if "=" not in entry:
             continue
-        k, _, v = line.partition("=")
+        k, _, v = entry.partition("=")
         os.environ[k] = v
 
 
-def apply_target_cluster(
-    target_cluster: str, target_cluster_dir: str = TARGET_CLUSTER_DIR
-) -> None:
-    """Copy target_cluster_dir/<name>.sh into the cloned
-    substrate repo as .ate-dev-env.sh (so ate-setup / deploy.sh source
-    it) and merge it into this process's env (so the orchestrator's own
-    gcloud / docker / kubectl calls see the same values). Resets os.environ
-    to the startup baseline first so vars defined by a previous target
-    cluster don't bleed into the next one."""
-    src = Path(target_cluster_dir) / f"{target_cluster}.sh"
-    if not src.exists():
-        raise FileNotFoundError(
-            f"target cluster {target_cluster!r} not found at {src}"
-        )
+def is_own_env_file(src: Path, substrate_dir: str) -> bool:
+    """Whether src is substrate_dir's own .ate-dev-env.sh. That file is
+    sourced where it is and left alone; any other env file is copied in for
+    the test and removed after it."""
+    return src.resolve() == (Path(substrate_dir) / ENV_FILE_NAME).resolve()
+
+
+def apply_env_file(src: Path, substrate_dir: str = SUBSTRATE_DIR) -> None:
+    """Install src as the substrate checkout's .ate-dev-env.sh (so ate-setup
+    / deploy.sh source it) and merge it into this process's env (so the
+    orchestrator's own gcloud / docker / kubectl calls see the same values).
+    Resets os.environ to the startup baseline first so vars defined by a
+    previous env file don't bleed into the next one."""
     os.environ.clear()
     os.environ.update(_ORIG_ENV)
-    dst = Path(SUBSTRATE_DIR) / ENV_FILE_NAME
-    shutil.copy(src, dst)
+    dst = Path(substrate_dir) / ENV_FILE_NAME
+    if not is_own_env_file(src, substrate_dir):
+        shutil.copy(src, dst)
     source_env(str(dst))
     for k in ("PROJECT_ID", "CLUSTER_NAME", "CLUSTER_LOCATION", "KO_DOCKER_REPO"):
         if not os.environ.get(k):
-            raise RuntimeError(
-                f"{k} not set after sourcing target cluster {target_cluster!r}"
-            )
+            raise RuntimeError(f"{k} not set after sourcing {src}")
 
 
-def clear_target_cluster() -> None:
-    dst = Path(SUBSTRATE_DIR) / ENV_FILE_NAME
-    if dst.exists():
+def clear_env_file(src: Path, substrate_dir: str = SUBSTRATE_DIR) -> None:
+    dst = Path(substrate_dir) / ENV_FILE_NAME
+    if not is_own_env_file(src, substrate_dir) and dst.exists():
         dst.unlink()
 
 
@@ -219,7 +289,7 @@ def _json_object(raw: str, what: str) -> dict[str, Any]:
 def run_metadata() -> dict[str, Any]:
     """Free-form run facts handed to the runner as --metadata.
 
-    Read per test, after apply_target_cluster has reset os.environ;
+    Read per test, after apply_env_file has reset os.environ;
     BENCHMARK_METADATA survives that reset because it is part of the startup
     env (_ORIG_ENV).
     """
@@ -263,15 +333,28 @@ def split_metadata_flag(test: dict[str, Any]) -> tuple[list[Any], dict[str, Any]
 
 
 def wait_for_docker(timeout: int = 120) -> None:
-    print("Waiting for DIND sidecar...", flush=True)
+    """Poll docker info: the CronJob's DIND sidecar starts alongside the
+    orchestrator, and a workstation's Docker may still be starting too."""
+    print("Waiting for docker...", flush=True)
     start = time.time()
     while time.time() - start < timeout:
         r = subprocess.run(["docker", "info"], capture_output=True)
         if r.returncode == 0:
-            print("DIND ready.", flush=True)
+            print("docker ready.", flush=True)
             return
         time.sleep(2)
-    raise RuntimeError("DIND sidecar did not become ready within timeout")
+    raise RuntimeError(f"docker did not become ready within {timeout}s")
+
+
+def build_tag(substrate_dir: str) -> str:
+    """HEAD's commit, labeling the runner image and the results. Uncommitted
+    changes get a unique -dirty suffix: the Job templates pull IfNotPresent,
+    so a tag reused for different content would run a stale image."""
+    git = ["git", "-C", substrate_dir]
+    commit = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+    if subprocess.check_output([*git, "status", "--porcelain"], text=True).strip():
+        commit += f"-dirty-{uuid.uuid4().hex[:6]}"
+    return commit
 
 
 def registry_host(ko_docker_repo: str) -> str:
@@ -575,6 +658,7 @@ def write_junit_xml(
 
 def main() -> None:
     args = parse_args()
+    substrate_dir = args.substrate_dir or SUBSTRATE_DIR
     tests = yaml.safe_load(Path(args.tests).read_text())["tests"]
     try:
         tests = select_tests(tests, args.test_name)
@@ -582,62 +666,68 @@ def main() -> None:
         validate_and_normalize_tests(tests)
         # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
         run_metadata()
+        check_env_files(tests, args, substrate_dir)
     except ValueError as e:
         sys.exit(str(e))
 
-    # Config-independent setup: DIND + clone the substrate branch once.
-    wait_for_docker()
-    run(
-        [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            args.branch,
-            args.repo,
-            SUBSTRATE_DIR,
-        ]
-    )
-    os.chdir(SUBSTRATE_DIR)
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    print(f"Building commit {commit}", flush=True)
+    # gcloud get-credentials writes the cluster into KUBECONFIG and makes it
+    # the current context, so give the run its own file rather than the
+    # caller's ~/.kube/config. Set in _ORIG_ENV too, so it survives
+    # apply_env_file's reset.
+    kubeconfig = str(Path(tempfile.mkdtemp(prefix="orchestrator-")) / "kubeconfig")
+    _ORIG_ENV["KUBECONFIG"] = os.environ["KUBECONFIG"] = kubeconfig
 
-    # Per-target-cluster caches: re-running setup for the same target
-    # cluster is wasted work, so we track what was last set up and only
-    # redo it when the target cluster name changes (substrate images get
-    # rebuilt by ate-setup each test anyway via ko). Runner
-    # images are built lazily per test type, so a locust-only tests.yaml
-    # never builds the nighthawk image and vice versa.
-    last_target = None
+    # Config-independent setup: docker, then the substrate checkout.
+    wait_for_docker()
+    if not args.substrate_dir:
+        run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                args.branch,
+                args.repo,
+                substrate_dir,
+            ]
+        )
+    os.chdir(substrate_dir)
+    tag = build_tag(substrate_dir)
+    print(f"Building {tag} from {substrate_dir}", flush=True)
+
+    # Per-env-file caches: re-running setup for the same env file is
+    # wasted work, so we track what was last set up and only redo it when
+    # the env file changes (substrate images get rebuilt by ate-setup each
+    # test anyway via ko). Runner images are built lazily per test type, so
+    # a locust-only tests.yaml never builds the nighthawk image and vice
+    # versa.
+    last_env_file = None
     images: dict[str, str] = {}
     results = []
 
     for i, test in enumerate(tests):
-        target_cluster = test["targetCluster"]
+        env_file = env_file_for(test, args)
         print(
-            f"\n=== test {i + 1}/{len(tests)}: {test['name']} (targetCluster={target_cluster}) ===",
+            f"\n=== test {i + 1}/{len(tests)}: {test['name']} (env file {env_file}) ===",
             flush=True,
         )
 
         try:
-            apply_target_cluster(target_cluster, args.target_cluster_dir)
+            apply_env_file(env_file, substrate_dir)
         except Exception as e:
-            print(
-                f"Failed to apply target cluster {target_cluster!r}: {e}",
-                flush=True,
-            )
+            print(f"Failed to apply env file {env_file}: {e}", flush=True)
             results.append((test["name"], "config-error", 0.0, str(e)))
             continue
 
         try:
-            if target_cluster != last_target:
+            if env_file != last_env_file:
                 gcloud_setup_for_target_cluster()
                 images = {}
-                last_target = target_cluster
+                last_env_file = env_file
             ttype = test_type(test)
             if ttype not in images:
-                images[ttype] = TYPES[ttype].build_image(commit)
+                images[ttype] = TYPES[ttype].build_image(tag)
 
             # Idempotent sweep before anything else: a previous CronJob
             # fire that crashed mid-test (or any other process that left
@@ -668,7 +758,7 @@ def main() -> None:
                         test,
                         images[ttype],
                         args.dest,
-                        commit,
+                        tag,
                         args.manifests_dir,
                     )
                     if status != "complete":
@@ -687,10 +777,10 @@ def main() -> None:
             duration = time.time() - start_time
             results.append((test["name"], status, duration, failure_msg))
         finally:
-            # Drop .ate-dev-env.sh so the next test cannot accidentally
-            # inherit this one's cluster/project if the next
-            # apply_target_cluster fails partway through.
-            clear_target_cluster()
+            # Drop the copied .ate-dev-env.sh so the next test cannot
+            # accidentally inherit this one's cluster/project if the next
+            # apply_env_file fails partway through.
+            clear_env_file(env_file, substrate_dir)
 
     print("\n=== summary ===", flush=True)
     failed = 0
