@@ -19,6 +19,8 @@ import (
 	"reflect"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -45,12 +47,17 @@ func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateReques
 	return toInvalidArgument(Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
 }
 
-// ValidateSetWorkerCapacityRequest validates req at the RPC edge. A non-nil
-// return is the InvalidArgument error the handler responds with. The
-// capacity's contents are opaque here (see the proto); the control plane
-// fully validates them when the report is forwarded.
+// ValidateSetWorkerCapacityRequest validates req at the RPC edge, applying
+// the rules ateapi declares on WorkerResources to the capacity. A non-nil
+// return is the InvalidArgument error the handler responds with.
 func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) error {
 	return toInvalidArgument(Validate_SetWorkerCapacityRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
+}
+
+// ValidateCustom_SetWorkerCapacityRequest_Capacity applies the rules the tags
+// on ateapipb.WorkerResources declare, shared through internal/resources.
+func ValidateCustom_SetWorkerCapacityRequest_Capacity(ctx context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.WorkerResources) field.ErrorList {
+	return resources.ValidateWorkerResources(ctx, fldPath, value)
 }
 
 func toInvalidArgument(errs field.ErrorList) error {

@@ -288,6 +288,123 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 		name: "missing capacity",
 		obj:  &ateletpb.SetWorkerCapacityRequest{},
 		want: field.ErrorList{field.Required(field.NewPath("capacity"), "")},
+	}, {
+		name: "full capacity",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "8Gi"}},
+			}},
+		},
+	}, {
+		name: "negative actors",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Actors: -1},
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "unsupported resource name",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}},
+			}},
+		},
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, nil)},
+	}, {
+		name: "missing resource name",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Quantity: "1"}},
+			}},
+		},
+		want: field.ErrorList{
+			field.Required(field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), ""),
+			field.NotSupported[string](field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, nil),
+		},
+	}, {
+		name: "resource name too long",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: strings.Repeat("x", 17), Quantity: "1"}},
+			}},
+		},
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, 16).WithOrigin("maxLength"),
+			field.NotSupported[string](field.NewPath("capacity", "resources", "limits").Index(0).Child("name"), nil, nil),
+		},
+	}, {
+		name: "quantity too long",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "memory", Quantity: strings.Repeat("1", 33)}},
+			}},
+		},
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength"),
+		},
+	}, {
+		name: "duplicate resource name",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "cpu", Quantity: "2"}},
+			}},
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("capacity", "resources", "limits").Index(1), nil)},
+	}, {
+		name: "missing quantity",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "cpu"}},
+			}},
+		},
+		want: field.ErrorList{field.Required(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), "")},
+	}, {
+		name: "malformed quantity",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "not-a-quantity"}},
+			}},
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "negative quantity",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "-1Gi"}},
+			}},
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "zero quantity",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "0"}},
+			}},
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "cpu at the bound",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1000"}},
+			}},
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "too many limits",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}, {Name: "cpu", Quantity: "2"}},
+			}},
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("capacity", "resources", "limits"), 3, 2).WithOrigin("maxItems")},
+	}, {
+		name: "nil limit entry",
+		obj: &ateletpb.SetWorkerCapacityRequest{
+			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{
+				Limits: []*ateapipb.Limits{nil},
+			}},
+		},
+		want: field.ErrorList{field.Required(field.NewPath("capacity", "resources", "limits").Index(0), "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

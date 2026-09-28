@@ -23,12 +23,14 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -1071,5 +1073,55 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 	}
 	if capacity := got.GetStatus().GetCapacity(); capacity != nil {
 		t.Errorf("a request carrying a ceiling set capacity to %v, want none", capacity)
+	}
+}
+
+// TestValidateWorkerResourcesParity holds resources.ValidateWorkerResources,
+// which atelet uses, to the generated Validate_WorkerResources. A tag change
+// on WorkerResources, Resources, or Limits that is not mirrored fails here.
+func TestValidateWorkerResourcesParity(t *testing.T) {
+	limits := func(l ...*ateapipb.Limits) *ateapipb.WorkerResources {
+		return &ateapipb.WorkerResources{Resources: &ateapipb.Resources{Limits: l}}
+	}
+	tests := []struct {
+		name string
+		obj  *ateapipb.WorkerResources
+	}{
+		{"empty", &ateapipb.WorkerResources{}},
+		{"valid", &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{
+			Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "8Gi"}},
+		}}},
+		{"empty resources", &ateapipb.WorkerResources{Resources: &ateapipb.Resources{}}},
+		{"negative actors", &ateapipb.WorkerResources{Actors: -1}},
+		{"nil limit", limits(nil)},
+		{"nil limit and too many", limits(
+			nil,
+			&ateapipb.Limits{Name: "cpu", Quantity: "1"},
+			&ateapipb.Limits{Name: "memory", Quantity: "1Gi"},
+		)},
+		{"too many limits", limits(
+			&ateapipb.Limits{Name: "cpu", Quantity: "1"},
+			&ateapipb.Limits{Name: "memory", Quantity: "1Gi"},
+			&ateapipb.Limits{Name: "cpu", Quantity: "2"},
+		)},
+		{"duplicate name", limits(&ateapipb.Limits{Name: "cpu", Quantity: "1"}, &ateapipb.Limits{Name: "cpu", Quantity: "2"})},
+		{"missing name", limits(&ateapipb.Limits{Quantity: "1"})},
+		{"long name", limits(&ateapipb.Limits{Name: strings.Repeat("x", 17), Quantity: "1"})},
+		{"unsupported name", limits(&ateapipb.Limits{Name: "gpu", Quantity: "1"})},
+		{"missing quantity", limits(&ateapipb.Limits{Name: "cpu"})},
+		{"long quantity", limits(&ateapipb.Limits{Name: "memory", Quantity: strings.Repeat("1", 33)})},
+		{"malformed quantity", limits(&ateapipb.Limits{Name: "cpu", Quantity: "lots"})},
+		{"zero quantity", limits(&ateapipb.Limits{Name: "memory", Quantity: "0"})},
+		{"negative quantity", limits(&ateapipb.Limits{Name: "memory", Quantity: "-1Gi"})},
+		{"cpu at the bound", limits(&ateapipb.Limits{Name: "cpu", Quantity: "1000"})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			fldPath := field.NewPath("capacity")
+			want := Validate_WorkerResources(ctx, operation.Operation{Type: operation.Create}, fldPath, tt.obj, nil)
+			got := resources.ValidateWorkerResources(ctx, fldPath, tt.obj)
+			field.ErrorMatcher{}.ByType().ByField().ByOrigin().ByDetailExact().Test(t, want, got)
+		})
 	}
 }

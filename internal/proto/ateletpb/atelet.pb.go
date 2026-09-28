@@ -210,10 +210,14 @@ type SetWorkerCapacityRequest struct {
 	// What the worker can supply, in the same vocabulary the control plane
 	// records and an ActorTemplate asks in.
 	//
-	// Control plane validates the capacity when atelet forwards it.
+	// Opaque: validation-gen only follows a type into another package if that
+	// package holds its custom hooks, and ateapipb is generated proto code. The
+	// custom validation applies the same rules as the tags on
+	// ateapi.WorkerResources, shared through internal/resources.
 	//
 	// +k8s:required
 	// +k8s:opaqueType
+	// +k8s:customValidation # ateapi.WorkerResources rules
 	Capacity      *ateapipb.WorkerResources `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

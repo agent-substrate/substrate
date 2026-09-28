@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"net/netip"
@@ -22,6 +23,9 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -205,4 +209,109 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 		}
 	}
 	return nil
+}
+
+// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
+var cpuLimitMax = resource.MustParse("1k")
+
+// ValidateLimits validates the contents of Resources.limits: only cpu and
+// memory are supported, each quantity must be greater than zero, and the cpu
+// limit must be less than 1000 cores. Presence, length, and uniqueness of
+// names are enforced by the tags on the message.
+//
+// It backs controlapi's Resources.limits custom validation hook and
+// ValidateWorkerResources, so both apply one rule.
+func ValidateLimits(fldPath *field.Path, limits []*ateapipb.Limits) field.ErrorList {
+	var errs field.ErrorList
+	for i, limit := range limits {
+		if limit == nil {
+			continue
+		}
+		if limit.Name != ResourceCPU && limit.Name != ResourceMemory {
+			errs = append(errs, field.NotSupported(fldPath.Index(i).Child("name"), limit.Name, []string{ResourceCPU, ResourceMemory}))
+			continue
+		}
+		if limit.Quantity == "" {
+			continue // required is enforced by tags
+		}
+		q, err := resource.ParseQuantity(limit.Quantity)
+		if err != nil {
+			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err)))
+			continue
+		}
+		if q.Sign() <= 0 {
+			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, "must be greater than zero"))
+		}
+		if limit.Name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
+			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, "cpu limit must be less than 1000 cores"))
+		}
+	}
+	return errs
+}
+
+// ValidateWorkerResources applies the declarative rules on
+// ateapipb.WorkerResources, Resources, and Limits for callers outside
+// controlapi. validation-gen cannot generate them there: it only follows a
+// type into another package if that package holds the custom hooks, and
+// ateapipb is generated proto code. TestValidateWorkerResourcesParity in
+// controlapi holds this to the generated Validate_WorkerResources, so a tag
+// change there fails it.
+func ValidateWorkerResources(ctx context.Context, fldPath *field.Path, obj *ateapipb.WorkerResources) field.ErrorList {
+	if obj == nil {
+		return nil
+	}
+	op := operation.Operation{Type: operation.Create}
+	var errs field.ErrorList
+
+	// resources: +k8s:optional
+	if obj.Resources != nil {
+		errs = append(errs, validateResources(ctx, op, fldPath.Child("resources"), obj.Resources)...)
+	}
+
+	// actors: +k8s:optional, +k8s:minimum=1
+	actorsPath := fldPath.Child("actors")
+	if len(validate.OptionalValue(ctx, op, actorsPath, &obj.Actors, nil)) == 0 {
+		errs = append(errs, validate.Minimum(ctx, op, actorsPath, &obj.Actors, nil, 1)...)
+	}
+	return errs
+}
+
+func validateResources(ctx context.Context, op operation.Operation, fldPath *field.Path, obj *ateapipb.Resources) field.ErrorList {
+	fldPath = fldPath.Child("limits")
+	limits := obj.Limits
+
+	// limits: +k8s:optional, +k8s:maxItems=2, +k8s:listType=map,
+	// +k8s:listMapKey=name, +k8s:customValidation.
+	var errs field.ErrorList
+	errs = append(errs, validate.PtrSliceNoNils[ateapipb.Limits](ctx, op, fldPath, limits, nil)...)
+	errs = append(errs, validate.MaxItems(ctx, op, fldPath, limits, nil, 2)...)
+	if len(errs) != 0 || len(validate.OptionalSlice(ctx, op, fldPath, limits, nil)) != 0 {
+		return errs
+	}
+	errs = ValidateLimits(fldPath, limits)
+	errs = append(errs, validate.PtrSliceUnique(ctx, op, fldPath, limits, nil,
+		func(a, b *ateapipb.Limits) bool { return a.Name == b.Name })...)
+	for i, limit := range limits {
+		errs = append(errs, validateLimit(ctx, op, fldPath.Index(i), limit)...)
+	}
+	return errs
+}
+
+func validateLimit(ctx context.Context, op operation.Operation, fldPath *field.Path, obj *ateapipb.Limits) field.ErrorList {
+	var errs field.ErrorList
+	// name: +k8s:required, +k8s:maxLength=16
+	namePath := fldPath.Child("name")
+	if e := validate.RequiredValue(ctx, op, namePath, &obj.Name, nil); len(e) != 0 {
+		errs = append(errs, e...)
+	} else {
+		errs = append(errs, validate.MaxLength(ctx, op, namePath, &obj.Name, nil, 16)...)
+	}
+	// quantity: +k8s:required, +k8s:maxLength=32
+	quantityPath := fldPath.Child("quantity")
+	if e := validate.RequiredValue(ctx, op, quantityPath, &obj.Quantity, nil); len(e) != 0 {
+		errs = append(errs, e...)
+	} else {
+		errs = append(errs, validate.MaxLength(ctx, op, quantityPath, &obj.Quantity, nil, 32)...)
+	}
+	return errs
 }

@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -269,6 +270,76 @@ func TestValidateUUID(t *testing.T) {
 					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
 				}
 			}
+		})
+	}
+}
+
+// ValidateWorkerResources is held to the generated rules by controlapi's
+// TestValidateWorkerResourcesParity; this covers the package's own contract,
+// including the ValidateLimits hook it shares with controlapi.
+func TestValidateWorkerResources(t *testing.T) {
+	limitsPath := field.NewPath("capacity", "resources", "limits")
+	withLimits := func(l ...*ateapipb.Limits) *ateapipb.WorkerResources {
+		return &ateapipb.WorkerResources{Resources: &ateapipb.Resources{Limits: l}}
+	}
+	tests := []struct {
+		name string
+		obj  *ateapipb.WorkerResources
+		want field.ErrorList
+	}{{
+		name: "nil",
+	}, {
+		name: "empty",
+		obj:  &ateapipb.WorkerResources{},
+	}, {
+		name: "valid",
+		obj:  &ateapipb.WorkerResources{Actors: 2, Resources: CPUMemory(1500, 1<<30)},
+	}, {
+		name: "negative actors",
+		obj:  &ateapipb.WorkerResources{Actors: -1},
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "nil limit and too many",
+		obj:  withLimits(nil, &ateapipb.Limits{Name: "cpu", Quantity: "1"}, &ateapipb.Limits{Name: "memory", Quantity: "1Gi"}),
+		want: field.ErrorList{
+			field.Required(limitsPath.Index(0), ""),
+			field.TooMany(limitsPath, 3, 2).WithOrigin("maxItems"),
+		},
+	}, {
+		name: "missing name",
+		obj:  withLimits(&ateapipb.Limits{Quantity: "1"}),
+		want: field.ErrorList{
+			field.Required(limitsPath.Index(0).Child("name"), ""),
+			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
+		},
+	}, {
+		name: "unsupported name",
+		obj:  withLimits(&ateapipb.Limits{Name: "gpu", Quantity: "1"}),
+		want: field.ErrorList{field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil)},
+	}, {
+		name: "duplicate name",
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1"}, &ateapipb.Limits{Name: "cpu", Quantity: "2"}),
+		want: field.ErrorList{field.Duplicate(limitsPath.Index(1), nil)},
+	}, {
+		name: "missing quantity",
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu"}),
+		want: field.ErrorList{field.Required(limitsPath.Index(0).Child("quantity"), "")},
+	}, {
+		name: "zero quantity",
+		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: "0"}),
+		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "cpu at the bound",
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1000"}),
+		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "cpu just under the bound",
+		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "999999m"}),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidateWorkerResources(context.Background(), field.NewPath("capacity"), tt.obj)
+			field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, tt.want, got)
 		})
 	}
 }
