@@ -104,6 +104,7 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 	g2.SetLimit(uploadConcurrency)
 
 	src := io.MultiReader(head, rest)
+	base := g.rotation()
 	for i := 0; ; i++ {
 		var buf []byte
 		select {
@@ -115,7 +116,7 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 		if n > 0 {
 			part := bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 			parts = append(parts, part)
-			upPart := g.uploadClient(ctx, i).Bucket(bucket).Object(part.ObjectName())
+			upPart := g.uploadClient(ctx, base+i).Bucket(bucket).Object(part.ObjectName())
 			data := buf[:n]
 			g2.Go(func() error {
 				defer func() { free <- buf }()

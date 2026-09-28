@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 )
 
@@ -61,5 +62,33 @@ func TestPooledClientsAreBuiltLikeTheClientTheyStandIn(t *testing.T) {
 		if c := g.uploadClient(ctx, i); c == nil || c == g.client {
 			t.Errorf("uploadClient(%d) did not return a pooled connection", i)
 		}
+	}
+}
+
+// TestObjectsRotateAcrossThePool checks that consecutive objects start on
+// different pooled clients: were they all to start on one, concurrent snapshots
+// under a few parts long would split a few connections and idle the rest.
+func TestObjectsRotateAcrossThePool(t *testing.T) {
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/credentials.json")
+	t.Setenv("GCE_METADATA_HOST", "127.0.0.1:1")
+
+	ctx := context.Background()
+	store, err := NewGCSClient(ctx, option.WithoutAuthentication())
+	if err != nil {
+		t.Fatalf("an anonymous client must build without credentials: %v", err)
+	}
+	g := store.(*gcsClient)
+	defer g.client.Close()
+
+	seen := map[*storage.Client]bool{}
+	for range uploadPoolSize {
+		c := g.uploadClient(ctx, g.rotation())
+		if c == g.client {
+			t.Fatal("rotation led to the wrapped client instead of a pooled one")
+		}
+		seen[c] = true
+	}
+	if len(seen) != uploadPoolSize {
+		t.Errorf("%d uploads used %d distinct clients, want %d", uploadPoolSize, len(seen), uploadPoolSize)
 	}
 }

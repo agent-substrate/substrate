@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -38,6 +39,8 @@ type gcsClient struct {
 	// built on first use by uploadClient.
 	poolOnce sync.Once
 	pool     []*storage.Client
+	// nextClient spreads concurrent objects across the pool; see rotation.
+	nextClient atomic.Uint32
 }
 
 // NewGCSClient returns a GCS-backed ObjectStorage. It builds its own
@@ -105,7 +108,7 @@ func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader
 
 // putSingle writes the whole body in one resumable request.
 func (g *gcsClient) putSingle(ctx context.Context, bucket, object string, reader io.Reader) error {
-	wc := g.client.Bucket(bucket).Object(object).NewWriter(ctx)
+	wc := g.uploadClient(ctx, g.rotation()).Bucket(bucket).Object(object).NewWriter(ctx)
 	wc.ChunkSize = uploadChunkSize
 	// io.Copy reports local read errors; wc.Close() reports the actual
 	// GCS upload (auth, permissions, transient). Join both so the caller
@@ -116,4 +119,13 @@ func (g *gcsClient) putSingle(ctx context.Context, bucket, object string, reader
 		return fmt.Errorf("while putting GCS object: %w", err)
 	}
 	return nil
+}
+
+// rotation returns the pool index an object's first request uses; its other parts
+// or ranges follow from there. It advances per object because the node moves many
+// snapshots at once: were every object to start at the same client, a snapshot
+// under three parts long would leave most of the pool idle while all of them split
+// the first few connections.
+func (g *gcsClient) rotation() int {
+	return int(g.nextClient.Add(1) % uploadPoolSize)
 }
