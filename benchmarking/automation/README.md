@@ -84,6 +84,21 @@ kubectl --context=<orchestration-cluster> -n substrate-benchmark \
 To change the schedule, edit `spec.schedule` in `scratch/cronjob.yaml` (the
 default is `0 3 * * *`, 3am UTC).
 
+## Running locally
+
+`--in-place` runs the orchestrator from your checkout instead of the CronJob:
+it builds the working tree rather than cloning `--repo`, and every test uses
+the checkout's existing `.ate-dev-env.sh` rather than a file from
+`--target-cluster-dir`. Pass `--tests` the tests file to run.
+It still needs `docker`, `gcloud` and `kubectl` on the `PATH`.
+
+```bash
+python3 -m venv benchmarking/automation/venv
+benchmarking/automation/venv/bin/pip install -r benchmarking/automation/requirements.txt
+benchmarking/automation/venv/bin/python benchmarking/automation/orchestrator.py \
+  --in-place --dest gs://<DEST_BUCKET>/<PREFIX> --tests path/to/tests.yaml
+```
+
 ## Test cluster prerequisites
 
 Create the test cluster with the substrate-required beta APIs, Workload
