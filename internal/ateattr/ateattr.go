@@ -173,6 +173,32 @@ const (
 	StatsSourceKey         = attribute.Key("ate.stats.source")
 )
 
+// Keys of the actor usage record. Logs only: the measurements are unbounded and
+// the epoch is per activation. The measurement names follow the
+// ate.actor.stats.* instruments and share their units, so a query works the
+// same on both signals: the memory keys are bytes, StatsCPUTimeKey is seconds
+// as a double.
+//
+// ActorEpochKey identifies one activation of an actor, a Run or Restore, as the
+// unix-nano time it began. It is the boundary of ate.stats.cpu.time, which
+// restarts at zero with each activation.
+const (
+	ActorEpochKey            = attribute.Key("ate.actor.epoch")
+	StatsKindKey             = attribute.Key("ate.stats.kind")
+	StatsMemoryUsageKey      = attribute.Key("ate.stats.memory.usage")
+	StatsMemoryPeakKey       = attribute.Key("ate.stats.memory.peak")
+	StatsMemoryWorkingSetKey = attribute.Key("ate.stats.memory.working_set")
+	StatsCPUTimeKey          = attribute.Key("ate.stats.cpu.time")
+)
+
+// Values for StatsKindKey. An initial or final sample brackets an activation; a
+// periodic one is the timer's.
+const (
+	StatsKindPeriodic = "periodic"
+	StatsKindInitial  = "initial"
+	StatsKindFinal    = "final"
+)
+
 // Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
 // not measure the same thing (the cgroup source charges the sandbox runtime's
 // overhead along with the workload, the guest-agent source sees only the
@@ -217,11 +243,12 @@ const (
 // meaning success, never as a parallel _failures counter.
 const ErrorTypeKey = attribute.Key("error.type")
 
-// Values for WorkerStateKey. Only idle and assigned are representable today;
-// starting and unhealthy workers are not modeled in the cache.
+// Values for WorkerStateKey. Unschedulable wins over occupancy.
 const (
-	WorkerStateIdle     = "idle"
-	WorkerStateAssigned = "assigned"
+	WorkerStateIdle          = "idle"
+	WorkerStatePartial       = "partial"
+	WorkerStateAtCapacity    = "at_capacity"
+	WorkerStateUnschedulable = "unschedulable"
 )
 
 // Values for ActorOperationNameKey: the actor lifecycle operations ateapi

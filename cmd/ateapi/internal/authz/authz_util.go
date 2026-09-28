@@ -18,136 +18,74 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"io/fs"
 	"log/slog"
-	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
-	"github.com/openfga/openfga/assets"
 	"github.com/openfga/openfga/pkg/server"
-	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/postgres"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
-	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/lock"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 const (
-	// DefaultStoreName is the name of the OpenFGA store managed by Substrate.
-	DefaultStoreName = "substrate"
-
-	// migrationTableName tracks OpenFGA schema migrations separately from
-	// Substrate's own schema_migrations table.
-	migrationTableName = "goose_db_version"
+	// defaultStoreName is the name of the OpenFGA store managed by Substrate.
+	defaultStoreName = "substrate"
 )
 
 //go:embed model.fga
 var modelDSL string
 
-// Server wraps an embedded OpenFGA server backed by PostgreSQL and
-// initialized with Substrate's authorization model.
-type Server struct {
-	closeOnce sync.Once
-	fgaServer *server.Server
-	datastore storage.OpenFGADatastore
-	storeID   string
-	modelID   string
-}
-
-// NewServer initializes OpenFGA database migrations on pool, constructs the
-// PostgreSQL storage adapter, creates the OpenFGA server, and ensures the
-// default store and checked-in authorization model are present.
-//
-// NewServer takes ownership of pool: calling Close on the returned Server (or
-// an error during NewServer initialization) closes pool. Callers must provide
-// a dedicated pool rather than a shared pool.
-func NewServer(ctx context.Context, pool *pgxpool.Pool) (*Server, error) {
+// NewOpenFGAServer creates an embedded OpenFGA server backed by a transaction-aware
+// PostgreSQL datastore on pool. Calling Close on the returned server stops
+// OpenFGA's background workers without closing the caller-owned pool.
+func NewOpenFGAServer(pool *pgxpool.Pool) (*server.Server, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("postgres pool must not be nil")
 	}
-
-	// Ensure OpenFGA database tables (tuple, store, authorization_model, changelog)
-	// are migrated and ready in PostgreSQL before initializing the storage adapter.
-	// Goose uses PostgresSessionLocker to serialize migrations safely across replicas.
-	if err := applyMigrations(ctx, pool); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("applying OpenFGA migrations: %w", err)
-	}
-
-	cfg := sqlcommon.NewConfig()
-	datastore, err := postgres.NewWithDB(pool, nil, cfg)
+	rawDatastore, err := postgres.NewWithDB(pool, nil, sqlcommon.NewConfig())
 	if err != nil {
-		pool.Close()
 		return nil, fmt.Errorf("creating OpenFGA postgres adapter: %w", err)
 	}
-
 	fgaServer, err := server.NewServerWithOpts(
-		server.WithDatastore(datastore),
+		server.WithDatastore(newTransactionalDatastore(rawDatastore)),
 	)
 	if err != nil {
-		datastore.Close()
 		return nil, fmt.Errorf("creating OpenFGA server: %w", err)
+	}
+	return fgaServer, nil
+}
+
+// EnsureStoreAndModel ensures the default OpenFGA store and checked-in authorization model
+// are provisioned on fgaServer (serialized across replicas via a PostgreSQL
+// advisory lock on pool) and returns the provisioned (storeID, modelID).
+func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server) (string, string, error) {
+	if pool == nil {
+		return "", "", fmt.Errorf("postgres pool must not be nil")
+	}
+	if fgaServer == nil {
+		return "", "", fmt.Errorf("fgaServer must not be nil")
 	}
 
 	unlock, err := acquireInitLock(ctx, pool)
 	if err != nil {
-		fgaServer.Close()
-		datastore.Close()
-		return nil, err
+		return "", "", err
 	}
+	defer unlock()
 
 	storeID, modelID, err := ensureStoreAndModel(ctx, fgaServer)
-	unlock()
 	if err != nil {
-		fgaServer.Close()
-		datastore.Close()
-		return nil, fmt.Errorf("initializing OpenFGA store and model: %w", err)
+		return "", "", fmt.Errorf("initializing OpenFGA store and model: %w", err)
 	}
 
-	slog.InfoContext(ctx, "OpenFGA server initialized",
+	slog.InfoContext(ctx, "OpenFGA store and model ready",
 		slog.String("store_id", storeID),
 		slog.String("model_id", modelID),
 	)
 
-	return &Server{
-		fgaServer: fgaServer,
-		datastore: datastore,
-		storeID:   storeID,
-		modelID:   modelID,
-	}, nil
-}
-
-// FGAServer returns the underlying OpenFGA server instance.
-func (s *Server) FGAServer() *server.Server {
-	return s.fgaServer
-}
-
-// StoreID returns the active OpenFGA store ID.
-func (s *Server) StoreID() string {
-	return s.storeID
-}
-
-// ModelID returns the active OpenFGA authorization model ID.
-func (s *Server) ModelID() string {
-	return s.modelID
-}
-
-// Close releases resources held by the OpenFGA server and datastore.
-// Calling Close multiple times is safe and idempotent.
-func (s *Server) Close() {
-	s.closeOnce.Do(func() {
-		if s.fgaServer != nil {
-			s.fgaServer.Close()
-		}
-		if s.datastore != nil {
-			s.datastore.Close()
-		}
-	})
+	return storeID, modelID, nil
 }
 
 // ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing
@@ -169,46 +107,6 @@ func acquireInitLock(ctx context.Context, pool *pgxpool.Pool) (func(), error) {
 	}, nil
 }
 
-// applyMigrations runs OpenFGA's embedded PostgreSQL migrations against pool
-// using Goose, tracking applied migration versions in the goose_db_version table.
-func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	migrations, err := fs.Sub(assets.EmbedMigrations, assets.PostgresMigrationDir)
-	if err != nil {
-		return fmt.Errorf("open embedded OpenFGA migrations: %w", err)
-	}
-
-	locker, err := lock.NewPostgresSessionLocker(
-		lock.WithLockID(ateFGAInitLockID),
-		lock.WithLockTimeout(1, 300),
-	)
-	if err != nil {
-		return fmt.Errorf("create OpenFGA migration locker: %w", err)
-	}
-
-	db := stdlib.OpenDBFromPool(pool)
-	provider, err := goose.NewProvider(
-		goose.DialectPostgres,
-		db,
-		migrations,
-		goose.WithTableName(migrationTableName),
-		goose.WithSessionLocker(locker),
-	)
-	if err != nil {
-		_ = db.Close()
-		return fmt.Errorf("create OpenFGA migration provider: %w", err)
-	}
-
-	_, err = provider.Up(ctx)
-	closeErr := provider.Close()
-	if err != nil {
-		return fmt.Errorf("run OpenFGA migrations: %w", err)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close OpenFGA migration provider: %w", closeErr)
-	}
-	return nil
-}
-
 // ensureStoreAndModel compiles the embedded model.fga DSL into an OpenFGA proto,
 // finds or creates the default store, and ensures the authorization model matches
 // the current schema. If an identical model already exists in the store, its ID
@@ -219,7 +117,7 @@ func ensureStoreAndModel(ctx context.Context, srv *server.Server) (string, strin
 		return "", "", fmt.Errorf("transform model.fga DSL to proto: %w", err)
 	}
 
-	storeID, err := findOrCreateStore(ctx, srv, DefaultStoreName)
+	storeID, err := findOrCreateStore(ctx, srv, defaultStoreName)
 	if err != nil {
 		return "", "", err
 	}

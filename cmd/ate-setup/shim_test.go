@@ -210,6 +210,14 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--deploy-atenet", "--atenet-dataplane", "agentgateway", "--experimental-use-sdsmint"},
 		want: []string{"--atenet-dataplane=agentgateway --experimental-use-sdsmint deploy atenet"},
 	}, {
+		name: "cluster profile flags are forwarded in either value form",
+		args: []string{"--deploy-ate-system", "--cluster-size", "size10", "--cordon-control-plane"},
+		want: []string{"--cluster-size=size10 --cordon-control-plane deploy ate-system --setup-csi=none"},
+	}, {
+		name: "--cluster-size takes an attached value",
+		args: []string{"--cluster-size=size10", "--deploy-ate-apiserver"},
+		want: []string{"--cluster-size=size10 deploy apiserver"},
+	}, {
 		name: "credential injection implies sdsmint and forwards provider flags",
 		args: []string{
 			"--deploy-atenet",

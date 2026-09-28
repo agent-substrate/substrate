@@ -147,6 +147,7 @@ cardinality_rules:
       - ate.atespace
       - ate.actor.version
       - ate.actor.container.name
+      - ate.actor.epoch
   - id: bounded-or-catalog-scoped
     brief: >
       Each ate.* metric label has a list of permitted values, or it names an
@@ -196,15 +197,16 @@ lint_exceptions:
     metric: none
     rule: One record goes to one place.
     brief: >
-      ateapi writes each actor lifecycle record twice: to stdout, and as an OTLP
-      event. Nothing reads both today. No collector config in this repository
-      declares a filelog receiver, and neither enterprise collector is a
+      ateapi writes each actor lifecycle record, and the ateoms each usage
+      sample, twice: to stdout, and as an OTLP event. Nothing reads both
+      today. No collector config in this repository declares a filelog
+      receiver, and neither enterprise collector is a
       DaemonSet, thus no agent reads the stdout copy into the same pipeline.
       The stdout copy is what kubectl logs shows. The OTLP copy is what a
       backend queries and needs no knowledge of the stdout envelope.
       An agent that reads pod stdout makes this a duplicate. Then drop one:
-      leave ate-system out of the globs of that agent, or drop the records with
-      the scope github.com/agent-substrate/substrate/internal/actorevent.
+      drop the records by event name, or leave the ate-api-server and ateom
+      containers out of the globs of that agent.
 
 # -----------------------------------------------------------------------------
 # The subsystems with no metrics. An agent that reads only the metrics gives the

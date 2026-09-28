@@ -69,6 +69,19 @@ groups:
           docs/metrics/substrate.yaml. It separates two actors that held the
           same name at different times.
         examples: [8f2a1c4e6b0d47f1]
+      - id: ate.actor.epoch
+        stability: development
+        type: int
+        brief: >
+          The activation of the actor that a record belongs to, as the unix
+          time in nanoseconds when it began.
+        note: >
+          Logs only, by the cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml. A Run or a Restore starts an activation.
+          ate.stats.cpu.time restarts at zero with each one. The epoch is the
+          StartTimeUnixNano of a cumulative metric point, carried as an
+          attribute because a log record has no field for it.
+        examples: [1699999990000000000]
       - id: ate.actor.state
         stability: development
         brief: The state the actor is in now.
@@ -203,18 +216,32 @@ groups:
       - id: ate.worker.state
         stability: development
         brief: >
-          The assignment state of a worker. The key starts with worker and not
-          with the name of the pool. Thus you can add related keys later.
+          How full a worker is, by actor slots. The key starts with worker and
+          not with the name of the pool. Thus you can add related keys later.
+        note: >
+          The state compares the allocated actors with the actor capacity. It
+          does not look at CPU or memory: whether those have room depends on
+          the size of the next actor. unschedulable wins over the other states.
         type:
           members:
             - id: idle
               stability: development
               value: idle
-              brief: No actor has this worker.
-            - id: assigned
+              brief: The worker can take actors and holds none.
+            - id: partial
               stability: development
-              value: assigned
-              brief: An actor has this worker.
+              value: partial
+              brief: The worker holds actors and has free actor slots.
+            - id: at_capacity
+              stability: development
+              value: at_capacity
+              brief: The worker has no free actor slot.
+            - id: unschedulable
+              stability: development
+              value: unschedulable
+              brief: >
+                The scheduler places no actor on the worker. It is not active,
+                or it has not reported an actor capacity yet.
 
   - id: registry.ate.sandbox
     type: attribute_group
@@ -520,6 +547,56 @@ groups:
               stability: development
               value: guest-agent
               brief: The measurement comes from the guest agent. It includes only the containers of the workload.
+      - id: ate.stats.kind
+        stability: development
+        brief: Why the sample was taken.
+        note: >
+          Logs only. It is bounded, but it is only ever recorded beside actor
+          identity, which no metric may carry.
+        type:
+          members:
+            - id: periodic
+              stability: development
+              value: periodic
+              brief: The timer of the ateom took the sample.
+            - id: initial
+              stability: development
+              value: initial
+              brief: The initial sample of an activation, when the workload became measurable.
+            - id: final
+              stability: development
+              value: final
+              brief: The last sample of an activation, taken in the checkpoint before the workload is torn down.
+      - id: ate.stats.memory.usage
+        stability: development
+        type: int
+        brief: The memory in use, in bytes. Absolute, not per activation.
+        note: Logs only. The log field of the instrument ate.actor.stats.memory.usage.
+        examples: [41943040]
+      - id: ate.stats.memory.peak
+        stability: development
+        type: int
+        brief: >
+          The high-water mark of ate.stats.memory.usage, in bytes, as the
+          source reports it.
+        note: Logs only. Absent when the source cannot report one. The cgroup source restarts it on a restore; the guest-agent source does not.
+        examples: [50331648]
+      - id: ate.stats.memory.working_set
+        stability: development
+        type: int
+        brief: The memory in use less the reclaimable page cache, in bytes.
+        note: Logs only. The log field of the instrument ate.actor.stats.memory.working_set.
+        examples: [33554432]
+      - id: ate.stats.cpu.time
+        stability: development
+        type: double
+        brief: The CPU time used since the activation began, in seconds.
+        note: >
+          Logs only. Restarts at zero with each ate.actor.epoch. The lifetime
+          figure is the sum over the epochs of the highest value in each. The
+          unit is that of the instrument ate.actor.stats.cpu.time, thus one
+          query serves both signals.
+        examples: [1.5]
 
   - id: registry.ate.deviation
     type: attribute_group
@@ -645,9 +722,12 @@ groups:
       ateapi reads this value with a callback. You can add the counts together.
       The sum across the states is the size of the pool. The sum across the
       pools is the size of the fleet. Thus this instrument is an UpDownCounter
-      and not a gauge. ateapi sets both states to 0 for each known pool. Thus a
+      and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
+      The states count workers, not actor slots. A worker with 1 of 20 slots
+      used and one with 19 of 20 are both partial. Do not read utilization of
+      the pool from this instrument.
       A worker with the class unknown is not capacity of the pool: the scheduler
       puts no actor on it. Thus a query that asks how much capacity a pool has
       must keep ate.sandbox.class, because a sum across the classes adds that
@@ -985,7 +1065,7 @@ groups:
       atecontroller reads this value with a callback. This is a separate
       instrument and not a state key on a shared instrument. This agrees with
       the Kubernetes conventions (k8s.deployment.desired_pods). The sum of
-      desired and ready has no meaning. But the sum of idle and assigned on
+      desired and ready has no meaning. But the sum across the states of
       ate.workerpool.workers has a meaning.
     annotations:
       substrate:

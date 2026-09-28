@@ -64,6 +64,35 @@ func TestEgressSPIFFEID(t *testing.T) {
 	}
 }
 
+func TestActorJWTIssuer(t *testing.T) {
+	tests := []struct {
+		name      string
+		namespace string
+		want      string
+	}{
+		{
+			// Relying parties compare iss against this byte for byte, so
+			// changing it breaks verification for every default install.
+			name:      "default namespace",
+			namespace: SystemNamespace,
+			want:      "https://idp.ate-system.svc",
+		},
+		{
+			name:      "namespace the install was relocated to",
+			namespace: "team-a-substrate",
+			want:      "https://idp.team-a-substrate.svc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ActorJWTIssuer(tt.namespace); got != tt.want {
+				t.Errorf("ActorJWTIssuer(%q) = %q, want %q", tt.namespace, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNamespaceFromPodEnv(t *testing.T) {
 	t.Run("falls back to the install default when unset", func(t *testing.T) {
 		t.Setenv(PodNamespaceEnv, "")

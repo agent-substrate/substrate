@@ -48,8 +48,9 @@ type OriginalDestination func(net.Conn) (string, error)
 type Egress struct {
 	originalDestination OriginalDestination
 
-	mu     sync.Mutex
-	active *egressActivation
+	mu sync.Mutex
+	// Keyed by actor UID, supplied by the namespace-specific listener.
+	active map[string]*egressActivation
 }
 
 type egressActivation struct {
@@ -71,16 +72,48 @@ func NewEgress(originalDestination OriginalDestination) (*Egress, error) {
 	}
 	return &Egress{
 		originalDestination: originalDestination,
+		active:              map[string]*egressActivation{},
 	}, nil
 }
 
-// Serve accepts intercepted actor connections until ctx is canceled or the
-// listener fails.
-func (e *Egress) Serve(ctx context.Context, listener net.Listener) error {
+// Bind captures the actor's activation before its listeners start serving.
+func (e *Egress) Bind(actorUID string) (func(context.Context, net.Listener) error, error) {
+	if actorUID == "" {
+		return nil, fmt.Errorf("atunnel: actor UID is required")
+	}
+	e.mu.Lock()
+	active := e.activationLocked(actorUID)
+	e.mu.Unlock()
+	return func(ctx context.Context, listener net.Listener) error {
+		defer func() {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.active[actorUID] == active && active.dialer == nil {
+				delete(e.active, actorUID)
+				active.cancel()
+			}
+		}()
+		return e.serve(ctx, listener, active)
+	}, nil
+}
+
+func (e *Egress) activationLocked(actorUID string) *egressActivation {
+	active := e.active[actorUID]
+	if active == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		active = &egressActivation{ctx: ctx, cancel: cancel}
+		e.active[actorUID] = active
+	}
+	return active
+}
+
+func (e *Egress) serve(ctx context.Context, listener net.Listener, active *egressActivation) error {
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
+			_ = listener.Close()
+		case <-active.ctx.Done():
 			_ = listener.Close()
 		case <-done:
 		}
@@ -95,13 +128,15 @@ func (e *Egress) Serve(ctx context.Context, listener net.Listener) error {
 			}
 			return fmt.Errorf("atunnel: accepting actor egress connection: %w", err)
 		}
-		e.handle(conn)
+		e.handle(conn, active)
 	}
 }
 
-// Activate allows egress with a previously obtained actor certificate and
-// renews it until deactivation.
-func (e *Egress) Activate(dialer egressDialer, certificateSource actorCertificateSource, expiresAt time.Time) error {
+// Activate enables the actor's egress and certificate renewal until deactivation.
+func (e *Egress) Activate(actorUID string, dialer egressDialer, certificateSource actorCertificateSource, expiresAt time.Time) error {
+	if actorUID == "" {
+		return fmt.Errorf("atunnel: actor UID is required")
+	}
 	if dialer == nil {
 		return fmt.Errorf("atunnel: egress dialer is required")
 	}
@@ -113,18 +148,13 @@ func (e *Egress) Activate(dialer egressDialer, certificateSource actorCertificat
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.active != nil {
-		return fmt.Errorf("atunnel: actor already has active egress")
+	active := e.activationLocked(actorUID)
+	if active.dialer != nil {
+		return fmt.Errorf("atunnel: actor %s already has active egress", actorUID)
 	}
-	activationCtx, cancel := context.WithCancel(context.Background())
-	active := &egressActivation{
-		dialer:            dialer,
-		certificateSource: certificateSource,
-		expiresAt:         expiresAt,
-		ctx:               activationCtx,
-		cancel:            cancel,
-	}
-	e.active = active
+	active.dialer = dialer
+	active.certificateSource = certificateSource
+	active.expiresAt = expiresAt
 	active.wg.Add(1)
 	go e.renew(active, expiresAt)
 	return nil
@@ -210,12 +240,11 @@ func waitForRenewal(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-// Deactivate rejects new egress, closes active streams, and waits for their
-// forwarding goroutines to exit.
-func (e *Egress) Deactivate(ctx context.Context) error {
+// Deactivate disables the actor's egress and closes and drains its streams.
+func (e *Egress) Deactivate(ctx context.Context, actorUID string) error {
 	e.mu.Lock()
-	active := e.active
-	e.active = nil
+	active := e.active[actorUID]
+	delete(e.active, actorUID)
 	if active != nil {
 		active.expiresAt = time.Time{}
 		active.cancel()
@@ -238,10 +267,9 @@ func (e *Egress) Deactivate(ctx context.Context) error {
 	}
 }
 
-func (e *Egress) handle(downstream net.Conn) {
+func (e *Egress) handle(downstream net.Conn, active *egressActivation) {
 	e.mu.Lock()
-	active := e.active
-	if active == nil {
+	if active == nil || active.ctx.Err() != nil {
 		e.mu.Unlock()
 		_ = downstream.Close()
 		return

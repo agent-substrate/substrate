@@ -1668,3 +1668,119 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 		})
 	}
 }
+
+func validGoldenSnapshotStatus(mutate ...func(*ateapipb.GoldenSnapshotStatus)) *ateapipb.GoldenSnapshotStatus {
+	s := &ateapipb.GoldenSnapshotStatus{
+		GoldenTag:            &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "01234567-89ab-cdef-0123-456789abcdef"},
+		TakeGoldenSnapshotAt: &timestamppb.Timestamp{Seconds: 867},
+	}
+	for _, m := range mutate {
+		m(s)
+	}
+	return s
+}
+
+func TestValidateGoldenSnapshotStatus(t *testing.T) {
+	valid := validGoldenSnapshotStatus
+	msgPath := field.NewPath("error_message")
+
+	tests := []struct {
+		name string
+		obj  *ateapipb.GoldenSnapshotStatus
+		want field.ErrorList
+	}{
+		{
+			name: "valid",
+			obj:  valid(),
+		},
+		{
+			name: "valid empty",
+			obj:  &ateapipb.GoldenSnapshotStatus{},
+		},
+		{
+			name: "valid failed",
+			obj: &ateapipb.GoldenSnapshotStatus{
+				TakeGoldenSnapshotAt: &timestamppb.Timestamp{Seconds: 867},
+				ErrorMessage:         "GoldenActorCrashed: golden actor crashed before its snapshot was taken",
+			},
+		},
+		{
+			name: "error_message at the bound",
+			obj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
+				s.ErrorMessage = strings.Repeat("x", 4096)
+			}),
+		},
+		{
+			name: "error_message too long",
+			obj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
+				s.ErrorMessage = strings.Repeat("x", 4097)
+			}),
+			want: field.ErrorList{field.TooLong(msgPath, nil, 4096).WithOrigin("maxLength")},
+		},
+		{
+			name: "golden_tag missing atespace",
+			obj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
+				s.GoldenTag.Atespace = ""
+			}),
+			want: field.ErrorList{field.Required(field.NewPath("golden_tag", "atespace"), "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			assertValidateErr(t, Validate_GoldenSnapshotStatus(context.Background(), op, nil, tt.obj, nil), tt.want)
+		})
+	}
+}
+
+func TestValidateGoldenSnapshotStatusUpdate(t *testing.T) {
+	valid := validGoldenSnapshotStatus
+
+	tests := []struct {
+		name   string
+		oldObj *ateapipb.GoldenSnapshotStatus // should always be valid
+		newObj *ateapipb.GoldenSnapshotStatus
+		want   field.ErrorList
+	}{
+		{
+			name:   "unchanged",
+			oldObj: valid(),
+			newObj: valid(),
+		},
+		{
+			// The reconciler restarts the warmup clock on every resume, so the
+			// deadline must stay mutable.
+			name:   "take_golden_snapshot_at changed",
+			oldObj: valid(),
+			newObj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
+				s.TakeGoldenSnapshotAt = &timestamppb.Timestamp{Seconds: 5309}
+			}),
+		},
+		{
+			name:   "take_golden_snapshot_at set",
+			oldObj: &ateapipb.GoldenSnapshotStatus{},
+			newObj: valid(),
+		},
+		{
+			name:   "error_message set",
+			oldObj: valid(),
+			newObj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
+				s.ErrorMessage = "GoldenActorCrashed: golden actor crashed before its snapshot was taken"
+			}),
+		},
+		{
+			name:   "error_message set too long",
+			oldObj: valid(),
+			newObj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
+				s.ErrorMessage = strings.Repeat("x", 4097)
+			}),
+			want: field.ErrorList{field.TooLong(field.NewPath("error_message"), nil, 4096).WithOrigin("maxLength")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Update}
+			assertValidateErr(t, Validate_GoldenSnapshotStatus(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
+		})
+	}
+}

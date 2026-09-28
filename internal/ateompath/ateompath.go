@@ -12,127 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Ateom and atelet need to agree on many filesystem paths.  They are defined in this package.
+// Package ateompath is what the ateoms still derive from the actor UID instead
+// of reading from ActorDirs. Each function goes away as the ateoms switch.
 package ateompath
 
 import (
 	"path/filepath"
+
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
-const (
-	// The base path.  This is both the path of the root shared folder on the
-	// host filesystem, and when it is mounted into ateom and atelet containers.
-	BasePath = "/var/lib/ateom-gvisor"
-)
-
-var (
-	// StaticFilesDir holds things like downloaded runsc binaries.
-	StaticFilesDir = filepath.Join(BasePath, "static-files")
-
-	// ImageCacheDir is the node-local OCI image layer cache (see
-	// internal/imagecache). It lives under BasePath so the cached layer
-	// directories are visible at the same path in atelet (which writes them)
-	// and in every ateom pod (which mounts them as overlay lowerdirs).
-	ImageCacheDir = filepath.Join(BasePath, "image-cache")
-
-	// ActorsDir holds the per-actor state directories (see ActorPath). The
-	// image cache's eviction root-set scan reads the bundle overlay specs
-	// under it.
-	ActorsDir = filepath.Join(BasePath, "actors")
-
-	// AteomSupportSocket is the node-local atelet socket used by atunnel
-	// to request credentials for the worker's current actor assignment.
-	AteomSupportSocket = filepath.Join(BasePath, "ateom-support.sock")
-)
-
-func RunSCBinaryPath(sha256 string) string {
-	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
-}
-
-// GVisorReleaseDir is the directory a gVisor release tarball (gvisor.tar.bz2,
-// containing runsc plus its gvisor-bin/ helper binaries) is extracted into,
-// content-addressed by the tarball's sha256. runsc requires the gvisor-bin/
-// subdirectory to sit next to it, so the whole release is kept together under
-// one directory rather than as loose files in StaticFilesDir.
-func GVisorReleaseDir(sha256 string) string {
-	return filepath.Join(StaticFilesDir, "gvisor-"+sha256)
-}
-
-// AteletOTLPSocketPath is the node-scoped unix socket atelet serves the OTLP
-// relay on (see internal/otlprelay). It is node-scoped rather than per-pod
-// because every ateom on the node pushes into the same relay: atelet is a
-// DaemonSet, so one socket collapses N per-pod collector connections into one
-// per-node connection.
-//
-// It sits directly under BasePath, which is the host directory already mounted
-// at the same path into atelet and into every ateom pod, so no new volume is
-// needed for ateom to reach it. Note that BasePath is mounted writable
-// (workerpool_apply.go) and shared with CredentialBrokerSocket and the image
-// cache, so a worker pod can unlink or replace this socket. Confining
-// atelet-owned sockets to a subdirectory mounted read-only would be an
-// improvement, but it is a property of the whole BasePath mount rather than of
-// this socket — a read-only subdir needs its own volume and mount, and the pod
-// keeps CAP_SYS_ADMIN. Tracked separately rather than solved here.
-func AteletOTLPSocketPath() string {
-	return filepath.Join(
-		BasePath,
-		"atelet-otlp.sock",
-	)
-}
-
-// AteomsDir is the parent of every per-ateom directory. Each ateom creates
-// AteomPath(podUID) under it when it boots, so listing this directory is how a
-// scraper with no prior knowledge discovers the node's ateoms.
-func AteomsDir() string {
-	return filepath.Join(BasePath, "ateoms")
-}
-
-func AteomPath(podUID string) string {
-	return filepath.Join(AteomsDir(), podUID)
-}
-
-func AteomSocketPath(podUID string) string {
-	return filepath.Join(
-		AteomPath(podUID),
-		"ateom.sock",
-	)
-}
-
-// ActorNetNSName names an actor's sandbox network namespace.
-func ActorNetNSName(actorUID string) string {
-	return "ateom-actor:" + actorUID
-}
-
-// ActorNetNSPath is the mount path of the actor's named namespace.
-func ActorNetNSPath(actorUID string) string {
-	return filepath.Join("/run/netns", ActorNetNSName(actorUID))
-}
-
-// ActorResolvConfPath is the resolver bind source outside the actor's rootfs.
-func ActorResolvConfPath(actorUID string) string {
-	return filepath.Join(ActorPath(actorUID), "resolv.conf")
-}
-
+// ActorPath is ActorDirs.root_dir.
 func ActorPath(actorUID string) string {
 	return filepath.Join(
-		ActorsDir,
+		nodepath.ActorsDir,
 		actorUID,
 	)
 }
 
-// ActorSandboxAssetsFile is the per-actor file where atelet records the sandbox
-// binaries (class + content-addressed asset set, for this node's architecture)
-// the actor is currently running. It is written at Run/Restore and read at
-// Checkpoint (when the request no longer carries the sandbox config). It lives
-// directly under ActorPath — NOT under a subdir wiped by atelet's
-// resetActorDirs — so it survives between Run and a later Checkpoint.
-func ActorSandboxAssetsFile(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"sandbox-assets.json",
-	)
+// ActorResolvConfPath is the resolver bind source outside the actor's rootfs.
+// ateom-gvisor writes it under ActorDirs.root_dir.
+func ActorResolvConfPath(actorUID string) string {
+	return filepath.Join(ActorPath(actorUID), "resolv.conf")
 }
 
+// RunSCStateDir is runsc --root for the actor's sandbox, under ActorDirs.root_dir.
 func RunSCStateDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -140,6 +44,7 @@ func RunSCStateDir(actorUID string) string {
 	)
 }
 
+// OCIBundleDir is ActorDirs.oci_bundle_dir.
 func OCIBundleDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -158,13 +63,7 @@ func OCIBundlePath(actorUID, containerName string) string {
 // container. The path is per-container: containers of one actor may mount the
 // same volume, and each needs its own mount point inside its own bundle.
 func ImageVolumeMountPath(actorUID, containerName, volumeName string) string {
-	return ImageVolumeMountPathInBundle(OCIBundlePath(actorUID, containerName), volumeName)
-}
-
-// ImageVolumeMountPathInBundle returns the image volume mount path inside a
-// bundle path.
-func ImageVolumeMountPathInBundle(bundlePath, volumeName string) string {
-	return filepath.Join(bundlePath, "volumes", volumeName)
+	return filepath.Join(OCIBundlePath(actorUID, containerName), "volumes", volumeName)
 }
 
 func RunscDebugLogDir(actorUID, containerName string) string {
@@ -175,6 +74,7 @@ func RunscDebugLogDir(actorUID, containerName string) string {
 	)
 }
 
+// CheckpointStateDir is ActorDirs.checkpoint_dir.
 func CheckpointStateDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -182,28 +82,7 @@ func CheckpointStateDir(actorUID string) string {
 	)
 }
 
-func LocalCheckpointsDir(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"local-checkpoint",
-	)
-}
-
-// LocalSnapshotDir is the directory holding one named local (pause) snapshot
-// of an actor: the checkpoint files plus their manifest.
-func LocalSnapshotDir(actorUID, snapshotName string) string {
-	return filepath.Join(LocalCheckpointsDir(actorUID), snapshotName)
-}
-
-// DurableDirTarFile is the snapshot file holding the tar of an
-// actor's durable-dir volumes (entries are <volumeName>/... relative to
-// DurableDirVolumeMountsDir). Written by ateom-microvm at checkpoint; a DATA
-// snapshot consists of this file alone, so atelet uses the name to carve the
-// durable data out of a FULL snapshot's file set.
-const DurableDirTarFile = "durable-dir.tar"
-
-// DurableDirVolumeMountsDir is the directory where individual durable-dir
-// volumes are mounted.
+// DurableDirVolumeMountsDir is ActorDirs.durable_dir_volume_mounts_dir.
 func DurableDirVolumeMountsDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -211,18 +90,10 @@ func DurableDirVolumeMountsDir(actorUID string) string {
 	)
 }
 
-// DurableDirVolumeMountPoint returns the path where a specific durable-dir volume is mounted on the nodeVM.
-func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
-	return filepath.Join(
-		DurableDirVolumeMountsDir(actorUID),
-		volumeName,
-	)
-}
-
-// SystemInfoVolumeRootsDir is the directory containing the per-volume root
-// directories of system-info volumes. Snapshots must capture durable-dir
-// data but never system-info contents, which atelet regenerates on every
-// Run/Restore; each sandbox class excludes them differently:
+// SystemInfoVolumeRootsDir is ActorDirs.system_info_volume_roots_dir.
+// Snapshots must capture durable-dir data but never system-info contents,
+// which atelet regenerates on every Run/Restore; each sandbox class excludes
+// them differently:
 //
 //   - micro-VM captures by location: its checkpoint tars all of
 //     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
@@ -241,17 +112,7 @@ func SystemInfoVolumeRootsDir(actorUID string) string {
 	)
 }
 
-// SystemInfoVolumeRoot returns the host path of the root directory for a
-// specific system-info volume.
-func SystemInfoVolumeRoot(actorUID, volumeName string) string {
-	return filepath.Join(
-		SystemInfoVolumeRootsDir(actorUID),
-		volumeName,
-	)
-}
-
-// RestoreStateDir is the local directory to use to restore an actor from a
-// checkpoint downloaded from GCS.
+// RestoreStateDir is ActorDirs.restore_dir.
 //
 // We need to use a different path from CheckpointStateDir, because using `runsc
 // restore -direct -background` means that runsc starts executing first, then
@@ -268,6 +129,7 @@ func RestoreStateDir(actorUID string) string {
 	)
 }
 
+// PIDFileDir is where runsc writes <container>.pid, under ActorDirs.root_dir.
 func PIDFileDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -282,26 +144,10 @@ func PIDFilePath(actorUID, containerName string) string {
 	)
 }
 
+// VolumesDir is ActorDirs.volumes_dir.
 func VolumesDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"volumes",
 	)
-}
-
-func VolumeHostPath(actorUID, volumeName string) string {
-	return filepath.Join(
-		VolumesDir(actorUID),
-		volumeName,
-	)
-}
-
-// StagingDirPrefix returns the prefix directory for staging CSI volumes.
-func StagingDirPrefix() string {
-	return filepath.Join(BasePath, "staging")
-}
-
-// KubeletPluginSocketPath returns the path to the CSI driver socket in kubelet plugins directory.
-func KubeletPluginSocketPath(driverName string) string {
-	return filepath.Join("/var/lib/kubelet/plugins", driverName, "csi.sock")
 }

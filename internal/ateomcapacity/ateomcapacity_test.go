@@ -29,6 +29,10 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+// testActors stands in for the ateom's own ceiling, which is a flag in
+// production rather than a constant here.
+const testActors = 7
+
 func TestFromFiles(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -49,9 +53,9 @@ func TestFromFiles(t *testing.T) {
 				t.Fatalf("writing memory limit: %v", err)
 			}
 
-			got := fromDir(dir).GetCapacity()
-			if got.GetActors() != actorsPerAteom {
-				t.Errorf("actors = %d, want %d", got.GetActors(), actorsPerAteom)
+			got := fromDir(dir, testActors).GetCapacity()
+			if got.GetActors() != testActors {
+				t.Errorf("actors = %d, want %d", got.GetActors(), testActors)
 			}
 			if diff := cmp.Diff(tc.want, got.GetResources(), protocmp.Transform()); diff != "" {
 				t.Errorf("reported resources mismatch (-want +got):\n%s", diff)
@@ -61,12 +65,12 @@ func TestFromFiles(t *testing.T) {
 }
 
 func TestFromFilesMissing(t *testing.T) {
-	got := fromDir(t.TempDir()).GetCapacity()
+	got := fromDir(t.TempDir(), testActors).GetCapacity()
 	if got.GetResources() != nil {
 		t.Errorf("unset environment reported %v, want no compute", got.GetResources())
 	}
-	if got.GetActors() != actorsPerAteom {
-		t.Errorf("actors = %d, want %d", got.GetActors(), actorsPerAteom)
+	if got.GetActors() != testActors {
+		t.Errorf("actors = %d, want %d", got.GetActors(), testActors)
 	}
 }
 

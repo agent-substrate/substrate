@@ -370,7 +370,9 @@ func TestMetricLabelValues(t *testing.T) {
 		want string
 	}{
 		{WorkerStateIdle, "idle"},
-		{WorkerStateAssigned, "assigned"},
+		{WorkerStatePartial, "partial"},
+		{WorkerStateAtCapacity, "at_capacity"},
+		{WorkerStateUnschedulable, "unschedulable"},
 
 		{OperationCreate, "create"},
 		{OperationResume, "resume"},

@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
 func TestImageCacheGCTarget(t *testing.T) {
@@ -160,13 +160,13 @@ func TestImageCacheDirOutsideBasePath(t *testing.T) {
 		dir  string
 		want bool
 	}{
-		{"inside", filepath.Join(ateompath.BasePath, "image-cache"), false},
-		{"inside with doubled separator", ateompath.BasePath + "//image-cache", false},
-		{"inside via dot-dot", ateompath.BasePath + "/x/../image-cache", false},
-		{"base path itself is not inside", ateompath.BasePath, true},
-		{"sibling with the base path as name prefix", ateompath.BasePath + "-other/image-cache", true},
+		{"inside", filepath.Join(nodepath.BasePath, "image-cache"), false},
+		{"inside with doubled separator", nodepath.BasePath + "//image-cache", false},
+		{"inside via dot-dot", nodepath.BasePath + "/x/../image-cache", false},
+		{"base path itself is not inside", nodepath.BasePath, true},
+		{"sibling with the base path as name prefix", nodepath.BasePath + "-other/image-cache", true},
 		{"outside", "/var/lib/elsewhere/image-cache", true},
-		{"dot-dot escaping the base path", ateompath.BasePath + "/../elsewhere/image-cache", true},
+		{"dot-dot escaping the base path", nodepath.BasePath + "/../elsewhere/image-cache", true},
 		{"relative resolves against the cwd, not the base path", "image-cache", true},
 	}
 	for _, tc := range cases {

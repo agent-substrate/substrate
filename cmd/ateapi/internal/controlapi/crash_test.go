@@ -31,11 +31,15 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 // seedActor stores a running actor with all worker-binding fields populated, so
@@ -272,9 +276,119 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown)
+			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, "test crash")
 
 			tt.check(t, ctx, st, err)
+		})
+	}
+}
+
+func TestCrashActor_RecordsCrash(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	seedActor(t, ctx, st, actorRef)
+
+	before := time.Now().Truncate(time.Microsecond)
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); err != nil {
+		t.Fatalf("crashActor() = %v, want nil", err)
+	}
+	first, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	crash := first.GetStatus().GetCrash()
+	if want := "resume failed: " + crashMessageWorkerDraining; crash.GetMessage() != want {
+		t.Errorf("Crash.Message = %q, want %q", crash.GetMessage(), want)
+	}
+	if got := crash.GetCrashTime().AsTime(); got.Before(before) || got.After(time.Now()) {
+		t.Errorf("Crash.CrashTime = %v, want between %v and now", got, before)
+	}
+
+	// Crashing an already-crashed actor, as a concurrent crash does, keeps the first crash.
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerGone); err != nil {
+		t.Fatalf("second crashActor() = %v, want nil", err)
+	}
+	second, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if diff := cmp.Diff(crash, second.GetStatus().GetCrash(), protocmp.Transform()); diff != "" {
+		t.Errorf("Crash after re-crash differs from the first crash (-want +got):\n%s", diff)
+	}
+}
+
+func TestAteletCrashMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "status error keeps its text",
+			err:  status.Error(codes.Unknown, "while uploading external snapshot: googleapi: Error 403: forbidden"),
+			want: "atelet Restore: while uploading external snapshot: googleapi: Error 403: forbidden",
+		},
+		{
+			name: "plain error keeps its text",
+			err:  errors.New("connection refused"),
+			want: "atelet Restore: connection refused",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ateletCrashMessage("Restore", tt.err); got != tt.want {
+				t.Errorf("ateletCrashMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewActorCrash(t *testing.T) {
+	const resumeOpPrefix = "resume failed: "
+	tests := []struct {
+		name    string
+		opName  string
+		message string
+		want    string
+	}{
+		{
+			name:    "known operation prefixes the message",
+			opName:  ateattr.OperationResume,
+			message: crashMessageWorkerGone,
+			want:    resumeOpPrefix + crashMessageWorkerGone,
+		},
+		{
+			name:    "unknown operation leaves the message bare",
+			opName:  ateattr.OperationUnknown,
+			message: crashMessageWorkerPodGone,
+			want:    crashMessageWorkerPodGone,
+		},
+		{
+			name:    "invalid UTF-8 is replaced",
+			opName:  ateattr.OperationResume,
+			message: "bad \xff byte",
+			want:    resumeOpPrefix + "bad \uFFFD byte",
+		},
+		{
+			name:    "long message is truncated to the limit",
+			opName:  ateattr.OperationResume,
+			message: strings.Repeat("x", maxCrashMessageBytes),
+			want:    resumeOpPrefix + strings.Repeat("x", maxCrashMessageBytes-len(resumeOpPrefix)),
+		},
+		{
+			name:    "truncation does not split a rune",
+			opName:  ateattr.OperationResume,
+			message: strings.Repeat("x", maxCrashMessageBytes-len(resumeOpPrefix)-1) + "é",
+			want:    resumeOpPrefix + strings.Repeat("x", maxCrashMessageBytes-len(resumeOpPrefix)-1),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := newActorCrash(tt.opName, tt.message).GetMessage(); got != tt.want {
+				t.Errorf("newActorCrash().Message = %q, want %q", got, tt.want)
+			}
 		})
 	}
 }
@@ -325,7 +439,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 
@@ -424,7 +538,7 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	seedWorker(t, ctx, st, actorRef)
 
 	releaseErr := errors.New("state store unavailable")
-	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown)
+	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, "test crash")
 
 	if err == nil {
 		t.Fatal("crashActor() = nil, want error")
@@ -611,7 +725,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 	if len(*records) != 1 {
@@ -654,7 +768,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	assertCopiesAgree(t, (*records)[0], gotEvents[0], actorevent.Crashed)
 
 	// Re-crashing an already-crashed actor must move neither signal.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("second crashActor: %v", err)
 	}
 	if len(*records) != 1 {

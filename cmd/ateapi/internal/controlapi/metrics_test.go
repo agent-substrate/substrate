@@ -71,15 +71,42 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 	return m
 }
 
-func worker(namespace, pool, class string, assigned bool) *ateapipb.Worker {
-	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class, Status: &ateapipb.WorkerStatus{}}
-	if assigned {
-		w.Status.Allocated = &ateapipb.WorkerResources{Actors: 1}
+// worker builds an ACTIVE worker holding allocated of capacity actor slots.
+func worker(namespace, pool, class string, allocated, capacity int32) *ateapipb.Worker {
+	return &ateapipb.Worker{
+		WorkerNamespace: namespace,
+		WorkerPool:      pool,
+		SandboxClass:    class,
+		Status: &ateapipb.WorkerStatus{
+			State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:  &ateapipb.WorkerResources{Actors: capacity},
+			Allocated: &ateapipb.WorkerResources{Actors: allocated},
+		},
 	}
-	return w
 }
 
 type series struct{ namespace, pool, state, class string }
+
+// seeded adds the zero series ateapi reports for every state of a known pool.
+func seeded(m map[series]int64, namespace, pool, class string) map[series]int64 {
+	if m == nil {
+		m = make(map[series]int64)
+	}
+	for _, state := range []string{
+		ateattr.WorkerStateIdle,
+		ateattr.WorkerStatePartial,
+		ateattr.WorkerStateAtCapacity,
+		ateattr.WorkerStateUnschedulable,
+	} {
+		m[series{namespace, pool, state, class}] = 0
+	}
+	return m
+}
+
+func withCount(m map[series]int64, s series, n int64) map[series]int64 {
+	m[s] = n
+	return m
+}
 
 func seriesCounts(sum metricdata.Sum[int64]) map[series]int64 {
 	got := make(map[series]int64)
@@ -98,11 +125,12 @@ func seriesCounts(sum metricdata.Sum[int64]) map[series]int64 {
 func TestWorkerCountTally(t *testing.T) {
 	workers := func() ([]*ateapipb.Worker, error) {
 		return []*ateapipb.Worker{
-			worker("ns-1", "pool-a", "gvisor", false),
-			worker("ns-1", "pool-a", "gvisor", false),
-			worker("ns-1", "pool-a", "gvisor", true),
-			worker("ns-1", "pool-b", "microvm", false),
-			worker("ns-2", "pool-a", "gvisor", false),
+			worker("ns-1", "pool-a", "gvisor", 0, 1),
+			worker("ns-1", "pool-a", "gvisor", 0, 1),
+			worker("ns-1", "pool-a", "gvisor", 1, 1),
+			worker("ns-1", "pool-a", "gvisor", 3, 20),
+			worker("ns-1", "pool-b", "microvm", 0, 1),
+			worker("ns-2", "pool-a", "gvisor", 0, 1),
 		}, nil
 	}
 	reader := newWorkerCountReader(t, workers, noPools)
@@ -121,10 +149,11 @@ func TestWorkerCountTally(t *testing.T) {
 
 	got := seriesCounts(sum)
 	want := map[series]int64{
-		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:     2,
-		{"ns-1", "pool-a", ateattr.WorkerStateAssigned, "gvisor"}: 1,
-		{"ns-1", "pool-b", ateattr.WorkerStateIdle, "microvm"}:    1,
-		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:     1,
+		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:       2,
+		{"ns-1", "pool-a", ateattr.WorkerStateAtCapacity, "gvisor"}: 1,
+		{"ns-1", "pool-a", ateattr.WorkerStatePartial, "gvisor"}:    1,
+		{"ns-1", "pool-b", ateattr.WorkerStateIdle, "microvm"}:      1,
+		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:       1,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
@@ -379,18 +408,15 @@ func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 		}, nil
 	}
 	workers := func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{worker("ns-1", "pool-a", "gvisor", true)}, nil
+		return []*ateapipb.Worker{worker("ns-1", "pool-a", "gvisor", 1, 1)}, nil
 	}
 	reader := newWorkerCountReader(t, workers, pools)
 
 	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
 	got := seriesCounts(sum)
-	want := map[series]int64{
-		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:      0,
-		{"ns-1", "pool-a", ateattr.WorkerStateAssigned, "gvisor"}:  1,
-		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "microvm"}:     0,
-		{"ns-2", "pool-a", ateattr.WorkerStateAssigned, "microvm"}: 0,
-	}
+	want := seeded(nil, "ns-1", "pool-a", "gvisor")
+	want = seeded(want, "ns-2", "pool-a", "microvm")
+	want[series{"ns-1", "pool-a", ateattr.WorkerStateAtCapacity, "gvisor"}] = 1
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
 	}
@@ -421,32 +447,26 @@ func TestWorkerCountEmptyClassWorker(t *testing.T) {
 			name:  "gvisor pool",
 			pools: []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-empty", "")},
 			workers: []*ateapipb.Worker{
-				worker("ns-1", "pool-empty", "", false),
-				worker("ns-1", "pool-empty", "", false),
-				worker("ns-1", "pool-empty", "", false),
+				worker("ns-1", "pool-empty", "", 0, 1),
+				worker("ns-1", "pool-empty", "", 0, 1),
+				worker("ns-1", "pool-empty", "", 0, 1),
 			},
-			want: map[series]int64{
-				{"ns-1", "pool-empty", ateattr.WorkerStateIdle, gvisor}:                      0,
-				{"ns-1", "pool-empty", ateattr.WorkerStateAssigned, gvisor}:                  0,
-				{"ns-1", "pool-empty", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 3,
-			},
+			want: withCount(seeded(nil, "ns-1", "pool-empty", gvisor),
+				series{"ns-1", "pool-empty", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}, 3),
 		},
 		{
 			// No gvisor series shows for a pool that runs no gvisor.
 			name:    "microvm pool",
 			pools:   []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-micro", atev1alpha1.SandboxClassMicroVM)},
-			workers: []*ateapipb.Worker{worker("ns-1", "pool-micro", "", false)},
-			want: map[series]int64{
-				{"ns-1", "pool-micro", ateattr.WorkerStateIdle, microvm}:                     0,
-				{"ns-1", "pool-micro", ateattr.WorkerStateAssigned, microvm}:                 0,
-				{"ns-1", "pool-micro", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
-			},
+			workers: []*ateapipb.Worker{worker("ns-1", "pool-micro", "", 0, 1)},
+			want: withCount(seeded(nil, "ns-1", "pool-micro", microvm),
+				series{"ns-1", "pool-micro", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}, 1),
 		},
 		{
 			// A worker that matches no pool has no class to fall back to.
 			name:    "orphan worker",
 			pools:   nil,
-			workers: []*ateapipb.Worker{worker("ns-1", "pool-orphan", "", false)},
+			workers: []*ateapipb.Worker{worker("ns-1", "pool-orphan", "", 0, 1)},
 			want: map[series]int64{
 				{"ns-1", "pool-orphan", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
 			},
@@ -470,5 +490,76 @@ func TestWorkerCountEmptyClassWorker(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWorkerState(t *testing.T) {
+	tests := []struct {
+		name      string
+		state     ateapipb.WorkerState
+		capacity  *ateapipb.WorkerResources
+		allocated *ateapipb.WorkerResources
+		want      string
+	}{
+		{"empty", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateIdle},
+		{"some slots used", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 3}, ateattr.WorkerStatePartial},
+		{"one below capacity", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 19}, ateattr.WorkerStatePartial},
+		{"all slots used", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 20}, ateattr.WorkerStateAtCapacity},
+		{"single slot used", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 1}, &ateapipb.WorkerResources{Actors: 1}, ateattr.WorkerStateAtCapacity},
+		// Capacity can shrink below the allocation on a later report.
+		{"over capacity", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 2}, &ateapipb.WorkerResources{Actors: 5}, ateattr.WorkerStateAtCapacity},
+		{"capacity not reported yet", ateapipb.WorkerState_WORKER_STATE_ACTIVE, nil, nil, ateattr.WorkerStateUnschedulable},
+		{"zero capacity", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 0}, nil, ateattr.WorkerStateUnschedulable},
+		{"draining and empty", ateapipb.WorkerState_WORKER_STATE_DRAINING, &ateapipb.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateUnschedulable},
+		{"draining with actors", ateapipb.WorkerState_WORKER_STATE_DRAINING, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 3}, ateattr.WorkerStateUnschedulable},
+		{"state unspecified", ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED, &ateapipb.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateUnschedulable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &ateapipb.Worker{Status: &ateapipb.WorkerStatus{State: tt.state, Capacity: tt.capacity, Allocated: tt.allocated}}
+			if got := workerState(w); got != tt.want {
+				t.Errorf("workerState = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWorkerCountSumsToPool checks that each worker lands in exactly one
+// state, so the sum over the states stays the size of the pool.
+func TestWorkerCountSumsToPool(t *testing.T) {
+	draining := worker("ns-1", "pool-a", "gvisor", 2, 4)
+	draining.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+	unreported := worker("ns-1", "pool-a", "gvisor", 0, 0)
+	unreported.Status.Capacity = nil
+	ws := []*ateapipb.Worker{
+		worker("ns-1", "pool-a", "gvisor", 0, 4),
+		worker("ns-1", "pool-a", "gvisor", 2, 4),
+		worker("ns-1", "pool-a", "gvisor", 4, 4),
+		draining,
+		unreported,
+	}
+	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
+		return []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-a", "")}, nil
+	}
+	reader := newWorkerCountReader(t, func() ([]*ateapipb.Worker, error) { return ws, nil }, pools)
+
+	got := seriesCounts(mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64]))
+	want := seeded(nil, "ns-1", "pool-a", "gvisor")
+	want[series{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}] = 1
+	want[series{"ns-1", "pool-a", ateattr.WorkerStatePartial, "gvisor"}] = 1
+	want[series{"ns-1", "pool-a", ateattr.WorkerStateAtCapacity, "gvisor"}] = 1
+	want[series{"ns-1", "pool-a", ateattr.WorkerStateUnschedulable, "gvisor"}] = 2
+	if len(got) != len(want) {
+		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
+	}
+	var total int64
+	for k, v := range want {
+		if gv, ok := got[k]; !ok || gv != v {
+			t.Errorf("series %v = %d (present=%v), want %d", k, gv, ok, v)
+		}
+		total += got[k]
+	}
+	if total != int64(len(ws)) {
+		t.Errorf("sum over states = %d, want pool size %d", total, len(ws))
 	}
 }

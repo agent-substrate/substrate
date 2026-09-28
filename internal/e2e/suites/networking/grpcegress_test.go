@@ -76,7 +76,7 @@ func TestActorEgressGRPC(t *testing.T) {
 	ctx := context.Background()
 	target := e2e.DeployServerPod(t, ctx, grpcEcho).Address()
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-grpc", egressFixture(), e2e.EgressAllowAll())
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-grpc", egressFixture(), e2e.EgressAllowAll())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -99,7 +99,7 @@ func TestActorEgressGRPC(t *testing.T) {
 		t.Fatalf("marshaling the gRPC request for %s: %v", target, err)
 	}
 
-	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	actorRef := resources.ActorRef{Atespace: actorAtespace, Name: actorName}
 	status, body := postThroughEgressActor(t, ctx, router, actorRef, "/grpc", payload)
 	if status != http.StatusOK {
 		t.Fatalf("Actor gRPC egress to %s returned HTTP %d, want 200; body: %s", target, status, body)
@@ -154,5 +154,5 @@ func TestActorEgressGRPC(t *testing.T) {
 	// Everything above would also pass if the Actor's traffic had been
 	// masqueraded straight out instead of tunneled. This is what says it went
 	// through the gateway, on this Actor's own certificate.
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(grpcEcho.Port))
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(grpcEcho.Port))
 }

@@ -257,6 +257,12 @@ data:
         - name: envoy.filters.listener.http_inspector
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector
+        - name: envoy.filters.listener.dynamic_modules
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter
+            dynamic_module_config:
+              name: envoy_substrate_egress_policy
+            filter_name: envoy_substrate_egress_policy
         filter_chains:
         # The cleartext chain: ext_proc decides every request and its answer
         # (dev.ate.egress:dial) picks the route, by name or to the dialed
@@ -601,7 +607,8 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: envoy
-        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
+        # ENVOY_DATAPLANE_IMAGE is substituted for the image URI in renderAtenetEgressManifest
+        image: ${ENVOY_DATAPLANE_IMAGE}
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

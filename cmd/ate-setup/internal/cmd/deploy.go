@@ -41,7 +41,8 @@ The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database.
 
-Shape the install with the global --atenet-dataplane flag.`,
+Shape the install with the global --atenet-dataplane, --cluster-size, and
+--cordon-control-plane flags.`,
 	// Flags are parsed by the time cobra validates arguments, and argument
 	// validation is the last thing that happens before the root command loads
 	// the configuration and connects to a cluster. Checking --setup-csi here

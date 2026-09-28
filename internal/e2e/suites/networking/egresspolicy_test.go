@@ -60,7 +60,7 @@ func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 	target := e2e.DeployServerPod(t, ctx, origin)
 	allowed := fmt.Sprintf("%s.%s.svc.cluster.local", origin.Name, target.Namespace)
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-policy", egressFixture(), e2e.EgressAllowHostnames(allowed))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-policy", egressFixture(), e2e.EgressAllowHostnames(allowed))
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -85,7 +85,7 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 	dataplane := e2e.CurrentAtenetDataplane()
 	target := e2e.DeployServerPod(t, ctx, egressHTTPTarget())
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-nopolicy", egressFixture())
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-nopolicy", egressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -115,7 +115,7 @@ func TestActorEgressPolicyAllowsByAddress(t *testing.T) {
 	block := netip.MustParseAddr(target.ClusterIP)
 	cidr := netip.PrefixFrom(block, block.BitLen()).String()
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-address", egressFixture(), e2e.EgressAllowCIDRs(cidr))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-address", egressFixture(), e2e.EgressAllowCIDRs(cidr))
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -146,7 +146,7 @@ func TestActorEgressPolicyAllowsByAddress(t *testing.T) {
 // nothing else, and waits until it is routable.
 func hostnamePolicyActor(t *testing.T, ctx context.Context) (*e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", egressFixture(), e2e.EgressAllowHostnames("example.com"))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", egressFixture(), e2e.EgressAllowHostnames("example.com"))
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -225,7 +225,7 @@ func TestActorEgressHTTPSByAddress(t *testing.T) {
 		}
 	}
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-ipblock", egressFixture(), e2e.EgressAllowCIDRs(cidrs...))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-ipblock", egressFixture(), e2e.EgressAllowCIDRs(cidrs...))
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}

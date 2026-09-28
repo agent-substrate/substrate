@@ -35,6 +35,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AteomSupport_MintActorCertificate_FullMethodName = "/atelet.AteomSupport/MintActorCertificate"
 	AteomSupport_SetWorkerCapacity_FullMethodName    = "/atelet.AteomSupport/SetWorkerCapacity"
+	AteomSupport_RequestActorSuspend_FullMethodName  = "/atelet.AteomSupport/RequestActorSuspend"
 )
 
 // AteomSupportClient is the client API for AteomSupport service.
@@ -54,6 +55,16 @@ type AteomSupportClient interface {
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
 	// Report capacity and supply for this worker back to atelet.
 	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
+	// RequestActorSuspend asks that the actor this worker hosts be suspended,
+	// for atelet to forward to the control plane's WorkerService, which this
+	// mirrors.
+	//
+	// Success means the control plane ran the suspend; an error is its refusal,
+	// passed through as it was given, so a worker can tell a decision from a
+	// failure to ask. Callers must not hold a lock the resulting Checkpoint
+	// would need: the control plane answers this by driving a suspend back
+	// through atelet into the calling ateom.
+	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
 }
 
 type ateomSupportClient struct {
@@ -84,6 +95,16 @@ func (c *ateomSupportClient) SetWorkerCapacity(ctx context.Context, in *SetWorke
 	return out, nil
 }
 
+func (c *ateomSupportClient) RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestActorSuspendResponse)
+	err := c.cc.Invoke(ctx, AteomSupport_RequestActorSuspend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AteomSupportServer is the server API for AteomSupport service.
 // All implementations must embed UnimplementedAteomSupportServer
 // for forward compatibility.
@@ -101,6 +122,16 @@ type AteomSupportServer interface {
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
 	// Report capacity and supply for this worker back to atelet.
 	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
+	// RequestActorSuspend asks that the actor this worker hosts be suspended,
+	// for atelet to forward to the control plane's WorkerService, which this
+	// mirrors.
+	//
+	// Success means the control plane ran the suspend; an error is its refusal,
+	// passed through as it was given, so a worker can tell a decision from a
+	// failure to ask. Callers must not hold a lock the resulting Checkpoint
+	// would need: the control plane answers this by driving a suspend back
+	// through atelet into the calling ateom.
+	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
 	mustEmbedUnimplementedAteomSupportServer()
 }
 
@@ -116,6 +147,9 @@ func (UnimplementedAteomSupportServer) MintActorCertificate(context.Context, *Mi
 }
 func (UnimplementedAteomSupportServer) SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetWorkerCapacity not implemented")
+}
+func (UnimplementedAteomSupportServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
 }
 func (UnimplementedAteomSupportServer) mustEmbedUnimplementedAteomSupportServer() {}
 func (UnimplementedAteomSupportServer) testEmbeddedByValue()                      {}
@@ -174,6 +208,24 @@ func _AteomSupport_SetWorkerCapacity_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AteomSupport_RequestActorSuspend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestActorSuspendRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomSupportServer).RequestActorSuspend(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomSupport_RequestActorSuspend_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomSupportServer).RequestActorSuspend(ctx, req.(*RequestActorSuspendRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AteomSupport_ServiceDesc is the grpc.ServiceDesc for AteomSupport service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -188,6 +240,10 @@ var AteomSupport_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerCapacity",
 			Handler:    _AteomSupport_SetWorkerCapacity_Handler,
+		},
+		{
+			MethodName: "RequestActorSuspend",
+			Handler:    _AteomSupport_RequestActorSuspend_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -2,9 +2,6 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-NOTE: This is not an officially supported Google product. This project is not
-eligible for the [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
-
 ## What is Agent Substrate?
 
 Agent Substrate is a secure-by-default agent execution runtime engineered to run millions of sandboxes with 10x higher density than standard container runtimes. Purpose-built for the era of autonomous agents, Substrate delivers sub-500ms resume operations at over 500 suspend/resume activations per second with native zero-trust kernel and network isolation. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
@@ -48,10 +45,9 @@ Agent Substrate is designed to be **framework and agent harness agnostic**. Beca
 
 ## Status and compatibility
 
-Agent Substrate is currently in early development.  It is not ready for
-production use, and the APIs are almost guaranteed to change.  We are not
-making any guarantees about backward compatibility at this stage, and
-everything in this project may be changed.
+Agent Substrate is pre-1.0.  We are not making any guarantees about backward
+compatibility at this stage, and APIs and behavior may still change
+significantly.
 
 ### Supported Kubernetes Releases
 
@@ -250,3 +246,12 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/benchmarking`: Synthetic workloads used by the load tests, including `glutton`, which consumes RAM, disk, and file descriptors on demand.
 * `tools/setup-gcp`: A provisioning utility to set up the necessary GCP infrastructure resources (GKE, GCS, IAM).
 * `demos/`: Sample applications demonstrating Agent Substrate capabilities.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=agent-substrate%2Fsubstrate&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=agent-substrate/substrate&type=date&theme=dark&legend=top-left">
+    <img alt="Star history chart for agent-substrate/substrate" src="https://api.star-history.com/svg?repos=agent-substrate/substrate&type=date&legend=top-left">
+  </picture>
+</a>

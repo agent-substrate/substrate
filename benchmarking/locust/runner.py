@@ -41,8 +41,13 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, TextIO
+from typing import IO, Any, TextIO
 
+from cluster_facts import (
+    EMPTY_FACTS,
+    append_trial_summary,
+    get_cluster_hardware_facts,
+)
 from common.boomer_config import build_config_json
 
 # Path inside the locust image to the boomer-worker binary baked in by
@@ -106,6 +111,16 @@ def parse_args() -> argparse.Namespace:
             "round-robin (iteration i targets actor i%%N). Forwarded to "
             "boomer-glutton as --actors-per-user. Omit to keep boomer's "
             "default of 1."
+        ),
+    )
+    p.add_argument(
+        "--cluster-facts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Read node capacity and worker pod count from the Kubernetes API "
+            "after the run to derive density frontiers. Pass "
+            "--no-cluster-facts to skip Kubernetes API discovery"
         ),
     )
     args, extra = p.parse_known_args()
@@ -406,6 +421,16 @@ def upload(src: Path, dest: str) -> None:
         shutil.copy(src, dest_path)
 
 
+def collect_cluster_facts(
+    args: argparse.Namespace, logs: TextIO
+) -> dict[str, Any]:
+    """Returns cluster hardware facts, or empty facts when discovery is off."""
+    if not args.cluster_facts:
+        tee(logs, "Skipping cluster hardware discovery (--no-cluster-facts)")
+        return dict(EMPTY_FACTS)
+    return get_cluster_hardware_facts(logs)
+
+
 def main() -> None:
     args = parse_args()
     now = datetime.now(timezone.utc)
@@ -459,6 +484,33 @@ def main() -> None:
                     jsonl_path.unlink()
         else:
             tee(logs, f"Stats CSV {stats_csv} not produced; skipping JSONL")
+
+        # The density frontiers are additive. They are kept out of the block
+        # above so that a failure here cannot discard the measurements the
+        # trial actually came for.
+        stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
+        # Seeded up front so that a discovery failure still leaves a usable
+        # value for the summary below.
+        facts = dict(EMPTY_FACTS)
+        try:
+            facts = collect_cluster_facts(args, logs)
+        except Exception as e:
+            tee(logs, f"Warning: Failed to read cluster facts: {e}")
+
+        # The frontiers divide by user counts, so they need the CSV.
+        if stats_generated:
+            try:
+                append_trial_summary(
+                    jsonl_path,
+                    stats_csv,
+                    stats_history_csv,
+                    args,
+                    data_ts,
+                    facts,
+                    logs,
+                )
+            except Exception as e:
+                tee(logs, f"Warning: Failed to record cluster facts: {e}")
 
     status_path.write_text(
         json.dumps(

@@ -247,8 +247,8 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	}
 	// Resume prefers a local checkpoint over the external snapshot, so one
 	// surviving here would hide the repoint the next resume has to detect.
-	if got := revertedStatus.GetLocalSnapshotInfo(); got != nil {
-		t.Errorf("reverted Actor local_snapshot_info = %v, want cleared", got)
+	if got := revertedStatus.GetLocalSnapshot(); got != nil {
+		t.Errorf("reverted Actor local_snapshot = %v, want cleared", got)
 	}
 	// The two halves of the mismatch the next resume has to spot: the spec
 	// names B, the snapshot it would restore was captured under A.

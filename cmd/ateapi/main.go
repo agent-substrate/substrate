@@ -28,20 +28,20 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -78,6 +78,7 @@ var (
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
@@ -109,6 +110,11 @@ func main() {
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
 	}
+	resolvedActorJWTIssuer, err := resolveActorJWTIssuer(*actorJWTIssuer, installdefaults.NamespaceFromPodEnv())
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
+	}
+	slog.InfoContext(ctx, "Resolved actor JWT issuer", slog.String("actor-jwt-issuer", resolvedActorJWTIssuer))
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -145,11 +151,11 @@ func main() {
 
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
-	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
+	authenticationConfig, err := apiauthn.LoadAuthenticationConfig(*authenticationConfigFile)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to load authentication config", err)
 	}
-	authCfg, actorIdentityJWTIssuer, err := buildJWTProviders(ctx, authenticationConfig)
+	authCfg, err := buildJWTProviders(ctx, authenticationConfig)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
 	}
@@ -158,24 +164,20 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
+	pool := persistence.Pool()
+	defer pool.Close()
 	// Backends may run background maintenance rooted in their own context
-	// (atepg's outbox maintenance loop); stop it on shutdown.
-	if closer, ok := persistence.(interface{ Close() }); ok {
-		defer closer.Close()
-	}
+	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
+	defer persistence.Close()
 
-	if poolProvider, ok := persistence.(interface {
-		NewPool(context.Context) (*pgxpool.Pool, error)
-	}); ok {
-		authzPool, err := poolProvider.NewPool(shutdownCtx)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to open dedicated PostgreSQL pool for OpenFGA", err)
-		}
-		authzSrv, err := authz.NewServer(shutdownCtx, authzPool)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
-		}
-		defer authzSrv.Close()
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+	}
+	defer fgaServer.Close()
+
+	if _, _, err := authz.EnsureStoreAndModel(shutdownCtx, pool, fgaServer); err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize OpenFGA store and model", err)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -265,7 +267,7 @@ func main() {
 		*egressGatewayAddress,
 		volPlugins,
 		objectStore,
-		actorIdentityJWTIssuer,
+		resolvedActorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
 	)
@@ -280,7 +282,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
-	if err := ateapiauth.ValidateServerConfig(authCfg); err != nil {
+	if err := apiauthn.ValidateServerConfig(authCfg); err != nil {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
@@ -295,18 +297,18 @@ func main() {
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
 		grpc.ChainUnaryInterceptor(
-			ateapiauth.UnaryServerInterceptor(authCfg),
+			apiauthn.UnaryServerInterceptor(authCfg),
 			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 			ateinterceptors.ServerUnaryInterceptor,
 			ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		),
 		grpc.ChainStreamInterceptor(
-			ateapiauth.StreamServerInterceptor(authCfg),
+			apiauthn.StreamServerInterceptor(authCfg),
 		),
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, ateletSPIFFEID, actorIDCAPool))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
@@ -376,6 +378,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-connection-string", *postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
+		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
@@ -413,9 +416,9 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 	}
 }
 
-// connectStore builds the PostgreSQL-backed store.Interface. Startup fails if
+// connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
 // its configuration is missing or the database can't be reached.
-func connectStore(ctx context.Context) (store.Interface, error) {
+func connectStore(ctx context.Context) (*atepg.Persistence, error) {
 	if *postgresConnectionString == "" {
 		return nil, fmt.Errorf("--postgres-connection-string is required")
 	}
@@ -503,16 +506,15 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 	}), nil
 }
 
-func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig) (ateapiauth.ServerConfig, string, error) {
-	var serverCfg ateapiauth.ServerConfig
-	var actorIdentityIssuer string
+func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) (apiauthn.ServerConfig, error) {
+	var serverCfg apiauthn.ServerConfig
 	for _, providerCfg := range cfg.JWTProviders {
 		httpClient, err := oidcjwt.NewHTTPClient(providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile)
 		if err != nil {
-			return ateapiauth.ServerConfig{}, "", fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
+			return apiauthn.ServerConfig{}, fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
 		}
 		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
-		serverCfg.JWTProviders = append(serverCfg.JWTProviders, ateapiauth.JWTProvider{
+		serverCfg.JWTProviders = append(serverCfg.JWTProviders, apiauthn.JWTProvider{
 			Name:   providerCfg.Name,
 			Issuer: providerCfg.Issuer,
 			Verify: func(ctx context.Context, bearer string) (string, error) {
@@ -523,10 +525,20 @@ func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig
 				return claims.Subject, nil
 			},
 		})
-		if providerCfg.Name == cfg.ActorIdentityJWTProvider {
-			actorIdentityIssuer = providerCfg.Issuer
-		}
 		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))
 	}
-	return serverCfg, actorIdentityIssuer, nil
+	return serverCfg, nil
+}
+
+// resolveActorJWTIssuer applies the install default to an empty
+// --actor-jwt-issuer and validates the result.
+func resolveActorJWTIssuer(flagValue, namespace string) (string, error) {
+	issuer := flagValue
+	if issuer == "" {
+		issuer = installdefaults.ActorJWTIssuer(namespace)
+	}
+	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
+		return "", err
+	}
+	return issuer, nil
 }

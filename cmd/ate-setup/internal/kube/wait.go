@@ -26,6 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
 // Workload kinds accepted by RolloutStatus.
@@ -47,6 +49,7 @@ var clusterTrustBundleGVK = schema.GroupVersionKind{
 // `kubectl rollout status <kind>/<name> -n <ns> --timeout=<t>`. The readiness
 // conditions match kubectl's own status viewers.
 func (c *Client) RolloutStatus(ctx context.Context, kind, namespace, name string, timeout time.Duration) error {
+	defer log.Elapsed(time.Now(), fmt.Sprintf("rollout status %s/%s", kind, name))
 	var lastMsg string
 	var notFoundCount int
 	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
@@ -232,10 +235,19 @@ func (c *Client) WaitCondition(ctx context.Context, gvk schema.GroupVersionKind,
 
 // WaitClusterTrustBundles blocks until the podcertificate controller has
 // published the identity bundles the rest of the install depends on.
+//
+// The timeout is one deadline shared across every bundle, not a budget per
+// bundle: a slow first one must not hand the second a fresh full timeout.
 func (c *Client) WaitClusterTrustBundles(ctx context.Context, names []string, timeout time.Duration) error {
+	defer log.Elapsed(time.Now(), "wait for clustertrustbundles")
+	deadline := time.Now().Add(timeout)
 	for _, name := range names {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("waiting for ClusterTrustBundle %s: the %s budget was spent on the bundles before it", name, timeout)
+		}
 		var lastErr error
-		err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+		err := poll(ctx, remaining, func(ctx context.Context) (bool, error) {
 			ok, err := c.Exists(ctx, clusterTrustBundleGVK, "", name)
 			if err != nil {
 				lastErr = err

@@ -45,6 +45,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
@@ -53,7 +54,7 @@ import (
 // ateompath.DurableDirVolumeMountsDir, so extraction restores the same layout.
 // The name is shared with atelet, which uses it to carve durable data out of a
 // FULL snapshot's file set when uploading a paused checkpoint as DATA.
-const durableTarFile = ateompath.DurableDirTarFile
+const durableTarFile = resources.DurableDirTarFile
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {

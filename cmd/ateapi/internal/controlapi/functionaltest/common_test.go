@@ -65,6 +65,7 @@ const (
 	// testStorageLocation is the snapshot_config.storage_location the test
 	// templates hand out. No object store is wired up behind it.
 	testStorageLocation = "gs://fake-fake-fake"
+	testActorJWTIssuer  = "https://idp.example.test"
 
 	// ateletNamespace and byNode mirror the unexported constants controlapi's
 	// atelet informer is built with.
@@ -222,7 +223,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		"",
 		volPlugins,
 		objectStore,
-		"https://nonexistent-issuer.example",
+		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		actorCAPool,
 	)

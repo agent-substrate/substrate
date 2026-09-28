@@ -163,7 +163,7 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
 
 **What this stream won't tell you.** It only writes when something changes. So an actor that has been sitting in the same state since before your logs roll over has no record, and no state. Ask the control plane what state something is in right now. Use this stream to see how it got there and when. Records can also go missing, like any other log, and a gap looks the same as an actor that just sat still. If you want to count activations, use the router's access log instead.
 
-`Actor crashed` is the exception, and carries the same two keys with `ate.actor.state="crashed"`. It is written once per committed transition into `ACTOR_STATE_CRASHED`, beside the [`ate.actor.crashes`](#the-metric-registry) increment and under the same already-crashed guard, so the two can never disagree about how many crashes happened. A consumer deriving state therefore selects on `ate.actor.state`, not on the message:
+`Actor crashed` is the exception, and carries the same two keys with `ate.actor.state="crashed"`. It is written once per committed transition into `ACTOR_STATE_CRASHED`, beside the [`ate.actor.crashes`](#the-metric-registry) increment and under the same already-crashed guard, so the two can never disagree about how many crashes happened. A consumer deriving state therefore selects on `ate.actor.state` under ateapi's resource (`service.name=ateapi`), not on the message. The resource is what makes the record authoritative. [The ateom relay](#the-ateom-otlp-relay) admits only ateom resources, so once worker pods have no direct path to the collector, a record carrying these keys under any other resource cannot come from a worker pod. Until then this is a rule the consumer applies, not one the transport enforces.
 
 ```json
 {"time":"…","level":"ERROR","msg":"Actor crashed",
@@ -177,22 +177,25 @@ The counter carries no actor identity, so this record is the only way to attribu
 
 #### The same records over OTLP
 
-Both records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. Only ateapi has a LoggerProvider today; [the ateom relay](#the-ateom-otlp-relay) carries logs, traces, and metrics, so an ateom exports log records the same way once it has one.
+These records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. ateapi is the only emitter today. The ateoms have a LoggerProvider on the same switch and export through [the ateom relay](#the-ateom-otlp-relay), which carries logs, traces, and metrics. atecontroller does not pass `OTEL_LOGS_EXPORTER` to worker pods, so the kind ConfigMap turns on ateapi only; the ateoms stay at `none` until the controller propagates it.
 
-Two `event.name` values, which is the OTLP LogRecord's own field rather than an attribute:
+Three `event.name` values, which is the OTLP LogRecord's own field rather than an attribute:
 
 | `event.name` | Body | Severity | Attributes |
 |---|---|---|---|
 | `ate.actor.state_changed` | `Actor state changed` | 9 | the five identity keys, `ate.actor.operation.name`, `ate.actor.state` |
 | `ate.actor.crashed` | `Actor crashed` | 17 | the same keys |
+| `ate.actor.usage_sampled` | `Actor usage sampled` | 9 | the five identity keys, `ate.workerpool.*`, `ate.sandbox.class`, `ate.stats.*`, `ate.actor.epoch` |
 
-A crash is its own name because an event name promises a fixed set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. Both names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
+`ate.actor.usage_sampled` is the ateoms' record: one per actor per sampling period, plus an `initial` and a `final` per activation, told apart by `ate.stats.kind`. Its timestamp is when the measurement was read. Its measurements are named after the `ate.actor.stats.*` instruments and share their units, so `ate.stats.cpu.time` is seconds. They are absent, not zero, while the actor is not measurable, which the record says with `ate.stats.source` unspecified. `ate.stats.cpu.time` restarts at zero with each `ate.actor.epoch`, the unix-nano time the activation began, so a lifetime figure is the sum over epochs of each epoch's highest value; `ate.stats.memory.usage` and `ate.stats.memory.working_set` are absolute, and `ate.stats.memory.peak` is as the source reports it. The same measurements ride `WorkloadStatsSample` on the stats RPCs, with the epoch beside them.
 
-The attributes are the same flat `ate.*` keys as the stdout copy, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout copy's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent`, which is how you select this stream, or exclude it.
+A crash is its own name because an event name promises a set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. All three names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
 
-**Never sample or filter this stream.** A consumer takes the last event for an actor's uid, so one dropped record reports a stale state with no sign that anything is missing. This is the one stream where a sampling policy is a correctness bug rather than a cost trade.
+The attributes are the same flat `ate.*` keys as the stdout copy, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout copy's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent` for every actor event. Select or drop a stream by `event.name`: the lifecycle events must never be sampled, the usage samples may be.
 
-**Both copies exist on purpose.** No substrate or enterprise collector reads pod stdout today, so nothing is duplicated: the stdout copy is what `kubectl logs` shows and what keeps the component's bootstrap and crash output readable, and the OTLP copy is what a backend queries. If a `filelog` DaemonSet is ever added, drop one of the two — exclude ate-system from its include globs, or drop records whose scope is the one above.
+**Never sample or filter the lifecycle stream.** A consumer takes the last event for an actor's uid, so one dropped record reports a stale state with no sign that anything is missing. This is the one stream where a sampling policy is a correctness bug rather than a cost trade.
+
+**Both copies exist on purpose.** No substrate or enterprise collector reads pod stdout today, so nothing is duplicated: the stdout copy is what `kubectl logs` shows and what keeps the component's bootstrap and crash output readable, and the OTLP copy is what a backend queries. If a `filelog` DaemonSet is ever added, drop one of the two — drop the records by `event.name`, or exclude the `ate-api-server` and `ateom` containers by name.
 
 ### Per-Actor Usage Events
 
@@ -242,7 +245,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
-| `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`assigned`) and sandbox class to provide fleet capacity and saturation at a glance |
+| `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`partial`/`at_capacity`/`unschedulable`) and sandbox class to provide fleet capacity and saturation at a glance |
 | `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
 | `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`) |

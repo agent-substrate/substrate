@@ -32,7 +32,7 @@
 #
 # OTEL_LOGS_EXPORTER turns on the actor lifecycle events. serverboot defaults it
 # to none, so the base ConfigMap leaves it unset and no other environment sends
-# log records yet. Only ateapi has a LoggerProvider today.
+# log records yet. Only ateapi emits log records today.
 apiVersion: v1
 kind: ConfigMap
 metadata:

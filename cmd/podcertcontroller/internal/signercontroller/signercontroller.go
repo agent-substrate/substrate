@@ -21,15 +21,14 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	certinformersv1beta1 "k8s.io/client-go/informers/certificates/v1beta1"
 	"k8s.io/client-go/kubernetes"
-	certlistersv1beta1 "k8s.io/client-go/listers/certificates/v1beta1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
@@ -49,9 +48,9 @@ type Hasher interface {
 type Controller struct {
 	clock clock.PassiveClock
 
-	kc          kubernetes.Interface
-	pcrInformer cache.SharedIndexInformer
-	pcrQueue    workqueue.TypedRateLimitingInterface[string]
+	kc        kubernetes.Interface
+	pcrClient *podcertificate.Client
+	pcrQueue  workqueue.TypedRateLimitingInterface[string]
 
 	hasher Hasher
 
@@ -59,22 +58,17 @@ type Controller struct {
 }
 
 // New creates a new Controller.
-func New(clock clock.PassiveClock, handler SignerImpl, kc kubernetes.Interface, hasher Hasher) *Controller {
-	pcrInformer := certinformersv1beta1.NewFilteredPodCertificateRequestInformer(kc, metav1.NamespaceAll, 24*time.Hour, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
-		func(opts *metav1.ListOptions) {
-		},
-	)
-
+func New(clock clock.PassiveClock, handler SignerImpl, kc kubernetes.Interface, hasher Hasher, pcrClient *podcertificate.Client) *Controller {
 	sc := &Controller{
-		clock:       clock,
-		kc:          kc,
-		pcrInformer: pcrInformer,
-		pcrQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		handler:     handler,
-		hasher:      hasher,
+		clock:     clock,
+		kc:        kc,
+		pcrClient: pcrClient,
+		pcrQueue:  workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		handler:   handler,
+		hasher:    hasher,
 	}
 
-	sc.pcrInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	sc.pcrClient.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(new any) {
 			key, err := cache.MetaNamespaceKeyFunc(new)
 			if err != nil {
@@ -101,10 +95,11 @@ func New(clock clock.PassiveClock, handler SignerImpl, kc kubernetes.Interface, 
 	return sc
 }
 
+// Run waits for the shared informer to sync, then processes this signer's queue.
+// The caller must start the informer separately.
 func (c *Controller) Run(ctx context.Context, workers int) {
 	defer c.pcrQueue.ShutDown()
-	go c.pcrInformer.Run(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), c.pcrInformer.HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), c.pcrClient.Informer().HasSynced) {
 		return
 	}
 
@@ -139,7 +134,7 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 		return true
 	}
 
-	pcr, err := certlistersv1beta1.NewPodCertificateRequestLister(c.pcrInformer.GetIndexer()).PodCertificateRequests(namespace).Get(name)
+	pcr, err := c.pcrClient.GetCached(namespace, name)
 	if k8serrors.IsNotFound(err) {
 		c.pcrQueue.Forget(key)
 		return true

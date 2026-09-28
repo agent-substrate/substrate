@@ -214,6 +214,9 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 			slog.String("worker", name))...)
 	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		if !wasAlreadyCrashed {
+			toUpdate.Status.Crash = newActorCrash(opName, crashMessageWorkerPodGone)
+		}
 		toUpdate.Status.WorkerAssignment = nil
 		// Local in-progress checkpoint dies with the worker: it lived on the node
 		// that went away. The external in-progress checkpoint is kept so delete

@@ -126,6 +126,9 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED: it never suspended cleanly", got.GetStatus().GetState())
 	}
+	if msg := got.GetStatus().GetCrash().GetMessage(); msg != crashMessageWorkerPodGone {
+		t.Errorf("crash message = %q, want %q", msg, crashMessageWorkerPodGone)
+	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 	}

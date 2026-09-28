@@ -16,6 +16,7 @@ package steps
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -81,8 +82,24 @@ func (e *Env) EnsurePodCertificateCAs(ctx context.Context) error {
 // has published both identity bundles.
 func (e *Env) WaitForPodCertificateTrustBundles(ctx context.Context) error {
 	log.Infof("Waiting for podcertificate ClusterTrustBundles to be ready...")
-	return e.Kube.WaitClusterTrustBundles(ctx, trustBundleNames, e.Cfg.WaitTimeout(BootstrapTimeout))
+	err := e.Kube.WaitClusterTrustBundles(ctx, trustBundleNames, e.Cfg.WaitTimeout(TrustBundleTimeout))
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, trustBundleDiagnostics)
+	}
+	return nil
 }
+
+// trustBundleDiagnostics is appended to a trust bundle timeout. By this point
+// the controller's rollout has already succeeded, so a missing bundle points
+// at the controller running but not producing, and these are the places to
+// look.
+const trustBundleDiagnostics = `The podcertificate-controller pod is likely Ready but not producing bundles
+(missing CA-pool secret, crash-looping after first Ready, RBAC denial, or a
+name mismatch after an upgrade). Investigate with:
+  kubectl get clustertrustbundles -A
+  kubectl -n podcertificate-controller-system logs deploy/podcertificate-controller --tail=200
+  kubectl -n podcertificate-controller-system get pods,secrets,configmaps
+  kubectl -n podcertificate-controller-system get events --sort-by=.lastTimestamp | tail -20`
 
 // ensureSecret runs create when the named Secret is absent.
 func (e *Env) ensureSecret(ctx context.Context, namespace, name string, create func(context.Context) error) error {

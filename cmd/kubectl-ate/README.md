@@ -252,14 +252,18 @@ kubectl ate create egress-policy <actor-name> -a <atespace> -f policy.yaml
 # Copy the egress policy of another actor.
 kubectl ate get egress-policy <src-actor> -a <atespace> -o yaml | \
   kubectl ate create egress-policy <actor-name> -a <atespace> -f -
+
+# Replace an actor's egress policy: dump it, edit the rules, send it back.
+kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml > policy.yaml
+$EDITOR policy.yaml
+kubectl ate update egress-policy <actor-name> -a <atespace> -f policy.yaml
 ```
 
-The manifest is one `EgressPolicy` in YAML or JSON; `metadata` may be omitted
-and server-managed fields are ignored, so the output of `get -o yaml` is a valid
-manifest as is.
+#### Details
 
-`get` exits 1 when the actor does not exist; an actor without a policy prints a
-note on stderr and exits 0.
+* `create` can take a manifest with no `metadata`, taking `name` and `atespace` from the command line.
+* `update` replaces the entire policy and the manifest metadata must match `uid`
+  and `version` for the `EgressPolicy` being updated.
 
 #### `kubectl ate get egress-policy` output columns
 

@@ -95,6 +95,10 @@ usage() {
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-dataplane=envoy|agentgateway  Select the atenet ingress and egress dataplane (default: envoy)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
+  echo "  --cluster-size size0|size10            Cluster size profile (default: size0). \"size10\" assumes a dedicated postgres node"
+  echo "  --cordon-control-plane                 Pin each control plane pod to its own node: assumes a pool labeled and tainted"
+  echo "                                         ate.dev/workloadType=ate-control-plane:NoSchedule with one node per pod (7 at the"
+  echo "                                         shipped replica counts) plus a spare, since rollouts surge a new pod first"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -299,6 +303,15 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--podcert-workers-per-signer=${prescan_args[$((i + 1))]}")
       ;;
+    --cluster-size=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --cluster-size)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --cluster-size requires size0 or size10" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--cluster-size=${prescan_args[$((i + 1))]}")
+      ;;
+    --cordon-control-plane|--cordon-control-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -355,10 +368,12 @@ while [[ "$#" -gt 0 ]]; do
     # Captured in the pre-scan above; matched here only so the `*)` branch does
     # not reject them, and so a separated value is consumed with its flag.
     --atenet-dataplane|--podcert-workers-per-signer|--rollout-timeout|--otlp-endpoint) shift ;;
+    --cluster-size) shift ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --credential-provider-name|--credential-provider-address) shift ;;
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
+    --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
     --experimental-use-sdsmint|--experimental-additional-egress-extproc-service=*) ;;
     --experimental-egress-credential-injection|--credential-provider-name=*|--credential-provider-address=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;

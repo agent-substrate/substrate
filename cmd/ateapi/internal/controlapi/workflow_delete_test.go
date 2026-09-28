@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -360,6 +361,53 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	}
 	if left := objects.Prefix(t, inFlight.OwnerPrefix()); len(left) != 0 {
 		t.Errorf("Deleting the actor left %v under its own prefix, want the in-flight snapshot collected", left)
+	}
+}
+
+// TestEnsureExternalSnapshotsReleased_DeletePrefixFailure verifies that if
+// objectstore.DeletePrefix fails with a transient error during actor deletion,
+// ensureExternalSnapshotsReleased returns that error, preserves the un-deleted
+// objects, and cleanly completes the deletion on a subsequent retry.
+func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
+	})
+
+	current := mustActorSnapshotURI(t, template, actor, "current")
+	objects.PutSnapshot(t, current, "manifest.json", "memory.zst")
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: current.String()}
+	})
+
+	errTransient := errors.New("simulated transient delete failure")
+	objects.OnDelete = func(bucket, object string) error {
+		return errTransient
+	}
+
+	err := w.ensureExternalSnapshotsReleased(ctx, actor)
+	if !errors.Is(err, errTransient) {
+		t.Fatalf("ensureExternalSnapshotsReleased error = %v, want error wrapping %v", err, errTransient)
+	}
+
+	// Objects should not have been deleted
+	if len(objects.Snapshot(t, current)) == 0 {
+		t.Fatal("objects were unexpectedly deleted despite OnDelete failure")
+	}
+
+	// Retry without failure: should successfully clean up the snapshot objects
+	objects.OnDelete = nil
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
+		t.Fatalf("ensureExternalSnapshotsReleased on retry failed: %v", err)
+	}
+	if remaining := objects.Snapshot(t, current); len(remaining) != 0 {
+		t.Errorf("external snapshot objects remain after retry: %v", remaining)
 	}
 }
 

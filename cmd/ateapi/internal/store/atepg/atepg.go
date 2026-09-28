@@ -255,10 +255,9 @@ func (p *Persistence) Close() {
 	}
 }
 
-// NewPool opens a dedicated PostgreSQL connection pool configured identically
-// to this persistence instance (including TLS rotation and search_path).
-func (p *Persistence) NewPool(ctx context.Context) (*pgxpool.Pool, error) {
-	return pgxpool.NewWithConfig(ctx, p.pool.Config())
+// Pool returns the underlying PostgreSQL connection pool.
+func (p *Persistence) Pool() *pgxpool.Pool {
+	return p.pool
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers

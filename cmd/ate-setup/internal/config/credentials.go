@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -40,6 +41,7 @@ func (c *Config) EnsureClusterCredentials(ctx context.Context) error {
 	}
 
 	log.Stepf("gcloud container clusters get-credentials %s", c.ClusterName)
+	defer log.Elapsed(time.Now(), "gcloud get-credentials")
 	cmd := exec.CommandContext(ctx, "gcloud", "container", "clusters", "get-credentials",
 		c.ClusterName,
 		"--location", c.ClusterLocation,

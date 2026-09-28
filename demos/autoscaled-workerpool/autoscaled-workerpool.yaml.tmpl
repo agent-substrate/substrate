@@ -15,7 +15,7 @@
 # This demo demonstrates autoscaling an Agent Substrate WorkerPool using a
 # HorizontalPodAutoscaler (HPA) and an External Metric (ate_workerpool_workers).
 # The pool runs capacity for the "counter" workload; the HPA scales the pool
-# dynamically based on the number of assigned workers. The ActorTemplate
+# dynamically based on the number of full workers. The ActorTemplate
 # lives in autoscaled-workerpool-template.yaml.tmpl and is created through
 # the ate API with `kubectl ate create actor-template`.
 #

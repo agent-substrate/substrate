@@ -27,39 +27,81 @@ import (
 // TODO(identity): Must be configurable per-install, so that each install can set it to a unique value.
 const ActorSPIFFETrustDomain = "substrate-actor.local"
 
-// ActorSPIFFEID returns "spiffe://substrate-actor.local/atespace/<atespace>/actor/<name>",
-// which ateapi mints into the actor certificate's URI SAN.
+// ActorSPIFFEID returns
+// "spiffe://substrate-actor.local/actor/<atespace>/<name>", which ateapi mints
+// into the actor certificate's URI SAN.
 func ActorSPIFFEID(r ActorRef) *url.URL {
+	return &url.URL{
+		Scheme: "spiffe",
+		Host:   ActorSPIFFETrustDomain,
+		Path:   path.Join("actor", r.Atespace, r.Name),
+	}
+}
+
+// ActorRefFromActorSPIFFEID parses an ID built by ActorSPIFFEID.
+func ActorRefFromActorSPIFFEID(id string) (ActorRef, error) {
+	u, err := url.Parse(id)
+	if err != nil {
+		return ActorRef{}, fmt.Errorf("invalid actor SPIFFE ID %q: %w", id, err)
+	}
+	return ActorRefFromActorSPIFFEURL(u)
+}
+
+func ActorRefFromActorSPIFFEURL(u *url.URL) (ActorRef, error) {
+	if u.Scheme != "spiffe" || u.Host != ActorSPIFFETrustDomain || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/actor/<atespace>/<name>", u.String())
+	}
+	segments := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(segments) != 3 || segments[0] != "actor" {
+		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/actor/<atespace>/<name>", u.String())
+	}
+	atespace, name := segments[1], segments[2]
+	if !IsValidResourceName(atespace) {
+		return ActorRef{}, fmt.Errorf("%q is not a valid atespace", atespace)
+	}
+	if !IsValidResourceName(name) {
+		return ActorRef{}, fmt.Errorf("%q is not a valid actor name", name)
+	}
+	return ActorRef{Atespace: atespace, Name: name}, nil
+}
+
+// AteomForActorSPIFFEID returns
+// "spiffe://substrate-actor.local/ateom-for-actor/<atespace>/<name>", which
+// ateapi mints into the actor certificate's URI SAN.
+func AteomForActorSPIFFEID(r ActorRef) *url.URL {
 	return &url.URL{
 		Scheme: "spiffe",
 		Host:   ActorSPIFFETrustDomain,
 		// TODO(identity): Prefix with "atunnel" to prevent
 		// confusion between atunnel and an actor pretending to be
 		// an atunnel.
-		Path: path.Join("atespace", r.Atespace, "actor", r.Name),
+		Path: path.Join("ateom-for-actor", r.Atespace, r.Name),
 	}
 }
 
-// ActorRefFromSPIFFEID parses an ID built by ActorSPIFFEID. Anything else is an
-// error, so a URI SAN that merely resembles an actor ID never resolves to one.
-func ActorRefFromSPIFFEID(id string) (ActorRef, error) {
+// ActorRefFromAteomForActorSPIFFEID parses an ID built by AteomForActorSPIFFEID.
+func ActorRefFromAteomForActorSPIFFEID(id string) (ActorRef, error) {
 	u, err := url.Parse(id)
 	if err != nil {
-		return ActorRef{}, fmt.Errorf("invalid actor SPIFFE ID %q: %w", id, err)
+		return ActorRef{}, fmt.Errorf("invalid ateom-for-actor SPIFFE ID %q: %w", id, err)
 	}
+	return ActorRefFromAteomForActorSPIFFEURL(u)
+}
+
+func ActorRefFromAteomForActorSPIFFEURL(u *url.URL) (ActorRef, error) {
 	if u.Scheme != "spiffe" || u.Host != ActorSPIFFETrustDomain || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return ActorRef{}, fmt.Errorf("invalid actor SPIFFE ID %q: must be spiffe://%s/atespace/<atespace>/actor/<name>", id, ActorSPIFFETrustDomain)
+		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/ateom-for-actor/<atespace>/<name>", u.String())
 	}
 	segments := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-	if len(segments) != 4 || segments[0] != "atespace" || segments[2] != "actor" {
-		return ActorRef{}, fmt.Errorf("invalid actor SPIFFE ID %q: must be spiffe://%s/atespace/<atespace>/actor/<name>", id, ActorSPIFFETrustDomain)
+	if len(segments) != 3 || segments[0] != "ateom-for-actor" {
+		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/ateom-for-actor/<atespace>/<name>", u.String())
 	}
-	atespace, name := segments[1], segments[3]
+	atespace, name := segments[1], segments[2]
 	if !IsValidResourceName(atespace) {
-		return ActorRef{}, fmt.Errorf("invalid actor SPIFFE ID %q: %q is not a valid atespace", id, atespace)
+		return ActorRef{}, fmt.Errorf("%q is not a valid atespace", atespace)
 	}
 	if !IsValidResourceName(name) {
-		return ActorRef{}, fmt.Errorf("invalid actor SPIFFE ID %q: %q is not a valid actor name", id, name)
+		return ActorRef{}, fmt.Errorf("%q is not a valid actor name", name)
 	}
 	return ActorRef{Atespace: atespace, Name: name}, nil
 }

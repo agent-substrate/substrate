@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -35,7 +36,7 @@ import (
 // defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a
 // private cgroup namespace, so this path is the pod's cgroup rather than the
 // host root, and runsc's per-container leaves are its direct children (see
-// setupCgroupDelegation).
+// ateomcgroup.Delegate).
 const defaultCgroupRoot = "/sys/fs/cgroup"
 
 // sandboxCgroupContainer is the container whose cgroup leaf accounts for the
@@ -51,7 +52,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // cgroup, because runsc resolves cgroupsPath against the parent of the cgroup
 // it is running in: cgroup v2 forbids a cgroup from holding processes and
 // delegating controllers to children at once, so runsc walks up one level to
-// find a directory it is allowed to create in. setupCgroupDelegation moves
+// find a directory it is allowed to create in. ateomcgroup.Delegate moves
 // ateom into /sys/fs/cgroup/ateom precisely so that one level up is the
 // delegated scope.
 //
@@ -89,28 +90,22 @@ const sandboxCgroupContainer = ocispec.PauseContainer
 
 // GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
 //
-// Unlike the three lifecycle RPCs this does not take s.lock, and must not start:
-// it is polled on a timer for the whole life of a workload, while lock is held
-// across entire boots and checkpoints. Blocking on it would park every poll
-// behind a multi-second runsc call, and — worse in the other direction — holding
-// it across the cgroup read would put a CheckpointWorkload behind telemetry.
-// The attribution is read from an atomic instead, and the cgroup files are read
-// with no lock held at all.
+// It must not take the actor's lifecycle lock, which is held across whole
+// boots and checkpoints: polls would stall behind runsc, and a checkpoint
+// would wait on telemetry. The cgroup files are read with no lock held.
 func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
 		return nil, status.Error(codes.InvalidArgument, "actor_uid is required")
 	}
 
-	// Both of these are NOT_FOUND rather than FAILED_PRECONDITION: they tell the
-	// caller the requested actor is not here, which no amount of retrying on the
-	// same timer will change. Its worker-to-actor mapping wants re-resolving.
-	active := s.activeActor.Load()
-	if active == nil {
-		return nil, status.Errorf(codes.NotFound, "ateom is available; it is not executing actor %q", req.GetActorUid())
+	// NOT_FOUND rather than FAILED_PRECONDITION: the requested actor is not
+	// here, which no amount of retrying on the same timer will change. Its
+	// worker-to-actor mapping wants re-resolving.
+	hosted := s.lookupActor(req.GetActorUid())
+	if hosted == nil {
+		return nil, status.Errorf(codes.NotFound, "ateom is not executing actor %q", req.GetActorUid())
 	}
-	if active.UID != req.GetActorUid() {
-		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.UID, req.GetActorUid())
-	}
+	active := &hosted.attribution
 
 	sample, err := s.sampleSandbox(active)
 	if err != nil {
@@ -128,18 +123,10 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
 	}
 
-	// Re-check that the same workload is still the active one. The read above
-	// holds no lock, so a checkpoint plus a fresh run can complete underneath it,
-	// and the numbers would then belong to an actor other than the one being
-	// reported. Pointer identity is enough: activeActor is stored as a new
-	// pointer on every Run and Restore and never mutated in place, so an
-	// unchanged pointer means no transition happened across the read.
-	//
-	// NOT_FOUND, like the two checks above and for the same reason: the requested
-	// actor is no longer the one here, so a retry lands on one of them and gets
-	// that answer anyway. The same state should not report two different codes
-	// depending on where in the handler it was noticed.
-	if s.activeActor.Load() != active {
+	// The read above holds no lock, so a checkpoint plus a fresh run can land
+	// underneath it. Pointer identity catches that: hostActor stores a new
+	// record every time.
+	if s.lookupActor(req.GetActorUid()) != hosted {
 		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
 
@@ -151,47 +138,33 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 // whatever is executing with no identity asserted. Same lock discipline as
 // GetWorkloadStats above, for the same reasons.
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
-	active := s.activeActor.Load()
-	if active == nil {
-		// "Available" is the empty list, per the proto: a normal answer for a
-		// scraper to get, not an error.
-		return &ateompb.GetActiveWorkloadStatsResponse{}, nil
-	}
-
-	sample, err := s.sampleSandbox(active)
-	if err != nil {
-		// A missing cgroup is a workload with no numbers yet -- a poll landing
-		// in the boot -- which for a caller with no prior knowledge is as
-		// normal a finding as an available ateom. It answers as a pending
-		// entry: attribution without measurements, so even a workload that
-		// dies during boot is attributable. Anything else is a real read
-		// failure.
-		if errors.Is(err, fs.ErrNotExist) {
-			return &ateompb.GetActiveWorkloadStatsResponse{
-				Samples: []*ateompb.WorkloadStatsSample{pendingSample(active)},
-			}, nil
+	hosted := s.hostedActors()
+	samples := make([]*ateompb.WorkloadStatsSample, 0, len(hosted))
+	for _, h := range hosted {
+		// An actor with no numbers is reported as pending: most often it is
+		// booting, but a failed read for one must not lose the others either.
+		sample, err := s.sampleSandbox(&h.attribution)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				slog.WarnContext(ctx, "Failed to read sandbox cgroup", slog.String("actorUID", h.attribution.UID), slog.Any("err", err))
+			}
+			sample = pendingSample(&h.attribution)
 		}
-		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
-	}
-
-	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
-	// there is no "requested actor" for NOT_FOUND to disown, and a transition
-	// underneath the read just means these numbers cannot be attributed to any
-	// single actor. Report the state as of now -- empty if the slot emptied, a
-	// pending entry for the new occupant otherwise; the next tick resolves it
-	// either way.
-	if latest := s.activeActor.Load(); latest != active {
-		if latest == nil {
-			return &ateompb.GetActiveWorkloadStatsResponse{}, nil
+		// The read holds no lock, and the cgroup is found by UID alone. If the
+		// actor was re-hosted meanwhile, perhaps on another template, the
+		// numbers are the new activation's: report it as pending instead.
+		switch latest := s.lookupActor(h.attribution.UID); {
+		case latest == nil:
+			continue
+		case latest != h:
+			sample = pendingSample(&latest.attribution)
 		}
-		return &ateompb.GetActiveWorkloadStatsResponse{
-			Samples: []*ateompb.WorkloadStatsSample{pendingSample(latest)},
-		}, nil
+		samples = append(samples, sample)
 	}
 
-	return &ateompb.GetActiveWorkloadStatsResponse{
-		Samples: []*ateompb.WorkloadStatsSample{sample},
-	}, nil
+	// An empty list is "available", per the proto: a normal answer for a
+	// scraper to get, not an error.
+	return &ateompb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
 }
 
 // pendingSample is a workload with no numbers to give yet, as the discovery
@@ -216,8 +189,8 @@ func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSam
 // active. Errors come back raw -- notably fs.ErrNotExist for a cgroup that is
 // not there yet -- because the two RPCs disagree on what that means: an error
 // code for the keyed read, a normal EXECUTING answer for the discovery read.
-// Callers re-check s.activeActor against the pointer they loaded after this
-// returns; the read holds no lock.
+// The read holds no lock, so the keyed caller re-checks the actor record it
+// loaded after this returns.
 func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
 	read := s.readSandboxCgroup
 	if read == nil {

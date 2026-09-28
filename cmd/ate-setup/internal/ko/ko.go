@@ -31,6 +31,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
 // versionPkg is the package whose Version variable receives the build stamp.
@@ -94,6 +97,7 @@ func findBinary(root string) (string, error) {
 // path (or from stdinManifest when path is "-") and returns the manifest with
 // image references replaced by digests.
 func (r *Runner) Resolve(ctx context.Context, path string, stdinManifest []byte) ([]byte, error) {
+	defer log.Elapsed(time.Now(), "ko resolve -f "+path)
 	cmd := exec.CommandContext(ctx, r.binary, r.args("resolve", "-f", path)...)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), r.Env...)
@@ -118,6 +122,7 @@ func (r *Runner) Resolve(ctx context.Context, path string, stdinManifest []byte)
 // references; Build is for the images with no manifest names, such as the ateom
 // worker images a WorkerPool points at through workerImage.
 func (r *Runner) Build(ctx context.Context, importPath string) (string, error) {
+	defer log.Elapsed(time.Now(), "ko build "+importPath)
 	cmd := exec.CommandContext(ctx, r.binary, r.args("build", importPath)...)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), r.Env...)

@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"google.golang.org/grpc"
 )
 
 const logsExporterEnv = "OTEL_LOGS_EXPORTER"
@@ -85,6 +86,11 @@ type LoggingOptions struct {
 	// Exporter is required. Build it with ResolveLogsExporter so
 	// OTEL_LOGS_EXPORTER overrides the component default.
 	Exporter LogsExporter
+	// ExporterConn and RelayCapable are the logs counterpart of the same fields
+	// on TracingOptions: ateom passes its relay connection and marks itself
+	// relay-capable so the resource carries ate.otlp.relay.
+	ExporterConn *grpc.ClientConn
+	RelayCapable bool
 }
 
 // InitLogging registers a global LoggerProvider for the records components emit
@@ -111,25 +117,43 @@ func InitLogging(ctx context.Context, opts LoggingOptions) (*sdklog.LoggerProvid
 		return nil, nil
 	}
 
-	res, err := newResource(ctx, opts.ServiceName)
+	lp, err := newLoggerProvider(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	global.SetLoggerProvider(lp)
+	slog.InfoContext(ctx, "Logging initialized", slog.String("exporter", string(opts.Exporter)))
+	return lp, nil
+}
+
+// newLoggerProvider is InitLogging without the global registration. Tests add a
+// processor to read the resource off an emitted record; the provider does not
+// expose it otherwise.
+func newLoggerProvider(ctx context.Context, opts LoggingOptions, extra ...sdklog.Processor) (*sdklog.LoggerProvider, error) {
+	res, err := newResource(ctx, opts.ServiceName, relayAttrs(opts.RelayCapable, opts.ExporterConn)...)
 	if err != nil {
 		return nil, fmt.Errorf("create logger resource: %w", err)
 	}
 
-	exporter, err := otlploggrpc.New(ctx,
-		// Matches the trace and metric exporters: GKE managed telemetry does not
-		// support validating the TLS certs of the collector.
-		otlploggrpc.WithInsecure(),
-	)
+	// Matches the trace and metric exporters: GKE managed telemetry does not
+	// support validating the TLS certs of the collector.
+	expOpts := []otlploggrpc.Option{otlploggrpc.WithInsecure()}
+	if opts.ExporterConn != nil {
+		// WithGRPCConn takes precedence over endpoint/credential options, so
+		// WithInsecure above is inert on this path.
+		expOpts = append(expOpts, otlploggrpc.WithGRPCConn(opts.ExporterConn))
+	}
+	exporter, err := otlploggrpc.New(ctx, expOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP log exporter: %w", err)
 	}
 
-	lp := sdklog.NewLoggerProvider(
+	popts := []sdklog.LoggerProviderOption{
 		sdklog.WithResource(res),
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
-	)
-	global.SetLoggerProvider(lp)
-	slog.InfoContext(ctx, "Logging initialized", slog.String("exporter", string(opts.Exporter)))
-	return lp, nil
+	}
+	for _, p := range extra {
+		popts = append(popts, sdklog.WithProcessor(p))
+	}
+	return sdklog.NewLoggerProvider(popts...), nil
 }

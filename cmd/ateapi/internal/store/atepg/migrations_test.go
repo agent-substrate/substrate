@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -26,10 +28,58 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/openfga/openfga/assets"
 	"github.com/pressly/goose/v3"
 )
 
+const pinnedOpenFGAMigrationVersion = 6
+
 var transactionControl = regexp.MustCompile(`(?im)^\s*(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK)\s*;`)
+
+// TestOpenFGAMigrationVersionGuard ensures that bumping github.com/openfga/openfga
+// in go.mod cannot silently introduce schema or query drift.
+//
+// Why this is needed:
+//  1. Substrate manages the OpenFGA PostgreSQL tables directly in
+//     migrations/000002_openfga.sql (rather than running OpenFGA's embedded Goose
+//     migrations) so that OpenFGA tables and Substrate resource tables live in
+//     the same PostgreSQL schema and migration ledger.
+//  2. cmd/ateapi/internal/authz/datastore.go adapts upstream postgres.Datastore
+//     SQL queries (pinned to OpenFGA PostgreSQL migration version 6) so reads
+//     and writes can execute on an existing caller pgx.Tx.
+//
+// If a future go.mod upgrade bumps OpenFGA to a version with a migration > 6,
+// this test will fail in CI until the new DDL is ported as a new migration in
+// cmd/ateapi/internal/store/atepg/migrations/ and datastore.go is verified.
+func TestOpenFGAMigrationVersionGuard(t *testing.T) {
+	entries, err := fs.ReadDir(assets.EmbedMigrations, assets.PostgresMigrationDir)
+	if err != nil {
+		t.Fatalf("read embedded OpenFGA migrations: %v", err)
+	}
+	var maxVersion int
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
+			continue
+		}
+		prefix, _, ok := strings.Cut(entry.Name(), "_")
+		if !ok {
+			t.Fatalf("unexpected OpenFGA migration filename %q", entry.Name())
+		}
+		v, err := strconv.Atoi(prefix)
+		if err != nil {
+			t.Fatalf("parse OpenFGA migration version from %q: %v", entry.Name(), err)
+		}
+		if v > maxVersion {
+			maxVersion = v
+		}
+	}
+	if maxVersion != pinnedOpenFGAMigrationVersion {
+		t.Fatalf(
+			"OpenFGA embedded PostgreSQL migrations are at version %d, but 000002_openfga.sql and cmd/ateapi/internal/authz/datastore.go are pinned to version %d; port any new OpenFGA DDL to cmd/ateapi/internal/store/atepg/migrations/ and verify TransactionalDatastore before updating pinnedOpenFGAMigrationVersion",
+			maxVersion, pinnedOpenFGAMigrationVersion,
+		)
+	}
+}
 
 func TestMigrationPolicy(t *testing.T) {
 	err := fs.WalkDir(migrationFiles, "migrations", func(path string, entry fs.DirEntry, err error) error {
@@ -189,7 +239,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 		}
 		p.Close()
 		p.pool.Close()
-		if _, err := pool.Exec(ctx, `INSERT INTO "migration-ahead".schema_migrations (version_id, is_applied) VALUES (2, true)`); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO "migration-ahead".schema_migrations (version_id, is_applied) VALUES ((SELECT max(version_id) + 1 FROM "migration-ahead".schema_migrations), true)`); err != nil {
 			t.Fatalf("setting ahead migration state: %v", err)
 		}
 
