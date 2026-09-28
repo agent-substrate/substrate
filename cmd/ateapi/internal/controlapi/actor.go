@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -703,26 +702,17 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, status.Errorf(codes.InvalidArgument, "Failed to verify CSR signature")
 	}
 
-	var template *x509.Certificate
-	switch req.GetPurpose() {
-	case ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL:
-		template = &x509.Certificate{
-			URIs: []*url.URL{resources.ActorSPIFFEID(resources.ActorRef{
-				Atespace: dbActor.GetMetadata().GetAtespace(),
-				Name:     dbActor.GetMetadata().GetName(),
-			})},
-			NotBefore:             time.Now().Add(-5 * time.Minute),
-			NotAfter:              time.Now().Add(time.Hour),
-			KeyUsage:              x509.KeyUsageDigitalSignature,
-			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-			BasicConstraintsValid: true,
-			IsCA:                  false,
-			Issuer: pkix.Name{
-				CommonName: "api.ate-system.svc.cluster.local",
-			},
-		}
-	default:
-		return nil, status.Errorf(codes.InvalidArgument, "certificate purpose must be specified")
+	template := &x509.Certificate{
+		URIs: []*url.URL{resources.ActorSPIFFEID(resources.ActorRef{
+			Atespace: dbActor.GetMetadata().GetAtespace(),
+			Name:     dbActor.GetMetadata().GetName(),
+		})},
+		NotBefore:             time.Now().Add(-5 * time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
 	}
 
 	err = substratex509.AddActorIdentityToCertificate(
@@ -730,7 +720,6 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 			Atespace:  dbActor.GetMetadata().GetAtespace(),
 			ActorName: dbActor.GetMetadata().GetName(),
 			ActorUid:  dbActor.GetMetadata().GetUid(),
-			Purpose:   substratex509.ActorIdentityPurposeAtunnel,
 		},
 		template,
 	)

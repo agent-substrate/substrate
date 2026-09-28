@@ -246,3 +246,12 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/benchmarking`: Synthetic workloads used by the load tests, including `glutton`, which consumes RAM, disk, and file descriptors on demand.
 * `tools/setup-gcp`: A provisioning utility to set up the necessary GCP infrastructure resources (GKE, GCS, IAM).
 * `demos/`: Sample applications demonstrating Agent Substrate capabilities.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=agent-substrate%2Fsubstrate&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=agent-substrate/substrate&type=date&theme=dark&legend=top-left">
+    <img alt="Star history chart for agent-substrate/substrate" src="https://api.star-history.com/svg?repos=agent-substrate/substrate&type=date&legend=top-left">
+  </picture>
+</a>

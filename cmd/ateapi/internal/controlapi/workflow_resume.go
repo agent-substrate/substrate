@@ -706,7 +706,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		switch {
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
+			req.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
 		default:
 			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
 		}
@@ -730,13 +730,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			tele.SnapshotKind = ateattr.SnapshotKindLatest
 		}
 		var scope ateletpb.SnapshotScope
-		var goldenSnapshotURI string
+		var baseConfig *ateletpb.ExternalRestoreConfiguration
 		switch {
 		case src.TemplateReplaced:
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			goldenSnapshotURI = src.GoldenSnapshotURI.String()
+			baseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
 		default:
 			scope = actorSnapshotContentScopeToAtelet(src.Scope)
 		}
@@ -750,18 +750,18 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
-				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+				ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
 			Scope: scope,
 			// Empty unless this is a Golden data resume.
-			GoldenSnapshotUri: goldenSnapshotURI,
-			SandboxAssets:     sandboxAssets,
-			ActorUid:          actor.GetMetadata().Uid,
-			EgressGateway:     egressGateway,
-			CpuMilli:          cpuMilli,
-			MemoryBytes:       memBytes,
+			BaseConfig:    baseConfig,
+			SandboxAssets: sandboxAssets,
+			ActorUid:      actor.GetMetadata().Uid,
+			EgressGateway: egressGateway,
+			CpuMilli:      cpuMilli,
+			MemoryBytes:   memBytes,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
