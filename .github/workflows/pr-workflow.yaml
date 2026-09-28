@@ -38,6 +38,14 @@ jobs:
     # A bound well clear of the observed runtime. Without one the platform
     # default applies, and a wedged step burns a free-tier slot for six hours.
     timeout-minutes: 45
+    env:
+      # go test ./... runs the Postgres-backed packages as separate test
+      # binaries against one Docker daemon, all registered with one Ryuk
+      # reaper. In the flaky runs the reaper has observed zero live clients
+      # while packages were still running and pruned the containers out from
+      # under them (its own prune log is quoted in the tracking issue). The
+      # runner is ephemeral, so container cleanup can wait for VM teardown.
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
