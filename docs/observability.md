@@ -324,6 +324,8 @@ These can be used to answer whether the controller is keeping up, e.g. rising `w
 
 Note that controller-runtime enables native histograms on `controller_runtime_reconcile_time_seconds`, `workqueue_queue_duration_seconds`, and `workqueue_work_duration_seconds`, so those three arrive as OTLP exponential histograms rather than fixed-bucket ones.
 
+A queue that has never processed an item bridges as an exponential histogram with no positive buckets, which Google Cloud Monitoring rejects on ingest. atecontroller drops those empty data points before the OTLP push (`cmd/atecontroller/metrics.go`), so an idle queue reports nothing instead of an error every tick.
+
 ### Local Metrics with Prometheus (Kind Cluster)
 
 For local development inside a `kind` cluster, Agent Substrate automatically provisions a Prometheus server in the `otel-system` namespace.

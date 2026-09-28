@@ -125,7 +125,7 @@ func main() {
 	// own Prometheus registry, which the manager serves on a port nothing scrapes.
 	// Bridging it as a Producer puts them on the OTLP path instead.
 	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
-		prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+		dropEmptyExponentialHistograms(prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry))))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
