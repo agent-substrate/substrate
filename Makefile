@@ -75,22 +75,14 @@ SKIP_IMAGES ?=
 IMAGES      := $(filter-out $(SKIP_IMAGES),$(ALL_IMAGES))
 DEMOS       := $(filter-out $(SKIP_IMAGES),$(DEMO_IMAGES))
 
-# Images built from a Dockerfile rather than with ko. envoy-dataplane is Envoy
-# plus a Rust dynamic module (cmd/dataplane/envoy), neither of which ko can
-# build. Each is pushed as $(KO_DOCKER_REPO)/<name>:$(VERSION): the naming
-# KO_NAMING gives the ko images, and the tag build-release-images gives them,
-# so `ate-setup deploy --image-repo --image-tag` finds it beside them. A build
-# from source never needs these targets, since ate-setup builds the image
-# itself.
+# Images ko cannot build: envoy-dataplane is Envoy plus a Rust dynamic module.
+# It is pushed as $(KO_DOCKER_REPO)/envoy-dataplane:$(VERSION), beside the ko
+# images, where `ate-setup deploy --image-repo --image-tag` looks for it. A
+# build from source doesn't need this; ate-setup builds the image itself.
 #
-# The platforms are the ones ate-setup builds this image for:
-# KO_DEFAULTPLATFORMS, or linux/amd64 when unset. That is narrower than the
-# .ko.yaml default of linux/amd64,linux/arm64, because a foreign-architecture
-# image compiles Rust under emulation, which needs QEMU registered with binfmt
-# on the build host and a builder that supports multi-platform builds. Set
-# DOCKERFILE_PLATFORMS=linux/amd64,linux/arm64 for a release that covers both.
-# Extra buildx flags, such as --annotation or --builder, go in
-# DOCKER_BUILD_FLAGS.
+# Platforms default to KO_DEFAULTPLATFORMS, else linux/amd64, as in ate-setup.
+# Another architecture compiles Rust under QEMU, which the build host must have
+# registered with binfmt. Extra buildx flags go in DOCKER_BUILD_FLAGS.
 DOCKERFILE_PLATFORMS ?= $(or $(KO_DEFAULTPLATFORMS),linux/amd64)
 DOCKER_BUILD_FLAGS   ?=
 

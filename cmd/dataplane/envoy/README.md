@@ -20,15 +20,13 @@ cmd/dataplane/envoy/
 
 During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the egress manifests (`manifests/ate-install/atenet-egress*.yaml`).
 
-An install of pre-built images (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing, and pins `REPO/envoy-dataplane:TAG` instead, so a release has to publish the image alongside the `ko` images. From the repository root:
+A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so a release publishes it with the other images:
 
 ```bash
 make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG
 ```
 
-That builds every image of the release under `TAG`, this one with `make build-envoy-dataplane`, which also works on its own.
-
-This builds for `KO_DEFAULTPLATFORMS`, or `linux/amd64` when that is unset, the same platforms `ate-setup` builds the image for. The `ko` images default to `linux/amd64,linux/arm64` (`.ko.yaml`); to match them, set `DOCKERFILE_PLATFORMS=linux/amd64,linux/arm64`. On an amd64 host the arm64 build compiles Rust under emulation, which needs QEMU registered with binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install arm64`) and a buildx builder that supports multi-platform builds. Extra `docker buildx` flags go in `DOCKER_BUILD_FLAGS`.
+`make build-envoy-dataplane` builds just this image. It targets `KO_DEFAULTPLATFORMS`, or `linux/amd64` when unset; set `DOCKERFILE_PLATFORMS` to override. Building another architecture compiles Rust under QEMU, which must be registered with binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install arm64`).
 
 To build the image locally without pushing it:
 
