@@ -479,6 +479,89 @@ func TestEgressRejectsInactiveConnection(t *testing.T) {
 	}
 }
 
+// A connection the egress policy rejects is reset rather than cleanly closed,
+// so the actor can tell a policy refusal (ECONNRESET) apart from the
+// destination hanging up (clean EOF).
+func TestEgressPolicyRejectionResets(t *testing.T) {
+	egress, err := NewEgress(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = egress.Deactivate(context.Background(), testActorUID) })
+	err = egress.Activate(testActorUID, egressDialerFunc(func(context.Context, string) (net.Conn, error) {
+		return nil, &ConnectRejectedError{StatusCode: http.StatusForbidden, Status: "403 Forbidden", Message: "egress policy denies the destination"}
+	}), fakeActorCertificateSource{}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve, err := egress.Bind(testActorUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go serve(context.Background(), listener)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		// The reset can overtake connect() itself; observing it at dial time
+		// satisfies the contract exactly as well as at first read.
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("dial error = %v, want connection reset by peer", err)
+		}
+		return
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("read error = %v, want connection reset by peer", err)
+	}
+}
+
+// Failures that are not refusals — the PEP unreachable, the TLS handshake
+// failing — keep the ordinary clean close: the actor sees a quiet EOF, not a
+// reset, and the two halves of the egress contract stay distinguishable.
+func TestEgressDialFailureClosesCleanly(t *testing.T) {
+	egress, err := NewEgress(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = egress.Deactivate(context.Background(), testActorUID) })
+	err = egress.Activate(testActorUID, egressDialerFunc(func(context.Context, string) (net.Conn, error) {
+		return nil, errors.New("test: PEP unreachable")
+	}), fakeActorCertificateSource{}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve, err := egress.Bind(testActorUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go serve(context.Background(), listener)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("read error = %v, want clean EOF", err)
+	}
+}
+
 type egressDialerFunc func(context.Context, string) (net.Conn, error)
 
 func (f egressDialerFunc) DialContext(ctx context.Context, destination string) (net.Conn, error) {

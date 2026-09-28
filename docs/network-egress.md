@@ -1,6 +1,6 @@
 # Network Egress Contract
 
-Last updated: 09/18/2026
+Last updated: 09/29/2026
 
 ## Overview
 
@@ -65,3 +65,9 @@ CURRENT CONNECT EGRESS PATH (one tunnel per actor TCP connection except destinat
            |<================ raw bidirectional bytes inside CONNECT ===========>|<========================>|
            |             (PEP may pass through, inspect, redirect, or MITM according to policy)             |
 ```
+
+## Rejected Connections
+
+When the PEP answers a CONNECT request with a non-2xx status — the egress policy does not authorize the destination, a client-authorization check in this contract fails, or the gateway could not establish the tunnel — `atunnel` MUST reset the actor-side TCP connection (RST) rather than close it cleanly. The actor then observes `ECONNRESET` on its socket instead of a clean EOF, so "the connection was refused" is distinguishable from "the destination hung up". A non-2xx CONNECT response is always a refusal: no tunnel was established and no bytes flowed, so a clean close would read exactly like a completed conversation.
+
+Failures before a CONNECT response is received (PEP unreachable, TLS handshake failure) remain ordinary closes. They are substrate infrastructure faults rather than refusals, and carry no signal an actor could act on beyond retrying.

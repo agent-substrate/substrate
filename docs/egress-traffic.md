@@ -13,7 +13,7 @@ DNS-over-TCP, UDP and other traffic is filtered by nftables and never reaches th
 | any | WebSocket | Blocked | n/a | `403 Forbidden` |
 | any | Standard HTTP(S) CONNECT (forward-proxy tunnel) | Blocked | n/a | `403 Forbidden` |
 | 53 | DNS | Allowed via netfilter rules | nftables -> node-configured DNS | n/a |
-| any | Any other TCP | Blocked | n/a | The connection is accepted and then closed with no bytes returned. There is no status code. atunnel logs the failure. |
+| any | Any other TCP | Blocked | n/a | The connection is accepted and then reset: no bytes and no status code come back, and the socket reads `ECONNRESET` rather than a clean EOF. atunnel logs the rejection. |
 
 ## UDP
 
