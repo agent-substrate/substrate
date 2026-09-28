@@ -22,7 +22,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 	"time"
@@ -841,25 +840,5 @@ func TestMintActorCertificate(t *testing.T) {
 	}
 	if diff := cmp.Diff(wantIdentity, identity); diff != "" {
 		t.Errorf("ActorIdentity mismatch (-want +got):\n%s", diff)
-	}
-}
-
-func TestActorJWTLifetime(t *testing.T) {
-	tests := []struct {
-		expirationSeconds int64
-		want              time.Duration
-	}{
-		{expirationSeconds: 0, want: 15 * time.Minute},
-		{expirationSeconds: 1, want: 5 * time.Minute},
-		{expirationSeconds: 300, want: 5 * time.Minute},
-		{expirationSeconds: 1800, want: 30 * time.Minute},
-		{expirationSeconds: 3600, want: time.Hour},
-		{expirationSeconds: 3601, want: time.Hour},
-		{expirationSeconds: math.MaxInt64, want: time.Hour},
-	}
-	for _, tt := range tests {
-		if got := actorJWTLifetime(tt.expirationSeconds); got != tt.want {
-			t.Errorf("actorJWTLifetime(%d) = %v, want %v", tt.expirationSeconds, got, tt.want)
-		}
 	}
 }

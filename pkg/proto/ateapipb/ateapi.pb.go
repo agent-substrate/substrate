@@ -5402,12 +5402,11 @@ type MintActorJWTRequest struct {
 	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
 	Audience []string `protobuf:"bytes,1,rep,name=audience,proto3" json:"audience,omitempty"`
-	// Requested lifetime of the JWT, in seconds. Zero means 900 (15 minutes).
-	// Other values are clamped to [300, 3600]; expires_at in the response
-	// reports the expiration actually used.
+	// Lifetime of the JWT, in seconds.
 	//
-	// +k8s:optional
-	// +k8s:minimum=1
+	// +k8s:required
+	// +k8s:minimum=300
+	// +k8s:maximum=3600
 	ExpirationSeconds int64 `protobuf:"varint,8,opt,name=expiration_seconds,json=expirationSeconds,proto3" json:"expiration_seconds,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -5476,8 +5475,6 @@ type MintActorJWTResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The signed actor JWT. Relying parties verify it with OpenID Connect
 	// Discovery against its issuer.
-	//
-	// The header carries `alg`, `kid`, and `typ: JWT`.
 	//
 	// Claims:
 	//

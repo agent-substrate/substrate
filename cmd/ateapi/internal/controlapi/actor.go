@@ -535,7 +535,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	// JWT timestamps have one-second resolution; truncating keeps expires_at
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
-	expiresAt := now.Add(actorJWTLifetime(req.GetExpirationSeconds()))
+	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
 		Issuer:     s.actorJWTIssuer,
 		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
@@ -561,23 +561,6 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		ActorJwt:  actorJWT,
 		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil
-}
-
-const (
-	defaultActorJWTLifetime = 15 * time.Minute
-	minActorJWTLifetime     = 5 * time.Minute
-	maxActorJWTLifetime     = time.Hour
-)
-
-// actorJWTLifetime maps a requested expiration_seconds to the lifetime to
-// sign with: zero means the default, anything else is clamped to the bounds.
-func actorJWTLifetime(expirationSeconds int64) time.Duration {
-	if expirationSeconds == 0 {
-		return defaultActorJWTLifetime
-	}
-	// Clamp in seconds so a huge request cannot overflow time.Duration.
-	seconds := min(max(expirationSeconds, int64(minActorJWTLifetime/time.Second)), int64(maxActorJWTLifetime/time.Second))
-	return time.Duration(seconds) * time.Second
 }
 
 func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {

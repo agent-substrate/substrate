@@ -999,31 +999,26 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 }
 
 func TestValidateMintActorJWTRequest(t *testing.T) {
-	valid := func() *ateapipb.MintActorJWTRequest {
+	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
 		return &ateapipb.MintActorJWTRequest{
-			Actor:    &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid: "0f8fad5b-d9cb-469f-a165-70867728950e",
-			Audience: []string{"https://example.com"},
+			Actor:             &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			ActorUid:          "0f8fad5b-d9cb-469f-a165-70867728950e",
+			Audience:          []string{"https://example.com"},
+			ExpirationSeconds: seconds,
 		}
 	}
-	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
-		req := valid()
-		req.ExpirationSeconds = seconds
-		return req
-	}
+	path := field.NewPath("expiration_seconds")
 	tests := []struct {
 		name string
 		req  *ateapipb.MintActorJWTRequest
 		want field.ErrorList
 	}{
-		{name: "default expiration", req: valid()},
-		{name: "expiration below the clamp", req: withExpiration(1)},
-		{name: "expiration above the clamp", req: withExpiration(86400)},
-		{
-			name: "negative expiration",
-			req:  withExpiration(-1),
-			want: field.ErrorList{field.Invalid(field.NewPath("expiration_seconds"), int64(-1), "").WithOrigin("minimum")},
-		},
+		{name: "minimum expiration", req: withExpiration(300)},
+		{name: "maximum expiration", req: withExpiration(3600)},
+		{name: "missing expiration", req: withExpiration(0), want: field.ErrorList{field.Required(path, "")}},
+		{name: "negative expiration", req: withExpiration(-1), want: field.ErrorList{field.Invalid(path, int64(-1), "").WithOrigin("minimum")}},
+		{name: "expiration below minimum", req: withExpiration(299), want: field.ErrorList{field.Invalid(path, int64(299), "").WithOrigin("minimum")}},
+		{name: "expiration above maximum", req: withExpiration(3601), want: field.ErrorList{field.Invalid(path, int64(3601), "").WithOrigin("maximum")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

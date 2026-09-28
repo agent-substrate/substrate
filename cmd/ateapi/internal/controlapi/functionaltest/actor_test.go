@@ -5033,8 +5033,9 @@ func TestMintActorJWT_Success(t *testing.T) {
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		ActorUid: createResp.GetMetadata().GetUid(),
-		Audience: []string{"foo"},
+		ActorUid:          createResp.GetMetadata().GetUid(),
+		Audience:          []string{"foo"},
+		ExpirationSeconds: 1800,
 	})
 	if err != nil {
 		t.Fatalf("Error while calling MintActorJWT: %v", err)
@@ -5059,39 +5060,7 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if want := "atespaces:" + testAtespace + ":actors:id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
 	}
-	assertActorJWTLifetime(t, mintResp, claims, 15*time.Minute)
-}
-
-func TestMintActorJWT_ClampsRequestedExpiration(t *testing.T) {
-	ns := namespaceForTest("ns-mintactorjwt-expiration")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	createResp, err := tc.client.CreateActor(t.Context(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-	}})
-	if err != nil {
-		t.Fatalf("CreateActor failed: %v", err)
-	}
-	mintResp, err := tc.client.MintActorJWT(t.Context(), &ateapipb.MintActorJWTRequest{
-		Actor:             &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
-		ActorUid:          createResp.GetMetadata().GetUid(),
-		Audience:          []string{"foo"},
-		ExpirationSeconds: 7200,
-	})
-	if err != nil {
-		t.Fatalf("MintActorJWT failed: %v", err)
-	}
-
-	segments := strings.Split(mintResp.GetActorJwt(), ".")
-	if len(segments) != 3 {
-		t.Fatalf("actor JWT has %d segments, want 3", len(segments))
-	}
-	var claims actoridjwt.WireClaims
-	decodeJWTSegment(t, segments[1], &claims)
-	assertActorJWTLifetime(t, mintResp, claims, time.Hour)
+	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
 }
 
 // assertActorJWTLifetime checks that expires_at matches the exp claim and that

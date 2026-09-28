@@ -1666,12 +1666,11 @@ message MintActorJWTRequest {
   // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
   repeated string audience = 1;
 
-  // Requested lifetime of the JWT, in seconds. Zero means 900 (15 minutes).
-  // Other values are clamped to [300, 3600]; expires_at in the response
-  // reports the expiration actually used.
+  // Lifetime of the JWT, in seconds.
   //
-  // +k8s:optional
-  // +k8s:minimum=1
+  // +k8s:required
+  // +k8s:minimum=300
+  // +k8s:maximum=3600
   int64 expiration_seconds = 8;
 }
 
@@ -1679,8 +1678,6 @@ message MintActorJWTRequest {
 message MintActorJWTResponse {
   // The signed actor JWT. Relying parties verify it with OpenID Connect
   // Discovery against its issuer.
-  //
-  // The header carries `alg`, `kid`, and `typ: JWT`.
   //
   // Claims:
   //
