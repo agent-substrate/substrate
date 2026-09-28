@@ -371,3 +371,36 @@ func pgErrConstraint(err error) string {
 	}
 	return ""
 }
+
+const (
+	// Paces the maintenance loop (outbox partitions and expired leases).
+	maintenanceInterval = time.Minute
+
+	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
+	// which would permanently starve partition creation. Stalls abort and retry.
+	maintenancePassTimeout = 5 * time.Minute
+)
+
+// Maintains worker_outbox partitions and reaps expired leases on a fixed
+// timer. The two are independent: a failure in one still lets the other run.
+func (p *Persistence) maintenance(ctx context.Context) {
+	ticker := time.NewTicker(maintenanceInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		passCtx, cancel := context.WithTimeout(ctx, maintenancePassTimeout)
+		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
+		}
+		if deleted, err := p.cleanupExpiredLeases(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "expired lease cleanup failed", slog.Int64("deleted", deleted), slog.Any("err", err))
+		} else if deleted > 0 {
+			slog.InfoContext(ctx, "removed expired PostgreSQL leases", slog.Int64("deleted", deleted))
+		}
+		cancel()
+	}
+}

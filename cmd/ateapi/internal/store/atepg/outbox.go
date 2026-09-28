@@ -119,15 +119,8 @@ const (
 	// Minimum time retention keeps outbox rows.
 	outboxRetentionAge = 15 * time.Minute
 
-	// Paces partition maintenance.
-	outboxMaintenanceInterval = time.Minute
-
 	// The outbox partition range width.
 	outboxPartitionInterval = 15 * time.Minute
-
-	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
-	// which would permanently starve partition creation. Stalls abort and retry.
-	outboxMaintenancePassTimeout = 5 * time.Minute
 
 	// How many intervals ahead partitions are pre-created: creation must stall past
 	// lead-1 intervals before any write detours into the DEFAULT partition backstop.
@@ -148,30 +141,6 @@ func (p *Persistence) outboxNow(ctx context.Context) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("reading database clock: %w", err)
 	}
 	return now.UTC(), nil
-}
-
-// Maintains worker_outbox partitions and reaps expired leases on a fixed
-// timer. The two are independent: a failure in one still lets the other run.
-func (p *Persistence) maintenance(ctx context.Context) {
-	ticker := time.NewTicker(outboxMaintenanceInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		passCtx, cancel := context.WithTimeout(ctx, outboxMaintenancePassTimeout)
-		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
-			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
-		}
-		if deleted, err := p.cleanupExpiredLeases(passCtx); err != nil && ctx.Err() == nil {
-			slog.WarnContext(ctx, "expired lease cleanup failed", slog.Int64("deleted", deleted), slog.Any("err", err))
-		} else if deleted > 0 {
-			slog.InfoContext(ctx, "removed expired PostgreSQL leases", slog.Int64("deleted", deleted))
-		}
-		cancel()
-	}
 }
 
 // Database-scoped advisory lock used to elect a single replica to run the retention transaction (drops + trim).

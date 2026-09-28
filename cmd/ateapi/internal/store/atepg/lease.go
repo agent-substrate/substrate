@@ -89,8 +89,7 @@ func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Leas
 // cleanupExpiredLeases deletes expired lease rows and returns how many it
 // removed. Acquisition reclaims an expired row for its own key by itself, so
 // this only keeps rows for keys nobody asks for again from accumulating. It
-// runs from the maintenance loop rather than on the acquisition path, where
-// it was one more write and round trip on every workflow.
+// runs from the maintenance loop.
 //
 // Rows are taken in batches with SKIP LOCKED, so a pass never waits on a
 // concurrent acquire reclaiming a row or on another replica's pass, and two
