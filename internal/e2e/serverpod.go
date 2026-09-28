@@ -18,13 +18,17 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 )
 
 // serverPodTemplate is the one manifest every ServerPod is rendered from.
@@ -71,6 +75,8 @@ type ServerPod struct {
 	// HealthPath is the HTTP readiness path, defaulting to /healthz. Ignored
 	// when GRPCProbe is set.
 	HealthPath string
+	// HealthScheme selects HTTP or HTTPS for the readiness probe. Empty means HTTP.
+	HealthScheme corev1.URIScheme
 	// Volumes and VolumeMounts carry whatever credentials the server needs.
 	// Typed, rather than more YAML in the template, so the Secret names here
 	// sit beside the code that creates them instead of drifting from it.
@@ -179,5 +185,107 @@ func serverReadinessProbe(spec ServerPod, targetPort string) string {
 	if path == "" {
 		path = "/healthz"
 	}
-	return fmt.Sprintf("      httpGet:\n        path: %s\n        port: %s", path, targetPort)
+	scheme := spec.HealthScheme
+	if scheme == "" {
+		scheme = corev1.URISchemeHTTP
+	}
+	return fmt.Sprintf("      httpGet:\n        path: %s\n        port: %s\n        scheme: %s", path, targetPort, scheme)
+}
+
+func serverEndpointReady(endpointSlices []discoveryv1.EndpointSlice, pod *corev1.Pod, port int32) bool {
+	for _, slice := range endpointSlices {
+		hasPort := false
+		for _, p := range slice.Ports {
+			if p.Port != nil && *p.Port == port && p.Protocol != nil && *p.Protocol == corev1.ProtocolTCP {
+				hasPort = true
+			}
+		}
+		if !hasPort {
+			continue
+		}
+		for _, endpoint := range slice.Endpoints {
+			ref := endpoint.TargetRef
+			if ref == nil || ref.Kind != "Pod" || ref.Namespace != pod.Namespace || ref.Name != pod.Name || ref.UID != pod.UID {
+				continue
+			}
+			if endpoint.Conditions.Ready == nil || !*endpoint.Conditions.Ready {
+				continue
+			}
+			if endpoint.Conditions.Terminating != nil && *endpoint.Conditions.Terminating {
+				continue
+			}
+			if slices.Contains(endpoint.Addresses, pod.Status.PodIP) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CreateServerService reserves the origin address before its Pod starts, so
+// callers can issue a certificate for that IP. Namespace must already exist.
+// DeployServerPod subsequently applies the same Service without replacing it.
+func CreateServerService(t *testing.T, ctx context.Context, spec ServerPod) Server {
+	t.Helper()
+	if spec.Namespace == "" {
+		t.Fatal("CreateServerService requires a test namespace")
+	}
+	raw, err := os.ReadFile(renderServerPod(t, spec, spec.Namespace))
+	if err != nil {
+		t.Fatalf("reading origin manifest: %v", err)
+	}
+	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
+		var kind metav1.TypeMeta
+		if err := yaml.Unmarshal([]byte(doc), &kind); err != nil {
+			t.Fatalf("decoding origin kind: %v", err)
+		}
+		if kind.Kind != "Service" {
+			continue
+		}
+		var service corev1.Service
+		if err := yaml.UnmarshalStrict([]byte(doc), &service); err != nil {
+			t.Fatalf("decoding origin Service: %v", err)
+		}
+		created, err := GetClients().K8s.CoreV1().Services(spec.Namespace).Create(ctx, &service, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatalf("creating origin Service: %v", err)
+		}
+		if net.ParseIP(created.Spec.ClusterIP) == nil {
+			t.Fatalf("origin Service has invalid IP %q", created.Spec.ClusterIP)
+		}
+		return Server{Namespace: spec.Namespace, ClusterIP: created.Spec.ClusterIP, Port: spec.Port}
+	}
+	t.Fatal("origin manifest has no Service")
+	return Server{}
+}
+
+// WaitForServerEndpoint waits for publication of the current origin Pod as a
+// ready Service backend. It does not perform the protocol exchange under test.
+func WaitForServerEndpoint(t *testing.T, ctx context.Context, spec ServerPod) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	clients := GetClients()
+	pod, err := clients.K8s.CoreV1().Pods(spec.Namespace).Get(ctx, spec.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("reading origin Pod for endpoint readiness: %v", err)
+	}
+	port := spec.TargetPort
+	if port == 0 {
+		port = spec.Port
+	}
+	for {
+		endpoints, err := clients.K8s.DiscoveryV1().EndpointSlices(spec.Namespace).List(ctx, metav1.ListOptions{LabelSelector: discoveryv1.LabelServiceName + "=" + spec.Name})
+		if err != nil {
+			t.Fatalf("reading origin EndpointSlices: %v", err)
+		}
+		if serverEndpointReady(endpoints.Items, pod, int32(port)) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("origin %s/%s has no ready endpoint for Pod %s on port %d: %v", spec.Namespace, spec.Name, pod.UID, port, ctx.Err())
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }

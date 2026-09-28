@@ -651,9 +651,20 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, protocol := range []string{"HTTP", "HTTPS"} {
-					policy, err := gateway.Pipe(kyaml.Lookup("binds", "[mode=internal]", "listeners", "[protocol="+protocol+"]", "routes", "0", "policies", "substrateEgress"))
-					if err != nil || policy == nil {
-						t.Fatalf("%s egress policy missing: %v", protocol, err)
+					routes, err := gateway.Pipe(kyaml.Lookup("binds", "[mode=internal]", "listeners", "[protocol="+protocol+"]", "routes"))
+					if err != nil || routes == nil {
+						t.Fatalf("%s routes missing: %v", protocol, err)
+					}
+					var policy *kyaml.RNode
+					for _, route := range routes.YNode().Content {
+						candidate, err := kyaml.NewRNode(route).Pipe(kyaml.Lookup("policies", "substrateEgress"))
+						if err == nil && candidate != nil {
+							policy = candidate
+							break
+						}
+					}
+					if policy == nil {
+						t.Fatalf("%s egress policy missing", protocol)
 					}
 					var got struct {
 						Providers []map[string]any `yaml:"credentialProviders"`
