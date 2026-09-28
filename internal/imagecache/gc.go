@@ -38,7 +38,7 @@ package imagecache
 //
 // Deletion is two-phase: the only steps that contend with the pull path
 // are one os.Remove of a record and one rename of a layer dir to a ".rm-*"
-// name inside the layer's singleflight (see retireLayer); the slow
+// name under the pin lock (see retireLayer); the slow
 // RemoveAll of multi-GB trees happens afterwards, on dirs nothing can
 // reach by diffID. A crash in between leaves a ".rm-*" dir for the
 // startup sweep.
@@ -590,6 +590,10 @@ func (s *Store) sweepOrphanLayers(ctx context.Context, roots RootSet, refcount m
 // Sizing is read-only: even a size-file backfill would break dry-run's
 // mutate-nothing contract.
 func (s *Store) dryRunRetire(hex string, cutoff time.Time) (int64, retireStatus) {
+	// A pinned layer is not reclaimable, so a dry run must not count it.
+	if s.pinned(hex) {
+		return 0, retireVetoed
+	}
 	dir := filepath.Join(s.layersDir(), hex)
 	fi, err := os.Stat(dir)
 	if err != nil {
