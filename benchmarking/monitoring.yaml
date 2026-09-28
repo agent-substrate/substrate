@@ -679,6 +679,15 @@ data:
           "targets": [
             { "expr": "sum(locust_users{user_class=~\"SleepUser|UserMemUser|KernelMemUser|GluttonUser|DurdirUser\"}) by (user_class)", "refId": "A", "legendFormat": "{{user_class}}" }
           ]
+        },
+        {
+          "title": "Actors by State (client view)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+          "targets": [
+            { "expr": "sum(locust_actors) by (user_class, state)", "refId": "A", "legendFormat": "{{user_class}} - {{state}}" }
+          ],
+          "fieldConfig": { "defaults": { "custom": { "stacking": { "mode": "normal" } } } }
         }
       ],
       "schemaVersion": 38,

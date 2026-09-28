@@ -169,6 +169,11 @@ comparing numbers across runs:
   numerator is the peak user count times `--actors-per-user`. No server-side
   gauge counts resident actors: `ate.actor.stats.sampled_actors` drops any
   actor without a live resource measurement, so suspended ones fall out.
+  For `GluttonUser`, the boomer worker's `locust_actors{user_class, state}`
+  gauge counts its live actors by the state it last observed (`running`,
+  `hibernated`, `hibernate_pending`, `crashed`). It is the client's view, so
+  an RPC that failed on the client but committed on the server leaves it off
+  by that actor.
 * **The denominators are read once, after the run.** A cluster that autoscaled
   mid-run is measured at its final size, so the ratio pairs a peak from one
   moment with a capacity from another.
