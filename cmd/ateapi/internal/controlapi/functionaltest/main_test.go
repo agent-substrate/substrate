@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/testenv"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -44,6 +45,9 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// The in-process server logs RPC bodies through ateinterceptors, which
+	// relies on this handler to mask debug_redact fields.
+	serverboot.InitLoggerWithWriter(os.Stderr)
 	var stopEnv func()
 	cfg, stopEnv = testenv.Start()
 

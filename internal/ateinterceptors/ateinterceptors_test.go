@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/protoredact"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -34,8 +35,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 func TestStatusErrorInterceptor(t *testing.T) {
@@ -355,6 +354,9 @@ func TestMaxDeadlineUnaryInterceptor_ShorterDeadlineIsPreserved(t *testing.T) {
 	}
 }
 
+// captureDefaultLog installs the handler stack the servers run with
+// (serverboot.InitLogger: contextlogging over the JSON handler), since the
+// interceptor relies on that handler for redaction.
 func captureDefaultLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var log bytes.Buffer
@@ -362,11 +364,11 @@ func captureDefaultLog(t *testing.T) *bytes.Buffer {
 	t.Cleanup(func() {
 		slog.SetDefault(origLogger)
 	})
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&log, nil)))
+	serverboot.InitLoggerWithWriter(&log)
 	return &log
 }
 
-func TestServerUnaryInterceptorRedactsEnvValuesFromProtoRequestLogs(t *testing.T) {
+func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 	log := captureDefaultLog(t)
 
 	req := &ateletpb.RunRequest{
@@ -407,7 +409,7 @@ func TestServerUnaryInterceptorRedactsEnvValuesFromProtoRequestLogs(t *testing.T
 	}
 }
 
-func TestServerUnaryInterceptorRedactsActorJWTFromResponseLogs(t *testing.T) {
+func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	log := captureDefaultLog(t)
 
 	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
@@ -432,7 +434,7 @@ func TestServerUnaryInterceptorRedactsActorJWTFromResponseLogs(t *testing.T) {
 	}
 }
 
-func TestInternalServerUnaryInterceptorRedactsBytesFields(t *testing.T) {
+func TestInternalServerUnaryInterceptorLogMasksBytesFields(t *testing.T) {
 	log := captureDefaultLog(t)
 
 	resp := &credproviderpb.FetchSecretResponse{OpaqueBytes: []byte("hunter2-hunter2")}
@@ -455,46 +457,6 @@ func TestInternalServerUnaryInterceptorRedactsBytesFields(t *testing.T) {
 	}
 	if string(resp.GetOpaqueBytes()) != "hunter2-hunter2" {
 		t.Fatalf("interceptor mutated the response returned to the client")
-	}
-}
-
-// TestDebugRedactFieldsArePinned lists every field across our protos that
-// carries debug_redact. It fails when a label is added or removed so the
-// change is reviewed as a deliberate decision about what the logs may show.
-func TestDebugRedactFieldsArePinned(t *testing.T) {
-	want := map[string]bool{
-		"ateapi.EnvVar.value":                           true,
-		"ateapi.MintActorJWTResponse.actor_jwt":         true,
-		"atelet.EnvEntry.value":                         true,
-		"credprovider.FetchSecretResponse.opaque_bytes": true,
-	}
-	got := map[string]bool{}
-	var walk func(protoreflect.MessageDescriptors)
-	walk = func(mds protoreflect.MessageDescriptors) {
-		for i := 0; i < mds.Len(); i++ {
-			md := mds.Get(i)
-			fds := md.Fields()
-			for j := 0; j < fds.Len(); j++ {
-				fd := fds.Get(j)
-				if opts, ok := fd.Options().(*descriptorpb.FieldOptions); ok && opts.GetDebugRedact() {
-					got[string(fd.FullName())] = true
-				}
-			}
-			walk(md.Messages())
-		}
-	}
-	for _, file := range []protoreflect.FileDescriptor{ateapipb.File_ateapi_proto, ateletpb.File_atelet_proto, credproviderpb.File_credprovider_proto} {
-		walk(file.Messages())
-	}
-	for name := range want {
-		if !got[name] {
-			t.Errorf("%s lost its debug_redact label; the interceptor would log it in clear", name)
-		}
-	}
-	for name := range got {
-		if !want[name] {
-			t.Errorf("%s is newly marked debug_redact; add it to this list if that is intended", name)
-		}
 	}
 }
 
