@@ -15,8 +15,10 @@
 package serverboot
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	otellog "go.opentelemetry.io/otel/log"
@@ -27,6 +29,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // TestResolveLogsExporter pins the logs names on top of the shared rules: otlp
@@ -259,5 +263,33 @@ func TestInitLoggingConsoleAlone(t *testing.T) {
 	}
 	if lp != nil {
 		t.Errorf("InitLogging() with console alone = %v, want nil", lp)
+	}
+}
+
+// TestInitLoggerInstallsRedactingHandler pins the contract the gRPC
+// interceptors rely on: the default logger every server gets from InitLogger
+// masks debug_redact fields, so bodies can be logged as they are. Not parallel:
+// it swaps the process-wide default logger.
+func TestInitLoggerInstallsRedactingHandler(t *testing.T) {
+	orig := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	var buf bytes.Buffer
+	InitLoggerWithWriter(&buf)
+
+	if h := slog.Default().Handler(); h == nil {
+		t.Fatal("no default handler installed")
+	} else if _, ok := h.(*contextlogging.ContextHandler); !ok {
+		t.Fatalf("default handler is %T, want *contextlogging.ContextHandler", h)
+	}
+
+	const token = "eyJhbGciOiJSUzI1NiJ9.secret-token"
+	slog.Info("Handle RPC", slog.Any("resp", &ateapipb.MintActorJWTResponse{ActorJwt: token}))
+	got := buf.String()
+	if strings.Contains(got, token) {
+		t.Fatalf("default logger wrote a debug_redact field: %s", got)
+	}
+	if !strings.Contains(got, `"actor_jwt":"[REDACTED]"`) {
+		t.Fatalf("default logger did not mask actor_jwt: %s", got)
 	}
 }

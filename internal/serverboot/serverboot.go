@@ -79,11 +79,6 @@ func SetLogLevel(level string) error {
 	return nil
 }
 
-// LogLevel exposes the level behind the serverboot loggers, for binaries
-// that build their own handler but should still honor --log-level. A
-// Leveler (not the LevelVar) so SetLogLevel stays the only mutation path.
-func LogLevel() slog.Leveler { return &logLevel }
-
 // serviceInstanceID is generated once so the tracer and meter resources share it.
 var serviceInstanceID = uuid.NewString()
 
