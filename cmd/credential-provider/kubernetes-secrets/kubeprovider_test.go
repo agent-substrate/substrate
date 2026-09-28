@@ -258,7 +258,7 @@ func TestFetchSecret(t *testing.T) {
 // neither keeps admitting every Secret in the namespace, which is what every
 // policy written before those fields existed already means.
 func TestFetchSecretSecretNarrowing(t *testing.T) {
-	const actorURI = "spiffe://substrate-actor.local/atespace/team-a/actor/my-actor"
+	const actorURI = "spiffe://substrate-actor.local/actor/team-a/my-actor"
 	model := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "model-key", Namespace: "ns1",
@@ -381,7 +381,7 @@ func TestFetchSecretNamedGrantDeniesBeforeRead(t *testing.T) {
 	srv := NewServer(client, authz)
 	if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/actor-id-ca-pool/token",
-		ActorSpiffeId: "spiffe://substrate-actor.local/atespace/team-a/actor/my-actor",
+		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
 	}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
 	}
@@ -533,7 +533,7 @@ func TestFetchSecretLabelGrantHidesExistence(t *testing.T) {
 	ask := func(name string) (codes.Code, string) {
 		_, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
 			Uri:           "ate-secret://k8s.io/default/ns1/" + name + "/token",
-			ActorSpiffeId: "spiffe://substrate-actor.local/atespace/team-a/actor/my-actor",
+			ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
 		})
 		return status.Code(err), status.Convert(err).Message()
 	}
@@ -564,7 +564,7 @@ func TestFetchSecretUnnarrowedGrantStillReportsNotFound(t *testing.T) {
 	srv := NewServer(fake.NewSimpleClientset(), authz)
 	if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/no-such-secret/token",
-		ActorSpiffeId: "spiffe://substrate-actor.local/atespace/team-a/actor/my-actor",
+		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("code = %v, want NotFound", status.Code(err))
 	}
