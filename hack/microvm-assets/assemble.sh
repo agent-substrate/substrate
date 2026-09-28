@@ -33,7 +33,20 @@
 # separately per arch.
 #
 # Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.1.0), CH_VER (v53.0),
-#      OUT (default ./bin/microvm-assets/$ARCH, under the gitignored bin/).
+#      OUT (default ./bin/microvm-assets/$ARCH, under the gitignored bin/),
+#      SLIM_ROOTFS (true|false, default false; see below),
+#      CONTAINER_CLI (the builder SLIM_ROOTFS=true runs, default docker).
+#
+# SLIM_ROOTFS=true builds rootfs.img instead of taking kata's: build-rootfs.sh puts
+# only the packages the guest runs on debian:trixie-slim, adds kata-agent recompiled
+# at KATA_VER without the policy engine and initdata support (which ateom never uses),
+# and packs the result. It is an unprivileged container build on this host, so the
+# host must be the TARGET arch, and the run takes minutes rather than seconds, which is
+# why it is off by default. The built rootfs.img is then the one asset without a
+# committed pin: install-microvm-deps.sh swaps its sha256 in for the kata-image pin at
+# apply time. So kata's image still has to be the pinned one, which also catches a
+# KATA_VER the manifest does not pin before the build starts; its sha256 is saved to
+# $OUT/.upstream-rootfs.sha256 for install-microvm-deps.sh.
 #
 # Always re-downloads and overwrites — there is no incremental mode. It clears
 # $OUT/.asset-versions before the first write and re-stamps it with the versions that
@@ -55,11 +68,24 @@ CH_VER="${CH_VER:-v53.0}"
 # what kata ships.
 VIRTIOFSD_VER="1.14.0"
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
+SLIM_ROOTFS="${SLIM_ROOTFS:-false}"
+CONTAINER_CLI="${CONTAINER_CLI:-docker}"
+BUILD_ROOTFS="${ROOT}/hack/microvm-assets/build-rootfs.sh"
+# Everything a SLIM_ROOTFS=true build reads: the script and its whole build context.
+SLIM_INPUTS=("${BUILD_ROOTFS}" "${ROOT}/hack/microvm-assets/rootfs/"*)
+# Written only by a SLIM_ROOTFS=true run, before rootfs.img is built.
+UPSTREAM_ROOTFS_SHA_FILE=".upstream-rootfs.sha256"
+# Holds the committed per-arch pins a SLIM_ROOTFS=true run checks the download against.
+MANIFEST_TEMPLATE="${ROOT}/manifests/microvm/sandboxconfig-microvm.yaml.tmpl"
 
 case "$ARCH" in
   arm64) CH_ASSET="cloud-hypervisor-static-aarch64" ;;
   amd64) CH_ASSET="cloud-hypervisor-static" ;;
   *) echo "unsupported ARCH=$ARCH" >&2; exit 1 ;;
+esac
+case "$SLIM_ROOTFS" in
+  true|false) ;;
+  *) echo "SLIM_ROOTFS must be true or false, got '${SLIM_ROOTFS}'" >&2; exit 1 ;;
 esac
 
 # Identifies the asset set this script produces. Cleared before the first write into
@@ -69,15 +95,29 @@ esac
 # indistinguishable from a current one. virtiofsd is stamped even though KATA_VER
 # already determines it: its version is what the CH restore handshake turns on, so the
 # dir should say which one it holds.
+# Only a slim set carries the extra slim-rootfs line, so a default dir's stamp does not
+# depend on the slim build. The line holds a hash of everything that build reads rather
+# than just "true", so editing any of it re-assembles a cached slim set instead of
+# reusing the image the old inputs built.
 STAMP_FILE=".asset-versions"
 asset_stamp() {
   printf 'arch=%s\nkata=%s\ncloud-hypervisor=%s\nvirtiofsd=%s\n' \
     "$ARCH" "$KATA_VER" "$CH_VER" "$VIRTIOFSD_VER"
+  if [ "$SLIM_ROOTFS" = "true" ]; then
+    printf 'slim-rootfs=%s\n' "$(cat "${SLIM_INPUTS[@]}" | sha256sum | cut -c1-12)"
+  fi
 }
 
 if [ "${1:-}" = "--print-stamp" ]; then
   asset_stamp
   exit 0
+fi
+
+# Fail before the ~1 GiB download rather than after it.
+if [ "$SLIM_ROOTFS" = "true" ] && ! command -v "${CONTAINER_CLI}" >/dev/null 2>&1; then
+  echo "SLIM_ROOTFS=true needs ${CONTAINER_CLI}: build-rootfs.sh builds rootfs.img in containers" >&2
+  echo "(set CONTAINER_CLI to use another builder)" >&2
+  exit 1
 fi
 
 WORK="$(mktemp -d)"
@@ -89,6 +129,8 @@ mkdir -p "$OUT"
 # inherited describes neither. Clearing it up front means an unstamped dir is the only
 # thing a failed run can leave, whatever the pins were before.
 rm -f "${OUT}/${STAMP_FILE}"
+# Likewise a previous slim run's by-products, which a default run never rewrites.
+rm -f "${OUT}/${UPSTREAM_ROOTFS_SHA_FILE}" "${OUT}/kata-agent.slim" "${OUT}/rootfs-packages.txt"
 cd "$WORK"
 
 echo ">> Downloading kata-static ${KATA_VER} (${ARCH})..."
@@ -97,12 +139,29 @@ curl -fSL -o kata-static.tar.zst \
 mkdir -p kata
 tar --zstd -xf kata-static.tar.zst -C kata
 KROOT="kata/opt/kata"
+KATA_ROOTFS="$(readlink -f "${KROOT}/share/kata-containers/kata-containers.img")"
 
 cp "$(readlink -f "${KROOT}/share/kata-containers/vmlinux.container")" "${OUT}/vmlinux"
-cp "$(readlink -f "${KROOT}/share/kata-containers/kata-containers.img")" "${OUT}/rootfs.img"
 # Statically linked, so it runs as-is outside the kata layout it is packaged for.
 cp "${KROOT}/libexec/virtiofsd" "${OUT}/virtiofsd"
 chmod +x "${OUT}/virtiofsd"
+
+if [ "$SLIM_ROOTFS" = "true" ]; then
+  # kata's image is not shipped, but its pin is the one the built image replaces, so it
+  # must be in the manifest. Recorded for install-microvm-deps.sh, which repeats this
+  # exact check before swapping in the built image's sha256.
+  UPSTREAM_ROOTFS_SHA="$(sha256sum "${KATA_ROOTFS}" | awk '{print $1}')"
+  if [ "$(grep -c "sha256: \"${UPSTREAM_ROOTFS_SHA}\"" "${MANIFEST_TEMPLATE}" || true)" != "1" ]; then
+    echo "kata ${KATA_VER} (${ARCH}) rootfs.img has sha256 ${UPSTREAM_ROOTFS_SHA}, which is not a" >&2
+    echo "kata-image pin in ${MANIFEST_TEMPLATE}. Pin it first (a SLIM_ROOTFS=false run" >&2
+    echo "prints the sha256s to paste); the built image stands in for a pinned one." >&2
+    exit 1
+  fi
+  echo "${UPSTREAM_ROOTFS_SHA}" > "${OUT}/${UPSTREAM_ROOTFS_SHA_FILE}"
+  ARCH="$ARCH" KATA_VER="$KATA_VER" OUT="$OUT" CONTAINER_CLI="$CONTAINER_CLI" "${BUILD_ROOTFS}"
+else
+  cp "${KATA_ROOTFS}" "${OUT}/rootfs.img"
+fi
 
 echo ">> Downloading cloud-hypervisor ${CH_VER} (${CH_ASSET})..."
 curl -fSL -o "${OUT}/cloud-hypervisor" \
@@ -132,6 +191,12 @@ fi
 # these pins.
 asset_stamp > "${OUT}/${STAMP_FILE}"
 echo
-echo ">> sha256 (paste all four into the per-arch block in"
-echo ">> manifests/microvm/sandboxconfig-microvm.yaml.tmpl):"
+if [ "$SLIM_ROOTFS" = "true" ]; then
+  echo ">> sha256 (rootfs.img was built on this host and stands in for the kata-image pin"
+  echo ">> ${UPSTREAM_ROOTFS_SHA}: do NOT paste it; install-microvm-deps.sh swaps it in"
+  echo ">> at apply time):"
+else
+  echo ">> sha256 (paste all four into the per-arch block in"
+  echo ">> manifests/microvm/sandboxconfig-microvm.yaml.tmpl):"
+fi
 sha256sum cloud-hypervisor virtiofsd vmlinux rootfs.img
