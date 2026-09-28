@@ -232,8 +232,8 @@ from the cluster, works for a manual run.
 ## Notes / limitations
 
 - The gateway **authenticates** identity (is this a real, running actor?) and **authorizes**
-  destinations against the Actor's `EgressPolicy`. The same `ext_proc` can also inject upstream
-  credentials on the sdsmint gateway's decrypted leg — see
+  destinations against the Actor's `EgressPolicy`. The same `ext_proc` can also replace a
+  placeholder request header with an upstream credential on HTTPS an `https` rule allows — see
   [docs/egress-credential-injection.md](../../docs/egress-credential-injection.md).
 - Identity comes entirely from the actor certificate: the atespace, actor name, and UID are read
   out of the `ActorIdentity` extension and the UID is matched against the live actor, so a
