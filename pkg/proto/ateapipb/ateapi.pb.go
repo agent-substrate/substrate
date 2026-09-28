@@ -1938,7 +1938,13 @@ type WorkerAssignment struct {
 	//
 	// +k8s:required
 	// +k8s:format=k8s-long-name
-	NodeName      string `protobuf:"bytes,7,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	NodeName string `protobuf:"bytes,7,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	// worker_epoch is the Worker's epoch when the Actor was placed on it. 0 if
+	// the Worker had not reported one.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	WorkerEpoch   int64 `protobuf:"varint,8,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2020,6 +2026,13 @@ func (x *WorkerAssignment) GetNodeName() string {
 		return x.NodeName
 	}
 	return ""
+}
+
+func (x *WorkerAssignment) GetWorkerEpoch() int64 {
+	if x != nil {
+		return x.WorkerEpoch
+	}
+	return 0
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -6661,8 +6674,8 @@ func (x *ListActorsResponse) GetNextPageToken() string {
 // by the control plane and is opaque to clients — never parse it or derive it
 // from anything else; read pod identity from the named fields below.
 //
-// labels is the only mutable field; every other field is either immutable
-// after creation or output-only. UpdateWorker replaces the whole resource, so
+// labels and epoch are the only mutable fields; every other field is
+// either immutable after creation or output-only. UpdateWorker replaces the whole resource, so
 // an immutable field that a request changes — including by omitting it, which
 // would clear it — is rejected with INVALID_ARGUMENT.
 type Worker struct {
@@ -6716,6 +6729,19 @@ type Worker struct {
 	// +k8s:eachKey=+k8s:format=k8s-label-key
 	// +k8s:eachVal=+k8s:format=k8s-label-value
 	Labels map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// epoch counts the runs of the worker pod's ateom container: 1 for its first
+	// run and one more for each restart. 0 means it has not been reported.
+	//
+	// A restarted ateom has lost the sandboxes of the Actors it was hosting, so
+	// once epoch rises the control plane crashes every Actor placed during an
+	// earlier epoch; status.observed_epoch reports when that is done. It may only
+	// increase.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	// +k8s:update=NoUnset
+	// +k8s:customValidation
+	Epoch int64 `protobuf:"varint,12,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	// Output-only server-managed state. Absent from Create/Update request
 	// payloads; whatever a request carries here is ignored. DrainWorker is the
 	// only way a client moves state, and the assignments are the scheduler's.
@@ -6819,6 +6845,13 @@ func (x *Worker) GetLabels() map[string]string {
 	return nil
 }
 
+func (x *Worker) GetEpoch() int64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
 func (x *Worker) GetStatus() *WorkerStatus {
 	if x != nil {
 		return x.Status
@@ -6848,7 +6881,14 @@ type WorkerStatus struct {
 	// resources consumed by the Actors currently assigned to this Worker.
 	//
 	// +k8s:optional
-	Allocated     *WorkerResources `protobuf:"bytes,3,opt,name=allocated,proto3" json:"allocated,omitempty"`
+	Allocated *WorkerResources `protobuf:"bytes,3,opt,name=allocated,proto3" json:"allocated,omitempty"`
+	// observed_epoch is the latest epoch whose earlier Actors the control plane
+	// has crashed and released. While it is below epoch, Actors placed before
+	// the ateom's last restart may still be reported as running.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	ObservedEpoch int64 `protobuf:"varint,4,opt,name=observed_epoch,json=observedEpoch,proto3" json:"observed_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6902,6 +6942,13 @@ func (x *WorkerStatus) GetAllocated() *WorkerResources {
 		return x.Allocated
 	}
 	return nil
+}
+
+func (x *WorkerStatus) GetObservedEpoch() int64 {
+	if x != nil {
+		return x.ObservedEpoch
+	}
+	return 0
 }
 
 // WorkerResources represents a set of resources.
@@ -6998,7 +7045,12 @@ type ActorAssignment struct {
 	// The resources allocated to the Actor when it was assigned.
 	//
 	// +k8s:optional
-	Resources     *Resources `protobuf:"bytes,5,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *Resources `protobuf:"bytes,5,opt,name=resources,proto3" json:"resources,omitempty"`
+	// worker_epoch is the Worker's epoch when the Actor was bound.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	WorkerEpoch   int64 `protobuf:"varint,7,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7066,6 +7118,13 @@ func (x *ActorAssignment) GetResources() *Resources {
 		return x.Resources
 	}
 	return nil
+}
+
+func (x *ActorAssignment) GetWorkerEpoch() int64 {
+	if x != nil {
+		return x.WorkerEpoch
+	}
+	return 0
 }
 
 type SetWorkerCapacityRequest struct {
@@ -7515,7 +7574,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\x8f\x02\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xb2\x02\n" +
 	"\x10WorkerAssignment\x12)\n" +
 	"\x06worker\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -7525,7 +7584,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
 	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\x12\x1b\n" +
-	"\tnode_name\x18\a \x01(\tR\bnodeName\"\x9a\x01\n" +
+	"\tnode_name\x18\a \x01(\tR\bnodeName\x12!\n" +
+	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\"\x9a\x01\n" +
 	"\tTagStatus\x124\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x18.ateapi.ExternalSnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\x12)\n" +
@@ -7761,7 +7821,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"c\n" +
 	"\x12ListActorsResponse\x12%\n" +
 	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xbe\x03\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd4\x03\n" +
 	"\x06Worker\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12)\n" +
 	"\x10worker_namespace\x18\x02 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -7773,24 +7833,27 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tnode_name\x18\x06 \x01(\tR\bnodeName\x12\x0e\n" +
 	"\x02ip\x18\a \x01(\tR\x02ip\x12#\n" +
 	"\rsandbox_class\x18\b \x01(\tR\fsandboxClass\x122\n" +
-	"\x06labels\x18\t \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12,\n" +
+	"\x06labels\x18\t \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12\x14\n" +
+	"\x05epoch\x18\f \x01(\x03R\x05epoch\x12,\n" +
 	"\x06status\x18\v \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa5\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcc\x01\n" +
 	"\fWorkerStatus\x12)\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x13.ateapi.WorkerStateR\x05state\x123\n" +
 	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x125\n" +
-	"\tallocated\x18\x03 \x01(\v2\x17.ateapi.WorkerResourcesR\tallocated\"Z\n" +
+	"\tallocated\x18\x03 \x01(\v2\x17.ateapi.WorkerResourcesR\tallocated\x12%\n" +
+	"\x0eobserved_epoch\x18\x04 \x01(\x03R\robservedEpoch\"Z\n" +
 	"\x0fWorkerResources\x12/\n" +
 	"\tresources\x18\x01 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12\x16\n" +
-	"\x06actors\x18\x02 \x01(\x05R\x06actors\"\xff\x01\n" +
+	"\x06actors\x18\x02 \x01(\x05R\x06actors\"\xa2\x02\n" +
 	"\x0fActorAssignment\x124\n" +
 	"\bmetadata\x18\x06 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12'\n" +
 	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12?\n" +
 	"\x12actor_template_ref\x18\x04 \x01(\v2\x11.ateapi.ObjectRefR\x10actorTemplateRef\x12/\n" +
-	"\tresources\x18\x05 \x01(\v2\x11.ateapi.ResourcesR\tresources\"z\n" +
+	"\tresources\x18\x05 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12!\n" +
+	"\fworker_epoch\x18\a \x01(\x03R\vworkerEpoch\"z\n" +
 	"\x18SetWorkerCapacityRequest\x12)\n" +
 	"\x06worker\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x123\n" +
 	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\"C\n" +

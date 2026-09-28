@@ -127,7 +127,11 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 	// A Worker is registered only once its pod is Ready and has an IP, which
 	// makes ACTIVE the only state it can be born in.
 	outWorker := proto.CloneOf(inWorker)
-	outWorker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	// A new Worker hosts no Actors, so none are left from an earlier epoch.
+	outWorker.Status = &ateapipb.WorkerStatus{
+		State:         ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		ObservedEpoch: inWorker.GetEpoch(),
+	}
 
 	// Capacity is left unset: a Worker holds nothing until its own ateom says
 	// what it has, through WorkerService.SetWorkerCapacity. Nothing is placed
@@ -151,8 +155,9 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 }
 
 // UpdateWorker replaces the stored Worker with the one the request carries.
-// Only labels are the caller's to change; a request that alters an immutable
-// field — including by leaving it unset, which would clear it — is rejected.
+// Only labels and epoch are the caller's to change; a request that alters an
+// immutable field — including by leaving it unset, which would clear it — is
+// rejected.
 // The service layer enforces that with declarative validation against the
 // stored worker inside the update transaction.
 func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorkerRequest) (*ateapipb.Worker, error) {

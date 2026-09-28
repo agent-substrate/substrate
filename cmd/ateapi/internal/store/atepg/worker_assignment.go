@@ -79,18 +79,22 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	// This is the identity a first bind gets; a rebind keeps the recorded one.
 	assignment.Metadata = &ateapipb.ResourceMetadata{Name: actorUID}
 	setCreateMetadata(assignment.Metadata)
-	assignmentBytes, err := proto.Marshal(assignment)
-	if err != nil {
-		return fmt.Errorf("marshaling assignment: %w", err)
-	}
 
-	_, err = p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
 			return nil, err
 		}
 		if worker.Status == nil {
 			worker.Status = &ateapipb.WorkerStatus{}
+		}
+
+		// Read under the row lock, so an epoch raised concurrently is either
+		// seen here or raised after this bind commits.
+		assignment.WorkerEpoch = worker.GetEpoch()
+		assignmentBytes, err := proto.Marshal(assignment)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling assignment: %w", err)
 		}
 
 		// Insert first and let the conflict say whether the Actor was already

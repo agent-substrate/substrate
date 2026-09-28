@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -90,6 +91,18 @@ func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldV
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_Worker_Ip(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validation.IsValidIP(fldPath, *value)
+}
+
+// epoch only moves forward: a lower value would make Actors placed during the
+// current run look older than it, and crash them.
+func ValidateCustom_Worker_Epoch(_ context.Context, op operation.Operation, fldPath *field.Path, value, oldValue *int64) field.ErrorList {
+	if op.Type != operation.Update || value == nil || oldValue == nil {
+		return nil
+	}
+	if *value < *oldValue {
+		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("may not decrease from %d", *oldValue))}
+	}
+	return nil
 }
 
 // This exists only because nested subfield tags are not supported yet.

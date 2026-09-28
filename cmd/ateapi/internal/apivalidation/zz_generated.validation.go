@@ -8086,6 +8086,46 @@ func Validate_Worker(
 		errs = append(errs, fn(fldPath.Child("labels"), obj.Labels, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.Worker.Epoch
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if e := validate.UpdateValue(ctx, op, fldPath, obj, oldObj,
+				func(a int64, b int64) bool { return a == b }, validate.NoUnset).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_Worker_Epoch(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Worker) *int64 {
+				return &oldObj.Epoch
+			})
+		errs = append(errs, fn(fldPath.Child("epoch"), &obj.Epoch, oldVal, oldObj != nil)...)
+	}
+
 	{ // field ateapipb.Worker.Status
 		fn := func(
 			fldPath *field.Path,
@@ -8368,6 +8408,37 @@ func Validate_WorkerAssignment(
 		errs = append(errs, fn(fldPath.Child("node_name"), &obj.NodeName, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.WorkerAssignment.WorkerEpoch
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerAssignment) *int64 {
+				return &oldObj.WorkerEpoch
+			})
+		errs = append(errs, fn(fldPath.Child("worker_epoch"), &obj.WorkerEpoch, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -8540,6 +8611,37 @@ func Validate_WorkerStatus(
 				return oldObj.Allocated
 			})
 		errs = append(errs, fn(fldPath.Child("allocated"), obj.Allocated, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.WorkerStatus.ObservedEpoch
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerStatus) *int64 {
+				return &oldObj.ObservedEpoch
+			})
+		errs = append(errs, fn(fldPath.Child("observed_epoch"), &obj.ObservedEpoch, oldVal, oldObj != nil)...)
 	}
 
 	return errs

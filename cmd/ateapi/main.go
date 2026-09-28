@@ -283,6 +283,10 @@ func main() {
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
+	// Crash the Actors lost when a Worker's ateom restarts.
+	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
+	workerAssignmentReconciler.Start(shutdownCtx)
+
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
 	if err != nil {
