@@ -132,6 +132,11 @@ them are checked into the repository.
 * `stats.csv`, `stats_history.csv`, `failures.csv`, `exceptions.csv`: Locust's
   own CSV output.
 * `logs.txt`, `traces.txt`: the runner log, and the trace IDs seen during the run.
+* `actors_history.csv`: boomer's `locust_actors` gauge, sampled every 5
+  seconds while Locust runs, one row per `Timestamp`, `User Class`, `State`
+  and `Count`. Only tests driven by boomer write it. Sampling stops when
+  Locust exits, so boomer's teardown of every actor is not recorded. A failed
+  scrape leaves a gap, never a zero.
 * `stats.jsonl`: one JSON object per line, one per metric. Every row carries
   the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
   `measurements` map holding that metric's numbers.
@@ -155,6 +160,14 @@ map holds the raw facts and the derived numbers side by side.
   worker pod across the run. Reported as a distribution rather than one
   average, and it spans ramp-up too, because a custom load shape has no
   single user count to call steady.
+* `running_actors_peak`, `running_actors_p50`, `running_actors_p90`: actors
+  in the `running` state across `actors_history.csv`, summed over user
+  classes. Unlike the `actors_per_*` keys these are counted, not derived.
+* `live_actors_peak`: the most actors boomer held in any state at once.
+* `hibernate_pending_actors_peak`: the most actors whose pause or suspend
+  failed and was awaiting a retry.
+* `crashed_actors_final`: actors in the `crashed` state at the last sample.
+* `running_actors_per_node`: `running_actors_peak` over `node_count`.
 * `aggregate_failure_ratio`: failures over requests for the run.
 * `<operation>_failure_ratio`: the same ratio for every operation Locust
   reported, so each test carries its own names through. The operation name is
