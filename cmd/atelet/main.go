@@ -33,9 +33,9 @@ import (
 
 	"sync"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletvalidation"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -1253,7 +1253,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 // Terminate terminates any running workload on ateom, unmounts external volumes,
 // and resets actor directories on the node.
 func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
-	if err := ateletvalidation.ValidateTerminateRequest(ctx, req); err != nil {
+	if err := apivalidation.ValidateTerminateRequest(ctx, req); err != nil {
 		return nil, err
 	}
 

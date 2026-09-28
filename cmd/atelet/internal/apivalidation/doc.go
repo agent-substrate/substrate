@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateletvalidation holds the declarative validation generated for the
+// Package apivalidation holds the declarative validation generated for the
 // atelet RPC surface. It is a separate package, unlike controlapi where the
 // generated code lives with the handlers, because atelet's handlers live in
 // package main.
@@ -23,4 +23,4 @@
 // +k8s:validation-gen-input=github.com/agent-substrate/substrate/internal/proto/ateletpb
 // +k8s:validation-gen-scheme-registry=nil
 // +k8s:validation-gen-deep-equal-func=ateDeepEqual
-package ateletvalidation
+package apivalidation

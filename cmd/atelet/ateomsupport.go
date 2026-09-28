@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletvalidation"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -44,7 +44,7 @@ func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *atel
 	// Reject malformed requests here rather than forwarding them for the
 	// control plane to reject after a round trip. After authentication, so an
 	// unauthenticated caller learns nothing but Unauthenticated.
-	if err := ateletvalidation.ValidateMintActorCertificateRequest(ctx, req); err != nil {
+	if err := apivalidation.ValidateMintActorCertificateRequest(ctx, req); err != nil {
 		return nil, err
 	}
 
@@ -147,7 +147,7 @@ func (s *ateomSupportServer) RequestActorSuspend(ctx context.Context, req *atele
 	// Reject malformed requests here rather than forwarding them for the
 	// control plane to reject after a round trip. After authentication, so an
 	// unauthenticated caller learns nothing but Unauthenticated.
-	if err := ateletvalidation.ValidateRequestActorSuspendRequest(ctx, req); err != nil {
+	if err := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); err != nil {
 		return nil, err
 	}
 	if _, err := s.workers.RequestActorSuspend(ctx, &ateapipb.RequestActorSuspendRequest{

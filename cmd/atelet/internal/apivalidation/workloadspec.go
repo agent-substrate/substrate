@@ -17,7 +17,7 @@
 // arriving here already passed them at template creation, so a failure is an
 // internal inconsistency, not a user error.
 
-package ateletvalidation
+package apivalidation
 
 import (
 	"context"
