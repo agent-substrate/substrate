@@ -21,6 +21,7 @@ export KO_DOCKER_REPO := gcr.io/$(PROJECT_ID)/ate-images
 # Go commands
 GO := go
 KO := hack/run-tool.sh ko
+HUGO ?= hugo
 
 # Flags every ko image build gets, e.g. `make build-images KO_FLAGS=--push=false`.
 # Empty by default, so ko runs on its own defaults and whatever .ko.yaml configures.
@@ -135,6 +136,18 @@ lint:
 .PHONY: verify
 verify: test
 	bash hack/verify-all.sh
+
+.PHONY: site-serve site-build
+
+# Serves the website in site/ with live reload. Needs Hugo extended and Go; see
+# site/README.md.
+site-serve:
+	cd site && $(HUGO) server
+
+# Builds the website into site/public, as the site workflow does. Production
+# builds also need npm, for PostCSS.
+site-build:
+	cd site && npm ci && $(HUGO) build --environment production --minify
 
 .PHONY: clean
 clean:

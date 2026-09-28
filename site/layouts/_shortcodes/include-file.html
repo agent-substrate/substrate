@@ -1,0 +1,79 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Renders a Markdown file from the repository inside the current page.
+
+The file is named by its path from the repository root, taken from the
+"file" argument or, failing that, the page's repo_source front matter. It
+must be mounted under assets/repo in hugo.yaml.
+
+Relative links in the file are resolved against the file's directory:
+  - a file that some page includes via repo_source links to that page;
+  - a path under params.repo_static_dirs links to the mounted static copy;
+  - anything else links to the file on GitHub.
+
+Callers must use {{% %}} so that Hugo renders the returned Markdown.
+*/ -}}
+
+{{- $file := .Get "file" | default (.Page.Params.repo_source) -}}
+{{- if not $file -}}
+  {{- errorf "include-file: %s: no file argument and no repo_source front matter" .Page.File.Path -}}
+{{- end -}}
+{{- $res := resources.Get (path.Join "repo" $file) -}}
+{{- if not $res -}}
+  {{- errorf "include-file: %s: %q is not mounted under assets/repo; add it to module.mounts in hugo.yaml" .Page.File.Path $file -}}
+{{- end -}}
+
+{{/* The page title replaces the file's leading H1. */ -}}
+{{- $content := replaceRE `\A\s*# [^\n]*\n+` "" $res.Content 1 -}}
+
+{{- $repo := site.Params.github_repo -}}
+{{- $branch := site.Params.github_branch | default "main" -}}
+{{- $dir := path.Dir $file -}}
+
+{{- range findRESubmatch `\]\(([^)\s]+)\)` $content -}}
+  {{- $target := index . 1 -}}
+  {{- $isRelative := not (or (strings.HasPrefix $target "#") (strings.HasPrefix $target "/") (strings.Contains $target ":")) -}}
+  {{- if $isRelative -}}
+    {{- $parts := split $target "#" -}}
+    {{- $rel := index $parts 0 -}}
+    {{- $anchor := "" -}}
+    {{- if gt (len $parts) 1 -}}
+      {{- $anchor = printf "#%s" (index $parts 1) -}}
+    {{- end -}}
+    {{- $repoPath := path.Join $dir $rel -}}
+    {{- $url := "" -}}
+    {{- with where site.Pages "Params.repo_source" $repoPath -}}
+      {{- $url = (index . 0).RelPermalink -}}
+    {{- else -}}
+      {{- range site.Params.repo_static_dirs -}}
+        {{- if and (not $url) (strings.HasPrefix $repoPath (printf "%s/" .)) -}}
+          {{- $url = relURL $repoPath -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if not $url -}}
+      {{- $kind := cond (or (strings.HasSuffix $rel "/") (eq (path.Ext $repoPath) "")) "tree" "blob" -}}
+      {{- $url = printf "%s/%s/%s/%s" $repo $kind $branch $repoPath -}}
+    {{- end -}}
+    {{- $content = replace $content (printf "](%s)" $target) (printf "](%s%s)" $url $anchor) -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* Emit Markdown for the {{% %}} caller to render; rendering it here as
+     well would run Goldmark twice. safeHTML keeps raw HTML in the docs intact. */ -}}
+{{- $content | safeHTML -}}

@@ -1,0 +1,37 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Docsy theme variable overrides. The palette is taken from the logo: Yolo's
+// greens, plus the blue, yellow, and pink of the robots.
+
+$substrate-green: #64d86b;
+$substrate-green-dark: #33a946;
+$substrate-green-light: #95f294;
+$substrate-blue: #66b8dd;
+$substrate-yellow: #f0f175;
+$substrate-pink: #e87cb3;
+
+$primary: $substrate-green-dark;
+$secondary: #fff;
+$dark: #0b1f10;
+$black: #000;
+$info: $substrate-blue;
+$light: #dee2e6;
+$link-color: $substrate-green;
+
+$white: #fff;
+$navbar-dark-color: rgba($white, 1);
+
+$td-enable-google-fonts: true;
+$google_font_family: "Open+Sans:300,300i,400,400i,600,600i,700,700i&display=swap";

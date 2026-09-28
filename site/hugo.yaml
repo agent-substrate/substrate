@@ -1,0 +1,158 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The deploy workflow overrides baseURL with the GitHub Pages URL.
+baseURL: 'https://agent-substrate.github.io/substrate/'
+locale: 'en-US'
+title: 'Agent Substrate'
+
+enableRobotsTXT: true
+
+# Last-modified dates would come from the stub pages under content/, not the
+# docs they include, so they are left off.
+enableGitInfo: false
+
+disableKinds:
+  - taxonomy
+  - term
+
+security:
+  allowContent:
+    - '^text/html$'
+    - '^text/markdown$'
+  node:
+    permissions:
+      allowRead: ["*"]
+
+menu:
+  main:
+    - name: "GitHub"
+      weight: 99
+      pre: "<i class='fab fa-github pe-2'></i>"
+      url: "https://github.com/agent-substrate/substrate"
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true
+    parser:
+      attribute:
+        block: true
+      # Match GitHub's heading IDs so anchors in docs/ keep working.
+      autoHeadingIDType: github
+  highlight:
+    guessSyntax: true
+    style: github-dark
+  tableOfContents:
+    startLevel: 2
+    endLevel: 3
+    ordered: false
+
+imaging:
+  resampleFilter: CatmullRom
+  quality: 85
+  anchor: Smart
+
+outputs:
+  home: [HTML]
+  section: [HTML]
+
+params:
+  github_repo: "https://github.com/agent-substrate/substrate"
+  github_project_repo: "https://github.com/agent-substrate/substrate"
+  github_subdir: "site"
+  github_branch: "main"
+
+  copyright: "The Agent Substrate Authors"
+
+  # Directories under the repository root that are mounted as static files at
+  # the same path, so relative image links in included docs resolve on the site.
+  repo_static_dirs:
+    - "docs/assets"
+
+  offlineSearch: true
+
+  ui:
+    navbar_logo: true
+    sidebar_menu_compact: true
+    sidebar_menu_foldable: true
+    sidebar_search_disable: true
+    breadcrumb_disable: true
+    footer_about_disable: true
+    feedback:
+      enable: false
+
+  links:
+    user:
+      - name: "ate-dev mailing list"
+        url: "https://groups.google.com/g/ate-dev"
+        icon: "fa fa-envelope"
+      - name: "YouTube"
+        url: "https://www.youtube.com/channel/UCN9PPqlTtVxlcpbQ-NWpfZQ"
+        icon: "fab fa-youtube"
+    developer:
+      - name: "GitHub"
+        url: "https://github.com/agent-substrate/substrate"
+        icon: "fab fa-github"
+      - name: "#substrate-dev on CNCF Slack"
+        url: "https://cloud-native.slack.com/archives/C0B6M3E2J3D"
+        icon: "fab fa-slack"
+
+module:
+  proxy: direct
+  hugoVersion:
+    extended: true
+    min: 0.163.3
+  mounts:
+    - source: content
+      target: content
+    - source: data
+      target: data
+    - source: layouts
+      target: layouts
+    - source: static
+      target: static
+    - source: assets
+      target: assets
+    # Docs are rendered straight from the repository rather than copied. Each
+    # file listed here is available to the include-file shortcode as
+    # repo/<path from the repository root>.
+    - source: ../
+      target: assets/repo
+      disableWatch: false
+      files: ["README.md"]
+    - source: ../docs
+      target: assets/repo/docs
+      disableWatch: false
+      files:
+        - "api-guide.md"
+        - "architecture.md"
+        - "authentication.md"
+        - "csi-deployment.md"
+        - "csi-volumes.md"
+        - "egress-traffic.md"
+        - "egress-trust-bundle.md"
+        - "glossary.md"
+        - "network-egress.md"
+        - "observability.md"
+        - "request-parking.md"
+        - "roadmap.md"
+        - "threat-model.md"
+        - "upgrade.md"
+    # Keep in sync with params.repo_static_dirs.
+    - source: ../docs/assets
+      target: static/docs/assets
+  imports:
+    - path: github.com/google/docsy
+      disable: false
