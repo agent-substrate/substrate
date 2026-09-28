@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -90,8 +91,8 @@ func usagePendingAttrs() []slog.Attr {
 
 func recordAttrs(rec log.Record) map[string]string {
 	got := make(map[string]string, rec.AttributesLen())
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
-		got[kv.Key] = kv.Value.String()
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		got[string(kv.Key)] = kv.Value.String()
 		return true
 	})
 	return got
@@ -346,8 +347,8 @@ func TestLogWritesBothCopies(t *testing.T) {
 				return true
 			})
 			otlpAttrs := map[string]string{}
-			otlpRec.WalkAttributes(func(kv log.KeyValue) bool {
-				otlpAttrs[kv.Key] = kv.Value.String()
+			otlpRec.WalkAttributes(func(kv attribute.KeyValue) bool {
+				otlpAttrs[string(kv.Key)] = kv.Value.String()
 				return true
 			})
 			if !maps.Equal(stdoutAttrs, otlpAttrs) {
@@ -387,7 +388,7 @@ func TestEmitCarriesTraceContext(t *testing.T) {
 
 	// Trace context belongs on the record's own fields. The stdout copy carries
 	// it as attributes; the OTLP copy must not, or it is there twice.
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 		switch kv.Key {
 		case ateattr.LogTraceIDField, ateattr.LogSpanIDField, ateattr.LogTraceFlagsField:
 			t.Errorf("record carries trace context as the attribute %q", kv.Key)
@@ -414,16 +415,16 @@ func TestBuildRecordKeepsValueKinds(t *testing.T) {
 	tests := []struct {
 		name string
 		attr slog.Attr
-		want log.Value
+		want attribute.Value
 	}{
-		{"string", slog.String("k", "v"), log.StringValue("v")},
-		{"int", slog.Int64("k", 7), log.Int64Value(7)},
-		{"uint", slog.Uint64("k", 7), log.Int64Value(7)},
-		{"uint above int64 clamps", slog.Uint64("k", math.MaxUint64), log.Int64Value(math.MaxInt64)},
-		{"float", slog.Float64("k", 1.5), log.Float64Value(1.5)},
-		{"bool", slog.Bool("k", true), log.BoolValue(true)},
-		{"duration is nanoseconds, as in the stdout copy", slog.Duration("k", 1500*time.Millisecond), log.Int64Value(1_500_000_000)},
-		{"anything else falls back to its string form", slog.Any("k", struct{}{}), log.StringValue("{}")},
+		{"string", slog.String("k", "v"), attribute.StringValue("v")},
+		{"int", slog.Int64("k", 7), attribute.Int64Value(7)},
+		{"uint", slog.Uint64("k", 7), attribute.Int64Value(7)},
+		{"uint above int64 clamps", slog.Uint64("k", math.MaxUint64), attribute.Int64Value(math.MaxInt64)},
+		{"float", slog.Float64("k", 1.5), attribute.Float64Value(1.5)},
+		{"bool", slog.Bool("k", true), attribute.BoolValue(true)},
+		{"duration is nanoseconds, as in the stdout copy", slog.Duration("k", 1500*time.Millisecond), attribute.Int64Value(1_500_000_000)},
+		{"anything else falls back to its string form", slog.Any("k", struct{}{}), attribute.StringValue("{}")},
 	}
 
 	for _, tt := range tests {
@@ -431,13 +432,13 @@ func TestBuildRecordKeepsValueKinds(t *testing.T) {
 			t.Parallel()
 
 			rec := BuildRecord(StateChanged, time.Now(), []slog.Attr{tt.attr})
-			var got log.Value
-			rec.WalkAttributes(func(kv log.KeyValue) bool {
+			var got attribute.Value
+			rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 				got = kv.Value
 				return false
 			})
-			if got.Kind() != tt.want.Kind() {
-				t.Fatalf("kind = %v, want %v", got.Kind(), tt.want.Kind())
+			if got.Type() != tt.want.Type() {
+				t.Fatalf("type = %v, want %v", got.Type(), tt.want.Type())
 			}
 			if got.String() != tt.want.String() {
 				t.Errorf("value = %v, want %v", got, tt.want)
