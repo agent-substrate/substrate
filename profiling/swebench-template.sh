@@ -115,18 +115,23 @@ fi
 #
 # There is no `kubectl wait` for substrate resources, so this polls the way
 # wait_actortemplate_ready() in benchmarking/workloads/deploy.sh does.
+#
+# kubectl-ate versions differ in two ways, so both are accepted: `get -o json`
+# may wrap the template in {"actorTemplates": [...]}, and readiness is either
+# a golden tag or a golden snapshot URI.
+STATUS_JQ='(.actorTemplates[0] // .) | .status.goldenSnapshotStatus'
 echo "waiting for the ${ATESPACE}/${NAME} golden snapshot (timeout ${READY_TIMEOUT}s)..."
 deadline=$((SECONDS + READY_TIMEOUT))
 while ((SECONDS < deadline)); do
   if json="$(ate get actor-template "${NAME}" -a "${ATESPACE}" -o json 2>/dev/null)"; then
-    if tag="$(jq -r '.status.goldenSnapshotStatus.goldenTag.name // empty' <<<"${json}")" \
+    if tag="$(jq -r "${STATUS_JQ} | .goldenTag.name // .goldenSnapshot.snapshotUri // empty" <<<"${json}")" \
        && [[ -n "${tag}" ]]; then
-      echo "golden snapshot ready: tag ${tag}"
+      echo "golden snapshot ready: ${tag}"
       exit 0
     fi
     # A golden actor that crashes leaves the template unready forever, so the
     # timeout alone does not say whether this is slow or broken.
-    if msg="$(jq -r '.status.goldenSnapshotStatus.errorMessage // empty' <<<"${json}")" \
+    if msg="$(jq -r "${STATUS_JQ} | .errorMessage // empty" <<<"${json}")" \
        && [[ -n "${msg}" ]]; then
       echo "error: ${ATESPACE}/${NAME} failed to build its golden snapshot: ${msg}" >&2
       exit 1
@@ -137,5 +142,5 @@ done
 
 echo "error: timed out after ${READY_TIMEOUT}s waiting for the ${ATESPACE}/${NAME} golden snapshot" >&2
 ate get actor-template "${NAME}" -a "${ATESPACE}" -o json 2>/dev/null \
-  | jq '.status' >&2 || true
+  | jq "${STATUS_JQ}" >&2 || true
 exit 1

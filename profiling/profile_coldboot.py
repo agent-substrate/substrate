@@ -141,11 +141,21 @@ def build_template(script, instance, atespace, env):
 
 
 def template_json(kubectl_ate, atespace, name):
-    """Fetch the template, whose UID is also the golden actor's name."""
+    """Fetch the template, whose UID is also the golden actor's name.
+
+    Newer kubectl-ate wraps `get -o json` in {"actorTemplates": [...]} even for
+    a single name; unwrap it so both shapes read the same.
+    """
     p = run(f"{kubectl_ate} get actor-template {name} -a {atespace} -o json", check=False)
     if p.returncode != 0:
         raise SystemExit(f"could not read actor template {atespace}/{name}:\n{p.stderr.strip()}")
-    return json.loads(p.stdout)
+    data = json.loads(p.stdout)
+    if "actorTemplates" in data:
+        items = data["actorTemplates"] or []
+        if not items:
+            raise SystemExit(f"actor template {atespace}/{name} not found in kubectl-ate output")
+        data = items[0]
+    return data
 
 
 def image_digests(tmpl):
