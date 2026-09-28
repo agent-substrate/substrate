@@ -292,6 +292,40 @@ To go back to a built-in variant, redeploy without the flag.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
   lifecycle latencies.
 
+### Spawn Benchmark
+
+The Spawn benchmark creates a batch of actors once and measures how long each
+actor takes from creation to its first answered ping, and how long the whole
+batch takes. `tests.yaml` runs it as `spawn_smoke_10_actors` with
+`shapes/spawn_shape.py`, which holds one user and ends the run once
+`TimeToAllReady` is recorded.
+
+Each boomer process creates one batch; extra users in the same process do
+nothing. Actors are named `spawn-<run-id>-<n>` and deleted when boomer exits.
+
+#### Spawn Configuration Knobs
+
+* `--total-actors`: Actors in the batch (default `100`).
+* `--spawn-concurrency`: Actors created concurrently (default `1`).
+* `--actor-deadline`: Per-actor timeout in seconds, covering create, resume and
+  first ping (default `120`).
+
+The web UI shows the same fields; `0` keeps the value boomer-worker started with.
+
+#### Spawn Reported Metrics
+
+* `CreateActor`, `ResumeActor`, `GluttonPing`: Latency of each call.
+* `ActorTimeToReady`: Per actor, from its first `CreateActor` attempt to its
+  first successful ping.
+* `TimeToReady_<k>pct` (`k` = 10, 20, … 100): From batch start until `k`% of
+  the batch was ready.
+* `TimeToAllReady`: From batch start until the last ready actor answered.
+  Actors that failed show up as `ActorTimeToReady` failures instead.
+* `CrashCount`: Actors that crashed during resume.
+
+The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
+count users × `--actors-per-user`, not `--total-actors`.
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 
