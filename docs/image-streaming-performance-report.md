@@ -393,19 +393,81 @@ Once the node has an active lease (or warm layer cache), image delivery (`oci_un
 
 ---
 
-### 4.2 Where Finer-Grained Sub-Phase Data Is Not Yet Collected
+### 4.2 Live-Cluster Riptide v2 Fine-Grained Sub-Phase Latency Breakdown (`PrepareLayers` + `Restore`)
 
-To further decompose the remaining bottlenecks above, additional sub-span instrumentation would be needed in three places:
+To decompose `PrepareLayers` (`restore.duration.oci_unpack`) and validate the GA Riptide v2 enhancements (full CRI label set `cri.image-ref`, `cri.manifest-digest`, `cri.layer-digest`, `cri.image-layers`; per-`chainID` mutex locking; `lease.json` persistence; and `layersExist` self-healing against host `containerd` proxy-plugin GC), we instrumented `Driver.PrepareLayers` (`PrepareLayers timing breakdown`) and executed a 4-regime live-cluster test on `substrate-stream-test` (`kuiyue-gke-dev`, nodes `gke-substrate-stream-substrate-node-p-01c8a8ea-sae4` and `gke-substrate-stream-substrate-node-p-01c8a8ea-65vz`) against the 9-layer (`1.19 GB` compressed / `~3.5 GB` unpacked) `sandbox` image:
 
-1. **Inside cold `PrepareLayers` (`1.13 s` Riptide / `3.47 s` SOCI):**
-   - `"Image streamed"` currently logs the total `PrepareLayers` duration as a single number. It does not yet separate:
-     - `defaultImageResolver` (remote registry manifest + config fetch inside `atelet`) vs.
-     - `client.Prepare` (snapshotter daemon fetching TOC/zTOC and mounting FUSE) vs.
-     - `probeListable` polling vs. `client.Stat` / `client.View` gRPC round-trips.
-2. **Inside `ateom_restore` (`125–170 ms`):**
-   - `Restore timing breakdown` records the outer `Ateom.Restore` gRPC call from `atelet` to `ateom`, without breaking down overlayfs mount setup, `atenet` network configuration, and `runsc restore` inside `ateom`.
-3. **Inside the `~960 ms` control-plane / CLI gap:**
-   - Current logs do not separate per-hop latency across `kubectl-ate` poll interval, `ateapi`, and `atescheduler` worker allocation.
+#### A. End-to-End Sub-Phase Latency Table Across All 4 Operational Regimes
+
+| Phase / Sub-Phase Metric | Regime 1a: Cold Node `sae4` (`e2e-riptide-2`) | Regime 1b: Cold Node `65vz` (`e2e-riptide-1`) | Regime 2: Committed-`chainID` `Stat` Hit (`e2e-riptide-stathit-2`, `refCount=0` $\rightarrow$ `1`) | Regime 3: Warm Lease Hit (`e2e-riptide-3` / `stathit-1`, `refCount` $\ge 1$) | Regime 4: Self-Healed Lease After External GC (`e2e-riptide-healed-1`) |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| **1. `PrepareLayers` Sub-Phases (`oci_unpack`)** | | | | | |
+| — `resolve_ms` *(GAR manifest + config fetch)* | `296.93 ms` (28.7%) | `370.94 ms` (25.9%) | `287.55 ms` (92.0%) | `0.00 ms` *(in-memory lease)* | `291.46 ms` (24.3%) |
+| — `stat_ms` *(`Snapshots.Stat` across 9 layers)* | `7.70 ms` (0.7%) | `7.80 ms` (0.5%) | **`2.96 ms`** (0.9%) | `0.00 ms` *(skipped)* | `10.39 ms` (0.9%) |
+| — `prepare_ms` *(`Snapshots.Prepare` across 9 layers)* | **`704.50 ms` (68.2%)** | **`1,027.45 ms` (71.8%)** | **`0.00 ms` (0.0% — skipped)** | `0.00 ms` *(skipped)* | **`871.82 ms` (72.6%)** |
+| — `view_ms` *(`Snapshots.View` across 9 layers)* | `20.82 ms` (2.0%) | `20.54 ms` (1.4%) | `18.34 ms` (5.9%) | `0.00 ms` *(skipped)* | `23.80 ms` (2.0%) |
+| — `listable_ms` *(`probeListable` `os.ReadDir` x 9)* | `2.19 ms` (0.2%) | `1.80 ms` (0.1%) | `2.58 ms` (0.8%) | `0.00 ms` *(skipped)* | `2.09 ms` (0.2%) |
+| — `wrapper_ms` *(symlinks + `finalized` + `lease.json`)* | `1.08 ms` (0.1%) | `1.14 ms` (0.1%) | `1.08 ms` (0.3%) | `1.25 ms` / `0.90 ms` *(`layersExist`)* | `1.68 ms` (0.1%) |
+| **Total `PrepareLayers` (`total_ms`)** | **`1,033.40 ms`** | **`1,430.16 ms`** | **`312.65 ms`** | **`1.25 ms` (`sae4`) / `0.90 ms` (`65vz`)** | **`1,201.46 ms`** |
+| **2. `AteomHerder/Restore` Sub-Phases** | | | | | |
+| — `restore.duration.volume_mount` | `0.0005 ms` | `0.0006 ms` | `0.0007 ms` | `0.0006 ms` / `0.0008 ms` | `0.0007 ms` |
+| — `restore.duration.manifest_fetch` *(GCS checkpoint)* | `86.40 ms` | `255.80 ms` | `44.16 ms` | `27.22 ms` / `55.14 ms` | `41.73 ms` |
+| — `restore.duration.sandbox_assets` | `0.09 ms` | `0.14 ms` | `0.13 ms` | `0.08 ms` / `0.08 ms` | `0.08 ms` |
+| — `restore.duration.download` *(parallel GCS fetch)* | `104.64 ms` | `132.77 ms` | `112.46 ms` | `66.21 ms` / `71.23 ms` | `51.14 ms` |
+| — `restore.duration.oci_unpack` | `1,034.90 ms` | `1,432.48 ms` | **`314.45 ms`** | **`2.72 ms` / `1.86 ms`** | `1,203.24 ms` |
+| — `restore.duration.ateom_restore` *(`runsc restore`)* | `199.00 ms` | `184.28 ms` | `150.28 ms` | `188.82 ms` / `158.60 ms` | `165.72 ms` |
+| **`restore.duration.total` (`AteomHerder/Restore` RPC)** | **`1,345.17 ms`** | **`1,898.02 ms`** | **`533.47 ms`** | **`306.06 ms` / `309.23 ms`** | **`1,434.98 ms`** |
+| **3. End-to-End `kubectl-ate resume actor` Wall-Clock** | **`3,306 ms`** | **`3,990 ms`** | **`2,447 ms`** | **`2,263 ms` / `2,349 ms`** | **`3,409 ms`** |
+
+*Note on Cold `create actor-template` (`sandbox-1gb-riptide-v2` on `sae4`):*
+- `PrepareLayers timing breakdown`: `resolve_ms=821.20`, `stat_ms=8.00`, `prepare_ms=865.74`, `view_ms=23.87`, `listable_ms=2.09`, `wrapper_ms=1.17`, `total_ms=1,722.26 ms`.
+- `AteomHerder/Run`: `1,916.13 ms`; `AteomHerder/Checkpoint`: `500.95 ms`.
+
+#### B. Key Insights from the Sub-Phase Breakdown
+
+1. **Cold `PrepareLayers` (`1,033–1,430 ms` across 9 layers):**
+   - **`prepare_ms` (`704.50–1,027.45 ms`, ~68–72% of `PrepareLayers`):** Roughly `78–114 ms` per layer across the 9 layers as `containerd-gcfs-grpc` + `gcfsd` register the 9 remote layer mounts with the GAR streaming backend and commit each layer's `chainID` in BoltDB.
+   - **`resolve_ms` (`287.55–370.94 ms`, ~26–29% of `PrepareLayers`):** Fetching the OCI image manifest and container config JSON from Google Artifact Registry via `go-containerregistry` (`remote.Image` + `img.ConfigFile()`).
+   - **`view_ms` (`20.54–20.82 ms`, ~2.0%):** Creating all 9 read-only `-view` snapshots (`~2.3 ms/layer`).
+   - **`stat_ms` (`7.70–7.80 ms`, ~0.7%):** `Snapshots.Stat` lookups (`~0.85 ms/layer`).
+   - **`listable_ms` (`1.80–2.19 ms`) & `wrapper_ms` (`1.08–1.14 ms`):** Host listability verification (`os.ReadDir`) and writing `layer-i/fs` symlinks, `finalized` markers, and `lease.json` add only **~3 ms total** across all 9 layers.
+2. **Committed-`chainID` `Stat` Hit (`312.65 ms` total, `prepare_ms = 0 ms`):**
+   - When all actors using an image pause or terminate (`refCount` drops to `0`), `ReleaseLayers` removes the 9 `-view` mounts, but the 9 committed `chainID` snapshots remain in Riptide v2.
+   - When the next actor (`e2e-riptide-stathit-2`) resumes on that node, all 9 layers hit `Stat(ctx, chainID) == OK` in **`2.96 ms` total (`0.33 ms/layer`)**, **completely skipping `Prepare` (`prepare_ms = 0 ms`)**, and creating 9 fresh `-view` mounts in **`18.34 ms`**.
+   - At that point, `resolve_ms` (`287.55 ms`, 92% of `PrepareLayers`) is the only remaining work in `PrepareLayers`, bringing `AteomHerder/Restore` down to **`533.47 ms`**.
+3. **Warm Lease Hit (`0.90–1.25 ms` total):**
+   - When `refCount >= 1` on the node, `PrepareLayers` verifies `layersExist(lease.layers)` and increments `refCount` in **`0.90–1.25 ms`** with zero network or gRPC calls, bringing `AteomHerder/Restore` down to **`306.06–309.23 ms`**.
+4. **Self-Healing Lease Recovery After Host `containerd` Proxy-Plugin GC (`1,201.46 ms`):**
+   - When external host `containerd` GC removes snapshotter views from `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` while `atelet` holds a cached in-memory `imageLease`, `layersExist(lease.layers)` detects the missing symlink target in `<1 ms`, logs `"Cached streaming lease layers missing on disk; re-preparing layers"`, and transparently re-runs `prepareLayersCold` (`1,201.46 ms`), succeeding without any actor restore failure.
+
+#### C. Live-Cluster `atelet` Structured Logs & Riptide v2 Evidence (`2026-09-28` Run)
+
+```json
+{"time":"2026-09-28T15:36:57.615019187Z","level":"INFO","msg":"Image streaming enabled","mode":"auto","provider":"riptide","socket":"/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock","reachable":true}
+{"time":"2026-09-28T15:37:50.127332225Z","level":"INFO","msg":"PrepareLayers timing breakdown","streamer":"riptide","image":"us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","digest":"sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","layers":9,"resolve_ms":821.2,"stat_ms":8,"prepare_ms":865.737,"view_ms":23.865,"listable_ms":2.085,"wrapper_ms":1.173,"total_ms":1722.256}
+{"time":"2026-09-28T15:41:43.55054597Z","level":"INFO","msg":"PrepareLayers timing breakdown","streamer":"riptide","image":"us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","digest":"sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","layers":9,"resolve_ms":296.929,"stat_ms":7.695,"prepare_ms":704.497,"view_ms":20.82,"listable_ms":2.194,"wrapper_ms":1.084,"total_ms":1033.404}
+{"time":"2026-09-28T15:41:43.774629596Z","level":"INFO","msg":"Restore timing breakdown","ate.atespace":"ate-demo-sandbox","ate.actor.name":"e2e-riptide-2","ate.actor.uid":"2e8076be-bb2b-44e4-91da-7da02048810f","ate.template.atespace":"ate-demo-sandbox","ate.template.name":"sandbox-1gb-riptide-v2","ate.snapshot.scope":"full","ate.snapshot.kind":"golden","ate.sandbox.class":"gvisor","ate.actor.restore.duration.volume_mount":5.15e-7,"ate.actor.restore.duration.manifest_fetch":0.086399227,"ate.actor.restore.duration.sandbox_assets":0.000091064,"ate.actor.restore.duration.download":0.104635639,"ate.actor.restore.duration.oci_unpack":1.034895622,"ate.actor.restore.duration.ateom_restore":0.199001854,"ate.actor.restore.duration.total":1.345168685}
+{"time":"2026-09-28T15:41:46.772769902Z","level":"DEBUG","msg":"Image streamed","image":"us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","streamer":"riptide","layers":9,"duration":1249679}
+{"time":"2026-09-28T15:41:47.048986234Z","level":"INFO","msg":"Restore timing breakdown","ate.atespace":"ate-demo-sandbox","ate.actor.name":"e2e-riptide-3","ate.actor.uid":"08be863b-fc28-4172-8617-94bbb3be34f6","ate.template.atespace":"ate-demo-sandbox","ate.template.name":"sandbox-1gb-riptide-v2","ate.snapshot.scope":"full","ate.snapshot.kind":"golden","ate.sandbox.class":"gvisor","ate.actor.restore.duration.volume_mount":5.66e-7,"ate.actor.restore.duration.manifest_fetch":0.027221996,"ate.actor.restore.duration.sandbox_assets":0.000076574,"ate.actor.restore.duration.download":0.066214067,"ate.actor.restore.duration.oci_unpack":0.002719545,"ate.actor.restore.duration.ateom_restore":0.18881569,"ate.actor.restore.duration.total":0.306059523}
+{"time":"2026-09-28T15:42:04.785343233Z","level":"INFO","msg":"PrepareLayers timing breakdown","streamer":"riptide","image":"us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","digest":"sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","layers":9,"resolve_ms":287.546,"stat_ms":2.959,"prepare_ms":0,"view_ms":18.337,"listable_ms":2.584,"wrapper_ms":1.075,"total_ms":312.65}
+{"time":"2026-09-28T15:42:04.959625115Z","level":"INFO","msg":"Restore timing breakdown","ate.atespace":"ate-demo-sandbox","ate.actor.name":"e2e-riptide-stathit-2","ate.actor.uid":"dd15e06c-6da1-49ac-9ad7-0d600708bfbf","ate.template.atespace":"ate-demo-sandbox","ate.template.name":"sandbox-1gb-riptide-v2","ate.snapshot.scope":"full","ate.snapshot.kind":"golden","ate.sandbox.class":"gvisor","ate.actor.restore.duration.volume_mount":7.32e-7,"ate.actor.restore.duration.manifest_fetch":0.044157698,"ate.actor.restore.duration.sandbox_assets":0.000127565,"ate.actor.restore.duration.download":0.112463552,"ate.actor.restore.duration.oci_unpack":0.314453206,"ate.actor.restore.duration.ateom_restore":0.150283048,"ate.actor.restore.duration.total":0.533469822}
+{"time":"2026-09-28T15:42:10.159442807Z","level":"WARN","msg":"Cached streaming lease layers missing on disk; re-preparing layers","streamer":"riptide","image":"us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e"}
+{"time":"2026-09-28T15:42:11.360925451Z","level":"INFO","msg":"PrepareLayers timing breakdown","streamer":"riptide","image":"us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","digest":"sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e","layers":9,"resolve_ms":291.459,"stat_ms":10.392,"prepare_ms":871.818,"view_ms":23.802,"listable_ms":2.094,"wrapper_ms":1.679,"total_ms":1201.455}
+{"time":"2026-09-28T15:42:11.551028715Z","level":"INFO","msg":"Restore timing breakdown","ate.atespace":"ate-demo-sandbox","ate.actor.name":"e2e-riptide-healed-1","ate.actor.uid":"860075d6-88db-4de6-92ae-5576a7b95acf","ate.template.atespace":"ate-demo-sandbox","ate.template.name":"sandbox-1gb-riptide-v2","ate.snapshot.scope":"full","ate.snapshot.kind":"golden","ate.sandbox.class":"gvisor","ate.actor.restore.duration.volume_mount":7.03e-7,"ate.actor.restore.duration.manifest_fetch":0.041733201,"ate.actor.restore.duration.sandbox_assets":0.000083448,"ate.actor.restore.duration.download":0.051137012,"ate.actor.restore.duration.oci_unpack":1.203236749,"ate.actor.restore.duration.ateom_restore":0.165718615,"ate.actor.restore.duration.total":1.434981786}
+```
+
+Host `gcfs-snapshotter.service` journal evidence confirming Riptide v2 consumed all 4 CRI labels (`cri.image-ref`, `cri.manifest-digest`, `cri.layer-digest`, `cri.image-layers`):
+```text
+Sep 28 14:47:48 gke-substrate-stream-substrate-node-p-01c8a8ea-sae4 containerd-gcfs-grpc[1636]: time="2026-09-28T14:47:48.622354443Z" level=info msg="Image us-central1-docker.pkg.dev/kuiyue-gke-dev/kuiyue-gke-dev-repo/ate-images/sandbox-04176181c57f0bf23e61506b0ddcf1fd@sha256:fa2f27bfa131cd35d2b81074ffd2e4ff6fe2bc78b92f0f9dfc494318f70e819e is backed by secondary boot disk caching by 0.0% (0/9 layers), by image streaming by 100.0% (9/9 layers)."
+```
+
+And two-hop symlink verification on `gke-substrate-stream-substrate-node-p-01c8a8ea-sae4`:
+```text
+layer-0/fs -> /var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/591/fs (resolves to /run/gcfsd/mnt/views/ea16cace89338c84eb6bcb91a7efdfcae6838fff359efe951858227436486c34/fs)
+layer-1/fs -> /var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/593/fs (resolves to /run/gcfsd/mnt/views/5dda86b5f741fd620228596b7d11aafada6529e6011f7f54e957e2b5636c18e9/fs)
+...
+layer-8/fs -> /var/lib/containerd/io.containerd.snapshotter.v1.gcfs/snapshotter/snapshots/607/fs (resolves to /run/gcfsd/mnt/views/fb2ce8854ebc5f60bff909e1958df5ef993746ec297d0da1c1b40d181a04e9f5/fs)
+```
 
 ---
 

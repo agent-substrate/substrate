@@ -1055,3 +1055,53 @@ func TestPrepareLayers_ConcurrentSharedBaseLayerLocking(t *testing.T) {
 		t.Errorf("shared base layer Prepare called %d times, want 1 (per-chainID lock should prevent duplicate Prepare)", gotBasePrepares)
 	}
 }
+
+func TestPrepareLayers_SelfHealsEvictedLeaseLayers(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+
+	diff0 := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	mount1 := filepath.Join(t.TempDir(), "snap-1")
+	mount2 := filepath.Join(t.TempDir(), "snap-2")
+	if err := os.MkdirAll(mount1, 0o755); err != nil {
+		t.Fatalf("MkdirAll(mount1): %v", err)
+	}
+	if err := os.MkdirAll(mount2, 0o755); err != nil {
+		t.Fatalf("MkdirAll(mount2): %v", err)
+	}
+
+	srv.remoteMounts = map[string][]*snapshots.Mount{
+		diff0: {{Type: "bind", Source: mount1}},
+	}
+	driver.imageResolver = func(context.Context, string, *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		return "sha256:digest", &v1.Config{}, []string{diff0}, []string{"sha256:blob0"}, nil
+	}
+
+	req := &imagestreaming.StreamRequest{ImageRef: "example.com/app:v1"}
+	if _, err := driver.PrepareLayers(ctx, req); err != nil {
+		t.Fatalf("first PrepareLayers error: %v", err)
+	}
+
+	// Simulate external host containerd GC removing the snapshotter view directory.
+	if err := os.RemoveAll(mount1); err != nil {
+		t.Fatalf("RemoveAll(mount1): %v", err)
+	}
+	srv.mu.Lock()
+	delete(srv.committedKeys, diff0)
+	delete(srv.mountsByKey, diff0)
+	srv.remoteMounts[diff0] = []*snapshots.Mount{{Type: "bind", Source: mount2}}
+	srv.mu.Unlock()
+
+	// Second PrepareLayers must detect the dangling layer-0/fs symlink and re-prepare.
+	res2, err := driver.PrepareLayers(ctx, req)
+	if err != nil {
+		t.Fatalf("second PrepareLayers after eviction error: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(res2.LayerDirs[0], "fs"))
+	if err != nil {
+		t.Fatalf("Readlink(layer-0/fs): %v", err)
+	}
+	if target != mount2 {
+		t.Errorf("healed layer-0/fs points to %q, want %q", target, mount2)
+	}
+}

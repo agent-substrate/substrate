@@ -482,14 +482,19 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 	d.mu.Lock()
 	for {
 		if lease, ok := d.leases[req.ImageRef]; ok && lease.refCount > 0 && lease.config != nil {
-			lease.refCount++
-			res := &imagestreaming.StreamResult{
-				ImageDigest: lease.digest,
-				Config:      lease.config,
-				LayerDirs:   append([]string(nil), lease.layers...),
+			if layersExist(lease.layers) {
+				lease.refCount++
+				res := &imagestreaming.StreamResult{
+					ImageDigest: lease.digest,
+					Config:      lease.config,
+					LayerDirs:   append([]string(nil), lease.layers...),
+				}
+				d.mu.Unlock()
+				return res, nil
 			}
-			d.mu.Unlock()
-			return res, nil
+			slog.WarnContext(ctx, "Cached streaming lease layers missing on disk; re-preparing layers",
+				slog.String("streamer", d.name),
+				slog.String("image", req.ImageRef))
 		}
 		if d.isDeclinedLocked(req.ImageRef, time.Now()) {
 			d.mu.Unlock()
@@ -528,20 +533,43 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 	return res, err
 }
 
+// layersExist reports whether every layer wrapper directory in layers still
+// exists on disk and, if it contains an "fs" entry, that the symlink target
+// still resolves (protecting against external snapshotter GC removing views).
+func layersExist(layers []string) bool {
+	if len(layers) == 0 {
+		return false
+	}
+	for _, l := range layers {
+		fsPath := filepath.Join(l, "fs")
+		if _, lerr := os.Lstat(fsPath); lerr == nil {
+			if _, err := os.Stat(fsPath); err != nil {
+				return false
+			}
+		} else if _, err := os.Stat(l); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
+	coldStart := time.Now()
 	client, err := d.getClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to snapshotter %s: %w", d.name, err)
 	}
 
+	resolveStart := time.Now()
 	digest, cfg, diffIDs, layerDigests, err := d.imageResolver(ctx, req.ImageRef, req.AuthConfig)
+	resolveDur := time.Since(resolveStart)
 	if err != nil {
 		return nil, fmt.Errorf("resolving image %s: %w", req.ImageRef, err)
 	}
 
 	// Fast path for reconciled leases whose layers are already mounted on host:
 	d.mu.Lock()
-	if lease, ok := d.leases[req.ImageRef]; ok && len(lease.layers) > 0 {
+	if lease, ok := d.leases[req.ImageRef]; ok && len(lease.layers) > 0 && layersExist(lease.layers) {
 		lease.config = cfg
 		if lease.digest == "" {
 			lease.digest = digest
@@ -584,6 +612,14 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 	criImageRef := canonicalImageRef(req.ImageRef, digest)
 	runID := fmt.Sprintf("%x", time.Now().UnixNano())
 
+	var (
+		statDur     time.Duration
+		prepareDur  time.Duration
+		viewDur     time.Duration
+		listableDur time.Duration
+		wrapperDur  time.Duration
+	)
+
 	for i, c := range chainInfos {
 		prepKey := fmt.Sprintf("%s-%s-l%d-prep", imgKey, runID, i)
 		viewKey := fmt.Sprintf("%s-%s-l%d-view", imgKey, runID, i)
@@ -599,7 +635,10 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 			}
 		}
 
-		mounts, err := d.viewLayer(ctx, client, snapshotter, c, prepKey, viewKey, labels)
+		mounts, lStatDur, lPrepDur, lViewDur, err := d.viewLayer(ctx, client, snapshotter, c, prepKey, viewKey, labels)
+		statDur += lStatDur
+		prepareDur += lPrepDur
+		viewDur += lViewDur
 		if err != nil {
 			cleanupOnErr()
 			return nil, fmt.Errorf("layer %d (%s): %w", i, c.ChainID, err)
@@ -618,12 +657,15 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		}
 
 		// Ensure the mount directory is listable to eliminate the async index loading race.
+		listStart := time.Now()
 		if err := d.probeListable(ctx, mountDir); err != nil {
 			cleanupOnErr()
 			return nil, fmt.Errorf("layer %d mount not listable: %w", i, err)
 		}
+		listableDur += time.Since(listStart)
 
 		// Create layer wrapper directory: layerDir/fs
+		wrapStart := time.Now()
 		layerDir := filepath.Join(imageWorkDir, fmt.Sprintf("layer-%d", i))
 		if err := os.MkdirAll(layerDir, 0o755); err != nil {
 			cleanupOnErr()
@@ -643,6 +685,7 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 			cleanupOnErr()
 			return nil, fmt.Errorf("writing finalized marker %s: %w", finalizedMarker, err)
 		}
+		wrapperDur += time.Since(wrapStart)
 
 		// Asynchronously prefetch directory metadata on the host to warm the snapshotter/kernel cache,
 		// eliminating gVisor Sentry/Gofer traversal stalls on actor startup.
@@ -651,6 +694,7 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		layerDirs = append(layerDirs, layerDir)
 	}
 
+	leaseWriteStart := time.Now()
 	if err := writeLeaseMetadata(imageWorkDir, &persistedLease{
 		ImageRef:     req.ImageRef,
 		Digest:       digest,
@@ -661,17 +705,36 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		cleanupOnErr()
 		return nil, fmt.Errorf("writing lease metadata: %w", err)
 	}
+	wrapperDur += time.Since(leaseWriteStart)
 
 	d.mu.Lock()
+	newRefCount := 1
+	if prev, ok := d.leases[req.ImageRef]; ok && prev != nil && prev.refCount > 0 {
+		newRefCount = prev.refCount + 1
+	}
 	d.leases[req.ImageRef] = &imageLease{
 		digest:       digest,
 		config:       cfg,
 		snapshotKeys: snapshotKeys,
 		layers:       layerDirs,
 		workDir:      imageWorkDir,
-		refCount:     1,
+		refCount:     newRefCount,
 	}
 	d.mu.Unlock()
+
+	slog.InfoContext(ctx, "PrepareLayers timing breakdown",
+		slog.String("streamer", d.name),
+		slog.String("image", req.ImageRef),
+		slog.String("digest", digest),
+		slog.Int("layers", len(layerDirs)),
+		slog.Float64("resolve_ms", float64(resolveDur.Microseconds())/1000.0),
+		slog.Float64("stat_ms", float64(statDur.Microseconds())/1000.0),
+		slog.Float64("prepare_ms", float64(prepareDur.Microseconds())/1000.0),
+		slog.Float64("view_ms", float64(viewDur.Microseconds())/1000.0),
+		slog.Float64("listable_ms", float64(listableDur.Microseconds())/1000.0),
+		slog.Float64("wrapper_ms", float64(wrapperDur.Microseconds())/1000.0),
+		slog.Float64("total_ms", float64(time.Since(coldStart).Microseconds())/1000.0),
+	)
 
 	return &imagestreaming.StreamResult{
 		ImageDigest: digest,
@@ -727,29 +790,36 @@ func (d *Driver) chainLock(chainID string) *sync.Mutex {
 // viewLayer returns mounts for a read-only view of one layer, following
 // containerd's remote snapshotter protocol. On error, the caller only needs
 // to clean up earlier layers.
-func (d *Driver) viewLayer(ctx context.Context, client snapshots.SnapshotsClient, snapshotter string, c chainInfo, prepKey, viewKey string, labels map[string]string) ([]*snapshots.Mount, error) {
+func (d *Driver) viewLayer(ctx context.Context, client snapshots.SnapshotsClient, snapshotter string, c chainInfo, prepKey, viewKey string, labels map[string]string) ([]*snapshots.Mount, time.Duration, time.Duration, time.Duration, error) {
 	// Serialize Stat + Prepare per chainID so concurrent pulls of different
 	// images sharing a base layer do not race Prepare for the same chainID.
 	lk := d.chainLock(c.ChainID)
 	lk.Lock()
+	statStart := time.Now()
 	committed, err := d.hasSnapshot(ctx, client, snapshotter, c.ChainID)
+	statDur := time.Since(statStart)
+	var prepDur time.Duration
 	if err == nil && !committed {
-		err = d.prepareLayer(ctx, client, snapshotter, c, prepKey, labels)
+		var confirmStatDur time.Duration
+		prepDur, confirmStatDur, err = d.prepareLayer(ctx, client, snapshotter, c, prepKey, labels)
+		statDur += confirmStatDur
 	}
 	lk.Unlock()
 	if err != nil {
-		return nil, err
+		return nil, statDur, prepDur, 0, err
 	}
+	viewStart := time.Now()
 	resp, err := client.View(d.withNamespace(ctx), &snapshots.ViewSnapshotRequest{
 		Snapshotter: snapshotter,
 		Key:         viewKey,
 		Parent:      c.ChainID,
 	})
+	viewDur := time.Since(viewStart)
 	if err != nil {
 		d.removeSnapshot(client, snapshotter, viewKey)
-		return nil, fmt.Errorf("creating view: %w", err)
+		return nil, statDur, prepDur, viewDur, fmt.Errorf("creating view: %w", err)
 	}
-	return resp.GetMounts(), nil
+	return resp.GetMounts(), statDur, prepDur, viewDur, nil
 }
 
 // prepareLayer asks the snapshotter to provide a layer that isn't committed
@@ -757,32 +827,36 @@ func (d *Driver) viewLayer(ctx context.Context, client snapshots.SnapshotsClient
 // and returns AlreadyExists. One that can't returns mounts for the caller to
 // unpack the layer into; the driver removes that snapshot instead and returns
 // imagestreaming.ErrNotStreamable.
-func (d *Driver) prepareLayer(ctx context.Context, client snapshots.SnapshotsClient, snapshotter string, c chainInfo, key string, labels map[string]string) error {
+func (d *Driver) prepareLayer(ctx context.Context, client snapshots.SnapshotsClient, snapshotter string, c chainInfo, key string, labels map[string]string) (time.Duration, time.Duration, error) {
+	prepStart := time.Now()
 	_, err := client.Prepare(d.withNamespace(ctx), &snapshots.PrepareSnapshotRequest{
 		Snapshotter: snapshotter,
 		Key:         key,
 		Parent:      c.ParentChainID,
 		Labels:      labels,
 	})
+	prepDur := time.Since(prepStart)
 	switch status.Code(err) {
 	case codes.OK:
 		// Never commit the unpopulated snapshot: that would leave an empty
 		// layer under the chain ID.
 		d.removeSnapshot(client, snapshotter, key)
-		return fmt.Errorf("declined by snapshotter: %w", imagestreaming.ErrNotStreamable)
+		return prepDur, 0, fmt.Errorf("declined by snapshotter: %w", imagestreaming.ErrNotStreamable)
 	case codes.AlreadyExists:
 		// The snapshotter consumed key when it committed the layer.
+		statStart := time.Now()
 		found, err := d.hasSnapshot(ctx, client, snapshotter, c.ChainID)
+		statDur := time.Since(statStart)
 		if err != nil {
-			return err
+			return prepDur, statDur, err
 		}
 		if !found {
-			return errors.New("prepare returned AlreadyExists but the chain ID snapshot does not exist")
+			return prepDur, statDur, errors.New("prepare returned AlreadyExists but the chain ID snapshot does not exist")
 		}
-		return nil
+		return prepDur, statDur, nil
 	default:
 		d.removeSnapshot(client, snapshotter, key)
-		return fmt.Errorf("preparing snapshot: %w", err)
+		return prepDur, 0, fmt.Errorf("preparing snapshot: %w", err)
 	}
 }
 
