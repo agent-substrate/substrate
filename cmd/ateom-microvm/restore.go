@@ -95,7 +95,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 	defer release()
 
-	if err := s.deactivateActorNetworking(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
+	if err := s.tunnel.Deactivate(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
 
@@ -189,7 +189,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
-	egress, err := s.prepareActorEgress(ctx, p.actorRef.Atespace, p.actorRef.Name, p.actorUID, p.egressGateway)
+	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
 	if err != nil {
 		return err
 	}
@@ -288,7 +288,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if cleanupErr := s.deactivateActorNetworking(cleanupCtx, p.attribution()); cleanupErr != nil {
+			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -425,7 +425,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		}
 	}
 
-	if err := s.activateActorNetworking(p.attribution(), egress); err != nil {
+	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
