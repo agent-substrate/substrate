@@ -17,8 +17,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
@@ -29,6 +31,45 @@ import (
 // manifests/ate-install/atelet.yaml), read only to detect which device nodes
 // exist; workers are handed the real host paths, which kubelet resolves.
 const hostDevRoot = "/host/dev"
+
+// hostShmemTHPPath is where the node's shmem THP policy knob is mounted into
+// atelet (see manifests/ate-install/atelet.yaml).
+const hostShmemTHPPath = "/host/sys/kernel/mm/transparent_hugepage/shmem_enabled"
+
+// writeShmemTHPFile is a test seam for os.WriteFile so unit tests can exercise
+// write-error handling even when running as root.
+var writeShmemTHPFile = os.WriteFile
+
+// ensureShmemTHP configures /sys/kernel/mm/transparent_hugepage/shmem_enabled
+// to "advise" when the node is currently set to the kernel default ("[never]").
+//
+// cloud-hypervisor backs shared guest RAM with a memfd and calls
+// madvise(MADV_HUGEPAGE) on it (MemoryConfig.thp defaults to true), so "advise"
+// lets KVM map guest RAM with 2 MiB EPT pages instead of 4 KiB pages without
+// changing huge-page backing for other pods' un-advised shared mappings on the
+// node. Any non-"[never]" setting ("[advise]", "[within_size]", "[always]",
+// "[deny]", "[force]") is left untouched so a deliberate node-level choice is
+// respected.
+func ensureShmemTHP(ctx context.Context, path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	cur := strings.TrimSpace(string(b))
+	if !strings.Contains(cur, "[never]") {
+		slog.InfoContext(ctx, "Leaving shmem transparent hugepages setting unchanged",
+			slog.String("shmem_enabled", cur))
+		return nil
+	}
+
+	const mode = "advise"
+	if err := writeShmemTHPFile(path, []byte(mode+"\n"), 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	slog.InfoContext(ctx, "Enabled shmem transparent hugepages",
+		slog.String("mode", mode), slog.String("previous", cur))
+	return nil
+}
 
 // microvmNodeCapable reports whether this node can host micro-VM workers:
 // cloud-hypervisor needs /dev/kvm (VmCreate fails with EPERM without it), and

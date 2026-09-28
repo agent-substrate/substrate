@@ -245,6 +245,8 @@ spec:
         - name: host-dev
           mountPath: /host/dev
           readOnly: true
+        - name: host-thp
+          mountPath: /host/sys/kernel/mm/transparent_hugepage
       volumes:
       - name: run-ateom
         hostPath:
@@ -271,6 +273,12 @@ spec:
         hostPath:
           path: /dev
           type: Directory
+      # Node-wide transparent hugepage sysfs directory, used on micro-VM-capable
+      # nodes to switch shmem_enabled from [never] to advise once per node so
+      # cloud-hypervisor's MADV_HUGEPAGE guest RAM memfd gets 2 MiB EPT pages.
+      - name: host-thp
+        hostPath:
+          path: /sys/kernel/mm/transparent_hugepage
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
       # serving cert (which requires DNS SANs it would not have); the
