@@ -65,24 +65,6 @@ roleRef:
 
 ---
 
-kind: Service
-apiVersion: v1
-metadata:
-  name: ate-controller
-  namespace: ate-system
-  labels:
-    app: ate-controller
-spec:
-  selector:
-    app: ate-controller
-  ports:
-  - name: metrics
-    port: 8080
-    targetPort: metrics
-    protocol: TCP
-
----
-
 kind: Deployment
 apiVersion: apps/v1
 metadata:
@@ -127,9 +109,6 @@ spec:
         - configMapRef:
             name: ate-otel-config
         ports:
-        - name: metrics
-          containerPort: 8080
-          protocol: TCP
         - name: healthz
           containerPort: 8081
           protocol: TCP
