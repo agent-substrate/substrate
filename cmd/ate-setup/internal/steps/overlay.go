@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -156,7 +155,7 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress"))
 	}
 
-	imageReference, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, e.Cfg.Path(envoyDataplaneDockefile), e.Cfg.KODefaultPlatforms)
+	imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
 	if err != nil {
 		return nil, err
 	}
