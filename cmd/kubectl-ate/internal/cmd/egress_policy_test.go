@@ -399,6 +399,9 @@ func TestEgressPolicyCommandArgs(t *testing.T) {
 		{name: "update", command: updateEgressPolicyCmd, args: []string{"c1"}},
 		{name: "update requires actor", command: updateEgressPolicyCmd, wantErr: true},
 		{name: "update rejects multiple", command: updateEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
+		{name: "delete", command: deleteEgressPolicyCmd, args: []string{"c1"}},
+		{name: "delete requires actor", command: deleteEgressPolicyCmd, wantErr: true},
+		{name: "delete rejects multiple", command: deleteEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
 	})
 }
 
@@ -858,6 +861,195 @@ func TestRequireEgressPolicyPreconditions(t *testing.T) {
 			}
 			if gotErr != test.wantErr {
 				t.Errorf("requireEgressPolicyPreconditions() error = %q, want %q", gotErr, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestDeleteOptionsFromFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		flags       deleteGuardFlags
+		wantOptions *ateapipb.DeleteOptions
+		wantErr     string
+	}{
+		{name: "neither set leaves options nil"},
+		{name: "uid alone", flags: deleteGuardFlags{uidSet: true, uid: "u"}, wantOptions: &ateapipb.DeleteOptions{Uid: "u"}},
+		{name: "version alone", flags: deleteGuardFlags{versionSet: true, version: 3}, wantOptions: &ateapipb.DeleteOptions{Version: 3}},
+		{name: "uid and version", flags: deleteGuardFlags{uidSet: true, uid: "u", versionSet: true, version: 3}, wantOptions: &ateapipb.DeleteOptions{Uid: "u", Version: 3}},
+		{name: "empty uid rejected", flags: deleteGuardFlags{uidSet: true}, wantErr: "--uid must not be empty"},
+		{name: "zero version rejected", flags: deleteGuardFlags{versionSet: true}, wantErr: "--version must be at least 1, got 0"},
+		{name: "negative version rejected", flags: deleteGuardFlags{versionSet: true, version: -1}, wantErr: "--version must be at least 1, got -1"},
+		{name: "empty uid with valid version rejected", flags: deleteGuardFlags{uidSet: true, versionSet: true, version: 3}, wantErr: "--uid must not be empty"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := deleteOptionsFromFlags(test.flags)
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != test.wantErr {
+				t.Errorf("deleteOptionsFromFlags() error = %q, want %q", gotErr, test.wantErr)
+			}
+			if !proto.Equal(got, test.wantOptions) {
+				t.Errorf("deleteOptionsFromFlags() = %v, want %v", got, test.wantOptions)
+			}
+		})
+	}
+}
+
+// fakeEgressPolicyDeleter records the requests it received and answers with a
+// configured policy or error. actorReq stays nil unless the runner reads the
+// actor, which it only does after a NotFound.
+type fakeEgressPolicyDeleter struct {
+	req      *ateapipb.DeleteActorEgressPolicyRequest
+	policy   *ateapipb.EgressPolicy
+	err      error
+	actorReq *ateapipb.GetActorRequest
+	actorErr error
+}
+
+func (f *fakeEgressPolicyDeleter) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	f.req = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.policy, nil
+}
+
+func (f *fakeEgressPolicyDeleter) GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.actorReq = req
+	if f.actorErr != nil {
+		return nil, f.actorErr
+	}
+	return &ateapipb.Actor{}, nil
+}
+
+func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
+	t.Parallel()
+
+	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
+	deleted := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1},
+		Rules:    []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}}},
+	}
+	unguarded := &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor}
+	wantActorReq := &ateapipb.GetActorRequest{Actor: actor}
+	policyNotFound := status.Error(codes.NotFound, "EgressPolicy not found")
+	const uid = "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+	confirmed := "egress policy for actor \"c1\" in atespace \"team-a\" deleted\n"
+
+	tests := []struct {
+		name         string
+		deleter      *fakeEgressPolicyDeleter
+		options      *ateapipb.DeleteOptions
+		wantReq      *ateapipb.DeleteActorEgressPolicyRequest
+		wantActorReq *ateapipb.GetActorRequest
+		wantOut      string
+		wantErr      string
+	}{
+		{
+			name:    "no flags leave options nil",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			wantReq: unguarded,
+			wantOut: confirmed,
+		},
+		{
+			name:    "uid and version populate options",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			options: &ateapipb.DeleteOptions{Uid: uid, Version: 3},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Uid: uid, Version: 3}},
+			wantOut: confirmed,
+		},
+		{
+			name:    "uid alone",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			options: &ateapipb.DeleteOptions{Uid: uid},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Uid: uid}},
+			wantOut: confirmed,
+		},
+		{
+			name:    "version alone",
+			deleter: &fakeEgressPolicyDeleter{policy: deleted},
+			options: &ateapipb.DeleteOptions{Version: 3},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Version: 3}},
+			wantOut: confirmed,
+		},
+		{
+			name:         "missing policy on an existing actor fails",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound},
+			wantReq:      unguarded,
+			wantActorReq: wantActorReq,
+			wantErr:      `actor "c1" in atespace "team-a" has no egress policy`,
+		},
+		{
+			name:         "guarded delete not found still reads actor",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound},
+			options:      &ateapipb.DeleteOptions{Uid: uid, Version: 3},
+			wantReq:      &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Uid: uid, Version: 3}},
+			wantActorReq: wantActorReq,
+			wantErr:      `actor "c1" in atespace "team-a" has no egress policy`,
+		},
+		{
+			name:         "missing actor fails",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")},
+			wantReq:      unguarded,
+			wantActorReq: wantActorReq,
+			wantErr:      `actor "c1" in atespace "team-a" not found`,
+		},
+		{
+			name:         "actor lookup error wraps",
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.PermissionDenied, "denied")},
+			wantReq:      unguarded,
+			wantActorReq: wantActorReq,
+			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
+		},
+		{
+			name:    "aborted conflict wraps",
+			deleter: &fakeEgressPolicyDeleter{err: status.Error(codes.Aborted, "EgressPolicy version conflict")},
+			options: &ateapipb.DeleteOptions{Version: 3},
+			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: &ateapipb.DeleteOptions{Version: 3}},
+			wantErr: `failed to delete egress policy for actor "c1" in atespace "team-a": rpc error: code = Aborted desc = EgressPolicy version conflict`,
+		},
+		{
+			name:    "unavailable wraps",
+			deleter: &fakeEgressPolicyDeleter{err: status.Error(codes.Unavailable, "api-server down")},
+			wantReq: unguarded,
+			wantErr: `failed to delete egress policy for actor "c1" in atespace "team-a": rpc error: code = Unavailable desc = api-server down`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout bytes.Buffer
+			runner := &deleteEgressPolicyRunner{
+				deleter: test.deleter,
+				actor:   actor,
+				options: test.options,
+				stdout:  &stdout,
+			}
+			err := runner.Run(context.Background())
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != test.wantErr {
+				t.Fatalf("Run() error = %q, want %q", gotErr, test.wantErr)
+			}
+			if diff := cmp.Diff(test.wantReq, test.deleter.req, protocmp.Transform()); diff != "" {
+				t.Errorf("request mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.wantActorReq, test.deleter.actorReq, protocmp.Transform()); diff != "" {
+				t.Errorf("actor request mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.wantOut, stdout.String()); diff != "" {
+				t.Errorf("stdout mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
