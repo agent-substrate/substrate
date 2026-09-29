@@ -105,6 +105,7 @@ func TestRestoreDurationShape(t *testing.T) {
 	}
 	inst.recordRestore(context.Background(), op,
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
+		phase{ateattr.SnapshotPhaseSandboxRecord, 20 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseTotal, 3 * time.Second})
 
 	m := collectHistogram(t, reader, restoreDurationMetric)
@@ -116,8 +117,8 @@ func TestRestoreDurationShape(t *testing.T) {
 	}
 
 	byPhase := phaseValues(t, m)
-	if len(byPhase) != 2 {
-		t.Fatalf("recorded %d phases, want download and total", len(byPhase))
+	if len(byPhase) != 3 {
+		t.Fatalf("recorded %d phases, want download, sandbox record, and total", len(byPhase))
 	}
 	got := byPhase[ateattr.SnapshotPhaseDownload]
 	for _, tc := range []struct {
@@ -139,6 +140,9 @@ func TestRestoreDurationShape(t *testing.T) {
 	}
 	if _, ok := got.Value(ateattr.ActorNameKey); ok {
 		t.Error("actor identity must never reach a metric datapoint")
+	}
+	if _, ok := byPhase[ateattr.SnapshotPhaseSandboxRecord]; !ok {
+		t.Error("sandbox record phase was not recorded")
 	}
 }
 
