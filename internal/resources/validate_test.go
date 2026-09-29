@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -268,6 +269,56 @@ func TestValidateUUID(t *testing.T) {
 				} else if !matched {
 					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
 				}
+			}
+		})
+	}
+}
+
+func testActorDirs() *ateompb.ActorDirs {
+	return &ateompb.ActorDirs{
+		RootDir:                   "/node/actors/a",
+		OciBundleDir:              "/node/actors/a/bundles",
+		CheckpointDir:             "/node/actors/a/checkpoint-state",
+		RestoreDir:                "/node/actors/a/restore-state",
+		DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
+		SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
+		VolumesDir:                "/node/actors/a/volumes",
+	}
+}
+
+func TestValidateActorDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ateompb.ActorDirs) *ateompb.ActorDirs
+		// wantField is the field the one expected error names; empty means valid.
+		wantField string
+	}{
+		{"valid", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { return actorDirs }, ""},
+		{"nil", func(*ateompb.ActorDirs) *ateompb.ActorDirs { return nil }, "actor_dirs"},
+		{"missing dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { actorDirs.RestoreDir = ""; return actorDirs }, "actor_dirs.restore_dir"},
+		{"relative dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+			actorDirs.OciBundleDir = "bundles"
+			return actorDirs
+		}, "actor_dirs.oci_bundle_dir"},
+		{"unclean dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+			actorDirs.CheckpointDir = "/node/actors/a/../b/checkpoint-state"
+			return actorDirs
+		}, "actor_dirs.checkpoint_dir"},
+		{"relative root", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+			actorDirs.RootDir = "node/actors/a"
+			return actorDirs
+		}, "actor_dirs.root_dir"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateActorDirs(tc.mutate(testActorDirs()), field.NewPath("actor_dirs"))
+			if tc.wantField == "" {
+				if len(errs) != 0 {
+					t.Fatalf("ValidateActorDirs() = %v, want no errors", errs)
+				}
+				return
+			}
+			if len(errs) != 1 || errs[0].Field != tc.wantField {
+				t.Fatalf("ValidateActorDirs() = %v, want one error on %s", errs, tc.wantField)
 			}
 		})
 	}

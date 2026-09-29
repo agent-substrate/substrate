@@ -30,20 +30,6 @@ func ActorPath(actorUID string) string {
 	)
 }
 
-// ActorResolvConfPath is the resolver bind source outside the actor's rootfs.
-// ateom-gvisor writes it under ActorDirs.root_dir.
-func ActorResolvConfPath(actorUID string) string {
-	return filepath.Join(ActorPath(actorUID), "resolv.conf")
-}
-
-// RunSCStateDir is runsc --root for the actor's sandbox, under ActorDirs.root_dir.
-func RunSCStateDir(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"runsc-state",
-	)
-}
-
 // OCIBundleDir is ActorDirs.oci_bundle_dir.
 func OCIBundleDir(actorUID string) string {
 	return filepath.Join(
@@ -64,14 +50,6 @@ func OCIBundlePath(actorUID, containerName string) string {
 // same volume, and each needs its own mount point inside its own bundle.
 func ImageVolumeMountPath(actorUID, containerName, volumeName string) string {
 	return filepath.Join(OCIBundlePath(actorUID, containerName), "volumes", volumeName)
-}
-
-func RunscDebugLogDir(actorUID, containerName string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"runsc-debug-logs",
-		containerName,
-	)
 }
 
 // CheckpointStateDir is ActorDirs.checkpoint_dir.
@@ -126,21 +104,6 @@ func RestoreStateDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"restore-state",
-	)
-}
-
-// PIDFileDir is where runsc writes <container>.pid, under ActorDirs.root_dir.
-func PIDFileDir(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"pidfiles",
-	)
-}
-
-func PIDFilePath(actorUID, containerName string) string {
-	return filepath.Join(
-		PIDFileDir(actorUID),
-		containerName+".pid",
 	)
 }
 
