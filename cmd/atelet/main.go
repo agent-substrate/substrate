@@ -96,6 +96,7 @@ var (
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
+	ecrAuthForImagePulls         = pflag.Bool("ecr-auth-for-image-pulls", false, "Authenticate pulls from private Amazon ECR registries with the ambient AWS credentials, such as an IRSA role.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 	imageCacheDir                = pflag.String("image-cache-dir", ateletpath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
@@ -201,11 +202,21 @@ func main() {
 		}
 	}
 
+	var ecrRegistryKeychain authn.Keychain
+	if *ecrAuthForImagePulls {
+		awsCfg, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to load AWS configuration for ECR image pulls", err)
+		}
+		ecrRegistryKeychain = imagecache.NewECRKeychain(awsCfg)
+	}
+
 	if err := validateImageCacheGCFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
 	}
 	imageCache, err := imagecache.New(*imageCacheDir,
 		imagecache.WithAuthenticator(gcpRegistryAuthn),
+		imagecache.WithKeychain(ecrRegistryKeychain),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
 		imagecache.WithActorsDir(nodepath.ActorsDir),
 		imagecache.WithMinAge(*imageCacheMinAge),
