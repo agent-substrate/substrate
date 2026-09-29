@@ -15,6 +15,7 @@
 package csi
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -32,11 +33,9 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 const mockDriverName = "mock-driver"
@@ -198,24 +197,20 @@ func dialPlugin(t *testing.T, addr, serverName string, paths tlsPaths) (*Plugin,
 		UsePodIdentity: true,
 		ServerName:     serverName,
 	})
-	return newCSIPlugin(t.Context(), &mockLister{cfg: cfg}, mockDriverName, true /*isController*/, paths)
+	return newCSIPlugin(t.Context(), &mockGetter{cfg: cfg}, mockDriverName, true /*isController*/, paths)
 }
 
-// mockLister serves a single CSIDriverConfig under mockDriverName.
-type mockLister struct{ cfg *v1alpha1.CSIDriverConfig }
+// mockGetter serves a single CSIDriverConfig under mockDriverName.
+type mockGetter struct{ cfg *v1alpha1.CSIDriverConfig }
 
-func (m *mockLister) List(labels.Selector) ([]*v1alpha1.CSIDriverConfig, error) {
-	return []*v1alpha1.CSIDriverConfig{m.cfg}, nil
-}
-
-func (m *mockLister) Get(name string) (*v1alpha1.CSIDriverConfig, error) {
+func (m *mockGetter) Get(ctx context.Context, name string) (*v1alpha1.CSIDriverConfig, error) {
 	if name != mockDriverName {
 		return nil, fmt.Errorf("no CSIDriverConfig named %q", name)
 	}
 	return m.cfg, nil
 }
 
-var _ listersv1alpha1.CSIDriverConfigLister = (*mockLister)(nil)
+var _ CSIDriverConfigGetter = (*mockGetter)(nil)
 
 func TestMTLSSucceeds(t *testing.T) {
 	t.Parallel()

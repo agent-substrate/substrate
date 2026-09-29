@@ -27,7 +27,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type mountCall struct {
@@ -45,7 +49,7 @@ type fakeWorkerPlugin struct {
 	mountCalls  []mountCall
 }
 
-func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, attributes map[string]string) error {
+func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, attributes map[string]string, publishContext map[string]string, mode ateapipb.VolumeAccessMode) error {
 	f.mountCalls = append(f.mountCalls, mountCall{
 		volumeID:   volumeID,
 		targetPath: targetPath,
@@ -537,4 +541,34 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Errorf("expected volumes dir %q to be created, stat err = %v", volumesDir, err)
 		}
 	})
+}
+
+func TestDirectCSIDriverConfigGetter(t *testing.T) {
+	ctx := context.Background()
+	fakeClient := fake.NewSimpleClientset(&v1alpha1.CSIDriverConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test.csi.k8s.io",
+		},
+		Spec: v1alpha1.CSIDriverConfigSpec{
+			DriverName:         "test.csi.k8s.io",
+			ControllerEndpoint: "tcp://127.0.0.1:9000",
+		},
+	})
+
+	getter := &directCSIDriverConfigGetter{client: fakeClient}
+
+	// Existing config
+	cfg, err := getter.Get(ctx, "test.csi.k8s.io")
+	if err != nil {
+		t.Fatalf("getter.Get failed: %v", err)
+	}
+	if cfg.Spec.DriverName != "test.csi.k8s.io" {
+		t.Errorf("expected driver name %q, got %q", "test.csi.k8s.io", cfg.Spec.DriverName)
+	}
+
+	// Missing config
+	_, err = getter.Get(ctx, "missing.csi.k8s.io")
+	if err == nil {
+		t.Fatalf("expected error for missing driver, got nil")
+	}
 }

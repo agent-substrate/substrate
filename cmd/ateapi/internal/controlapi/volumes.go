@@ -21,6 +21,8 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -49,6 +51,7 @@ func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageC
 				VolumeName: vol.GetName(),
 				VolumeType: sc.Provisioner,
 				Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+				AccessMode: vol.GetExternalVolumeTemplate().GetAccessMode(),
 			})
 		}
 	}
@@ -109,14 +112,24 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, status.Errorf(codes.FailedPrecondition, "volume %q has mismatched type %q (expected %q from StorageClass %q)", volName, vol.GetVolumeType(), sc.Provisioner, scName)
 		}
 
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, registry.GetPlugin, vol.GetVolumeType())
 		if err != nil {
 			return resultVolumes, status.Errorf(codes.FailedPrecondition, "failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
 		}
 
-		storageVolumeID, volCtx, volErr := plugin.CreateVolume(ctx, actVolID, specVol.GetExternalVolumeTemplate().GetCapacity(), sc.Provisioner, sc.Parameters)
+		storageVolumeID, volCtx, volErr := plugin.CreateVolume(ctx, actVolID, specVol.GetExternalVolumeTemplate().GetCapacity(), sc.Provisioner, sc.Parameters, vol.GetAccessMode())
 		if volErr != nil {
-			return resultVolumes, status.Errorf(codes.Internal, "failed to create volume %q: %v", specVol.GetName(), volErr)
+			switch status.Code(volErr) {
+			case codes.InvalidArgument,
+				codes.OutOfRange,
+				codes.ResourceExhausted,
+				codes.PermissionDenied,
+				codes.Unimplemented,
+				codes.AlreadyExists:
+				return resultVolumes, status.Errorf(status.Code(volErr), "failed to create volume %q: %v", specVol.GetName(), volErr)
+			default:
+				return resultVolumes, status.Errorf(codes.Internal, "failed to create volume %q: %v", specVol.GetName(), volErr)
+			}
 		}
 
 		resultVolumes = append(resultVolumes, &ateapipb.ExternalVolume{
@@ -125,6 +138,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			VolumeType:      sc.Provisioner,
 			Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 			VolumeContext:   volCtx,
+			AccessMode:      vol.GetAccessMode(),
 		})
 	}
 	return resultVolumes, nil
@@ -144,11 +158,9 @@ func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 			// to the original requested volID.
 			volID = actorVolumeID(actorUID, vol.GetVolumeName())
 		}
-		// TODO: Standardize volume plugin lookup and error handling across control plane
-		// and worker plane (e.g. via a shared helper).
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, registry.GetPlugin, vol.GetVolumeType())
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
+			errs = append(errs, err)
 			continue
 		}
 		if err := plugin.DeleteVolume(ctx, volID); err != nil {
@@ -194,6 +206,8 @@ func actorVolumeID(actorUID string, volumeName string) string {
 }
 
 // detachActorVolumes detaches all mounted external volumes for an actor from its worker node.
+// Upon successful persistence of cleared volume states to the store, actor's Status and
+// Metadata are updated in-place with the stored actor record.
 func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
@@ -226,6 +240,7 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		volumesToDetach = getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), template)
 	}
 	// Collect errors for all volumes to detach, but continue processing so we attempt to detach all volumes.
+	var clearedVolNames []string
 	var errs []error
 	for _, vol := range volumesToDetach {
 		// StorageVolumeId is only populated once the volume is provisioned.
@@ -235,19 +250,46 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 			continue
 		}
 		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, err := volume.LookupPlugin(ctx, registry.GetPlugin, vol.GetVolumeType())
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
+			errs = append(errs, err)
 			continue
 		}
 		if err := plugin.DetachVolume(ctx, vol.GetStorageVolumeId(), node); err != nil {
 			if status.Code(err) == codes.NotFound {
 				slog.WarnContext(ctx, "Volume not found during detach, assuming already detached", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
+				clearedVolNames = append(clearedVolNames, vol.GetVolumeName())
 				continue
 			}
 			errs = append(errs, fmt.Errorf("failed to detach volume %q from node %q: %w", vol.GetStorageVolumeId(), node, err))
+		} else {
+			clearedVolNames = append(clearedVolNames, vol.GetVolumeName())
 		}
 	}
+
+	if len(clearedVolNames) > 0 {
+		actorRef := resources.ActorRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
+		storedActor, updateErr := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+			for _, name := range clearedVolNames {
+				for _, toVol := range toUpdate.GetStatus().GetActorVolumes() {
+					if toVol.GetVolumeName() == name {
+						toVol.PublishContext = nil
+						toVol.PublishContextNode = ""
+					}
+				}
+			}
+			return nil
+		})
+		if updateErr != nil {
+			if !errors.Is(updateErr, store.ErrNotFound) {
+				slog.WarnContext(ctx, "Failed to persist cleared volume publish context", slog.String("actor_id", actor.GetMetadata().GetName()), slog.Any("error", updateErr))
+			}
+		} else if storedActor != nil {
+			actor.Status = storedActor.Status
+			actor.Metadata = storedActor.Metadata
+		}
+	}
+
 	return errors.Join(errs...)
 }
 
@@ -255,4 +297,5 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 // detach actor volumes.
 type detachActorVolumesStore interface {
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 }

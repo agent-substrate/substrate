@@ -53,10 +53,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/internal/volume/csi"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -267,10 +267,7 @@ func main() {
 		}
 	}
 
-	// TODO: Revisit scalability implications of using a shared informer. This lister
-	// is unlikely to be used with frequency.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
+	csiDriverConfigGetter := &directCSIDriverConfigGetter{client: ateClient}
 
 	clusterTrustBundleInformerFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 24*time.Hour,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
@@ -281,9 +278,7 @@ func main() {
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	ateFactory.Start(stopCh)
 	clusterTrustBundleInformerFactory.Start(stopCh)
-	ateFactory.WaitForCacheSync(stopCh)
 	clusterTrustBundleInformerFactory.WaitForCacheSync(stopCh)
 
 	wmService := NewService(
@@ -294,7 +289,7 @@ func main() {
 		imageCache,
 		instruments,
 		volPlugins,
-		csiDriverConfigLister,
+		csiDriverConfigGetter,
 		systemInfoVolumes,
 	)
 	go systemInfoVolumes.run(ctx)
@@ -303,19 +298,17 @@ func main() {
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
 	// on-demand fetch in ensureSandboxAssets still covers correctness.
 	//
-	// The informer is requested only now, after the factory's blocking
-	// WaitForCacheSync above, so it cannot hold up atelet startup when its
-	// list/watch fails (e.g. Forbidden while the ClusterRole rollout lags the
-	// binary): the reflector retries in the background and prewarm stays cold
-	// until it recovers.
+	// We intentionally never WaitForCacheSync on this factory, so a failing
+	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
+	// binary) cannot hold up atelet startup: the reflector retries in the
+	// background and prewarm stays cold until it recovers.
+	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
 	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
-	// The factory only runs informers that exist when Start is called: the
-	// Start above predates the SandboxConfigs informer, so without this call
-	// it would never list or watch. Start is idempotent per informer — this
-	// launches the new one and leaves the already-running ones untouched.
+	// Start after the informer is registered: the factory only runs informers
+	// that exist when Start is called.
 	ateFactory.Start(stopCh)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
@@ -427,6 +420,15 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 	return done
 }
 
+// directCSIDriverConfigGetter retrieves CSIDriverConfig via direct API call rather than a cluster-wide watch informer.
+type directCSIDriverConfigGetter struct {
+	client versioned.Interface
+}
+
+func (g *directCSIDriverConfigGetter) Get(ctx context.Context, name string) (*atev1alpha1.CSIDriverConfig, error) {
+	return g.client.ApiV1alpha1().CSIDriverConfigs().Get(ctx, name, metav1.GetOptions{})
+}
+
 // AteomHerder is a service that allows controlling workloads on individual
 // ateoms.
 type AteomHerder struct {
@@ -439,7 +441,7 @@ type AteomHerder struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
-	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+	csiDriverConfigGetter csi.CSIDriverConfigGetter
 	systemInfoVolumes     *systemInfoVolumeRefresher
 }
 
@@ -454,7 +456,7 @@ func NewService(
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
-	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
+	csiDriverConfigGetter csi.CSIDriverConfigGetter,
 	systemInfoVolumes *systemInfoVolumeRefresher,
 ) *AteomHerder {
 	wms := &AteomHerder{
@@ -464,7 +466,7 @@ func NewService(
 		gcsClient:             gcsClient,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
-		csiDriverConfigLister: csiDriverConfigLister,
+		csiDriverConfigGetter: csiDriverConfigGetter,
 		systemInfoVolumes:     systemInfoVolumes,
 	}
 	return wms
