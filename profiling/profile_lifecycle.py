@@ -12,6 +12,9 @@ Phase sources (all verified against the tree):
                   "FinalizeSuspended store ..." slog.Duration, int64 ns
   atelet          "Image cache hit|miss"        per image reference
                   "Image pulled into layer cache" took, int64 ns: the registry pull
+                  "PrepareLayers timing breakdown" *_ms, float64 ms: image streaming (Info)
+                  "Image streamed"              duration, int64 ns (Debug)
+                  "Image ... falling back to cache" streaming declined or failed
                   "Restore timing breakdown"    ate.actor.restore.duration.*, float64 s
   ateom worker    "Actor starting|started"      lifecycle envelope, RFC3339Nano
                   "Actor restoring|restored"
@@ -279,6 +282,112 @@ def atelet_images(records):
     return out, notes
 
 
+# Image streaming messages (cmd/atelet/oci.go and
+# internal/imagestreaming/drivers/remotesnapshotter/driver.go).
+STREAM_BREAKDOWN = "PrepareLayers timing breakdown"
+STREAM_BREAKDOWN_FIELDS = ("resolve_ms", "stat_ms", "prepare_ms", "view_ms",
+                           "listable_ms", "wrapper_ms", "total_ms")
+STREAMED = "Image streamed"
+STREAM_REPREPARE = "Cached streaming lease layers missing on disk; re-preparing layers"
+STREAM_FALLBACKS = (
+    "Image not streamable; falling back to cache",
+    "Image streaming layer preparation failed; falling back to cache",
+    "Image streaming unavailable; falling back to cache",
+    "Error evaluating image streaming eligibility; falling back to cache",
+    "Failed to resolve image config for streamed image; falling back to cache",
+)
+
+
+def atelet_flags():
+    """--image-streamer and --log-level from the atelet DaemonSet args.
+
+    Absent flags take atelet's defaults (none, info). Call this outside every
+    timed span: it is script overhead, not part of any step.
+    """
+    out = run(f"kubectl -n {ATE_SYSTEM} get ds -l app=atelet -o jsonpath='{{..args}}'",
+              check=False).stdout
+
+    def flag(name, default):
+        # More than one value means more than one atelet DaemonSet is live.
+        vals = sorted(set(re.findall(rf"--{name}=([^\",\s\]]+)", out)))
+        return ",".join(vals) or default
+
+    return {"image_streamer": flag("image-streamer", "none"),
+            "log_level": flag("log-level", "info")}
+
+
+def image_digest(rec):
+    """The digest pinned in a record's image or ref, else its digest field."""
+    m = re.search(r"@(sha256:[0-9a-f]+)", rec.get("image") or rec.get("ref") or "")
+    return m.group(1) if m else rec.get("digest", "")
+
+
+def atelet_streaming(records, digests=None):
+    """Per-image streaming path and PrepareLayers breakdown.
+
+    Returns (table, notes, streamed digests). digests limits the scan to those
+    images; None keeps every record, which suits records already selected by
+    trace ID.
+
+    The path is read from which lines appear:
+      breakdown, prepare_ms > 0   cold: snapshots prepared through Riptide
+      breakdown, prepare_ms == 0  stat hit: committed layers already on the node
+      breakdown, resolve_ms == 0  resolve cached: image metadata reused, no registry call
+      "Image streamed" only       lease reuse: the driver's fast paths log no breakdown
+
+    "unattributed" is total_ms minus the named phases: work inside
+    prepareLayersCold that has no field of its own.
+    """
+    out, notes = {}, []
+    broken_down, streamed, fell_back = set(), set(), set()
+    for r in records:
+        m, d = msg_of(r), image_digest(r)
+        if digests is not None and d not in digests:
+            continue
+        ref = short_ref(r.get("image", "")) or d[7:19]
+        if m == STREAM_BREAKDOWN:
+            broken_down.add(d)
+            path = "cold" if (r.get("prepare_ms") or 0) > 0 else "stat hit (layers already on node)"
+            if r.get("resolve_ms") == 0:
+                path += ", resolve cached"
+            out[f"{ref} path"] = f"STREAMED {path}, {r.get('layers')} layers"
+            for k in STREAM_BREAKDOWN_FIELDS:
+                if isinstance(r.get(k), (int, float)):
+                    out[f"  prepare_layers.{k[:-3]}"] = r[k] / 1000.0
+            parts = [r.get(k) for k in STREAM_BREAKDOWN_FIELDS]
+            if all(isinstance(v, (int, float)) for v in parts):
+                out["  prepare_layers.unattributed"] = (parts[-1] - sum(parts[:-1])) / 1000.0
+        elif m == STREAMED:
+            streamed.add(d)
+            if d not in broken_down:
+                out[f"{ref} path"] = f"STREAMED lease reuse, {r.get('layers')} layers"
+            out[f"stream {ref} (atelet total)"] = ns_to_s(r.get("duration"))
+        elif m in STREAM_FALLBACKS:
+            fell_back.add(d)
+            reason = m.split(";")[0]
+            out[f"{ref} path"] = f"FALLBACK to pull: {reason}" + (f" ({r['err']})" if r.get("err") else "")
+        elif m == STREAM_REPREPARE:
+            notes.append(f"{ref}: {m}")
+
+    if broken_down - streamed - fell_back:
+        notes.append(
+            "PrepareLayers logged a breakdown but no 'Image streamed' followed: "
+            "atelet may not be running at debug level."
+        )
+    return out, notes, streamed | (broken_down - fell_back)
+
+
+def log_level_note(flags):
+    """A warning when streaming is on but atelet drops its Debug lines, else None."""
+    if flags.get("image_streamer") == "none" or "debug" in flags.get("log_level", ""):
+        return None
+    return (
+        f"atelet runs at --log-level={flags.get('log_level')}: 'Image streamed' and "
+        "'Image streaming unavailable' are Debug, so lease reuse and declines are "
+        "invisible and only the Info breakdown shows. Set --log-level=debug."
+    )
+
+
 def short_ref(ref):
     """Last path element of an image reference, minus the digest."""
     return ref.rsplit("/", 1)[-1].split("@")[0] or ref
@@ -341,13 +450,15 @@ def collect(args, step, method, window, trace_id, since, actor, span):
 
     facts, notes = ateapi_facts(api, method)
     images, image_notes = atelet_images(let)
+    streaming, stream_notes, _ = atelet_streaming(let)
     phases, meta = ateom_timeline(wrk, window, actor)
     return {
         "step": step,
         "trace_id": trace_id,
-        "notes": notes + image_notes,
+        "notes": notes + image_notes + stream_notes,
         "ateapi": facts,
         "images": images,
+        "streaming": streaming,
         "atelet_restore": atelet_restore(let),
         "ateom": phases,
         "ateom_meta": meta,
@@ -390,6 +501,7 @@ def report(result, placement):
         print(f"  - {placement}")
     table("client + ate-api-server", {"client_wall": result["client_wall"], **result["ateapi"]})
     table("atelet image cache (pull from the registry)", result["images"])
+    table("atelet image streaming", result["streaming"])
     table("atelet restore phases (concurrent: download || assets+oci_unpack)", result["atelet_restore"])
     table("ateom worker steps", {**result["ateom"], "ateom_total": result["ateom_meta"].get("ateom_total")})
 
@@ -422,6 +534,12 @@ def main():
         if not args.worker_pool:
             p.error("one of --worker-selector or --worker-pool is required")
         args.worker_selector = f"ate.dev/worker-pool={args.worker_pool}"
+
+    # Read before the first step so it never lands in a measured span.
+    flags = atelet_flags()
+    print(f"atelet --image-streamer={flags['image_streamer']} --log-level={flags['log_level']}")
+    if log_level_note(flags):
+        print(f"WARNING: {log_level_note(flags)}")
 
     actor = args.actor or f"prof-{int(time.time())}"
     results, t_origin = [], time.time()
@@ -479,7 +597,8 @@ def main():
 
         if args.json and results:
             with open(args.json, "w") as f:
-                json.dump({"actor": actor, "steps": [r for r, _ in results]}, f, indent=2)
+                json.dump({"actor": actor, "atelet_flags": flags,
+                           "steps": [r for r, _ in results]}, f, indent=2)
             print(f"\nwrote {args.json}")
 
         if not args.keep:

@@ -38,8 +38,11 @@ import time
 
 from profile_lifecycle import (
     ATE_SYSTEM,
+    atelet_flags,
     atelet_restore,
+    atelet_streaming,
     ateom_timeline,
+    log_level_note,
     logs,
     msg_of,
     ns_to_s,
@@ -189,12 +192,15 @@ def image_size(ref):
     return sum(l.get("size", 0) for l in mf.get("layers", []))
 
 
-def cold_pull(records, digests, sizes):
+def cold_pull(records, digests, sizes, streamed=()):
     """Cache outcome and pull duration for this template's images.
 
     Records are already bounded to the build window, so unlike the steady-state
     reading in profile_lifecycle.atelet_images the first outcome seen for a
     digest is the golden actor's own, and later hits cannot overwrite it.
+
+    streamed holds digests that image streaming served; those bypass the layer
+    cache entirely, so their absence from it says nothing about warmth.
     """
     out, notes = {}, []
     for r in records:
@@ -210,7 +216,7 @@ def cold_pull(records, digests, sizes):
             size = sizes.get(digest)
             if size and took:
                 out[f"  {size / 1e6:.0f} MB at"] = f"{size / 1e6 / took:.0f} MB/s"
-    if not any(v == "MISS" for v in out.values()):
+    if not any(v == "MISS" for v in out.values()) and not set(digests) <= set(streamed):
         notes.append(
             "image was already in this node's layer cache: this run measures a "
             "warm boot, not a cold pull. Recreating a template does not evict "
@@ -268,6 +274,10 @@ def main():
     selector = args.worker_selector or f"ate.dev/worker-pool={args.worker_pool}"
     name = "swebench-" + re.sub(r"-+", "-", args.instance.replace("_", "-"))
 
+    # Read before build_template starts its clock so it stays out of t0..t1.
+    flags = atelet_flags()
+    level_note = log_level_note(flags)
+
     print(f"\nbuilding {args.atespace}/{name} from {args.instance} ...")
     t0, t1, out = build_template(args.script, args.instance, args.atespace, args.env)
     print(out)
@@ -288,7 +298,9 @@ def main():
                  key=lambda r: r["_ts"])
 
     facts, notes = boot_path(api)
-    pulls, pull_notes = cold_pull(let, digests, sizes)
+    streaming, stream_notes, streamed = atelet_streaming(let, digests)
+    pulls, pull_notes = cold_pull(let, digests, sizes, streamed)
+    pull_notes += stream_notes + ([level_note] if level_note else [])
     phases, meta = ateom_timeline(wrk, "boot", uid)
     ckpt, ckpt_meta = ateom_timeline(wrk, "suspend", uid)
 
@@ -296,6 +308,7 @@ def main():
     print(f" GOLDEN ACTOR COLD BOOT   {args.atespace}/{name}")
     print("=" * 68)
     print(f"  golden actor {GOLDEN_ATESPACE}/{uid}")
+    print(f"  atelet --image-streamer={flags['image_streamer']} --log-level={flags['log_level']}")
     for n in notes + pull_notes:
         print(f"  - {n}")
     if not notes:
@@ -324,6 +337,7 @@ def main():
         ):
             print(f"  {line}")
     table("atelet image cache (cold pull baseline)", pulls)
+    table("atelet image streaming", streaming)
     table("atelet phases", atelet_restore(let))
     table("ateom worker steps (boot from spec)", {**phases, "ateom_total": meta.get("ateom_total")})
     table("ateom worker steps (checkpoint to golden)",
@@ -345,6 +359,7 @@ def main():
                 "build_segments": segments,
                 "notes": notes + pull_notes,
                 "ateapi": facts, "images": pulls,
+                "atelet_flags": flags, "streaming": streaming,
                 "ateom_boot": phases, "ateom_boot_meta": meta,
                 "ateom_checkpoint": ckpt, "ateom_checkpoint_meta": ckpt_meta,
             }, f, indent=2)
