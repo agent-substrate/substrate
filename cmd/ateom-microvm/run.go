@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -157,10 +156,6 @@ const vmmMemReserveMiB = 128
 // with real headroom, not the smallest that boots — a workload heavier than a static Go
 // binary needs more, and this floor cannot know how much.
 const minGuestMemMiB = 128
-
-// maxActorContainers is a sanity cap on containers per actor (all share the one
-// micro-VM + virtiofsd). 25 is far above any real pod.
-const maxActorContainers = 25
 
 // workloadIDs returns the guest container ids for the actor's containers, in
 // order. Recorded on runningActor so the SIGTERM handler knows which guest
@@ -384,12 +379,6 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// CreateContainer/StartContainer, driven below after the shared boot +
 	// CreateSandbox + guest networking.
 	containers := p.containers
-	if len(containers) == 0 {
-		return apierror.InvalidArgument("actor spec has no containers")
-	}
-	if len(containers) > maxActorContainers {
-		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
-	}
 
 	// ateom builds the CH vm.create itself, so it needs the guest kernel + image
 	// paths directly.

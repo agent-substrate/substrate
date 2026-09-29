@@ -397,9 +397,10 @@ func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateomp
 // every container answered, so a deadline never yields a partial sum.
 //
 // The loop as a whole is bounded by ctx — the caller's RPC deadline — with
-// maxActorContainers * statsCallTimeout as the ceiling when the caller set
-// none. statsCallTimeout is per call so that one hung container read cannot
-// eat the budget the remaining containers still need.
+// ateomvalidation.MaxContainers * statsCallTimeout as the ceiling when the
+// caller set none, since validation caps the spec before anything boots.
+// statsCallTimeout is per call so that one hung container read cannot eat
+// the budget the remaining containers still need.
 func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstats.Sample, map[string]uint64, error) {
 	var (
 		total   agentstats.Sample

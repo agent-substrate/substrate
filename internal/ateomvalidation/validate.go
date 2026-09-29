@@ -68,6 +68,30 @@ func ValidateGetWorkloadStatsRequest(ctx context.Context, req *ateompb.GetWorklo
 	return nil
 }
 
+// MaxContainers is the bound on WorkloadSpec.containers, the template's own
+// bound; the +k8s:maxItems tag on the field carries the same number.
+const MaxContainers = 10
+
+// Run and Restore need a container to start. The WorkloadSpec message itself
+// allows none, for the fallback spec Terminate sends when an actor's template
+// is gone, but a Run or Restore with none would boot the sandbox around
+// nothing.
+
+func ValidateCustom_RunWorkloadRequest_Spec(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateompb.WorkloadSpec) field.ErrorList {
+	return requireContainers(fldPath, value)
+}
+
+func ValidateCustom_RestoreWorkloadRequest_Spec(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateompb.WorkloadSpec) field.ErrorList {
+	return requireContainers(fldPath, value)
+}
+
+func requireContainers(fldPath *field.Path, spec *ateompb.WorkloadSpec) field.ErrorList {
+	if len(spec.GetContainers()) == 0 {
+		return field.ErrorList{field.Required(fldPath.Child("containers"), "a workload needs a container to start")}
+	}
+	return nil
+}
+
 // GetActiveWorkloadStatsRequest has no fields, so validation-gen emits
 // nothing for it and there is no wrapper.
 
