@@ -59,8 +59,6 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
     &mut self,
     envoy_filter: &mut ELF,
   ) -> envoy_dynamic_module_type_on_listener_filter_status {
-//    if let Some(transport_protocol) = envoy_filter.get_detected_transport_protocol()
-//      && transport_protocol.as_slice() == b"raw_buffer"
     let transport_protocol_str = envoy_filter
       .get_detected_transport_protocol()
       .map(|transport_protocol| {
@@ -70,6 +68,7 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
 
     if transport_protocol_str.as_deref() != Some("tls")
     {
+      // TODO(yanavlasov): allow plaintext traffic only if there are `http` rules in the policy
       envoy_filter.set_filter_state_bytes(
         ATE_EGRESS_FILTER_CHAIN,
         ATE_EGRESS_FILTER_CHAIN_CLEARTEXT.as_bytes(),
@@ -102,10 +101,12 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
         if policy
           .allowed_snis
           .iter()
+          // TODO(yanavlasov): implement wildcard matching.
           .any(|sni| server_name.eq_ignore_ascii_case(sni)) =>
       {
         ATE_EGRESS_FILTER_CHAIN_MITM
       }
+      // TODO(yanavlasov): implement passthrough TLS policy.
       _ => ATE_EGRESS_FILTER_CHAIN_NONE,
     };
 
