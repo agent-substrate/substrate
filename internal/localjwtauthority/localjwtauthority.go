@@ -199,6 +199,7 @@ func sign(payloadBytes []byte, signingKey crypto.PrivateKey, algorithm, keyID st
 	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadBytes)
 
 	rawHeader := wireHeader{
+		Type:      "JWT",
 		Algorithm: algorithm,
 		KeyID:     keyID,
 	}

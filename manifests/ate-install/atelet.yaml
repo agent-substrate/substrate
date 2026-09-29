@@ -137,11 +137,12 @@ spec:
       # Stop() and the tracer/meter flush on exit.
       terminationGracePeriodSeconds: 330
       # atelet must run on every node a WorkerPool actor may schedule to.
-      # Microvm pools are tainted ate.dev/sandboxClass=<class>:NoSchedule per
-      # the convention in cmd/atecontroller/internal/controllers/workerpool_apply.go
-      # (which also adds the matching toleration to ateom worker pods).
-      # Tolerating the key with operator: Exists covers any current or future
-      # sandbox class value without needing another manifest edit.
+      # Node pools reserved for one sandbox class are tainted
+      # ate.dev/sandboxClass=<class>:NoSchedule per the convention in
+      # cmd/atecontroller/internal/controllers/workerpool_apply.go, which adds
+      # the matching toleration to every pool's worker pods. Tolerating the key
+      # with operator: Exists covers any current or future sandbox class value
+      # without needing another manifest edit.
       tolerations:
       - key: ate.dev/sandboxClass
         operator: Exists
@@ -160,7 +161,7 @@ spec:
         - --drain-timeout=5m
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
-        # /var/lib/ateom-gvisor hostPath as root, so it needs no Linux
+        # /var/lib/ate hostPath as root, so it needs no Linux
         # capabilities. (Unpacking arbitrary actor images can require writing into
         # image-defined read-only dirs; the untar in cmd/atelet/oci.go extracts
         # directories writable then restores the image's modes, and removal makes
@@ -230,7 +231,7 @@ spec:
           periodSeconds: 10
         volumeMounts:
         - name: run-ateom
-          mountPath: /var/lib/ateom-gvisor
+          mountPath: /var/lib/ate
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
         - name: servicedns-ca
@@ -246,7 +247,7 @@ spec:
       volumes:
       - name: run-ateom
         hostPath:
-          path: /var/lib/ateom-gvisor
+          path: /var/lib/ate
           type: DirectoryOrCreate
       # Mount Kubelet plugins directory to access CSI driver Unix domain sockets.
       - name: kubelet-plugins

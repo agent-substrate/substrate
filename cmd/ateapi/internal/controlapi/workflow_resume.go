@@ -713,7 +713,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		switch {
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
+			req.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
 			req.GoldenSnapshotFiles = src.GoldenSnapshotFiles
 		default:
 			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
@@ -738,14 +738,14 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			tele.SnapshotKind = ateattr.SnapshotKindLatest
 		}
 		var scope ateletpb.SnapshotScope
-		var goldenSnapshotURI string
+		var baseConfig *ateletpb.ExternalRestoreConfiguration
 		var goldenSnapshotFiles []string
 		switch {
 		case src.TemplateReplaced:
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			goldenSnapshotURI = src.GoldenSnapshotURI.String()
+			baseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
 			goldenSnapshotFiles = src.GoldenSnapshotFiles
 		default:
 			scope = actorSnapshotContentScopeToAtelet(src.Scope)
@@ -760,7 +760,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
-				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+				ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
@@ -770,7 +770,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			// its first suspend, are owned in the golden atespace.
 			FromGoldenSnapshot: src.SnapshotURI.Atespace() == resources.GoldenActorAtespace,
 			// Empty unless this is a Golden data resume.
-			GoldenSnapshotUri:   goldenSnapshotURI,
+			BaseConfig:          baseConfig,
 			GoldenSnapshotFiles: goldenSnapshotFiles,
 			SandboxAssets:       sandboxAssets,
 			ActorUid:            actor.GetMetadata().Uid,

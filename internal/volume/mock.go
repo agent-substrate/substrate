@@ -21,11 +21,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
 // Use a directory that is shared between atelet and ateom but not cleaned up by atelet
-var mockVolumeDirectories string = filepath.Join(ateompath.BasePath, "mockvolumes")
+var mockVolumeDirectories string = filepath.Join(nodepath.BasePath, "mockvolumes")
 
 var (
 	_ VolumePluginControlPlane = (*MockVolumePlugin)(nil)

@@ -34,15 +34,16 @@ import (
 	"sync"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atelet"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -67,6 +68,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -95,12 +97,12 @@ var (
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
-	imageCacheDir                = pflag.String("image-cache-dir", ateompath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
+	imageCacheDir                = pflag.String("image-cache-dir", ateletpath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
-	otlpRelaySocket = pflag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(), "Unix socket to serve the OTLP relay on, which forwards the node's ateom telemetry to OTEL_EXPORTER_OTLP_ENDPOINT so worker pods need no network path to the collector. Empty disables the relay.")
+	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(), "Unix socket to serve the OTLP relay on, which forwards the node's ateom telemetry to OTEL_EXPORTER_OTLP_ENDPOINT so worker pods need no network path to the collector. Empty disables the relay.")
 
 	actorStatsPollInterval = pflag.Duration("actor-stats-poll-interval", time.Minute, fmt.Sprintf("Actor resource utilization sampling frequency. 0 disables the sampling entirely; minimum accepted value is %v.", minActorStatsPollInterval))
 
@@ -205,7 +207,7 @@ func main() {
 	imageCache, err := imagecache.New(*imageCacheDir,
 		imagecache.WithAuthenticator(gcpRegistryAuthn),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
-		imagecache.WithActorsDir(ateompath.ActorsDir),
+		imagecache.WithActorsDir(nodepath.ActorsDir),
 		imagecache.WithMinAge(*imageCacheMinAge),
 		imagecache.WithMeter(otel.Meter("atelet")),
 	)
@@ -353,23 +355,22 @@ func main() {
 
 	ateomFacingTLS := tlsCfg.Clone()
 	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
-	if err := os.Remove(ateompath.AteomSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(nodepath.AteomSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
 	}
-	ateomFacingLis, err := net.Listen("unix", ateompath.AteomSupportSocket)
+	ateomFacingLis, err := net.Listen("unix", nodepath.AteomSupportSocket)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen for credential broker", err)
 	}
 	defer ateomFacingLis.Close()
-	if err := os.Chmod(ateompath.AteomSupportSocket, 0o600); err != nil {
+	if err := os.Chmod(nodepath.AteomSupportSocket, 0o600); err != nil {
 		serverboot.Fatal(ctx, "Failed to restrict credential broker socket", err)
 	}
 
 	ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
 
 	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
-		controlClient: ateapipb.NewControlClient(ateapiConn),
-		workers:       ateapipb.NewWorkerServiceClient(ateapiConn),
+		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
 	})
 	go func() {
 		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {
@@ -538,6 +539,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
 		ActorUid:              actorUID,
+		ActorDirs:             ateletpath.ActorDirs(actorUID),
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
@@ -567,20 +569,11 @@ func initSnapshotSizeMetric() error {
 // recordSnapshotSize labels each image with the registry's file.name. That
 // label used to be spelled "kind", which means the snapshot's provenance
 // everywhere else in the ate.* namespace, not one of its files.
-func recordSnapshotSize(ctx context.Context, file, path, templateAtespace, templateName string) {
+func recordSnapshotSize(ctx context.Context, file string, size int64, templateAtespace, templateName string) {
 	if snapshotSizeBytes == nil {
 		return
 	}
-	fi, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "Failed to stat snapshot image for size metric",
-			slog.String("file", file), slog.String("path", path), slog.Any("err", err))
-		return
-	}
-	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
+	snapshotSizeBytes.Record(ctx, size, metric.WithAttributes(
 		semconv.FileNameKey.String(file),
 		ateattr.TemplateAtespaceKey.String(templateAtespace),
 		ateattr.TemplateNameKey.String(templateName),
@@ -629,7 +622,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, err
 	}
 
-	checkpointDir := ateompath.CheckpointStateDir(actorUID)
+	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -655,6 +648,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              actorUID,
+		ActorDirs:             ateletpath.ActorDirs(actorUID),
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
@@ -665,15 +659,21 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	s.systemInfoVolumes.Deregister(actorUID)
 
-	snapshotFiles := resp.GetSnapshotFiles()
-	if len(snapshotFiles) == 0 && shouldHaveSnapshots(req) {
-		return nil, fmt.Errorf("ateom reported no snapshot files for checkpoint")
+	snapshotFiles, err := checkpointSnapshotFiles(resp, shouldHaveSnapshots(req))
+	if err != nil {
+		return nil, err
 	}
 
 	// No earlier pause snapshot can ever be restored again, so remove them
 	// all: the actor's current state was just captured by CheckpointWorkload,
 	// and the control plane tracks only a single local snapshot, which this
 	// checkpoint either overwrites (pause) or clears (suspend).
+	//
+	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
+	// in-place path: that leaves the whole checkpoint window with no local snapshot
+	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
+	// the actor for good (resume never falls back to object storage, RequiredNodes
+	// pins it to this node, nothing clears the field).
 	//
 	// Best-effort: if this fail, the actor's terminate prunes again.
 	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
@@ -692,7 +692,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, snapshotFiles); err != nil {
+		if err := s.moveLocalCheckpoint(ctx, req, snapshotFiles); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
 		}
@@ -713,6 +713,17 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	return &ateletpb.CheckpointResponse{SnapshotFiles: snapshotFiles}, nil
 }
 
+func checkpointSnapshotFiles(resp *ateompb.CheckpointWorkloadResponse, required bool) ([]string, error) {
+	files := resp.GetSnapshotFiles()
+	if len(files) == 0 && required {
+		return nil, errors.New("ateom reported no snapshot files for checkpoint")
+	}
+	if err := validateSnapshotFiles(files, field.NewPath("snapshot_files")).ToAggregate(); err != nil {
+		return nil, fmt.Errorf("ateom reported invalid snapshot files: %w", err)
+	}
+	return files, nil
+}
+
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	// assumption the request already been validated and scope is in the valid values set
 	switch scope {
@@ -725,19 +736,40 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	}
 }
 
-func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, snapshotFiles []string) error {
-	localCheckpointPath := ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalConfig().GetSnapshotName())
-	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, snapshotFiles []string) error {
+	actorDir := ateletpath.ActorPath(req.GetActorUid())
+	root, err := os.OpenRoot(actorDir)
+	if err != nil {
+		return fmt.Errorf("while opening actor directory: %w", err)
+	}
+	defer root.Close()
+
+	checkpointDir, err := filepath.Rel(actorDir, ateletpath.CheckpointStateDir(req.GetActorUid()))
+	if err != nil {
+		return err
+	}
+	localDir, err := filepath.Rel(actorDir, ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalConfig().GetSnapshotName()))
+	if err != nil {
+		return err
+	}
+	if err := root.MkdirAll(localDir, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
 	}
 
 	// Move exactly the files ateom reported.
 	for _, fileName := range snapshotFiles {
 		src := filepath.Join(checkpointDir, fileName)
-		dst := filepath.Join(localCheckpointPath, fileName)
-		recordSnapshotSize(ctx, fileName, src, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+		dst := filepath.Join(localDir, fileName)
+		info, err := root.Lstat(src)
+		if err != nil {
+			return fmt.Errorf("while inspecting checkpoint file %s: %w", fileName, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("checkpoint file %s is not a regular file", fileName)
+		}
+		recordSnapshotSize(ctx, fileName, info.Size(), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
-		if err := os.Rename(src, dst); err != nil {
+		if err := root.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
 		}
 	}
@@ -772,16 +804,34 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 // leaves orphaned objects that nothing references; retries overwrite the
 // deterministic object names.
 func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, snapshotFiles []string, templateAtespace, templateName string) error {
+	root, err := os.OpenRoot(srcDir)
+	if err != nil {
+		return fmt.Errorf("while opening snapshot directory: %w", err)
+	}
+	defer root.Close()
+
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range snapshotFiles {
-		local := filepath.Join(srcDir, fileName)
-		recordSnapshotSize(ctx, fileName, local, templateAtespace, templateName)
 		g.Go(func() error {
+			local, err := root.Open(fileName)
+			if err != nil {
+				return fmt.Errorf("while opening %s in snapshot directory: %w", fileName, err)
+			}
+			defer local.Close()
+			info, err := local.Stat()
+			if err != nil {
+				return fmt.Errorf("while inspecting %s in snapshot directory: %w", fileName, err)
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("snapshot file %s is not a regular file", fileName)
+			}
+			recordSnapshotSize(ctx, fileName, info.Size(), templateAtespace, templateName)
+
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
-			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
+			if err := ategcs.SendFileToGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
 				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
 			}
 			return nil
@@ -820,7 +870,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	localDir := ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
+	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
 
 	tPersist := time.Now()
 	snapshotFiles, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
@@ -886,12 +936,12 @@ func uploadFiles(req *ateletpb.UploadPausedCheckpointRequest) ([]string, error) 
 func narrowFullCaptureToData(sandboxClass string, files []string) ([]string, error) {
 	switch atev1alpha1.SandboxClass(sandboxClass) {
 	case atev1alpha1.SandboxClassMicroVM, atev1alpha1.SandboxClassGvisor:
-		if !slices.Contains(files, ateompath.DurableDirTarFile) {
+		if !slices.Contains(files, resources.DurableDirTarFile) {
 			// No durable-dir volumes were attached at pause: this snapshot
 			// holds no data, and never will — not retryable.
-			return nil, status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", sandboxClass, ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
+			return nil, status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", sandboxClass, resources.DurableDirTarFile, ateattr.SnapshotScopeData)
 		}
-		return []string{ateompath.DurableDirTarFile}, nil
+		return []string{resources.DurableDirTarFile}, nil
 
 	default:
 		return nil, status.Errorf(codes.FailedPrecondition, "unknown sandbox class %q", sandboxClass)
@@ -1001,7 +1051,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, mountErr
 	}
 
-	checkpointDir := ateompath.RestoreStateDir(actorUID)
+	checkpointDir := ateletpath.RestoreStateDir(actorUID)
 
 	snapshotFiles := req.GetSnapshotFiles()
 	goldenSnapshotFiles := req.GetGoldenSnapshotFiles()
@@ -1034,7 +1084,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 			if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, snapshotFiles, goldenSnapshotFiles); err != nil {
+				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetBaseConfig().GetSnapshotUri(), checkpointDir, snapshotFiles, goldenSnapshotFiles); err != nil {
 					return err
 				}
 			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, snapshotFiles); err != nil {
@@ -1047,14 +1097,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			// the golden's from object storage, concurrently.
 			gLocal, gLocalCtx := errgroup.WithContext(gctx)
 			gLocal.Go(func() error {
-				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, snapshotFiles); err != nil {
+				if err := s.copyLocalCheckpoint(gLocalCtx, ateletpath.ActorPath(actorUID), req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, snapshotFiles); err != nil {
 					return err
 				}
 				return nil
 			})
 			if combineWithGolden {
 				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(snapshotFiles, goldenSnapshotFiles)); err != nil {
+					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetBaseConfig().GetSnapshotUri(), checkpointDir, goldenOnlyFiles(snapshotFiles, goldenSnapshotFiles)); err != nil {
 						return err
 					}
 					return nil
@@ -1123,13 +1173,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              req.GetActorUid(),
+		ActorDirs:             ateletpath.ActorDirs(actorUID),
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
 		// Informational: for DATA_ON_GOLDEN the golden snapshot's files are
 		// already staged into the restore dir by the combined download above;
 		// ateom restores from the shared dir and never fetches this URI.
-		GoldenSnapshotUri: req.GetGoldenSnapshotUri(),
+		GoldenSnapshotUri: req.GetBaseConfig().GetSnapshotUri(),
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
@@ -1186,6 +1237,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		ActorTemplateName:     req.GetActorTemplateName(),
 		RunscPath:             runscPathFor(assetPaths),
 		Spec:                  spec,
+		ActorDirs:             ateletpath.ActorDirs(actorUID),
 	}); err != nil {
 		if status.Code(err) == codes.NotFound {
 			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
@@ -1219,19 +1271,89 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	return &ateletpb.TerminateResponse{}, nil
 }
 
-func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName string, srcDir, dstDir string, files []string) error {
+// copyLocalCheckpoint stages files from the local checkpoint snapshotName under
+// srcDir into dstDir. Both must be inside actorDir, which confines every access.
+func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, actorDir, snapshotName, srcDir, dstDir string, files []string) error {
+	root, err := os.OpenRoot(actorDir)
+	if err != nil {
+		return fmt.Errorf("while opening actor directory: %w", err)
+	}
+	defer root.Close()
+	srcDir, err = filepath.Rel(actorDir, filepath.Join(srcDir, snapshotName))
+	if err != nil {
+		return err
+	}
+	dstDir, err = filepath.Rel(actorDir, dstDir)
+	if err != nil {
+		return err
+	}
+
 	for _, fileName := range files {
 		if ctx.Err() != nil {
 			return fmt.Errorf("context cancelled: %w", ctx.Err())
 		}
-		src := filepath.Join(srcDir, snapshotName, fileName)
+		src := filepath.Join(srcDir, fileName)
 		dst := filepath.Join(dstDir, fileName)
-		if _, err := sparsefile.CopyFile(src, dst); err != nil {
+		// A link to a symlink would be followed later, outside the root.
+		info, err := root.Lstat(src)
+		if err != nil {
+			return fmt.Errorf("while inspecting %s: %w", src, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", src)
+		}
+		// Link rather than copy. The local checkpoint lives under the same actor dir
+		// as the restore staging area, so this stages the memory image in constant
+		// time instead of re-writing its whole working set. Nothing rewrites the
+		// shared inode: CH demand-pages from the staged image read-only,
+		// rewriteSnapshotSocketPaths renames its rewritten config.json into place
+		// rather than truncating, and MergeDeltaIntoBase refuses its in-place overlay
+		// once the image carries a second link.
+		//
+		// EXDEV alone falls back to copying, so an unexpected link failure surfaces
+		// instead of silently reverting to the full copy this exists to remove. It
+		// also keeps copyRootFile off a dst that is already a link to src, where its
+		// O_TRUNC would empty both and report a successful copy of the old size.
+		switch err := linkFile(root, src, dst); {
+		case err == nil:
+			continue
+		case !errors.Is(err, unix.EXDEV):
+			return fmt.Errorf("failed to link %s to %s: %w", src, dst, err)
+		}
+		slog.WarnContext(ctx, "local checkpoint and restore dir are on different filesystems; copying instead of linking",
+			slog.String("src", src), slog.String("dst", dst))
+		if _, err := copyRootFile(root, src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
 	}
 
 	return nil
+}
+
+// linkFile is os.Root.Link, indirected so a test can force the cross-filesystem
+// fallback in copyLocalCheckpoint without mounting a second filesystem.
+var linkFile = (*os.Root).Link
+
+func copyRootFile(root *os.Root, src, dst string) (int64, error) {
+	source, err := root.Open(src)
+	if err != nil {
+		return 0, err
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("%s is not a regular file", src)
+	}
+
+	destination, err := root.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		return 0, err
+	}
+	nBytes, err := sparsefile.Copy(source, destination)
+	return nBytes, errors.Join(err, destination.Close())
 }
 
 // goldenOnlyFiles returns the golden snapshot files not shadowed by the
@@ -1272,16 +1394,27 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 	if err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(dstDir)
+	if err != nil {
+		return fmt.Errorf("while opening restore directory: %w", err)
+	}
+	defer root.Close()
+
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		fileName := fileName
-		local := filepath.Join(dstDir, fileName)
 		g.Go(func() error {
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
-			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
+			local, err := root.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+			if err != nil {
+				return fmt.Errorf("while opening %s in restore directory: %w", fileName, err)
+			}
+			fetchErr := ategcs.FetchFileFromGCSWithZstd(gCtx, s.gcsClient, objectURI, local)
+			closeErr := local.Close()
+			if err := errors.Join(fetchErr, closeErr); err != nil {
 				return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
 			}
 			return nil
@@ -1311,7 +1444,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	for _, vol := range spec.GetVolumes() {
 		switch vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
-			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
+			volPath := ateletpath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
 			}
@@ -1331,7 +1464,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			[]string{"/pause"},
 			nil,
 			nil,
-			ateompath.ActorNetNSPath(actorUID),
+			nodepath.ActorNetNSPath(actorUID),
 			nil, // pause is sandbox infra; it mounts no volumes.
 			nil,
 			nil, // pause only reaps; it needs no capabilities.
@@ -1359,7 +1492,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				ctr.GetCommand(),
 				ctr.GetArgs(),
 				envs,
-				ateompath.ActorNetNSPath(actorUID),
+				nodepath.ActorNetNSPath(actorUID),
 				spec.GetVolumes(),
 				ctr.GetVolumeMounts(),
 				resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
@@ -1498,7 +1631,7 @@ func newAteomDialer(size int) *AteomDialer {
 // ateomSocketPath resolves a pod UID to the ateom socket atelet dials. A
 // variable because the real path is rooted at the node's BasePath, which a
 // test cannot serve on.
-var ateomSocketPath = ateompath.AteomSocketPath
+var ateomSocketPath = nodepath.AteomSocketPath
 
 func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.ClientConn, error) {
 	key := podUID
@@ -1637,17 +1770,17 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	}
 
 	// A DATA_ON_GOLDEN restore needs both halves: the actor's data snapshot
-	// (local pause checkpoint or external commit) and the golden snapshot,
+	// (local pause checkpoint or external commit) and the base snapshot,
 	// which is always external.
 	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		if _, err := resources.ParseSnapshotURI(req.GetGoldenSnapshotUri()); err != nil {
-			return fmt.Errorf("invalid golden_snapshot_uri: %w", err)
+		if _, err := resources.ParseSnapshotURI(req.GetBaseConfig().GetSnapshotUri()); err != nil {
+			return fmt.Errorf("invalid base_config.snapshot_uri: %w", err)
 		}
 		if len(req.GetGoldenSnapshotFiles()) == 0 {
 			return fmt.Errorf("golden_snapshot_files is required with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
 		}
-	} else if req.GetGoldenSnapshotUri() != "" || len(req.GetGoldenSnapshotFiles()) > 0 {
-		return fmt.Errorf("golden_snapshot_uri and golden_snapshot_files are only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
+	} else if req.GetBaseConfig() != nil || len(req.GetGoldenSnapshotFiles()) > 0 {
+		return fmt.Errorf("base_config and golden_snapshot_files are only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
 	}
 	// A DATA snapshot of an actor without durable-dir volumes has no files;
 	// any other snapshot does.
@@ -1759,10 +1892,8 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 }
 
 // writeFileAtomic writes data to path by writing a temp file in the same
-// directory, syncing, and renaming it over the target, then syncing the
-// parent directory so the rename is durable. The identity directory is
-// bind-mounted into actors, so the file must change atomically: a reader
-// must never observe a truncated or partially written value.
+// directory and renaming it over the target so readers never observe a
+// truncated or partially written value.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -1778,23 +1909,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(f.Name(), path); err != nil {
-		return err
-	}
-
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return os.Rename(f.Name(), path)
 }
 
 // resetActorDirs empties the actor's directories and leaves them in place for
@@ -1808,7 +1926,7 @@ func resetActorDirs(actorUID string) error {
 	// making them writable. (The rootfs itself is just an empty mountpoint
 	// here: the overlay is mounted in the ateom pod's mount namespace, not
 	// atelet's, and is detached by ateom at teardown.)
-	bundleDir := ateompath.OCIBundleDir(actorUID)
+	bundleDir := ateletpath.OCIBundleDir(actorUID)
 	if err := imagecache.RemoveAllWritable(bundleDir); err != nil {
 		return wrapFileSystemErr("while deleting bundle dir: %w", err)
 	}
@@ -1816,23 +1934,7 @@ func resetActorDirs(actorUID string) error {
 		return wrapFileSystemErr("while creating bundle dir: %w", err)
 	}
 
-	runscDir := ateompath.RunSCStateDir(actorUID)
-	if err := os.RemoveAll(runscDir); err != nil {
-		return wrapFileSystemErr("while deleting runsc state dir: %w", err)
-	}
-	if err := os.MkdirAll(runscDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating runsc state dir: %w", err)
-	}
-
-	pidFileDir := ateompath.PIDFileDir(actorUID)
-	if err := os.RemoveAll(pidFileDir); err != nil {
-		return wrapFileSystemErr("while deleting PID file dir: %w", err)
-	}
-	if err := os.MkdirAll(pidFileDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating PID file dir: %w", err)
-	}
-
-	checkpointDir := ateompath.CheckpointStateDir(actorUID)
+	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
 	if err := os.RemoveAll(checkpointDir); err != nil {
 		return wrapFileSystemErr("while deleting checkpoint-state dir: %w", err)
 	}
@@ -1840,7 +1942,7 @@ func resetActorDirs(actorUID string) error {
 		return wrapFileSystemErr("while creating checkpoint-state dir: %w", err)
 	}
 
-	restoreStateDir := ateompath.RestoreStateDir(actorUID)
+	restoreStateDir := ateletpath.RestoreStateDir(actorUID)
 	if err := os.RemoveAll(restoreStateDir); err != nil {
 		return wrapFileSystemErr("while deleting restore-state dir: %w", err)
 	}
@@ -1848,7 +1950,7 @@ func resetActorDirs(actorUID string) error {
 		return wrapFileSystemErr("while creating restore-state dir: %w", err)
 	}
 
-	durableDirVolumesMountDir := ateompath.DurableDirVolumeMountsDir(actorUID)
+	durableDirVolumesMountDir := ateletpath.DurableDirVolumeMountsDir(actorUID)
 	if err := os.RemoveAll(durableDirVolumesMountDir); err != nil {
 		return wrapFileSystemErr("while deleting durable-dir volumes mount dir: %w", err)
 	}
@@ -1858,7 +1960,7 @@ func resetActorDirs(actorUID string) error {
 
 	// World-readable (0o755): bind-mounted read-only into the actor, whose
 	// workload reads it through the gofer.
-	systemInfoVolumeRootsDir := ateompath.SystemInfoVolumeRootsDir(actorUID)
+	systemInfoVolumeRootsDir := ateletpath.SystemInfoVolumeRootsDir(actorUID)
 	if err := os.RemoveAll(systemInfoVolumeRootsDir); err != nil {
 		return wrapFileSystemErr("while deleting system-info volume roots dir: %w", err)
 	}
@@ -1868,7 +1970,7 @@ func resetActorDirs(actorUID string) error {
 
 	// Do not call RemoveAll on volume directories in case the unmount failed.
 	// We do not want to delete mount content.
-	volumesDir := ateompath.VolumesDir(actorUID)
+	volumesDir := ateletpath.VolumesDir(actorUID)
 	entries, err := os.ReadDir(volumesDir)
 	if err != nil && !os.IsNotExist(err) {
 		return wrapFileSystemErr("while reading volumes dir: %w", err)
@@ -1897,7 +1999,7 @@ func removeActorDirs(actorUID string) error {
 	if err := resetActorDirs(actorUID); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(ateompath.ActorPath(actorUID)); err != nil {
+	if err := os.RemoveAll(ateletpath.ActorPath(actorUID)); err != nil {
 		return wrapFileSystemErr("while deleting actor dir: %w", err)
 	}
 	return nil

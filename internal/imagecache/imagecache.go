@@ -248,7 +248,7 @@ func WithPlatform(p v1.Platform) Option {
 }
 
 // WithActorsDir points the eviction root-set scan at the node's actors
-// directory (the per-actor state dirs under ateompath.BasePath). Each
+// directory (the per-actor state dirs under nodepath.BasePath). Each
 // <actorsDir>/<actorUID>/bundles/<container>/rootfs-overlay.json roots its
 // image and layers against eviction. Empty disables the scan.
 func WithActorsDir(dir string) Option {

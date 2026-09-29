@@ -21,7 +21,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
@@ -35,7 +35,7 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 		if ext == nil {
 			continue
 		}
-		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
+		hostPath := ateletpath.VolumeHostPath(actorUID, vol.GetName())
 		if err := os.MkdirAll(hostPath, 0o750); err != nil {
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
@@ -58,7 +58,7 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 		if ext == nil {
 			continue
 		}
-		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
+		hostPath := ateletpath.VolumeHostPath(actorUID, vol.GetName())
 		slog.InfoContext(ctx, "Unmounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
 		// TODO: Standardize volume plugin lookup and error handling across control plane
 		// and worker plane (e.g. via a shared helper).

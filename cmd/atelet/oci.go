@@ -22,7 +22,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -82,7 +82,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	span.SetAttributes(attribute.String("image", ref))
 	defer span.End()
 
-	bundlePath := ateompath.OCIBundlePath(actorUID, containerName)
+	bundlePath := ateletpath.OCIBundlePath(actorUID, containerName)
 
 	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
 	// already wiped the bundle dir on the Run/Restore path).
@@ -149,15 +149,17 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 
 	// Write the runtime-neutral OCI spec to config.json.
 	if err := ocispec.Save(bundlePath, ocispec.Build(ocispec.Options{
-		ActorUID:      actorUID,
-		ContainerName: containerName,
-		Args:          resolvedArgs,
-		Env:           resolvedEnv,
-		NetNSPath:     netns,
-		Volumes:       volumes,
-		VolumeMounts:  volumeMounts,
-		Capabilities:  capabilities,
-		Resources:     resources,
+		Args:                      resolvedArgs,
+		Env:                       resolvedEnv,
+		NetNSPath:                 netns,
+		Volumes:                   volumes,
+		VolumeMounts:              volumeMounts,
+		Capabilities:              capabilities,
+		Resources:                 resources,
+		DurableDirVolumeMountsDir: ateletpath.DurableDirVolumeMountsDir(actorUID),
+		VolumesDir:                ateletpath.VolumesDir(actorUID),
+		SystemInfoVolumeRootsDir:  ateletpath.SystemInfoVolumeRootsDir(actorUID),
+		BundlePath:                bundlePath,
 	})); err != nil {
 		return fmt.Errorf("while writing OCI spec: %w", err)
 	}

@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
@@ -52,10 +53,14 @@ func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
 }
 
 // injectionHandler builds a handler whose actor's policy injects a credential
-// for api.example.com, with provider as the credential provider (nil leaves
-// injection off).
+// for HTTPS to api.example.com, with provider as the credential provider (nil
+// leaves injection off).
 func injectionHandler(provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("api.example.com")}, nil, 0, provider, providerName)
+	return injectionHandlerFor(credentialInjectionPolicySample("api.example.com"), provider, providerName)
+}
+
+func injectionHandlerFor(policy *ateapipb.EgressPolicy, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName)
 }
 
 // On the TLS-terminated MITM leg an allowed rule's credential is resolved and
@@ -88,8 +93,9 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 	if got := provider.got.GetUri(); got != "ate-secret://k8s/default/token" {
 		t.Errorf("provider URI = %q", got)
 	}
-	if got := provider.got.GetActorSpiffeId(); got != testActorSPIFFEID {
-		t.Errorf("actor identity = %q, want %q", got, testActorSPIFFEID)
+	wantActorSPIFFEID := "spiffe://substrate-actor.local/actor/default/my-actor"
+	if got := provider.got.GetActorSpiffeId(); got != wantActorSPIFFEID {
+		t.Errorf("actor identity = %q, want %q", got, wantActorSPIFFEID)
 	}
 }
 
@@ -100,16 +106,19 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 func TestInjectionSkippedAndPassedThrough(t *testing.T) {
 	tests := []struct {
 		name     string
+		policy   *ateapipb.EgressPolicy
 		provider *fakeProvider // nil means no provider configured
 		leg      string
 	}{
 		{
 			name:     "cleartext leg skips injection",
+			policy:   cleartextInjectionPolicy("api.example.com"),
 			provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
 			leg:      extproc.EgressCleartextFilterChainName,
 		},
 		{
 			name:     "no provider configured skips injection",
+			policy:   credentialInjectionPolicySample("api.example.com"),
 			provider: nil,
 			leg:      extproc.EgressTLSMITMFilterChainName,
 		},
@@ -118,9 +127,9 @@ func TestInjectionSkippedAndPassedThrough(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var h *Handler
 			if tc.provider == nil {
-				h = injectionHandler(nil, injectionProviderName)
+				h = injectionHandlerFor(tc.policy, nil, injectionProviderName)
 			} else {
-				h = injectionHandler(tc.provider, injectionProviderName)
+				h = injectionHandlerFor(tc.policy, tc.provider, injectionProviderName)
 			}
 			res, err := h.HandleRequestHeaders(context.Background(),
 				innerMetadata(tc.leg, "GET", "api.example.com", nil))

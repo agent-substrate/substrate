@@ -1,5 +1,3 @@
-//go:build linux
-
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateomnet
+// Package dns answers an actor's DNS from its sandbox's gateway namespace and
+// writes the resolv.conf that points the actor at it.
+package dns
 
 import (
 	"errors"
@@ -25,11 +25,12 @@ import (
 	"strings"
 )
 
-// SandboxResolvConf replaces nameservers with the sandbox gateway while
-// preserving the pod's search domains and options for Kubernetes DNS.
-func SandboxResolvConf(podResolvConf []byte) []byte {
+// SandboxResolvConf replaces the pod's nameservers with nameserver, the
+// address the sandbox's DNS is served on, while preserving the pod's search
+// domains and options for Kubernetes DNS.
+func SandboxResolvConf(nameserver string, podResolvConf []byte) []byte {
 	var out strings.Builder
-	out.WriteString("nameserver " + ActorVethGateway + "\n")
+	out.WriteString("nameserver " + nameserver + "\n")
 	for line := range strings.SplitSeq(string(podResolvConf), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "nameserver") {
 			continue
@@ -47,7 +48,7 @@ func SandboxResolvConf(podResolvConf []byte) []byte {
 // os.Root confines path traversal; unlinking prevents writes through existing links.
 func WriteRootfsResolvConf(rootfs string, content []byte) error {
 	if len(content) == 0 {
-		return fmt.Errorf("actornet: refusing to write an empty resolv.conf")
+		return fmt.Errorf("dns: refusing to write an empty resolv.conf")
 	}
 	root, err := os.OpenRoot(rootfs)
 	if err != nil {

@@ -32,6 +32,8 @@ const (
 	APIServiceName = "api"
 	// RouterServiceName is the Service name of atenet-router.
 	RouterServiceName = "atenet-router"
+	// IDPServiceName is the Service name of ate-idp-server.
+	IDPServiceName = "idp"
 	// ClientServiceAccount is the ServiceAccount an out-of-cluster client mints
 	// its ateapi bearer token from.
 	ClientServiceAccount = "ate-client"
@@ -60,6 +62,16 @@ func NamespaceFromPodEnv() string {
 		return ns
 	}
 	return SystemNamespace
+}
+
+// ActorJWTIssuer returns the actor JWT issuer for an install in namespace that
+// does not configure one: the in-cluster URL of its ate-idp-server Service.
+// Relying parties bind trust to this exact string.
+func ActorJWTIssuer(namespace string) string {
+	return (&url.URL{
+		Scheme: "https",
+		Host:   IDPServiceName + "." + namespace + ".svc",
+	}).String()
 }
 
 // SPIFFEID returns the SPIFFE ID that Pod certificates for serviceAccount in

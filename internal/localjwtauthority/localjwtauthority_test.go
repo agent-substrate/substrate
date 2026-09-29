@@ -15,13 +15,18 @@
 package localjwtauthority
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/agent-substrate/substrate/internal/actoridjwt"
 )
 
 func TestRefreshingPool(t *testing.T) {
@@ -146,4 +151,38 @@ func TestRefreshingPool(t *testing.T) {
 			t.Fatalf("Refreshing pool returned wrong trust anchors after file update; diff (-got +want)\n%s", diff)
 		}
 	})
+}
+
+func TestSignJWTHeader(t *testing.T) {
+	authority, err := GenerateECDSAP256Authority("key-1")
+	if err != nil {
+		t.Fatalf("Unexpected error generating authority: %v", err)
+	}
+	pool := &ConcretePool{
+		Authorities:      []*Authority{authority},
+		ActiveForSigning: "key-1",
+	}
+
+	jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "atespaces:a:actors:b", Audiences: []string{"aud"}})
+	if err != nil {
+		t.Fatalf("Unexpected error signing JWT: %v", err)
+	}
+
+	headerB64, _, ok := strings.Cut(jwt, ".")
+	if !ok {
+		t.Fatalf("JWT %q has no header segment", jwt)
+	}
+	headerBytes, err := base64.RawURLEncoding.DecodeString(headerB64)
+	if err != nil {
+		t.Fatalf("Unexpected error decoding header: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(headerBytes, &got); err != nil {
+		t.Fatalf("Unexpected error unmarshaling header: %v", err)
+	}
+
+	want := map[string]string{"typ": "JWT", "alg": "ES256", "kid": "key-1"}
+	if diff := cmp.Diff(got, want); diff != "" {
+		t.Errorf("Wrong JWT header; diff (-got +want)\n%s", diff)
+	}
 }

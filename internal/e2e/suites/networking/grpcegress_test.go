@@ -60,10 +60,11 @@ type grpcEchoStreamedMsg struct {
 
 // TestActorEgressGRPC covers the egress path with gRPC, which fails in ways the
 // HTTP tests cannot see. atenet-egress terminates the Actor's CONNECT and
-// relays opaque TCP, so HTTP/2 framing has to survive end to end and the gRPC
-// status has to arrive in trailers, after the response body. An egress path
-// that parsed the traffic as HTTP/1.1, or dropped trailers, would still pass
-// TestActorEgress and fail here.
+// decides the cleartext requests inside it one by one, so HTTP/2 framing has
+// to survive that parsing end to end and the gRPC status has to arrive in
+// trailers, after the response body. An egress path that downgraded the
+// traffic to HTTP/1.1, or dropped trailers, would still pass TestActorEgress
+// and fail here.
 //
 // All three streaming shapes in one request, because each one fails
 // differently: unary is a status in trailers, a server-stream is many frames
@@ -76,7 +77,7 @@ func TestActorEgressGRPC(t *testing.T) {
 	ctx := context.Background()
 	target := e2e.DeployServerPod(t, ctx, grpcEcho).Address()
 
-	actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-grpc", egressFixture(), e2e.EgressAllowAll())
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-grpc", egressFixture(), e2e.EgressAllowAll()...)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -99,7 +100,7 @@ func TestActorEgressGRPC(t *testing.T) {
 		t.Fatalf("marshaling the gRPC request for %s: %v", target, err)
 	}
 
-	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	actorRef := resources.ActorRef{Atespace: actorAtespace, Name: actorName}
 	status, body := postThroughEgressActor(t, ctx, router, actorRef, "/grpc", payload)
 	if status != http.StatusOK {
 		t.Fatalf("Actor gRPC egress to %s returned HTTP %d, want 200; body: %s", target, status, body)
@@ -154,5 +155,5 @@ func TestActorEgressGRPC(t *testing.T) {
 	// Everything above would also pass if the Actor's traffic had been
 	// masqueraded straight out instead of tunneled. This is what says it went
 	// through the gateway, on this Actor's own certificate.
-	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(grpcEcho.Port))
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(grpcEcho.Port))
 }

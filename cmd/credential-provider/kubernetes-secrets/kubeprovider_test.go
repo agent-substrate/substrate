@@ -128,8 +128,8 @@ func TestFetchSecretAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newNamespaceAuthorizer: %v", err)
 	}
-	const teamAURI = "spiffe://substrate-actor.local/atespace/team-a/actor/my-actor"
-	const teamBURI = "spiffe://substrate-actor.local/atespace/team-b/actor/my-actor"
+	const teamAURI = "spiffe://substrate-actor.local/actor/team-a/my-actor"
+	const teamBURI = "spiffe://substrate-actor.local/actor/team-b/my-actor"
 
 	tests := []struct {
 		name          string

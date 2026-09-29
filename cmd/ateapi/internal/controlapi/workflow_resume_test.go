@@ -1338,9 +1338,9 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 // TestResumeActor_AteletWireRequest is the characteristic test for the
 // loadActorForResume + ensureAteletRestored seam: for every combination of
 // boot-source inputs it pins the exact request atelet receives — which RPC,
-// req.Scope, req.GoldenSnapshotUri, the snapshot the config names, and the
-// recorded files of each — and that a source-resolution error never produces
-// an atelet RPC.
+// req.Scope, req.BaseConfig, the snapshot the config names, and the recorded
+// files of each — and that a source-resolution error never produces an
+// atelet RPC.
 //
 // The rows are ordered strictly by input columns (local → external → tmplUID →
 // golden → fromData) so a missing permutation is visible by scanning.
@@ -1906,8 +1906,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			if got := restore.GetScope(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
 			}
-			if got := restore.GetGoldenSnapshotUri(); got != tt.want.goldenURI {
-				t.Errorf("GoldenSnapshotUri = %q, want %q", got, tt.want.goldenURI)
+			if got := restore.GetBaseConfig().GetSnapshotUri(); got != tt.want.goldenURI {
+				t.Errorf("BaseConfig.SnapshotUri = %q, want %q", got, tt.want.goldenURI)
 			}
 			// The files follow the snapshot the config names, and the golden
 			// files follow the golden URI.

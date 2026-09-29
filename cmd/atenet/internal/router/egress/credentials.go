@@ -59,8 +59,8 @@ func mapCredentialProviderError(err error) error {
 //
 // Once injection is actually attempted (TLS leg, provider present), any failure
 // to produce the credential the policy required fails closed.
-func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, leg string, effects *ateapipb.EgressRuleEffects) ([]*corev3.HeaderValueOption, error) {
-	injections := effects.GetInjectStaticHeaders()
+func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, leg string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
+	injections := effects.GetReplaceHeaders()
 	if len(injections) == 0 {
 		return nil, nil
 	}
@@ -76,10 +76,8 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		return nil, nil
 	}
 
-	// The actor identity the provider authorizes on, as the actor's SPIFFE URI —
-	// the same form the CONNECT leg verified and shared as filter state. The
-	// provider authenticates this gateway and trusts its assertion; see
-	// pkg/proto/credproviderpb.
+	// Atunnel connected to us with an ateom-for-actor SPIFFE ID; translate it
+	// to a pure actor SPIFFE ID for plugins to make decisions on.
 	actorSpiffeID := resources.ActorSPIFFEID(ref).String()
 
 	setHeaders := make([]*corev3.HeaderValueOption, 0, len(injections))

@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -83,6 +85,37 @@ func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field
 func ValidateAteomUID(targetAteomUID string) error {
 	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
 		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// ValidateActorDirs checks that every directory atelet passes to ateom is
+// set, absolute and clean.
+func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+	if actorDirs == nil {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	var errs field.ErrorList
+	for _, actorDir := range []struct{ name, path string }{
+		{"root_dir", actorDirs.GetRootDir()},
+		{"oci_bundle_dir", actorDirs.GetOciBundleDir()},
+		{"checkpoint_dir", actorDirs.GetCheckpointDir()},
+		{"restore_dir", actorDirs.GetRestoreDir()},
+		{"durable_dir_volume_mounts_dir", actorDirs.GetDurableDirVolumeMountsDir()},
+		{"system_info_volume_roots_dir", actorDirs.GetSystemInfoVolumeRootsDir()},
+		{"volumes_dir", actorDirs.GetVolumesDir()},
+	} {
+		errs = append(errs, validateAbsDir(actorDir.path, fldPath.Child(actorDir.name))...)
+	}
+	return errs
+}
+
+func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
+	if dir == "" {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
+		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
 	}
 	return nil
 }

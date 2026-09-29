@@ -31,12 +31,13 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
 // ateomHostDir is the host directory atelet mounts sandbox images under. Both
 // CSI drivers need it bind-mounted with bidirectional propagation so volumes
 // they mount inside it are visible to atelet.
-const ateomHostDir = "/var/lib/ateom-gvisor"
+const ateomHostDir = nodepath.BasePath
 
 // csiNFSStorageClass is the StorageClass the external volume demos provision
 // from.

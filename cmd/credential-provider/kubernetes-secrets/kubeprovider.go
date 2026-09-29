@@ -175,10 +175,10 @@ func (s *Server) authorize(ctx context.Context, actorSpiffeID, namespace string)
 	if s.nsAuth == nil {
 		return nil
 	}
-	actor, err := resources.ActorRefFromSPIFFEID(actorSpiffeID)
+	actor, err := resources.ActorRefFromActorSPIFFEID(actorSpiffeID)
 	if err != nil {
 		slog.WarnContext(ctx, "credential request denied: unusable actor identity", slog.Any("err", err))
-		return status.Error(codes.PermissionDenied, "actor identity is required and must be a valid actor SPIFFE URI")
+		return status.Errorf(codes.PermissionDenied, "actor identity is required and must be a valid actor SPIFFE URI: %v", err)
 	}
 	if !s.nsAuth.Allowed(actor.Atespace, namespace) {
 		slog.WarnContext(ctx, "credential request denied: atespace not permitted for namespace",

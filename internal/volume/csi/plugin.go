@@ -24,8 +24,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/volume"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -66,7 +66,7 @@ var _ volume.VolumePluginWorkerPlane = (*Plugin)(nil)
 func NewPlugin(client *Client) *Plugin {
 	return &Plugin{
 		client:           client,
-		stagingDirPrefix: ateompath.StagingDirPrefix(),
+		stagingDirPrefix: filepath.Join(nodepath.BasePath, "staging"),
 	}
 }
 
@@ -293,7 +293,7 @@ func newCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLis
 		endpoint = cfg.Spec.NodeSocketOverride
 		slog.InfoContext(ctx, "Found CSIDriverConfig with NodeSocketOverride", slog.String("driver", driverName), slog.String("endpoint", endpoint))
 	default:
-		endpoint = "unix://" + ateompath.KubeletPluginSocketPath(driverName)
+		endpoint = "unix://" + kubeletPluginSocketPath(driverName)
 	}
 
 	var tlsCfg *tls.Config
@@ -452,4 +452,9 @@ func parseCertPool(path string) (*x509.CertPool, error) {
 		return nil, fmt.Errorf("failed to parse any certificates from %q", path)
 	}
 	return pool, nil
+}
+
+// kubeletPluginSocketPath is the CSI driver socket in the kubelet plugins directory.
+func kubeletPluginSocketPath(driverName string) string {
+	return filepath.Join("/var/lib/kubelet/plugins", driverName, "csi.sock")
 }

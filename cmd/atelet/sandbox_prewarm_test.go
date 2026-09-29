@@ -31,8 +31,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -162,9 +163,9 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 // prewarm is requeued with backoff, and a config deleted between enqueue and
 // processing is forgotten without retries.
 func TestPrewarmProcessRetries(t *testing.T) {
-	origDir := ateompath.StaticFilesDir
-	ateompath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { ateompath.StaticFilesDir = origDir })
+	origDir := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = t.TempDir()
+	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
 
 	ctx := context.Background()
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
@@ -196,9 +197,9 @@ func TestPrewarmProcessRetries(t *testing.T) {
 // filter as gVisor may be micro-VM by the time the worker resolves it, and a
 // node without KVM must skip it rather than download guest assets.
 func TestPrewarmProcessReappliesClassGate(t *testing.T) {
-	origDir := ateompath.StaticFilesDir
-	ateompath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { ateompath.StaticFilesDir = origDir })
+	origDir := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = t.TempDir()
+	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
 
 	ctx := context.Background()
 	// Enqueued while gVisor, edited to micro-VM before the worker ran.
@@ -242,9 +243,9 @@ func TestMicrovmNodeCapable(t *testing.T) {
 // lands in the image cache, and an asset fetch failure does not stop the
 // pull (the two live in different backends).
 func TestPrewarmPauseImage(t *testing.T) {
-	origDir := ateompath.StaticFilesDir
-	ateompath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { ateompath.StaticFilesDir = origDir })
+	origDir := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = t.TempDir()
+	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
 
 	srv := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
 	defer srv.Close()
@@ -328,10 +329,10 @@ func (hangingObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reade
 // prewarmTimeout: the queue has one worker, so an attempt that never returned
 // would block every other config's prewarm.
 func TestPrewarmTimeout(t *testing.T) {
-	origDir, origTimeout := ateompath.StaticFilesDir, prewarmTimeout
-	ateompath.StaticFilesDir = t.TempDir()
+	origDir, origTimeout := nodepath.StaticFilesDir, prewarmTimeout
+	nodepath.StaticFilesDir = t.TempDir()
 	prewarmTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { ateompath.StaticFilesDir, prewarmTimeout = origDir, origTimeout })
+	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmTimeout = origDir, origTimeout })
 
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
 	cfg.Spec.PauseImage = ""
@@ -353,10 +354,10 @@ func TestPrewarmTimeout(t *testing.T) {
 // fake clientset flows through the informer into the prewarm worker, which
 // lands the asset in the static-files cache without any Run/Restore request.
 func TestSandboxAssetPrewarmDownloads(t *testing.T) {
-	origDir, origJitter := ateompath.StaticFilesDir, prewarmMaxJitter
-	ateompath.StaticFilesDir = t.TempDir()
+	origDir, origJitter := nodepath.StaticFilesDir, prewarmMaxJitter
+	nodepath.StaticFilesDir = t.TempDir()
 	prewarmMaxJitter = 0
-	t.Cleanup(func() { ateompath.StaticFilesDir, prewarmMaxJitter = origDir, origJitter })
+	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmMaxJitter = origDir, origJitter })
 
 	host := imageVolumeTestRegistry(t)
 	pauseRef := host + "/pause:3.10"
@@ -387,7 +388,7 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	defer close(stopCh)
 	factory.Start(stopCh)
 
-	wantPath := ateompath.RunSCBinaryPath(sha)
+	wantPath := ateletpath.RunSCBinaryPath(sha)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(wantPath); err == nil {

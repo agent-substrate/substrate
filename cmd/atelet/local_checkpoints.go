@@ -22,13 +22,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 )
 
 // pruneLocalCheckpoints removes every local snapshot of the actor. A missing
 // directory is not an error, so retries are safe.
 func pruneLocalCheckpoints(ctx context.Context, actorUID string) error {
-	return pruneLocalCheckpointDir(ctx, ateompath.LocalCheckpointsDir(actorUID))
+	return pruneLocalCheckpointDir(ctx, ateletpath.LocalCheckpointsDir(actorUID))
 }
 
 func pruneLocalCheckpointDir(ctx context.Context, dir string) error {

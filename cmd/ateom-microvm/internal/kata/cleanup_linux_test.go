@@ -20,12 +20,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
 func TestIsSandboxProcess(t *testing.T) {
 	const id = "0e16c0fa-5c06-4b48-8742-4068635c08c1"
-	staged := ateompath.StaticFilesDir + "/runsc-ed81e9b2"
+	staged := nodepath.StaticFilesDir + "/runsc-ed81e9b2"
 	argv := func(args ...string) string { return strings.Join(args, "\x00") + "\x00" }
 	for _, tc := range []struct {
 		name    string

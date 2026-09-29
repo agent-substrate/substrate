@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -574,7 +574,7 @@ func TestSystemInfoVolumesFor(t *testing.T) {
 		t.Fatalf("systemInfoVolumesFor = %+v, want the two system-info volumes in spec order", got)
 	}
 	for _, v := range got {
-		if want := ateompath.SystemInfoVolumeRoot("uid-1", v.Name); v.Root != want || v.Spec == nil {
+		if want := ateletpath.SystemInfoVolumeRoot("uid-1", v.Name); v.Root != want || v.Spec == nil {
 			t.Errorf("volume %q: root %q spec %v, want root %q and a spec", v.Name, v.Root, v.Spec, want)
 		}
 	}

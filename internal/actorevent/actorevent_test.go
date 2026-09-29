@@ -18,10 +18,12 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -60,10 +62,37 @@ func crashedAttrs() []slog.Attr {
 		slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
 }
 
+// usageSampledAttrs carries every UsageSampled key with a plausible value.
+func usageSampledAttrs() []slog.Attr {
+	return append(ateattr.ActorLogAttrs(testAttribution()),
+		slog.String(string(ateattr.WorkerPoolNamespaceKey), "ate-system"),
+		slog.String(string(ateattr.WorkerPoolNameKey), "default"),
+		slog.String(string(ateattr.SandboxClassKey), "gvisor"),
+		slog.String(string(ateattr.StatsSourceKey), ateattr.StatsSourceCgroup),
+		slog.String(string(ateattr.StatsKindKey), ateattr.StatsKindPeriodic),
+		slog.Uint64(string(ateattr.StatsMemoryUsageKey), 40<<20),
+		slog.Uint64(string(ateattr.StatsMemoryPeakKey), 48<<20),
+		slog.Uint64(string(ateattr.StatsMemoryWorkingSetKey), 32<<20),
+		slog.Float64(string(ateattr.StatsCPUTimeKey), 1.5),
+		slog.Int64(string(ateattr.ActorEpochKey), 1_699_999_990_000_000_000))
+}
+
+// usagePendingAttrs is the record for an actor that is not measurable yet: the
+// required keys only, with source unspecified.
+func usagePendingAttrs() []slog.Attr {
+	return append(ateattr.ActorLogAttrs(testAttribution()),
+		slog.String(string(ateattr.WorkerPoolNamespaceKey), "ate-system"),
+		slog.String(string(ateattr.WorkerPoolNameKey), "default"),
+		slog.String(string(ateattr.SandboxClassKey), "gvisor"),
+		slog.String(string(ateattr.StatsSourceKey), ateattr.StatsSourceUnspecified),
+		slog.String(string(ateattr.StatsKindKey), ateattr.StatsKindPeriodic),
+		slog.Int64(string(ateattr.ActorEpochKey), 1_699_999_990_000_000_000))
+}
+
 func recordAttrs(rec log.Record) map[string]string {
 	got := make(map[string]string, rec.AttributesLen())
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
-		got[kv.Key] = kv.Value.String()
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		got[string(kv.Key)] = kv.Value.String()
 		return true
 	})
 	return got
@@ -82,6 +111,8 @@ func TestBuildRecord(t *testing.T) {
 		wantBody string
 		wantSev  log.Severity
 		wantVals map[string]string
+		// wantAbsent are conditional keys this record must not carry.
+		wantAbsent []string
 	}{
 		{
 			name:     "state changed",
@@ -118,6 +149,32 @@ func TestBuildRecord(t *testing.T) {
 				string(ateattr.ActorStateKey): ateattr.ActorStateCrashed,
 			},
 		},
+		{
+			name:     "usage sampled",
+			event:    UsageSampled,
+			attrs:    usageSampledAttrs(),
+			wantName: "ate.actor.usage_sampled",
+			wantBody: "Actor usage sampled",
+			wantSev:  log.SeverityInfo,
+			wantVals: map[string]string{
+				string(ateattr.StatsKindKey):    ateattr.StatsKindPeriodic,
+				string(ateattr.ActorEpochKey):   "1699999990000000000",
+				string(ateattr.StatsCPUTimeKey): "1.5",
+				string(ateattr.ActorUIDKey):     testActorUID,
+			},
+		},
+		{
+			name:     "usage sampled while pending carries no measurements",
+			event:    UsageSampled,
+			attrs:    usagePendingAttrs(),
+			wantName: "ate.actor.usage_sampled",
+			wantBody: "Actor usage sampled",
+			wantSev:  log.SeverityInfo,
+			wantVals: map[string]string{
+				string(ateattr.StatsSourceKey): ateattr.StatsSourceUnspecified,
+			},
+			wantAbsent: UsageSampled.Conditional,
+		},
 	}
 
 	for _, tt := range tests {
@@ -150,16 +207,21 @@ func TestBuildRecord(t *testing.T) {
 				}
 			}
 
-			// The event name promises a fixed shape, so the emitted set and the
-			// declared set must match both ways.
+			// The event name promises a shape: every required key is present,
+			// and nothing outside the required and conditional sets.
 			for _, key := range tt.event.Keys {
 				if _, ok := got[key]; !ok {
 					t.Errorf("declared key %q is missing from the record", key)
 				}
 			}
 			for key := range got {
-				if !slices.Contains(tt.event.Keys, key) {
+				if !slices.Contains(tt.event.Keys, key) && !slices.Contains(tt.event.Conditional, key) {
 					t.Errorf("record carries %q, which %s does not declare", key, tt.event.Name)
+				}
+			}
+			for _, key := range tt.wantAbsent {
+				if _, ok := got[key]; ok {
+					t.Errorf("record carries %q, which must be absent here", key)
 				}
 			}
 		})
@@ -184,6 +246,7 @@ func TestEventLevel(t *testing.T) {
 		{"a sub-level keeps its range", log.SeverityInfo3, slog.LevelInfo},
 		{"the state_changed event", StateChanged.Severity, slog.LevelInfo},
 		{"the crashed event", Crashed.Severity, slog.LevelError},
+		{"the usage_sampled event", UsageSampled.Severity, slog.LevelInfo},
 	}
 
 	for _, tt := range tests {
@@ -237,6 +300,7 @@ func TestLogWritesBothCopies(t *testing.T) {
 	}{
 		{"state changed", StateChanged, stateChangedAttrs(ateattr.ActorStateRunning)},
 		{"crashed", Crashed, crashedAttrs()},
+		{"usage sampled", UsageSampled, usageSampledAttrs()},
 	}
 
 	for _, tt := range tests {
@@ -283,8 +347,8 @@ func TestLogWritesBothCopies(t *testing.T) {
 				return true
 			})
 			otlpAttrs := map[string]string{}
-			otlpRec.WalkAttributes(func(kv log.KeyValue) bool {
-				otlpAttrs[kv.Key] = kv.Value.String()
+			otlpRec.WalkAttributes(func(kv attribute.KeyValue) bool {
+				otlpAttrs[string(kv.Key)] = kv.Value.String()
 				return true
 			})
 			if !maps.Equal(stdoutAttrs, otlpAttrs) {
@@ -324,7 +388,7 @@ func TestEmitCarriesTraceContext(t *testing.T) {
 
 	// Trace context belongs on the record's own fields. The stdout copy carries
 	// it as attributes; the OTLP copy must not, or it is there twice.
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 		switch kv.Key {
 		case ateattr.LogTraceIDField, ateattr.LogSpanIDField, ateattr.LogTraceFlagsField:
 			t.Errorf("record carries trace context as the attribute %q", kv.Key)
@@ -351,15 +415,16 @@ func TestBuildRecordKeepsValueKinds(t *testing.T) {
 	tests := []struct {
 		name string
 		attr slog.Attr
-		want log.Value
+		want attribute.Value
 	}{
-		{"string", slog.String("k", "v"), log.StringValue("v")},
-		{"int", slog.Int64("k", 7), log.Int64Value(7)},
-		{"uint", slog.Uint64("k", 7), log.Int64Value(7)},
-		{"float", slog.Float64("k", 1.5), log.Float64Value(1.5)},
-		{"bool", slog.Bool("k", true), log.BoolValue(true)},
-		{"duration is nanoseconds, as in the stdout copy", slog.Duration("k", 1500*time.Millisecond), log.Int64Value(1_500_000_000)},
-		{"anything else falls back to its string form", slog.Any("k", struct{}{}), log.StringValue("{}")},
+		{"string", slog.String("k", "v"), attribute.StringValue("v")},
+		{"int", slog.Int64("k", 7), attribute.Int64Value(7)},
+		{"uint", slog.Uint64("k", 7), attribute.Int64Value(7)},
+		{"uint above int64 clamps", slog.Uint64("k", math.MaxUint64), attribute.Int64Value(math.MaxInt64)},
+		{"float", slog.Float64("k", 1.5), attribute.Float64Value(1.5)},
+		{"bool", slog.Bool("k", true), attribute.BoolValue(true)},
+		{"duration is nanoseconds, as in the stdout copy", slog.Duration("k", 1500*time.Millisecond), attribute.Int64Value(1_500_000_000)},
+		{"anything else falls back to its string form", slog.Any("k", struct{}{}), attribute.StringValue("{}")},
 	}
 
 	for _, tt := range tests {
@@ -367,17 +432,43 @@ func TestBuildRecordKeepsValueKinds(t *testing.T) {
 			t.Parallel()
 
 			rec := BuildRecord(StateChanged, time.Now(), []slog.Attr{tt.attr})
-			var got log.Value
-			rec.WalkAttributes(func(kv log.KeyValue) bool {
+			var got attribute.Value
+			rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 				got = kv.Value
 				return false
 			})
-			if got.Kind() != tt.want.Kind() {
-				t.Fatalf("kind = %v, want %v", got.Kind(), tt.want.Kind())
+			if got.Type() != tt.want.Type() {
+				t.Fatalf("type = %v, want %v", got.Type(), tt.want.Type())
 			}
 			if got.String() != tt.want.String() {
 				t.Errorf("value = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestLogAtStampsBothCopies pins that the caller's time, not the write time, is
+// the timestamp of both copies: a usage sample is dated when it was read.
+func TestLogAtStampsBothCopies(t *testing.T) {
+	stdout := &captureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(stdout))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	exp := &memExporter{}
+	lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(exp)))
+	t.Cleanup(func() { _ = lp.Shutdown(context.Background()) })
+
+	at := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	NewEmitter(lp).LogAt(context.Background(), UsageSampled, at, usageSampledAttrs())
+
+	if len(stdout.records) != 1 || len(exp.records) != 1 {
+		t.Fatalf("wrote %d stdout and %d OTLP records, want 1 and 1", len(stdout.records), len(exp.records))
+	}
+	if got := stdout.records[0].Time; !got.Equal(at) {
+		t.Errorf("stdout time = %v, want %v", got, at)
+	}
+	if got := exp.records[0].Timestamp(); !got.Equal(at) {
+		t.Errorf("OTLP timestamp = %v, want %v", got, at)
 	}
 }

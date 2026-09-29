@@ -73,7 +73,7 @@ func statuszServer(t *testing.T) (*Server, string) {
 
 	if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/example-api/token",
-		ActorSpiffeId: "spiffe://substrate-actor.local/atespace/team-a/actor/my-actor",
+		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
 	}); err != nil {
 		t.Fatalf("FetchSecret: %v", err)
 	}

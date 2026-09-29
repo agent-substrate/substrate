@@ -37,14 +37,16 @@ const Name = "servicedns.podcert.ate.dev/identity"
 const CTBPrefix = "servicedns.podcert.ate.dev:identity:"
 
 type Impl struct {
-	kc     kubernetes.Interface
-	caPool localca.Pool
+	kc        kubernetes.Interface
+	pcrClient *podcertificate.Client
+	caPool    localca.Pool
 }
 
-func NewImpl(kc kubernetes.Interface, caPool localca.Pool) *Impl {
+func NewImpl(kc kubernetes.Interface, caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
 	return &Impl{
-		kc:     kc,
-		caPool: caPool,
+		kc:        kc,
+		pcrClient: pcrClient,
+		caPool:    caPool,
 	}
 }
 
@@ -209,7 +211,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	pcr.Status.BeginRefreshAt = ptr.To(metav1.NewTime(beginRefreshAt))
 	pcr.Status.NotAfter = ptr.To(metav1.NewTime(notAfter))
 
-	_, err = h.kc.CertificatesV1beta1().PodCertificateRequests(pcr.ObjectMeta.Namespace).UpdateStatus(ctx, pcr, metav1.UpdateOptions{})
+	err = h.pcrClient.UpdateStatus(ctx, pcr)
 	if err != nil {
 		return fmt.Errorf("while updating PodCertificateRequest: %w", err)
 	}

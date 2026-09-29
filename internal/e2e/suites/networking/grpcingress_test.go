@@ -61,7 +61,7 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 		t.Skip("TODO: is HTTP/2-to-HTTP/1 downgrade, and rejecting gRPC for HTTP/1-only actors, an AgentGateway ingress contract?")
 	}
 	ctx := context.Background()
-	actorName, _ := createAndResumeSubstrateActor(t, ctx, "protodowngrade", e2e.SubstrateCounterFixture())
+	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "protodowngrade", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 
 	base := "http://" + routerAddress(t, ctx)
@@ -144,7 +144,7 @@ func TestIngressGRPC(t *testing.T) {
 	ctx := context.Background()
 
 	fixture := deployGRPCEchoTemplate(t, ctx, env["BUCKET_NAME"])
-	actorName, _ := createAndResumeSubstrateActor(t, ctx, "grpcingress", fixture)
+	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "grpcingress", fixture)
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	ctx = metadata.AppendToOutgoingContext(ctx,
 		atenet.TargetActorHeader, actorRef.String(),
