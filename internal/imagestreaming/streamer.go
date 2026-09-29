@@ -49,12 +49,14 @@ func KeychainFromContext(ctx context.Context) authn.Keychain {
 }
 
 // AuthConfig contains registry credentials for one image request. Drivers use
-// them only to resolve the image manifest and config. They are never sent to
-// the streaming provider, which fetches layer data with node identity.
+// them to resolve the image manifest and config, and providers that expose a
+// credential side-channel (such as Google Riptide V2's gcfsd keychain service)
+// also receive them for on-demand layer streaming.
 type AuthConfig struct {
 	Username      string `json:"username,omitempty"`
 	Password      string `json:"password,omitempty"`
 	Auth          string `json:"auth,omitempty"`
+	ServerAddress string `json:"serveraddress,omitempty"`
 	IdentityToken string `json:"identitytoken,omitempty"`
 	RegistryToken string `json:"registrytoken,omitempty"`
 }
@@ -66,7 +68,8 @@ type StreamRequest struct {
 	ImageRef string
 
 	// AuthConfig holds optional credentials for resolving the image manifest
-	// and config. When nil, the driver uses its node-level keychain.
+	// and config (and, on Riptide V2, registering credentials with gcfsd).
+	// When nil, the driver uses its node-level keychain.
 	AuthConfig *AuthConfig
 }
 

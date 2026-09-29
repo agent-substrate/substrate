@@ -256,6 +256,12 @@ spec:
         - name: image-credential-provider-config
           mountPath: /run/image-credential-provider/config.yaml
           readOnly: true
+        - name: host-etc-containerd
+          mountPath: /host/etc/containerd
+        - name: host-run-containerd
+          mountPath: /host/run/containerd
+        - name: host-run-systemd
+          mountPath: /host/run/systemd
       volumes:
       - name: run-ateom
         hostPath:
@@ -279,6 +285,22 @@ spec:
       - name: var-lib-soci
         hostPath:
           path: /var/lib/soci-snapshotter-grpc
+          type: DirectoryOrCreate
+      # Used by cmd/atelet/host_containerd_gcfs.go when Riptide image streaming
+      # is active on a GKE node to detach [proxy_plugins.gcfs] from host
+      # containerd and switch CRI to overlayfs so atelet has exclusive ownership
+      # of containerd-gcfs-grpc and gcfsd.
+      - name: host-etc-containerd
+        hostPath:
+          path: /etc/containerd
+          type: DirectoryOrCreate
+      - name: host-run-containerd
+        hostPath:
+          path: /run/containerd
+          type: DirectoryOrCreate
+      - name: host-run-systemd
+        hostPath:
+          path: /run/systemd
           type: DirectoryOrCreate
       # Mount Kubelet plugins directory to access CSI driver Unix domain sockets.
       - name: kubelet-plugins

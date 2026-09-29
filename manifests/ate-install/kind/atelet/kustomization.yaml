@@ -65,8 +65,21 @@ patches:
                 $patch: delete
               - mountPath: /run/image-credential-provider/config.yaml
                 $patch: delete
+              - mountPath: /host/etc/containerd
+                $patch: delete
+              - mountPath: /host/run/containerd
+                $patch: delete
+              - mountPath: /host/run/systemd
+                $patch: delete
             volumes:
             - name: image-credential-provider-bin
               $patch: delete
             - name: image-credential-provider-config
               $patch: delete
+            - name: host-etc-containerd
+              $patch: delete
+            - name: host-run-containerd
+              $patch: delete
+            - name: host-run-systemd
+              $patch: delete
+

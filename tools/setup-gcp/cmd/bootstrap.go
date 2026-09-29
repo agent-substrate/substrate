@@ -93,4 +93,5 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&cfg.MachineType, "machine-type", getEnv("GVISOR_NODE_MACHINE_TYPE", "c3-standard-4"), "Machine type for the gVisor node pool [env: GVISOR_NODE_MACHINE_TYPE]")
 	bootstrapCmd.Flags().StringVar(&cfg.BucketName, "bucket-name", getEnv("BUCKET_NAME", ""), "Name of the GCS bucket for snapshots [env: BUCKET_NAME]")
 	bootstrapCmd.Flags().StringVar(&cfg.DashboardDir, "dashboard-dir", getEnv("DASHBOARD_DIR", "tools/setup-gcp/dashboards"), "Directory containing dashboard JSON files [env: DASHBOARD_DIR]")
+	bootstrapCmd.Flags().BoolVar(&cfg.EnableImageStreaming, "enable-image-streaming", getEnv("ENABLE_IMAGE_STREAMING", false), "Enable GKE Image Streaming (GCFS) on the worker node pool [env: ENABLE_IMAGE_STREAMING]")
 }

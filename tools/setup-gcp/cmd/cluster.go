@@ -58,6 +58,12 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 			DatapathProvider: containerpb.DatapathProvider_ADVANCED_DATAPATH,
 		}
 	}
+	var gcfsConfig *containerpb.GcfsConfig
+	if cfg.EnableImageStreaming {
+		gcfsConfig = &containerpb.GcfsConfig{
+			Enabled: true,
+		}
+	}
 	return &containerpb.CreateClusterRequest{
 		Parent: parent,
 		Cluster: &containerpb.Cluster{
@@ -69,6 +75,7 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 					InitialNodeCount: 2,
 					Config: &containerpb.NodeConfig{
 						MachineType: cfg.MachineType,
+						GcfsConfig:  gcfsConfig,
 					},
 				},
 			},
@@ -93,6 +100,10 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 
 func filestoreCsiDriverEnabled(cluster *containerpb.Cluster) bool {
 	return cluster.GetAddonsConfig().GetGcpFilestoreCsiDriverConfig().GetEnabled()
+}
+
+func nodePoolImageStreamingEnabled(np *containerpb.NodePool) bool {
+	return np.GetConfig().GetGcfsConfig().GetEnabled()
 }
 
 func createClusterInternal(ctx context.Context, cfg *Config, client *container.ClusterManagerClient, parent string) error {
@@ -265,6 +276,33 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		slog.Info("Cluster Filestore CSI driver match perfectly.", slog.String("cluster", cfg.ClusterName))
 	}
 
+	for _, np := range cluster.GetNodePools() {
+		if np.GetName() != "substrate-node-pool" {
+			continue
+		}
+		if nodePoolImageStreamingEnabled(np) != cfg.EnableImageStreaming {
+			slog.Info("Mismatch in node pool Image Streaming (GCFS) config",
+				slog.String("nodePool", np.GetName()),
+				slog.Bool("current", nodePoolImageStreamingEnabled(np)),
+				slog.Bool("expected", cfg.EnableImageStreaming))
+			slog.Info("Updating node pool GcfsConfig...", slog.String("nodePool", np.GetName()))
+			op, err := client.UpdateNodePool(ctx, &containerpb.UpdateNodePoolRequest{
+				Name: fmt.Sprintf("%s/nodePools/%s", clusterName, np.GetName()),
+				GcfsConfig: &containerpb.GcfsConfig{
+					Enabled: cfg.EnableImageStreaming,
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("update node pool gcfs config: %w", err)
+			}
+			if err := waitContainerOperation(ctx, client, op.Name, cfg); err != nil {
+				return err
+			}
+		} else {
+			slog.Info("Node pool Image Streaming (GCFS) config match perfectly.", slog.String("nodePool", np.GetName()))
+		}
+	}
+
 	return nil
 }
 
@@ -332,4 +370,5 @@ func init() {
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", getEnv("GVISOR_NODE_MACHINE_TYPE", "c3-standard-4"), "Machine type for the gVisor node pool [env: GVISOR_NODE_MACHINE_TYPE]")
 	clusterCmd.Flags().BoolVar(&cfg.EnableDataplaneV2, "enable-dataplane-v2", getEnv("ENABLE_DATAPLANE_V2", true), "Enable Dataplane V2 [env: ENABLE_DATAPLANE_V2]")
+	clusterCmd.Flags().BoolVar(&cfg.EnableImageStreaming, "enable-image-streaming", getEnv("ENABLE_IMAGE_STREAMING", false), "Enable GKE Image Streaming (GCFS) on the substrate node pool [env: ENABLE_IMAGE_STREAMING]")
 }

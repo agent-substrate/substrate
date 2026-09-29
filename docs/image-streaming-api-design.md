@@ -188,6 +188,27 @@ Unlike containerd v2's `Unpacker` (which checks containerd's own local `meta.db`
 - **`--enable-image-proxy-keychain-client=false`:** Must remain `false` (its default in `cmd/containerd-gcfs-grpc/main.go:L76`), as enabling it starts the CRI `ImageService` proxy which requires containerd CRI and kubeconfig.
 - **Background `containerd.sock` Client & `imageStreamingStatusMap`:** Even when only the `Snapshots` gRPC service is used, `containerd-gcfs-grpc` (`main.go:L130`) initializes a `containerdclient.Client` against `/run/containerd/containerd.sock` (which is present on GKE nodes to run system/worker pods) and records one small status string per unique streamed image in `imageStreamingStatusMap` (`AddImageStreamingStatus`) that is only cleared on containerd `ContainerCreate` events. Because the number of distinct actor images per node is small, this in-memory map entry (~100 bytes per unique image) is benign.
 
+#### 3.4.1. Host `containerd` Proxy-Plugin GC Isolation & Candidate Architectures
+
+On GKE nodes provisioned with Image Streaming (`GcfsConfig{Enabled: true}`), the node's default `/etc/containerd/config.toml` sets CRI `snapshotter = 'gcfs'` and registers `[proxy_plugins.gcfs]` pointing to `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`. Because `containerd-gcfs-grpc`'s internal BoltDB (`containerd/snapshots/storage`, bucket `v1/snapshots`) is flat and not partitioned by `containerd-namespace`, **host `containerd` and `atelet` cannot safely share `[proxy_plugins.gcfs]`**: whenever host `containerd` runs its snapshot garbage collector (`core/metadata/snapshot.go:garbageCollect`, triggered e.g. when a Kubernetes Pod terminates on the node), `containerd` walks `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` and calls `Snapshots.Remove` on any snapshot (`*-view` and `sha256:<chainID>`) not recorded in `containerd`'s own `meta.db`, which in turn triggers `gcfsd.DeleteSnapshot` and unmounts `/run/gcfsd/mnt/views/<chainID>/fs`.
+
+We evaluated four candidate architectures against our primary optimization target (**actor startup and restore latency**):
+
+| Candidate Option | Cold Stream (`9` layers) | Snapshotter Hit (`Stat` hit) | Warm Lease Hit (`refCount > 0`) | Host `containerd` Lock Contention | Isolation & Operational Trade-offs |
+| :--- | ---: | ---: | ---: | ---: | :--- |
+| **Option 0: Shared `[proxy_plugins.gcfs]` + `layersExist` Self-Healing Only** | `~1,480 ms` | `~312 ms` *(or `~1,480 ms` if evicted by K8s Pod GC)* | `~1 ms` *(or `~1,480 ms` if evicted)* | None | Host `containerd` GC evicts active `*-view` and `sha256:<chainID>` snapshots whenever K8s Pods churn on the node, degrading `1 ms`/`312 ms` warm starts back to `1,480 ms` cold starts and risking mid-flight FUSE view unmounts. |
+| **Option 1: Route `Snapshots.v1` + `Leases.v1` Through Host `containerd.sock`** | `~1,520–1,560 ms` (`+35–80 ms`) | `~330–345 ms` (`+15–30 ms`) | `~1 ms` | **High (`+50–200 ms` p99 spikes)** | Adds 18–27 extra synchronous `bbolt` `fdatasync` transactions in host `containerd`'s `meta.db` per 9-layer cold start, and serializes concurrent actor starts behind host `containerd`'s single-writer `meta.db` lock and exclusive `gcMu` GC lock. |
+| **Option 2: Run Dedicated `containerd-gcfs-grpc` Instance Sharing Host `gcfsd`** | `~1,480 ms` | `~312 ms` | `~1 ms` | None | Isolates snapshotter BoltDB, but `gcfsd` (`127.0.0.1:2112`) remains shared and keys views by `<chainID>` without cross-snapshotter reference counting. If a K8s Pod and Actor share a base layer `<chainID>` and the Pod's image is GC'd, `gcfsd` unmounts the shared view. Also requires running an extra daemon and `hostNetwork: true` on `atelet`. |
+| **Option 3 (Chosen): Detach `gcfs` from Host `containerd` on Dedicated Substrate Nodes + `layersExist` Defense-in-Depth** | **`~1,480 ms` (`+0 ms`)** | **`~312 ms` (`+0 ms`, 100% retained)** | **`~1 ms` (`+0 ms`, 100% retained)** | **None (`0 ms`)** | **100% exclusive `atelet` ownership of both `containerd-gcfs-grpc` and `gcfsd`** with zero runtime latency overhead, zero extra daemons, and zero BoltDB contention. Regular K8s Pods on the node use standard `overlayfs`. |
+
+##### Sub-Option Comparison for Option 3 (3A vs. 3B Combination):
+- **3A (`tools/setup-gcp` Provisioning):** Controlled by `--enable-image-streaming` (`[env: ENABLE_IMAGE_STREAMING]`, defaulting to `false`), which configures `GcfsConfig: &containerpb.GcfsConfig{Enabled: true}` on `substrate-node-pool` (and idempotently updates existing node pools via `UpdateNodePool`) so GKE provisions and manages `gcfsd.service` and `gcfs-snapshotter.service`.
+- **3B (`cmd/atelet` Idempotent Runtime Detach):** Controlled by `atelet`'s `--image-streamer` flag (`auto` or `riptide`; completely skipped when `--image-streamer=none`). When `atelet` starts on a node where `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` exists and `/host/etc/containerd/config.toml` still references `gcfs`, `maybeDetachHostContainerdGCFS` (`cmd/atelet/host_containerd_gcfs.go`):
+  1. Purges non-`pause` `gcfs`-pulled image metadata records from host `containerd` (`k8s.io` namespace via `/host/run/containerd/containerd.sock`) so subsequent K8s Pods cleanly pull and unpack layer blobs into `overlayfs`.
+  2. Atomically rewrites `/host/etc/containerd/config.toml` (`snapshotter = 'gcfs'` $\rightarrow$ `'overlayfs'` and removes `[proxy_plugins.gcfs]`).
+  3. Sends `RestartUnit("containerd.service", "replace")` over `/host/run/systemd/private` (requiring no `hostPID`, `privileged`, or Linux capabilities; `KillMode=process` keeps all running containers alive) and waits for `/host/run/containerd/containerd.sock` readiness.
+  4. Retains `layersExist` verification in `remotesnapshotter.Driver` as a `< 50 µs` defense-in-depth self-healing check in case `gcfs-snapshotter.service` is ever manually reset on the host.
+
 The contract has two additional boundaries:
 - **`AlreadyExists` means the layer is on the node, not that it is streamed.** A snapshotter may also provide a layer from local content, such as a GKE secondary boot disk. The driver treats both the same because the content is valid.
 - **The contract carries no credentials.** See Section 5.5.3.
@@ -452,78 +473,50 @@ flowchart TD
   - **On AWS (SOCI Snapshotter):** The SOCI snapshotter uses the EC2 instance profile or link-local metadata service, which automatically negotiates and refreshes AWS authorization tokens.
 - **Why We Do Not Pass Tokens via Snapshot Labels:** Containerd snapshotters explicitly avoid passing bearer tokens inside `PrepareSnapshotRequest.Labels` because labels are stored persistently in SQLite/bbolt and exposed via `Stat()`/`List()` RPCs, which would leak credentials.
 
-#### 5.5.3. Architectural Decision on `imagePullSecrets` and Fallback Behavior
+#### 5.5.3. Architectural Decision on `imagePullSecrets` (Riptide V2 Support vs. OSS Providers)
 
-A fundamental architectural question is how Agent Substrate handles Kubernetes `imagePullSecrets` for private registries in the image streaming path.
+A key architectural question is how Agent Substrate handles explicit registry credentials (`imagePullSecrets`) for private registries in the image streaming path when there is no CNCF standard for passing credentials over `containerd.services.snapshots.v1.Snapshots`.
 
 ##### The Core Architectural Rule:
-**Under the snapshotter contract (Section 3.4), workloads that require explicit `imagePullSecrets` never stream, on either Google Riptide or external OSS streaming solutions like AWS SOCI. They always fall back to traditional non-streaming mode (`imagecache.EnsureImage`).**
+1. **Why There Is No Industry Standard:**
+   The CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API (`Prepare`, `View`, `Stat`, `Remove`) contains **no RPC field or metadata header for registry credentials**. Passing tokens or passwords inside `PrepareSnapshotRequest.Labels` is strictly forbidden because snapshotter daemons persist labels unencrypted to disk (SQLite/bbolt) and expose them to any caller of `Stat()` and `List()`. Consequently, every streaming snapshotter relies on its own non-standard out-of-band credential side-channel or convention.
+2. **Explicit Support for What Google Riptide V2 Supports:**
+   Instead of disabling streaming for `imagePullSecrets` or building a fragile cross-provider abstraction over unstandardized conventions, **Agent Substrate explicitly supports `imagePullSecrets` / explicit registry credentials on Google Riptide V2 (`riptide`)** using Riptide V2's native `gcfsd` Keychain gRPC side-channel (`unix:///run/gcfsd/keychain.sock`).
+3. **No Promise for Other OSS Streaming Providers (Left for Future Improvement):**
+   We **do not promise or guarantee `imagePullSecrets` streaming support for other OSS streaming providers** (such as AWS SOCI, eStargz, or Nydus). On non-Riptide providers, workloads with `imagePullSecrets` may happen to stream if the node's ambient identity or node-level Docker config can already read the image, or may fail to stream and fall back to `imagecache.EnsureImage` (or fail if unauthorized). Supporting per-workload pull secrets across general OSS streaming providers is left for future improvement (Section 5.5.4).
 
-Image streaming in Substrate is strictly scoped to **ambient Node Identity** (GCE VM Service Account on GKE, EC2 Instance Profile on EKS). This holds at GA and after the next step below; only the future work in Section 5.5.4 would change it.
+##### How Riptide V2 `imagePullSecrets` Works Under the Hood:
+In Riptide V2 (`--enable-v2`), the snapshotter daemon (`containerd-gcfs-grpc`) and the FUSE daemon (`gcfsd`) split responsibilities across two local gRPC sockets:
+- **Snapshotter (`snapshot/v2/snapshot.go`):** Neither `Snapshots.Prepare` nor `Snapshots.Stat` reads Kubernetes Secrets or touches the keychain directly. Instead, `Snapshots.Prepare` extracts `imageRef := s.Labels["containerd.io/snapshot/cri.image-ref"]` and calls `gcfsd.CreateView(ctx, &CreateViewRequest{ImageName: imageRef, LayerDigest: layerDigest, ...})` over `/run/gcfsd/gcfsd.sock`. Similarly, on `Snapshots.Stat(chainID)`, if `gcfsd` restarted and lost its FUSE mount, `snapshot/v2` re-mounts the layer using the stored `imageRef` label.
+- **Keychain Side-Channel (`unix:///run/gcfsd/keychain.sock`):** `gcfsd` exposes a local gRPC `cloud.containers.riptide.fuse.keychain.Keychain` service (`UpdateCreds` / `RemoveCreds`). When `gcfsd` needs to fetch streaming metadata or layer chunks for `image_name` and the node's GCE metadata server token does not suffice, `gcfsd` looks up credentials pushed via `Keychain.UpdateCreds(image, auth)` keyed by `image`.
 
-##### Why `imagePullSecrets` Cannot Be Used with Image Streaming:
+##### Candidate Integration Options Evaluated for Riptide V2:
 
-1. **CNCF Snapshotter Protocol Invariant:**
-   Substrate communicates with remote snapshotters strictly via the standard CNCF `containerd.services.snapshots.v1.Snapshots` gRPC API (`Prepare`, `View`, `Stat`, `Remove`). This protocol contains **no RPC field or metadata header for client authentication credentials**.
-2. **Strict Prohibition of Token Injection via Snapshot Labels:**
-   Attempting to pass bearer tokens, registry passwords, or authorization headers inside `PrepareSnapshotRequest.Labels` is strictly forbidden:
-   - Snapshotter daemons (both Riptide Snapshotter and SOCI Snapshotter) persist snapshot labels unencrypted to disk in their internal metadata stores (SQLite or bbolt).
-   - Labels are visible to any node process querying the snapshotter via `Stat()` and `List()` RPCs, creating a severe credential leak and cross-tenant privilege escalation risk.
-3. **How Streaming Snapshotters Handle Pull Secrets in Standard Kubernetes vs. Substrate:**
-   - *In Standard Kubernetes (CRI Proxy Architecture):* In standard Kubernetes, Kubelet communicates with containerd through the CRI runtime interface (`CRI.PullImage`). When a pod specifies `imagePullSecrets`, Kubelet supplies those credentials in the CRI call. Remote snapshotters (the Riptide Snapshotter, AWS SOCI, eStargz, and Nydus) can deploy an opt-in **CRI proxy service** that sits between Kubelet and containerd. The CRI proxy intercepts `PullImage`, captures the credentials, caches them in memory keyed by image reference, and uses them for on-demand chunk fetches.
-   - *In Agent Substrate (Bypassing Kubelet & CRI):* Substrate’s entire performance thesis relies on bypassing Kubelet and containerd CRI (`containerd.sock`) to achieve sub-500ms startup without CRI lock contention or pod lifecycle overhead. Because Substrate talks directly to the Remote Snapshotter over `Snapshots.v1` gRPC, no `PullImage` call passes through the proxy, so it never sees workload credentials. Driving the proxy from Substrate is future work (Section 5.5.4).
-4. **Registry Exclusivity for Google Riptide:**
-   As noted in Section 3.2, Google Riptide exclusively supports Google Artifact Registry (GAR/GCR). GAR access is authenticated ambiently via the node's GCE VM Service Account through the link-local metadata server (`http://169.254.169.254`), making `imagePullSecrets` unnecessary for GAR images that the node's service account can read.
-
-##### Fallback Behavior for Workloads with `imagePullSecrets`:
-When the node's identity can't read an image:
-1. The snapshotter can't fetch the image's layers, so it declines each layer's `Prepare` (Section 3.4), and the driver returns `imagestreaming.ErrNotStreamable`.
-2. `cmd/atelet` falls back to Substrate's traditional image caching pipeline: `imagecache.EnsureImage`.
-3. `imagecache.EnsureImage` authenticates with atelet's node-level keychain (the kubelet credential provider, Section 5.5.1), downloads and verifies the complete layers, untars them into the node's local cache directory, and composes the overlay lowerdir as usual.
-
-Substrate doesn't support per-workload pull secrets yet. Until it does, a private image works only if the node-level keychain can read it.
-
-##### Roadmap and Alternatives:
-
-| Approach | Status | Description |
+| Option | Mechanism | Evaluation & Why Chosen / Rejected |
 | :--- | :--- | :--- |
-| **Fall back to non-streaming** | GA | Images that the node identity can't read use `imagecache.EnsureImage`, as described above. |
-| **Authorize with workload credentials, stream with node identity** | Next step after GA | Add per-workload pull secrets to Substrate. atelet resolves the manifest with the workload's credentials, which proves the workload may read the image, and the snapshotter streams with node identity. If the node identity can't read the image, the snapshotter declines and atelet falls back to `imagecache.EnsureImage` with the workload's credentials. Streamed layers are shared node-wide, so atelet must authorize every `PrepareLayers` call, including calls that reuse an existing lease. Needs nothing beyond the snapshotter contract. |
-| **Register credentials through the snapshotter's CRI proxy** | Future work | Would stream images that only the workload can read, but depends on conventions outside the contract. See Section 5.5.4. |
-| **Add a credential RPC to each snapshotter** | Rejected | No standard defines one. Every provider would have to add and maintain a Substrate-specific API. |
-| **Call a provider's internal credential interface directly** | Rejected | Reaches below the snapshotter's public API, breaks the encapsulation boundary in Section 3.2, and works with only one provider. |
-| **Pass credentials in snapshot labels** | Rejected | Leaks credentials (item 2 above). |
+| **Option A: Snapshotter CRI `ImageService` Proxy (`PullImage` on `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock`)** | Call `runtime.v1.ImageService/PullImage` with `AuthConfig` on Riptide's snapshotter socket before `PrepareLayers`. | **Rejected.** In Riptide's `imageProxyV1.PullImage`, after calling `keychain.UpdateCreds`, the proxy **unconditionally forwards `PullImage` to host `/run/containerd/containerd.sock`**. Because Substrate isolates Riptide from host `containerd` GC by switching host `containerd`'s CRI snapshotter to `overlayfs` (Section 3.2.2, Option 3), forwarding `PullImage` to host `containerd` would trigger a **full, non-streaming `overlayfs` download and unpack of the entire image in host `containerd`** on the critical path. It would also register the image in `k8s.io` where Kubelet image GC can call `RemoveImage` and trigger `keychain.RemoveCreds` while actors are still running. |
+| **Option B: Direct `gcfsd` Keychain gRPC (`Keychain.UpdateCreds` on `unix:///run/gcfsd/keychain.sock`)** | Have `remotesnapshotter.Driver` call `cloud.containers.riptide.fuse.keychain.Keychain/UpdateCreds` directly on `/run/gcfsd/keychain.sock` before `Snapshots.Stat` / `Snapshots.Prepare`. | **Selected (Implemented).** `atelet` already mounts `/run/gcfsd` from the host. Calling `UpdateCreds` directly on `/run/gcfsd/keychain.sock` takes `<1 ms`, completely bypasses host `containerd` (`overlayfs`) and Kubelet image GC, and populates `gcfsd`'s in-memory keychain under the exact canonical digest-pinned reference (`<repo>@sha256:<digest>`) before `Snapshots.Stat` (crash recovery) or `Snapshots.Prepare` (`CreateView`) runs. |
 
-#### 5.5.4. Future Work: Per-Workload Pull Secrets via the Snapshotter CRI Credential Proxy
+##### End-to-End Riptide V2 Credential Flow in `remotesnapshotter.Driver`:
+1. **Manifest Resolution (`imageResolver`):** `remotesnapshotter.Driver` resolves the image manifest, config, and canonical `digest` against the registry using `req.AuthConfig` (if provided on `StreamRequest`) or `d.keychain` (`authn.Keychain`).
+2. **Canonical Reference Pinning:** The driver constructs `criImageRef = canonicalImageRef(req.ImageRef, digest)` (`<repo>@sha256:<digest>`), which is the exact string passed in `PrepareSnapshotRequest.Labels["containerd.io/snapshot/cri.image-ref"]`.
+3. **Direct `UpdateCreds` Push (`pushRiptideKeychainCreds`):** When `d.keychainSocket` is configured (default `/run/gcfsd/keychain.sock` for `NewRiptide`) and explicit credentials are present (either in `req.AuthConfig` or resolved from `d.keychain`), the driver calls `Keychain.UpdateCreds(ctx, &UpdateCredsRequest{Image: criImageRef, Auth: auth})` over `unix:///run/gcfsd/keychain.sock`:
+   - On **cold `PrepareLayers`**: right after `imageResolver` resolves `digest` and **before** `viewLayer` (`Snapshots.Stat` / `Snapshots.Prepare`).
+   - On **warm `PrepareLayers` lease hits**: before returning the cached lease, so rotated tokens from a new actor request refresh `gcfsd`'s in-memory credentials for long-running FUSE mounts.
 
-Streaming images that only a workload's `imagePullSecrets` can read is future work. The step after GA (Section 5.5.3) authorizes with workload credentials but still streams with node identity. The candidate mechanism for going further is the CRI credential proxy that several streaming snapshotters already ship. This section records how the proxy works, where it stands relative to the standards Substrate depends on, and what adopting it would require.
+#### 5.5.4. Future Work: `imagePullSecrets` Streaming for Other OSS Snapshotters
 
-##### How the Proxy Works in Standard Kubernetes:
+While Google Riptide V2 is supported via `unix:///run/gcfsd/keychain.sock` (Section 5.5.3), other OSS streaming snapshotters (such as AWS SOCI, eStargz, and Nydus) do not expose a standalone `gcfsd`-style keychain socket. Instead, several OSS snapshotters ship an opt-in CRI `runtime.v1.ImageService` credential proxy. Because we do not promise `imagePullSecrets` streaming support for other OSS providers at GA, this section records how the OSS CRI proxy convention works and the open problems that future OSS support would need to solve.
+
+##### How the Proxy Convention Works in Standard Kubernetes:
 1. Kubelet's `--image-service-endpoint` points at the snapshotter's socket instead of containerd's.
 2. The snapshotter serves the CRI `runtime.v1.ImageService` on that socket. On `PullImage`, it caches the request's `AuthConfig` (the Pod's resolved `imagePullSecrets`) in memory, keyed by image reference, and forwards the call to containerd.
 3. When containerd then calls `Prepare` for each layer, the snapshotter finds the cached credentials through the `containerd.io/snapshot/cri.image-ref` label and uses them for on-demand chunk fetches.
 
-##### Current State:
-- **Not part of the CNCF snapshotter API.** None of the `containerd.services.snapshots.v1.Snapshots` RPCs carries credentials. Labels can't carry them either, because snapshotters store labels on disk and return them from `Stat` and `List`.
-- **The wire format is standard; the credential behavior isn't.** The proxy uses Kubernetes CRI `ImageService.PullImage`. Using that call to capture credentials is a convention that started in stargz (`cri_keychain`) and was copied by SOCI, Nydus, and the Riptide Snapshotter.
-- **No specification defines** whether the proxy exists, how credentials are keyed, how long they live, or when they're dropped. Each implementation makes the proxy opt-in.
-- **The implementations already behave differently.** The Riptide Snapshotter drops credentials on `RemoveImage`. SOCI checks the node's Docker config first and stops at the first non-empty credentials ([SOCI registry authentication](https://github.com/awslabs/soci-snapshotter/blob/main/docs/registry-authentication.md)), so it ignores captured credentials for registries the node already has credentials for.
-- **It is the CRI path that Substrate deliberately bypasses** (Section 3.1).
-
-##### Open Questions Before Adoption:
-With the proxy, atelet would call `PullImage` with the workload's credentials on the snapshotter socket before preparing layers. Adoption depends on resolving the following:
-
-- **containerd re-enters the critical path.** The proxy forwards `PullImage` to containerd, which records the image in its `k8s.io` namespace and creates its own snapshots alongside the driver's.
-- **Kubelet image garbage collection can drop credentials.** Actors are not Pods, so kubelet sees the image as unused and may remove it under disk pressure. On the Riptide Snapshotter, that `RemoveImage` also drops the credentials while actors are still reading from the image.
-- **SOCI's forwarded pull stays lazy only if containerd's CRI snapshotter is also `soci`.** Otherwise it becomes a full download. Switching it also changes how Kubernetes Pods on the node pull images.
-- **Credentials must stay valid for the actor's lifetime.** Lazy loading fetches data long after startup, for example when an actor wakes after hours idle. Short-lived tokens would need to be registered again on wake and restore.
-- **The credential cache is node-wide.** Once one workload registers credentials for an image, any workload on the node that streams that image is served. atelet must authorize each actor with its own credentials before attaching layers.
-- **Restart recovery.** The Riptide Snapshotter rebuilds its cache from Pods' `imagePullSecrets`, and SOCI keeps captured credentials only in memory; neither covers actors. atelet would need to register credentials again when it reconciles leases, which means re-obtaining them from the control plane.
-- **Image references must match.** The reference passed to `PullImage` must normalize to the same string the driver sends in `containerd.io/snapshot/cri.image-ref`.
-- **Registry scope is unchanged.** Riptide still streams only from Google Artifact Registry, so on GKE the proxy helps only with GAR repositories the node's service account can't read, such as cross-project repositories.
-- **Node configuration.** We need to verify whether GKE enables the Riptide Snapshotter's proxy on nodes. On EKS, SOCI's CRI credentials must be enabled in the snapshotter config.
-
-Until these are resolved, workloads that need `imagePullSecrets` use the non-streaming path in Section 5.5.3.
+##### Why OSS CRI Proxy Streaming Is Deferred to Future Work:
+- **Not part of the CNCF snapshotter API.** None of the `containerd.services.snapshots.v1.Snapshots` RPCs carries credentials. Using `ImageService.PullImage` to capture credentials is an unstandardized convention that started in stargz (`cri_keychain`) and was copied with behavioral differences by SOCI and Nydus.
+- **No specification defines** whether the proxy exists, how credentials are keyed, how long they live, or when they're dropped. For example, SOCI checks the node's Docker config first and stops at the first non-empty credentials ([SOCI registry authentication](https://github.com/awslabs/soci-snapshotter/blob/main/docs/registry-authentication.md)), ignoring captured CRI credentials for registries where the node already has an entry.
+- **Host `containerd` re-enters the critical path.** The CRI proxy forwards `PullImage` to host `containerd`, which either triggers a full non-streaming download (if host `containerd` uses `overlayfs`) or registers snapshots in `k8s.io` where Kubelet image GC can evict them.
 
 ### 5.6. Fallback Contract & Error Codes
 
@@ -534,10 +527,10 @@ A clear contract specifies when `atelet` falls back to traditional download mode
 | **Daemon Unavailable / Hung** | Socket connection refused, ENOENT, `codes.Unavailable`, or `CanStream` liveness probe (`DefaultProbeTimeout = 500ms`) fails | **Fallback:** Daemon is not running, crashed, or unresponsive; `CanStream` returns `false` and `atelet` falls back to `imagecache.EnsureImage`. |
 | **Unsupported Image** | The snapshotter declines a layer: `Prepare` returns mounts with a nil error instead of `AlreadyExists` (e.g. the image has no SOCI index or Riptide streaming metadata) | **Fallback:** The driver removes the prepared snapshot without committing it, records the image in the negative decline cache (`DefaultDeclineTTL = 10m`) so subsequent starts skip `CanStream`, and returns `imagestreaming.ErrNotStreamable`; fall back to standard download. |
 | **External Registry (Riptide)** | Image is hosted outside Google Artifact Registry (e.g. Docker Hub, Quay) on GKE | **Fallback:** The Riptide Snapshotter declines the layers, as for an unsupported image; fall back to standard download. |
-| **`imagePullSecrets` Required** | The image is readable only with a workload's pull secret, not with the node identity | **Fallback:** `Snapshots.v1` can't carry credentials, so the snapshotter declines the layers; fall back to `imagecache.EnsureImage` (Section 5.5.3). |
+| **`imagePullSecrets` on OSS Providers** | The image requires explicit pull credentials on a non-Riptide OSS snapshotter whose node identity cannot read the image | **No Streaming Guarantee / Fallback:** Riptide V2 streams `imagePullSecrets` via `/run/gcfsd/keychain.sock` (Section 5.5.3). Other OSS providers are not guaranteed to stream `imagePullSecrets` and fall back to `imagecache.EnsureImage` if the snapshotter declines the layers. |
 | **Listable Timeout** | Daemon mounts FUSE, but directory listing fails or times out (`DefaultListableTimeout`) | **Fallback:** Daemon hung or unhealthy; unmount and fall back to standard download. |
 | **Control Plane Auth (`atelet`)** | Credential provider returns 401 Unauthorized for metadata resolution | **Terminal Error:** `atelet` tries the fallback, but `imagecache.EnsureImage` uses the same node-level keychain and also fails with 401. |
-| **Data Plane Auth (daemon)** | The snapshotter's node identity can't read the image, but `atelet`'s keychain can | **Fallback:** The snapshotter declines the layers; `imagecache.EnsureImage` pulls with `atelet`'s keychain. |
+| **Data Plane Auth (daemon)** | The snapshotter cannot authenticate against the registry, but `atelet`'s keychain can | **Fallback:** The snapshotter declines the layers; `imagecache.EnsureImage` pulls with `atelet`'s keychain. |
 | **Snapshotter Error** | `Stat`, `Prepare`, or `View` fails with any other error (e.g. `codes.PermissionDenied`, or a failed internal commit) | **Fallback:** The driver removes the prepared snapshot, if any, and the image's views; fall back to standard download. |
 
 ### 5.7. Provider Selection
@@ -572,8 +565,8 @@ A socket file doesn't prove that the snapshotter is running, because the file ca
 
 | Provider | Support Status | Host Socket | Protocol | Image Indexing & Registry Scope | Control Plane Auth (atelet) | Data Plane Auth (Streaming Daemon) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`riptide`** (Google Riptide v2) | **GA Supported (`--enable-v2`)** | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` | containerd `SnapshotService` gRPC | Google Cloud Artifact Registry Streaming Manifests (**GAR/GCR only**) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
-| **`soci`** (AWS SOCI) | **Benchmark PoC / Post-GA Production** (currently requires all layers indexed via `--min-layer-size=0`; see Section 9.1) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM |
+| **`riptide`** (Google Riptide v2) | **GA Supported (`--enable-v2`)** | `/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock` (plus `/run/gcfsd/keychain.sock`) | containerd `SnapshotService` gRPC + Riptide `Keychain` gRPC | Google Cloud Artifact Registry Streaming Manifests (**GAR/GCR only**) | Kubelet Credential Provider plugin (`authn.Keychain`) / `StreamRequest.AuthConfig` | VM link-local metadata service (`http://169.254.169.254`) + explicit credentials pushed via `/run/gcfsd/keychain.sock` (`UpdateCreds`) |
+| **`soci`** (AWS SOCI) | **Benchmark PoC / Post-GA Production** (currently requires all layers indexed via `--min-layer-size=0`; see Section 9.1) | `/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock` | containerd `SnapshotService` gRPC | OCI Artifact SOCI Index (`application/vnd.amazon.soci.index.v1+json`) | Kubelet Credential Provider plugin (`authn.Keychain`) | VM link-local metadata service (`http://169.254.169.254`) / Node IAM (`imagePullSecrets` not guaranteed) |
 
 ---
 

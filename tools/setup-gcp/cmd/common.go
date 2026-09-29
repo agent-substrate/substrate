@@ -28,9 +28,10 @@ type Config struct {
 	ClusterLocation string
 	ClusterVersion  string
 
-	Network           string
-	Subnetwork        string
-	EnableDataplaneV2 bool
+	Network              string
+	Subnetwork           string
+	EnableDataplaneV2    bool
+	EnableImageStreaming bool
 
 	NodePoolName    string
 	NodePoolVersion string

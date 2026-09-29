@@ -104,3 +104,94 @@ func TestFilestoreCsiDriverEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildCreateClusterRequest_ImageStreaming(t *testing.T) {
+	parent := "projects/test-project/locations/us-west1-c"
+
+	t.Run("disabled by default", func(t *testing.T) {
+		cfg := &Config{
+			ProjectID:       "test-project",
+			ClusterName:     "test-cluster",
+			ClusterLocation: "us-west1-c",
+			MachineType:     "c3-standard-4",
+		}
+		req := buildCreateClusterRequest(parent, cfg)
+		if len(req.GetCluster().GetNodePools()) != 1 {
+			t.Fatalf("expected 1 node pool, got %d", len(req.GetCluster().GetNodePools()))
+		}
+		np := req.GetCluster().GetNodePools()[0]
+		if nodePoolImageStreamingEnabled(np) {
+			t.Errorf("expected GcfsConfig to be disabled by default, got enabled")
+		}
+	})
+
+	t.Run("enabled when EnableImageStreaming is true", func(t *testing.T) {
+		cfg := &Config{
+			ProjectID:            "test-project",
+			ClusterName:          "test-cluster",
+			ClusterLocation:      "us-west1-c",
+			MachineType:          "c3-standard-4",
+			EnableImageStreaming: true,
+		}
+		req := buildCreateClusterRequest(parent, cfg)
+		if len(req.GetCluster().GetNodePools()) != 1 {
+			t.Fatalf("expected 1 node pool, got %d", len(req.GetCluster().GetNodePools()))
+		}
+		np := req.GetCluster().GetNodePools()[0]
+		if !nodePoolImageStreamingEnabled(np) {
+			t.Errorf("expected GcfsConfig to be enabled when EnableImageStreaming is true")
+		}
+	})
+}
+
+func TestNodePoolImageStreamingEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		np   *containerpb.NodePool
+		want bool
+	}{
+		{
+			name: "nil node pool",
+			np:   nil,
+			want: false,
+		},
+		{
+			name: "nil node config",
+			np:   &containerpb.NodePool{},
+			want: false,
+		},
+		{
+			name: "nil gcfs config",
+			np: &containerpb.NodePool{
+				Config: &containerpb.NodeConfig{},
+			},
+			want: false,
+		},
+		{
+			name: "gcfs disabled",
+			np: &containerpb.NodePool{
+				Config: &containerpb.NodeConfig{
+					GcfsConfig: &containerpb.GcfsConfig{Enabled: false},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "gcfs enabled",
+			np: &containerpb.NodePool{
+				Config: &containerpb.NodeConfig{
+					GcfsConfig: &containerpb.GcfsConfig{Enabled: true},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nodePoolImageStreamingEnabled(tt.np); got != tt.want {
+				t.Errorf("nodePoolImageStreamingEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

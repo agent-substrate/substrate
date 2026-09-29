@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/imagestreaming"
+	"github.com/agent-substrate/substrate/internal/proto/riptidekeychain"
 	"github.com/agent-substrate/substrate/internal/proto/snapshots"
 	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -1103,5 +1104,166 @@ func TestPrepareLayers_SelfHealsEvictedLeaseLayers(t *testing.T) {
 	}
 	if target != mount2 {
 		t.Errorf("healed layer-0/fs points to %q, want %q", target, mount2)
+	}
+}
+
+type mockRiptideKeychainServer struct {
+	riptidekeychain.UnimplementedKeychainServer
+	mu      sync.Mutex
+	updates []*riptidekeychain.UpdateCredsRequest
+}
+
+func (s *mockRiptideKeychainServer) UpdateCreds(_ context.Context, req *riptidekeychain.UpdateCredsRequest) (*riptidekeychain.UpdateCredsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updates = append(s.updates, req)
+	return &riptidekeychain.UpdateCredsResponse{}, nil
+}
+
+func setupMockRiptideKeychainServer(t *testing.T) (*mockRiptideKeychainServer, string) {
+	t.Helper()
+	sockPath := filepath.Join(t.TempDir(), "keychain.sock")
+	srv := &mockRiptideKeychainServer{}
+	lis, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen on keychain socket: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	riptidekeychain.RegisterKeychainServer(grpcServer, srv)
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+	})
+	return srv, sockPath
+}
+
+func TestPrepareLayers_RiptideKeychainUpdateCreds(t *testing.T) {
+	ctx := context.Background()
+	snapSrv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+	kcSrv, kcSock := setupMockRiptideKeychainServer(t)
+	driver.keychainSocket = kcSock
+
+	diff0 := "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	mount0 := t.TempDir()
+	driver.imageResolver = func(context.Context, string, *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		return "sha256:manifestdigest", &v1.Config{}, []string{diff0}, []string{"sha256:blob0"}, nil
+	}
+
+	var credsPresentAtPrepare bool
+	snapSrv.prepareFunc = func(_ context.Context, req *snapshots.PrepareSnapshotRequest) (*snapshots.PrepareSnapshotResponse, error) {
+		kcSrv.mu.Lock()
+		credsPresentAtPrepare = len(kcSrv.updates) == 1 &&
+			kcSrv.updates[0].GetImage() == req.GetLabels()["containerd.io/snapshot/cri.image-ref"]
+		kcSrv.mu.Unlock()
+		target := req.GetLabels()["containerd.io/snapshot.ref"]
+		snapSrv.commitLocked(target, []*snapshots.Mount{{Type: "bind", Source: mount0}})
+		return nil, status.Errorf(codes.AlreadyExists, "target snapshot %q: already exists", target)
+	}
+
+	req := &imagestreaming.StreamRequest{
+		ImageRef: "us-docker.pkg.dev/proj/repo/private:v1",
+		AuthConfig: &imagestreaming.AuthConfig{
+			Username: "_json_key",
+			Password: "secret-token-1",
+		},
+	}
+	if _, err := driver.PrepareLayers(ctx, req); err != nil {
+		t.Fatalf("PrepareLayers cold error: %v", err)
+	}
+	if !credsPresentAtPrepare {
+		t.Fatal("expected Riptide Keychain.UpdateCreds to be called with canonical cri.image-ref BEFORE Snapshots.Prepare")
+	}
+
+	kcSrv.mu.Lock()
+	if len(kcSrv.updates) != 1 {
+		t.Fatalf("got %d UpdateCreds calls, want 1", len(kcSrv.updates))
+	}
+	got := kcSrv.updates[0]
+	kcSrv.mu.Unlock()
+
+	wantRef := "us-docker.pkg.dev/proj/repo/private@sha256:manifestdigest"
+	if got.GetImage() != wantRef {
+		t.Errorf("UpdateCreds image = %q, want %q", got.GetImage(), wantRef)
+	}
+	if got.GetAuth().GetUsername() != "_json_key" || got.GetAuth().GetPassword() != "secret-token-1" {
+		t.Errorf("UpdateCreds auth = %+v, want username=_json_key password=secret-token-1", got.GetAuth())
+	}
+	if got.GetAuth().GetServerAddress() != "us-docker.pkg.dev" {
+		t.Errorf("UpdateCreds ServerAddress = %q, want %q", got.GetAuth().GetServerAddress(), "us-docker.pkg.dev")
+	}
+
+	// Warm lease hit with rotated credentials should refresh gcfsd's keychain without re-running Prepare.
+	reqWarm := &imagestreaming.StreamRequest{
+		ImageRef: "us-docker.pkg.dev/proj/repo/private:v1",
+		AuthConfig: &imagestreaming.AuthConfig{
+			Username: "_json_key",
+			Password: "secret-token-2",
+		},
+	}
+	if _, err := driver.PrepareLayers(ctx, reqWarm); err != nil {
+		t.Fatalf("PrepareLayers warm error: %v", err)
+	}
+	kcSrv.mu.Lock()
+	defer kcSrv.mu.Unlock()
+	if len(kcSrv.updates) != 2 {
+		t.Fatalf("got %d UpdateCreds calls after warm PrepareLayers, want 2", len(kcSrv.updates))
+	}
+	if kcSrv.updates[1].GetAuth().GetPassword() != "secret-token-2" {
+		t.Errorf("warm UpdateCreds password = %q, want secret-token-2", kcSrv.updates[1].GetAuth().GetPassword())
+	}
+}
+
+type basicAuthTestKeychain struct {
+	username string
+	password string
+}
+
+func (k *basicAuthTestKeychain) Resolve(_ authn.Resource) (authn.Authenticator, error) {
+	return &authn.Basic{Username: k.username, Password: k.password}, nil
+}
+
+func TestPrepareLayers_RiptideKeychainFromDriverKeychain(t *testing.T) {
+	ctx := context.Background()
+	snapSrv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+	kcSrv, kcSock := setupMockRiptideKeychainServer(t)
+	driver.keychainSocket = kcSock
+	driver.keychain = &basicAuthTestKeychain{username: "k8s-pull-user", password: "k8s-pull-pass"}
+
+	diff0 := "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	mount0 := t.TempDir()
+	snapSrv.remoteMounts = map[string][]*snapshots.Mount{
+		diff0: {{Type: "bind", Source: mount0}},
+	}
+	driver.imageResolver = func(context.Context, string, *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		return "sha256:kcmanifest", &v1.Config{}, []string{diff0}, []string{"sha256:blob0"}, nil
+	}
+
+	if _, err := driver.PrepareLayers(ctx, &imagestreaming.StreamRequest{ImageRef: "ghcr.io/org/private:v2"}); err != nil {
+		t.Fatalf("PrepareLayers error: %v", err)
+	}
+
+	kcSrv.mu.Lock()
+	defer kcSrv.mu.Unlock()
+	if len(kcSrv.updates) != 1 {
+		t.Fatalf("got %d UpdateCreds calls, want 1", len(kcSrv.updates))
+	}
+	got := kcSrv.updates[0]
+	if got.GetImage() != "ghcr.io/org/private@sha256:kcmanifest" {
+		t.Errorf("UpdateCreds image = %q, want ghcr.io/org/private@sha256:kcmanifest", got.GetImage())
+	}
+	if got.GetAuth().GetUsername() != "k8s-pull-user" || got.GetAuth().GetPassword() != "k8s-pull-pass" {
+		t.Errorf("UpdateCreds auth = %+v, want k8s-pull-user/k8s-pull-pass", got.GetAuth())
+	}
+	if got.GetAuth().GetServerAddress() != "ghcr.io" {
+		t.Errorf("UpdateCreds ServerAddress = %q, want ghcr.io", got.GetAuth().GetServerAddress())
+	}
+}
+
+func TestNewSOCI_DoesNotConfigureRiptideKeychainSocket(t *testing.T) {
+	_, sociDriver := setupTestRemoteSnapshotter(t, ProviderSOCI)
+	if sociDriver.keychainSocket != "" {
+		t.Errorf("sociDriver.keychainSocket = %q, want empty string", sociDriver.keychainSocket)
 	}
 }

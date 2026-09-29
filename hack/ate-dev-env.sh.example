@@ -45,3 +45,7 @@ export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
 
 # Set this if you want to override the default build platforms
 export KO_DEFAULTPLATFORMS=linux/amd64
+
+# Set to true to enable GKE Image Streaming (Riptide v2 / GCFS) on the worker node pool
+export ENABLE_IMAGE_STREAMING=false
+

@@ -16,21 +16,31 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/google/go-containerregistry/pkg/authn"
 )
 
 // newImagePullCredentials builds the keychain atelet authenticates image pulls
-// with, from the node's kubelet credential provider plugins. A nil keychain
-// means anonymous pulls, which is all an unconfigured node (kind, say) can do
-// and all a public registry needs.
+// with, combining an optional Docker config (e.g. a mounted Kubernetes
+// imagePullSecret at $DOCKER_CONFIG/config.json or ~/.docker/config.json) with
+// the node's kubelet credential provider plugins. A nil keychain means
+// anonymous pulls, which is all an unconfigured node (kind, say) can do and all
+// a public registry needs.
 func newImagePullCredentials() (authn.Keychain, error) {
 	if *imageCredentialProviderConfig == "" {
+		if os.Getenv("DOCKER_CONFIG") != "" {
+			return authn.DefaultKeychain, nil
+		}
 		return nil, nil
 	}
 	if *imageCredentialProviderBinDir == "" {
 		return nil, fmt.Errorf("--image-credential-provider-bin-dir is required when --image-credential-provider-config is set")
 	}
-	return credentialprovider.New(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
+	cpKeychain, err := credentialprovider.New(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
+	if err != nil {
+		return nil, err
+	}
+	return authn.NewMultiKeychain(authn.DefaultKeychain, cpKeychain), nil
 }

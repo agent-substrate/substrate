@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/imagestreaming"
+	"github.com/agent-substrate/substrate/internal/proto/riptidekeychain"
 	"github.com/agent-substrate/substrate/internal/proto/snapshots"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -58,6 +59,10 @@ const (
 
 	// DefaultRiptideSocket is the default UNIX socket path for containerd-gcfs-grpc.
 	DefaultRiptideSocket = "/run/containerd-gcfs-grpc/containerd-gcfs-grpc.sock"
+
+	// DefaultRiptideKeychainSocket is the default UNIX socket path for Riptide's
+	// gcfsd keychain service (cloud.containers.riptide.fuse.keychain.Keychain).
+	DefaultRiptideKeychainSocket = "/run/gcfsd/keychain.sock"
 
 	// DefaultSOCISocket is the default UNIX socket path for soci-snapshotter.
 	DefaultSOCISocket = "/run/soci-snapshotter-grpc/soci-snapshotter-grpc.sock"
@@ -161,6 +166,22 @@ func WithSnapshotsClient(c snapshots.SnapshotsClient) Option {
 	}
 }
 
+// WithKeychainSocketPath sets the UNIX socket path for Riptide's gcfsd
+// keychain service.
+func WithKeychainSocketPath(p string) Option {
+	return func(d *Driver) {
+		d.keychainSocket = p
+	}
+}
+
+// WithRiptideKeychainClient injects a Riptide gcfsd KeychainClient (useful in tests).
+func WithRiptideKeychainClient(c riptidekeychain.KeychainClient) Option {
+	return func(d *Driver) {
+		d.riptideKeychainClient = c
+		d.riptideKeychainClientInjected = true
+	}
+}
+
 // ImageResolverFunc resolves an image reference to its manifest digest, config, diffIDs, and layer digests.
 type ImageResolverFunc func(ctx context.Context, ref string, auth *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error)
 
@@ -196,6 +217,7 @@ type inflightPrep struct {
 type Driver struct {
 	name             string
 	socket           string
+	keychainSocket   string
 	workDir          string
 	namespace        string
 	snapshotterName  string
@@ -204,16 +226,19 @@ type Driver struct {
 	declineTTL       time.Duration
 	keychain         authn.Keychain
 
-	snapshotsClient snapshots.SnapshotsClient
-	clientInjected  bool
-	imageResolver   ImageResolverFunc
+	snapshotsClient               snapshots.SnapshotsClient
+	clientInjected                bool
+	riptideKeychainClient         riptidekeychain.KeychainClient
+	riptideKeychainClientInjected bool
+	imageResolver                 ImageResolverFunc
 
-	mu         sync.Mutex
-	conn       *grpc.ClientConn
-	leases     map[string]*imageLease
-	declined   map[string]time.Time
-	inflight   map[string]*inflightPrep
-	chainLocks map[string]*sync.Mutex
+	mu           sync.Mutex
+	conn         *grpc.ClientConn
+	keychainConn *grpc.ClientConn
+	leases       map[string]*imageLease
+	declined     map[string]time.Time
+	inflight     map[string]*inflightPrep
+	chainLocks   map[string]*sync.Mutex
 }
 
 // New creates a generic remote snapshotter driver.
@@ -245,6 +270,7 @@ func NewRiptide(opts ...Option) (*Driver, error) {
 	d := &Driver{
 		name:             ProviderRiptide,
 		socket:           DefaultRiptideSocket,
+		keychainSocket:   DefaultRiptideKeychainSocket,
 		workDir:          filepath.Join(DefaultBaseWorkDir, ProviderRiptide),
 		namespace:        DefaultNamespace,
 		snapshotterName:  "gcfs",
@@ -301,6 +327,9 @@ func NewFromConfig(ctx context.Context, provider string, cfg imagestreaming.Conf
 	opts = append(opts, extraOpts...)
 	if sock := cfg[imagestreaming.SocketPathKey]; sock != "" {
 		opts = append(opts, WithSocketPath(sock))
+	}
+	if ksock := cfg["keychain_socket"]; ksock != "" {
+		opts = append(opts, WithKeychainSocketPath(ksock))
 	}
 	if workDir := cfg["work_dir"]; workDir != "" {
 		opts = append(opts, WithWorkDir(workDir))
@@ -490,6 +519,7 @@ func (d *Driver) PrepareLayers(ctx context.Context, req *imagestreaming.StreamRe
 					LayerDirs:   append([]string(nil), lease.layers...),
 				}
 				d.mu.Unlock()
+				d.pushRiptideKeychainCreds(ctx, canonicalImageRef(req.ImageRef, res.ImageDigest), req)
 				return res, nil
 			}
 			slog.WarnContext(ctx, "Cached streaming lease layers missing on disk; re-preparing layers",
@@ -567,6 +597,9 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		return nil, fmt.Errorf("resolving image %s: %w", req.ImageRef, err)
 	}
 
+	criImageRef := canonicalImageRef(req.ImageRef, digest)
+	d.pushRiptideKeychainCreds(ctx, criImageRef, req)
+
 	// Fast path for reconciled leases whose layers are already mounted on host:
 	d.mu.Lock()
 	if lease, ok := d.leases[req.ImageRef]; ok && len(lease.layers) > 0 && layersExist(lease.layers) {
@@ -609,7 +642,6 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		_ = os.RemoveAll(imageWorkDir)
 	}
 
-	criImageRef := canonicalImageRef(req.ImageRef, digest)
 	runID := fmt.Sprintf("%x", time.Now().UnixNano())
 
 	var (
@@ -1085,6 +1117,10 @@ func (d *Driver) Close() error {
 		_ = d.conn.Close()
 		d.conn = nil
 	}
+	if d.keychainConn != nil {
+		_ = d.keychainConn.Close()
+		d.keychainConn = nil
+	}
 	return nil
 }
 
@@ -1110,6 +1146,122 @@ func (d *Driver) getClient(ctx context.Context) (snapshots.SnapshotsClient, erro
 	d.conn = conn
 	d.snapshotsClient = snapshots.NewSnapshotsClient(conn)
 	return d.snapshotsClient, nil
+}
+
+func (d *Driver) getRiptideKeychainClient() (riptidekeychain.KeychainClient, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.riptideKeychainClient != nil {
+		return d.riptideKeychainClient, nil
+	}
+	if d.keychainSocket == "" {
+		return nil, nil
+	}
+	conn, err := grpc.NewClient("unix://"+d.keychainSocket,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	d.keychainConn = conn
+	d.riptideKeychainClient = riptidekeychain.NewKeychainClient(conn)
+	return d.riptideKeychainClient, nil
+}
+
+func (d *Driver) resolveRiptideAuthConfig(refStr string, reqAuth *imagestreaming.AuthConfig) *riptidekeychain.AuthConfig {
+	if reqAuth != nil && (reqAuth.Username != "" || reqAuth.Password != "" || reqAuth.Auth != "" || reqAuth.IdentityToken != "" || reqAuth.RegistryToken != "") {
+		serverAddr := reqAuth.ServerAddress
+		if serverAddr == "" {
+			if ref, err := name.ParseReference(refStr); err == nil {
+				serverAddr = ref.Context().RegistryStr()
+			}
+		}
+		return &riptidekeychain.AuthConfig{
+			Username:      reqAuth.Username,
+			Password:      reqAuth.Password,
+			Auth:          reqAuth.Auth,
+			ServerAddress: serverAddr,
+			IdentityToken: reqAuth.IdentityToken,
+			RegistryToken: reqAuth.RegistryToken,
+		}
+	}
+	if d == nil || d.keychain == nil {
+		return nil
+	}
+	ref, err := name.ParseReference(refStr)
+	if err != nil {
+		return nil
+	}
+	authenticator, err := d.keychain.Resolve(ref.Context())
+	if err != nil || authenticator == nil || authenticator == authn.Anonymous {
+		return nil
+	}
+	cfg, err := authenticator.Authorization()
+	if err != nil || cfg == nil {
+		return nil
+	}
+	if cfg.Username == "" && cfg.Password == "" && cfg.Auth == "" && cfg.IdentityToken == "" && cfg.RegistryToken == "" {
+		return nil
+	}
+	return &riptidekeychain.AuthConfig{
+		Username:      cfg.Username,
+		Password:      cfg.Password,
+		Auth:          cfg.Auth,
+		ServerAddress: ref.Context().RegistryStr(),
+		IdentityToken: cfg.IdentityToken,
+		RegistryToken: cfg.RegistryToken,
+	}
+}
+
+// pushRiptideKeychainCreds forwards explicit registry credentials to Riptide
+// V2's gcfsd daemon over its local Keychain gRPC socket (/run/gcfsd/keychain.sock)
+// before Snapshots.Stat or Snapshots.Prepare is called. In Riptide V2,
+// snapshot/v2 does not read Kubernetes imagePullSecrets itself; instead, gcfsd
+// looks up credentials pushed via Keychain.UpdateCreds keyed by the canonical
+// image reference (<repo>@sha256:<digest>) passed in containerd.io/snapshot/cri.image-ref.
+func (d *Driver) pushRiptideKeychainCreds(ctx context.Context, criImageRef string, req *imagestreaming.StreamRequest) {
+	if d == nil || req == nil || criImageRef == "" {
+		return
+	}
+	if d.keychainSocket == "" && !d.riptideKeychainClientInjected {
+		return
+	}
+	auth := d.resolveRiptideAuthConfig(req.ImageRef, req.AuthConfig)
+	if auth == nil {
+		return
+	}
+	if !d.riptideKeychainClientInjected && d.keychainSocket != "" {
+		if _, err := os.Stat(d.keychainSocket); err != nil {
+			slog.DebugContext(ctx, "Riptide gcfsd keychain socket not present; skipping UpdateCreds",
+				slog.String("socket", d.keychainSocket),
+				slog.String("image", criImageRef))
+			return
+		}
+	}
+	kcClient, err := d.getRiptideKeychainClient()
+	if err != nil || kcClient == nil {
+		slog.WarnContext(ctx, "Failed to initialize Riptide gcfsd keychain client",
+			slog.String("socket", d.keychainSocket),
+			slog.Any("error", err))
+		return
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := kcClient.UpdateCreds(rpcCtx, &riptidekeychain.UpdateCredsRequest{
+		Image: criImageRef,
+		Auth:  auth,
+	}); err != nil {
+		slog.WarnContext(ctx, "Failed to push credentials to Riptide gcfsd keychain",
+			slog.String("socket", d.keychainSocket),
+			slog.String("image", criImageRef),
+			slog.Any("error", err))
+		return
+	}
+	slog.InfoContext(ctx, "Pushed credentials to Riptide gcfsd keychain",
+		slog.String("socket", d.keychainSocket),
+		slog.String("image", criImageRef),
+		slog.String("server", auth.GetServerAddress()),
+		slog.String("username", auth.GetUsername()))
 }
 
 func warmLayerMetadata(root string) {

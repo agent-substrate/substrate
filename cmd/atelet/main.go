@@ -517,6 +517,11 @@ func initImageStreamer(ctx context.Context, mode, socket string) (imagestreaming
 	if err := checkUnixSocket(socket); err != nil {
 		return nil, fmt.Errorf("--image-streamer-socket: %w", err)
 	}
+	if mode == riptide.ProviderName {
+		if err := maybeDetachHostContainerdGCFS(ctx, defaultHostContainerdDetachOptions()); err != nil {
+			slog.WarnContext(ctx, "Failed to detach host containerd from gcfs", slog.Any("err", err))
+		}
+	}
 	streamer, err := imagestreaming.Get(ctx, mode, imagestreaming.Config{imagestreaming.SocketPathKey: socket})
 	if err != nil {
 		return nil, fmt.Errorf("initializing image streamer %q: %w", mode, err)
@@ -533,6 +538,11 @@ func detectImageStreamer(ctx context.Context, sockets []streamerSocket) imagestr
 		paths = append(paths, s.path)
 		if checkUnixSocket(s.path) != nil {
 			continue
+		}
+		if s.provider == riptide.ProviderName {
+			if err := maybeDetachHostContainerdGCFS(ctx, defaultHostContainerdDetachOptions()); err != nil {
+				slog.WarnContext(ctx, "Failed to detach host containerd from gcfs", slog.Any("err", err))
+			}
 		}
 		streamer, err := imagestreaming.Get(ctx, s.provider, imagestreaming.Config{imagestreaming.SocketPathKey: s.path})
 		if err != nil {
