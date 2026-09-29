@@ -17,7 +17,6 @@
 package imagecache
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,35 +27,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
-
-// writeLayer builds a layer dir (fs/ tree + whiteouts.json) as the store's
-// unpack would.
-func writeLayer(t *testing.T, dir string, files map[string]string, wh *whiteoutSet) {
-	t.Helper()
-	fs := filepath.Join(dir, layerFSDirName)
-	if err := os.MkdirAll(fs, 0o755); err != nil {
-		t.Fatalf("mkdir fs: %v", err)
-	}
-	for name, body := range files {
-		p := filepath.Join(fs, name)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", name, err)
-		}
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-	if wh != nil {
-		wh.Version = 1
-		b, err := json.Marshal(wh)
-		if err != nil {
-			t.Fatalf("marshal whiteouts: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, layerWhiteoutsFileName), b, 0o600); err != nil {
-			t.Fatalf("write whiteouts.json: %v", err)
-		}
-	}
-}
 
 // FinalizeLayer materializes whiteout devices (mknod, CAP_MKNOD) and opaque
 // xattrs (trusted.*, CAP_SYS_ADMIN); only root has those in a plain test
