@@ -153,7 +153,7 @@ func TestBootstrapPublicSchema(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := Connect(ctx, readWriteDSN, ownerDSN, ReadWriteRoleName, OwnerRoleName, "public", 0, 0)
+	p, err := Connect(ctx, readWriteDSN, ownerDSN, ReadWriteRoleName, OwnerRoleName, "public", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

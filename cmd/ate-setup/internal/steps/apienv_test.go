@@ -146,9 +146,9 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 	}
 }
 
-func TestCreateAPIServerEnvVarsPoolSizeWithFileReference(t *testing.T) {
+func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 	cfg := config.Config{
-		PostgresReadWriteConnectionString: "@file:/run/postgres/readwrite-dsn",
+		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 		PostgresPoolMaxConns:              "20",
 	}
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
