@@ -2414,14 +2414,18 @@ type UploadPausedCheckpointRequest struct {
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
 	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
-	// The scope the pause checkpoint captured is not sent: atelet reads it from
-	// the local snapshot's own manifest, which is authoritative. When they
-	// differ, atelet converts where possible (micro-VM FULL capture to a DATA
-	// upload by selecting the durable-dir tar) and rejects otherwise.
+	// When it differs from the captured scope, atelet converts where possible
+	// (a FULL capture to a DATA upload by selecting the durable-dir tar) and
+	// rejects otherwise.
 	DesiredScope SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	// The files of the local snapshot, as recorded when the pause captured it.
 	// atelet uploads the subset that desired_scope needs.
 	SnapshotFiles []string `protobuf:"bytes,9,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
+	// The scope the pause checkpoint captured (FULL or DATA), as recorded on
+	// the actor's LocalSnapshot. With desired_scope and snapshot_files it
+	// determines the files the upload writes, which lets a retry recognize an
+	// upload that already finished after the local snapshot was pruned.
+	CapturedScope SnapshotScope `protobuf:"varint,10,opt,name=captured_scope,json=capturedScope,proto3,enum=atelet.SnapshotScope" json:"captured_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2517,6 +2521,13 @@ func (x *UploadPausedCheckpointRequest) GetSnapshotFiles() []string {
 		return x.SnapshotFiles
 	}
 	return nil
+}
+
+func (x *UploadPausedCheckpointRequest) GetCapturedScope() SnapshotScope {
+	if x != nil {
+		return x.CapturedScope
+	}
+	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
 type UploadPausedCheckpointResponse struct {
@@ -2990,7 +3001,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\";\n" +
 	"\x12CheckpointResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xac\x03\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xea\x03\n" +
 	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3001,7 +3012,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\x12%\n" +
-	"\x0esnapshot_files\x18\t \x03(\tR\rsnapshotFiles\"G\n" +
+	"\x0esnapshot_files\x18\t \x03(\tR\rsnapshotFiles\x12<\n" +
+	"\x0ecaptured_scope\x18\n" +
+	" \x01(\x0e2\x15.atelet.SnapshotScopeR\rcapturedScope\"G\n" +
 	"\x1eUploadPausedCheckpointResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x85\a\n" +
 	"\x0eRestoreRequest\x12(\n" +
@@ -3150,36 +3163,37 @@ var file_atelet_proto_depIdxs = []int32{
 	36, // 29: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
 	2,  // 30: atelet.CheckpointRequest.scope:type_name -> atelet.SnapshotScope
 	2,  // 31: atelet.UploadPausedCheckpointRequest.desired_scope:type_name -> atelet.SnapshotScope
-	16, // 32: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
-	1,  // 33: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
-	35, // 34: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
-	36, // 35: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
-	2,  // 36: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
-	12, // 37: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	15, // 38: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
-	13, // 39: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	14, // 40: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	7,  // 41: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 42: atelet.AteomSupport.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
-	5,  // 43: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	11, // 44: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	37, // 45: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	41, // 46: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	39, // 47: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
-	9,  // 48: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	8,  // 49: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	4,  // 50: atelet.AteomSupport.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
-	6,  // 51: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	34, // 52: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	38, // 53: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	42, // 54: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	40, // 55: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
-	10, // 56: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
-	49, // [49:57] is the sub-list for method output_type
-	41, // [41:49] is the sub-list for method input_type
-	41, // [41:41] is the sub-list for extension type_name
-	41, // [41:41] is the sub-list for extension extendee
-	0,  // [0:41] is the sub-list for field type_name
+	2,  // 32: atelet.UploadPausedCheckpointRequest.captured_scope:type_name -> atelet.SnapshotScope
+	16, // 33: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
+	1,  // 34: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
+	35, // 35: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
+	36, // 36: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
+	2,  // 37: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
+	12, // 38: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
+	15, // 39: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	13, // 40: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	14, // 41: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	7,  // 42: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 43: atelet.AteomSupport.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
+	5,  // 44: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
+	11, // 45: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
+	37, // 46: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
+	41, // 47: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
+	39, // 48: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
+	9,  // 49: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
+	8,  // 50: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	4,  // 51: atelet.AteomSupport.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
+	6,  // 52: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	34, // 53: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
+	38, // 54: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
+	42, // 55: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
+	40, // 56: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
+	10, // 57: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
+	50, // [50:58] is the sub-list for method output_type
+	42, // [42:50] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }

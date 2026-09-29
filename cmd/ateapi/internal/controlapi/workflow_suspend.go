@@ -269,7 +269,8 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 // persisted in-progress snapshot location; no workload runs, so there is no
 // ateom to checkpoint. Retries re-send the same semantic request: the
 // destination is minted once and the upload overwrites deterministic object
-// names, with the remote manifest as the commit marker.
+// names. A retry after atelet pruned the local snapshot succeeds when every
+// file the upload writes is already at the destination.
 func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, snapshotFiles []string, err error) {
 	ctx, done := stepSpan(ctx, "UploadPausedCheckpoint")
 	defer func() { err = done(err) }()
@@ -302,8 +303,9 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		LocalSnapshotName:      local.GetSnapshotName(),
 		DestinationSnapshotUri: actor.GetStatus().GetInProgressSnapshotUri(),
 		// The commit scope, like a running-origin suspend; atelet converts
-		// from the captured scope in the snapshot's manifest where possible.
+		// from the captured scope where possible.
 		DesiredScope:  actorSnapshotContentScopeToAtelet(commitSnapshotScope(actor.GetMetadata().GetAtespace(), actorTemplate)),
+		CapturedScope: actorSnapshotContentScopeToAtelet(pausedContentScope(local, actorTemplate)),
 		SnapshotFiles: local.GetSnapshotFiles(),
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)

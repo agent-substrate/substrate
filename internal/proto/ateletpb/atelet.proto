@@ -432,15 +432,20 @@ message UploadPausedCheckpointRequest {
   string destination_snapshot_uri = 7;
 
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
-  // The scope the pause checkpoint captured is not sent: atelet reads it from
-  // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (micro-VM FULL capture to a DATA
-  // upload by selecting the durable-dir tar) and rejects otherwise.
+  // When it differs from the captured scope, atelet converts where possible
+  // (a FULL capture to a DATA upload by selecting the durable-dir tar) and
+  // rejects otherwise.
   SnapshotScope desired_scope = 8;
 
   // The files of the local snapshot, as recorded when the pause captured it.
   // atelet uploads the subset that desired_scope needs.
   repeated string snapshot_files = 9;
+
+  // The scope the pause checkpoint captured (FULL or DATA), as recorded on
+  // the actor's LocalSnapshot. With desired_scope and snapshot_files it
+  // determines the files the upload writes, which lets a retry recognize an
+  // upload that already finished after the local snapshot was pruned.
+  SnapshotScope captured_scope = 10;
 }
 
 message UploadPausedCheckpointResponse {

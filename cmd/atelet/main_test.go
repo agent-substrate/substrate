@@ -1164,9 +1164,13 @@ type recordingObjectStorage struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	putErr  error
+	getErr  error
 }
 
 func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	b, ok := r.objects[bucket+"/"+object]
@@ -1204,6 +1208,38 @@ func (r *recordingObjectStorage) keys() []string {
 	return keys
 }
 
+// barrierObjectStorage holds every get until want of them are in flight, so a
+// caller that looks objects up one at a time times out. Every object exists.
+type barrierObjectStorage struct {
+	want       int
+	mu         sync.Mutex
+	started    int
+	allStarted chan struct{}
+}
+
+func (b *barrierObjectStorage) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
+	b.mu.Lock()
+	b.started++
+	if b.started == b.want {
+		close(b.allStarted)
+	}
+	b.mu.Unlock()
+	select {
+	case <-b.allStarted:
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Second):
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return nil, fmt.Errorf("get %s/%s: only %d of %d lookups started concurrently", bucket, object, b.started, b.want)
+	}
+}
+
+func (b *barrierObjectStorage) PutObject(context.Context, string, string, io.Reader) error {
+	return errors.New("barrierObjectStorage is read-only")
+}
+
 // writeLocalSnapshot lays a local pause snapshot out in dir: the given files
 // plus the marshaled manifest beside them.
 func writeLocalSnapshot(t *testing.T, dir string, rec sandboxAssetsRecord, contents map[string]string) {
@@ -1235,6 +1271,7 @@ func validUploadPausedCheckpointRequest() *ateletpb.UploadPausedCheckpointReques
 		LocalSnapshotName:      "pause-snap-1",
 		DestinationSnapshotUri: pausedSnapshotURI,
 		DesiredScope:           ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		CapturedScope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 	}
 }
 
@@ -1419,13 +1456,76 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
-	t.Run("gone locally but already uploaded succeeds", func(t *testing.T) {
+	goneDir := func(t *testing.T) string { return filepath.Join(t.TempDir(), "never-created") }
+	retryReq := func(captured, desired ateletpb.SnapshotScope) *ateletpb.UploadPausedCheckpointRequest {
+		req := validUploadPausedCheckpointRequest()
+		req.CapturedScope = captured
+		req.DesiredScope = desired
+		req.SnapshotFiles = fullRec("microvm").SnapshotFiles
+		return req
+	}
+
+	for _, tc := range []struct {
+		class   string
+		desired ateletpb.SnapshotScope
+	}{
+		{"microvm", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
+		{"microvm", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA},
+		{"gvisor", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
+		{"gvisor", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA},
+	} {
+		t.Run(fmt.Sprintf("retry after a %s upload as %v finished and pruned reports the same files", tc.class, tc.desired), func(t *testing.T) {
+			store := &recordingObjectStorage{}
+			s := &AteomHerder{gcsClient: store}
+			dir := filepath.Join(t.TempDir(), "pause-snap-1")
+			writeLocalSnapshot(t, dir, fullRec(tc.class), map[string]string{
+				"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
+			})
+			req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, tc.desired)
+
+			_, first, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
+			if err != nil {
+				t.Fatalf("first uploadLocalCheckpointDir: %v", err)
+			}
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatalf("pruning local snapshot: %v", err)
+			}
+			_, retried, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
+			if err != nil {
+				t.Fatalf("retried uploadLocalCheckpointDir: %v", err)
+			}
+			if !slices.Equal(retried, first) {
+				t.Errorf("retry reported files = %v, want %v as the first attempt did", retried, first)
+			}
+		})
+	}
+
+	t.Run("gone locally but every file uploaded succeeds", func(t *testing.T) {
 		store := &recordingObjectStorage{objects: map[string][]byte{
-			pausedSnapshotPath + "/manifest.json": []byte(`{"sandboxClass":"microvm","snapshotFiles":["durable-dir.tar"]}`),
+			pausedSnapshotPath + "/config.json.zstd":     nil,
+			pausedSnapshotPath + "/memory-ranges.zstd":   nil,
+			pausedSnapshotPath + "/durable-dir.tar.zstd": nil,
 		}}
 		s := &AteomHerder{gcsClient: store}
 
-		_, files, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL)
+		_, files, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri)
+		if err != nil {
+			t.Fatalf("uploadLocalCheckpointDir: %v", err)
+		}
+		if want := fullRec("microvm").SnapshotFiles; !slices.Equal(files, want) {
+			t.Errorf("reported files = %v, want %v", files, want)
+		}
+	})
+
+	t.Run("gone locally looks only for the files a data upload writes", func(t *testing.T) {
+		store := &recordingObjectStorage{objects: map[string][]byte{
+			pausedSnapshotPath + "/durable-dir.tar.zstd": nil,
+		}}
+		s := &AteomHerder{gcsClient: store}
+
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA)
+		_, files, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri)
 		if err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
@@ -1434,15 +1534,80 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
-	t.Run("gone locally and remotely crashes the actor", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+	t.Run("gone locally with an incomplete upload crashes the actor", func(t *testing.T) {
+		store := &recordingObjectStorage{objects: map[string][]byte{
+			pausedSnapshotPath + "/config.json.zstd":     nil,
+			pausedSnapshotPath + "/durable-dir.tar.zstd": nil,
+		}}
+		s := &AteomHerder{gcsClient: store}
 
-		_, _, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
-		if !strings.Contains(err.Error(), "gone and no uploaded copy exists") {
+		if !strings.Contains(err.Error(), "no uploaded copy exists") || !strings.Contains(err.Error(), "memory-ranges") {
+			t.Errorf("error = %v, want it to name the missing memory-ranges", err)
+		}
+	})
+
+	t.Run("gone locally and remotely crashes the actor", func(t *testing.T) {
+		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri)
+		if err == nil {
+			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
+		}
+		if !strings.Contains(err.Error(), "no uploaded copy exists") {
 			t.Errorf("error = %v, want it to name the unrecoverable local snapshot", err)
+		}
+	})
+
+	t.Run("gone locally with a failed lookup returns the error", func(t *testing.T) {
+		lookupErr := errors.New("storage unavailable")
+		s := &AteomHerder{gcsClient: &recordingObjectStorage{getErr: lookupErr}}
+
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri)
+		if !errors.Is(err, lookupErr) {
+			t.Errorf("error = %v, want it to wrap %v", err, lookupErr)
+		}
+	})
+
+	t.Run("gone locally looks every file up concurrently", func(t *testing.T) {
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL)
+		store := &barrierObjectStorage{want: len(req.GetSnapshotFiles()), allStarted: make(chan struct{})}
+		s := &AteomHerder{gcsClient: store}
+
+		_, files, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri)
+		if err != nil {
+			t.Fatalf("uploadLocalCheckpointDir: %v", err)
+		}
+		if !slices.Equal(files, req.GetSnapshotFiles()) {
+			t.Errorf("reported files = %v, want %v", files, req.GetSnapshotFiles())
+		}
+	})
+
+	t.Run("gone locally with no files to look for fails", func(t *testing.T) {
+		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL)
+		req.SnapshotFiles = nil
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri); err == nil {
+			t.Fatal("uploadLocalCheckpointDir succeeded with nothing to look for, want error")
+		}
+	})
+
+	t.Run("gone locally without a captured scope fails", func(t *testing.T) {
+		store := &recordingObjectStorage{objects: map[string][]byte{
+			pausedSnapshotPath + "/durable-dir.tar.zstd": nil,
+		}}
+		s := &AteomHerder{gcsClient: store}
+
+		req := retryReq(ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA)
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, req, goneDir(t), uri); err == nil {
+			t.Fatal("uploadLocalCheckpointDir succeeded without a captured scope, want error")
 		}
 	})
 
@@ -1486,6 +1651,9 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		{"data-on-golden scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
 			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}, true},
+		{"missing captured scope accepted", func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.CapturedScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+		}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

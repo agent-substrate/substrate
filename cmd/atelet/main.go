@@ -877,33 +877,10 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 // manifest was not read) and the files the uploaded snapshot consists of.
 // Parameterized by localDir for tests.
 func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, localDir string, uri resources.SnapshotURI) (string, []string, error) {
-	manifestURI, err := uri.ObjectURI(sandboxManifestName)
-	if err != nil {
-		return "", nil, fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
-	}
-
 	manifest, err := os.ReadFile(filepath.Join(localDir, sandboxManifestName))
 	if errors.Is(err, os.ErrNotExist) {
-		// The local snapshot is gone. A previous invocation may have uploaded
-		// and pruned it: the remote manifest is uploaded last, so its presence
-		// means the whole snapshot is committed and this retry already
-		// succeeded. Absent on both sides, the paused actor's state is
-		// unrecoverable.
-		remote, fetchErr := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
-		if fetchErr == nil {
-			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", req.GetDestinationSnapshotUri()))
-			// Report the files that upload wrote, as the first attempt did.
-			var uploaded sandboxAssetsRecord
-			if err := json.Unmarshal(remote, &uploaded); err != nil {
-				return "", nil, fmt.Errorf("while parsing the already-uploaded snapshot manifest: %w", err)
-			}
-			return "", uploaded.SnapshotFiles, nil
-		}
-		if errors.Is(fetchErr, ategcs.ErrObjectNotFound) {
-			return "", nil, fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w",
-				req.GetLocalSnapshotName(), fetchErr)
-		}
-		return "", nil, fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
+		files, err := s.alreadyUploadedFiles(ctx, req, uri)
+		return "", files, err
 	}
 	if err != nil {
 		return "", nil, wrapFileSystemErr("while reading local snapshot manifest", err)
@@ -945,12 +922,13 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 	switch atev1alpha1.SandboxClass(rec.SandboxClass) {
 	case atev1alpha1.SandboxClassMicroVM, atev1alpha1.SandboxClassGvisor:
-		if !slices.Contains(rec.SnapshotFiles, ateompath.DurableDirTarFile) {
+		files, ok := durableDataFiles(rec.SnapshotFiles)
+		if !ok {
 			// No durable-dir volumes were attached at pause: this snapshot
 			// holds no data, and never will — not retryable.
 			return status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", rec.SandboxClass, ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
 		}
-		rec.SnapshotFiles = []string{ateompath.DurableDirTarFile}
+		rec.SnapshotFiles = files
 		rec.Scope = ateattr.SnapshotScopeData
 		return nil
 
@@ -958,6 +936,80 @@ func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 		// The manifest's class is unvalidated input from disk/object storage.
 		return status.Errorf(codes.FailedPrecondition, "unknown sandbox class %q in snapshot manifest", rec.SandboxClass)
 	}
+}
+
+// durableDataFiles returns the files of a FULL capture that a DATA upload
+// writes, and false when the capture holds no durable data.
+func durableDataFiles(files []string) ([]string, bool) {
+	if !slices.Contains(files, ateompath.DurableDirTarFile) {
+		return nil, false
+	}
+	return []string{ateompath.DurableDirTarFile}, true
+}
+
+// alreadyUploadedFiles handles a retry whose local snapshot was already
+// uploaded and pruned. The destination is unique to this suspend and objects
+// appear only when complete, so if every expected file exists it returns them;
+// otherwise the snapshot is lost.
+func (s *AteomHerder) alreadyUploadedFiles(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, uri resources.SnapshotURI) ([]string, error) {
+	files, err := retriedUploadFiles(req)
+	if err != nil {
+		return nil, fmt.Errorf("local snapshot %q is gone and no uploaded copy can be identified: %w", req.GetLocalSnapshotName(), err)
+	}
+	// Look every file up concurrently, like uploadSnapshot writes them.
+	present := make([]bool, len(files))
+	g, gCtx := errgroup.WithContext(ctx)
+	for i, fileName := range files {
+		g.Go(func() error {
+			objectURI, err := uri.ObjectURI(fileName + ".zstd")
+			if err != nil {
+				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
+			}
+			exists, err := ategcs.ObjectExists(gCtx, s.gcsClient, objectURI)
+			if err != nil {
+				return fmt.Errorf("while probing for an already-uploaded %s: %w", fileName, err)
+			}
+			present[i] = exists
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	var missing []string
+	for i, fileName := range files {
+		if !present[i] {
+			missing = append(missing, fileName)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %v not found", req.GetLocalSnapshotName(), missing)
+	}
+	slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", req.GetDestinationSnapshotUri()))
+	return files, nil
+}
+
+// retriedUploadFiles returns the files a completed upload of req wrote, using
+// the same scope conversion as uploadLocalCheckpointDir.
+func retriedUploadFiles(req *ateletpb.UploadPausedCheckpointRequest) ([]string, error) {
+	capturedScope := ateattr.SnapshotScopeValue(req.GetCapturedScope())
+	desiredScope := ateattr.SnapshotScopeValue(req.GetDesiredScope())
+	files := req.GetSnapshotFiles()
+	switch {
+	case len(files) == 0:
+		return nil, errors.New("the request lists no snapshot files")
+	case capturedScope != ateattr.SnapshotScopeFull && capturedScope != ateattr.SnapshotScopeData:
+		return nil, fmt.Errorf("the request has no captured scope (got %q)", capturedScope)
+	case capturedScope == desiredScope:
+		return files, nil
+	case capturedScope == ateattr.SnapshotScopeData:
+		return nil, fmt.Errorf("a %s capture cannot have been uploaded as %s", capturedScope, desiredScope)
+	}
+	dataFiles, ok := durableDataFiles(files)
+	if !ok {
+		return nil, fmt.Errorf("a %s capture without %s cannot have been uploaded as %s", capturedScope, ateompath.DurableDirTarFile, desiredScope)
+	}
+	return dataFiles, nil
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {

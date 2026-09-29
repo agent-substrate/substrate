@@ -80,6 +80,39 @@ func Open(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadClose
 	return rc, nil
 }
 
+// objectStatter is an ObjectStorage that can look an object up without
+// reading it. StatObject returns an error wrapping ErrObjectNotFound when the
+// object or its bucket is absent.
+type objectStatter interface {
+	StatObject(ctx context.Context, bucket, object string) error
+}
+
+// ObjectExists reports whether the object at gsURL exists. It reads only
+// metadata when the backend supports that; otherwise it opens the object and
+// closes it unread.
+func ObjectExists(ctx context.Context, client ObjectStorage, gsURL string) (bool, error) {
+	bucket, object, err := parseGCSURL(gsURL)
+	if err != nil {
+		return false, fmt.Errorf("while parsing url: %w", err)
+	}
+	if statter, ok := client.(objectStatter); ok {
+		err = statter.StatObject(ctx, bucket, object)
+	} else {
+		var rc io.ReadCloser
+		if rc, err = client.GetObject(ctx, bucket, object); err == nil {
+			err = rc.Close()
+		}
+	}
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrObjectNotFound):
+		return false, nil
+	default:
+		return false, fmt.Errorf("while looking up object bucket=%q object=%q: %w", bucket, object, err)
+	}
+}
+
 // SendBytesToGCS uploads the given bytes (uncompressed) to gsURL. Intended for
 // small objects such as the snapshot manifest.
 func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {

@@ -23,6 +23,17 @@ import (
 	"cloud.google.com/go/storage"
 )
 
+// StatObject looks the object up by its metadata alone.
+func (g *gcsClient) StatObject(ctx context.Context, bucket, object string) error {
+	if _, err := g.client.Bucket(bucket).Object(object).Attrs(ctx); err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) || errors.Is(err, storage.ErrBucketNotExist) {
+			return fmt.Errorf("%w: Bucket:%q, Object:%q", ErrObjectNotFound, bucket, object)
+		}
+		return err
+	}
+	return nil
+}
+
 // GetObject streams the object, fetching it as parallel byte ranges when it spans
 // more than one chunk (see rangedget.go). Smaller objects stay a single request.
 func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {

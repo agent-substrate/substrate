@@ -17,8 +17,11 @@ package ategcs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -95,5 +98,66 @@ func TestS3GetObjectClassifiesAbsence(t *testing.T) {
 				t.Errorf("errors.Is(err, ReasonFailedGetExternalObject) = %v, want %v (err: %v)", got, tc.wantAbsent, err)
 			}
 		})
+	}
+}
+
+// TestS3ObjectExists covers the HEAD-based lookup: a HEAD response has no
+// body, so only the status code tells absence from other failures.
+func TestS3ObjectExists(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     int
+		wantExists bool
+		wantErr    bool
+	}{
+		{name: "200 exists", status: http.StatusOK, wantExists: true},
+		{name: "404 is absent", status: http.StatusNotFound},
+		{name: "403 is an error", status: http.StatusForbidden, wantErr: true},
+		{name: "500 is an error", status: http.StatusInternalServerError, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exists, err := ObjectExists(context.Background(), s3ErrorClient(t, tc.status, ""), "gs://bkt/obj")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ObjectExists err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if exists != tc.wantExists {
+				t.Errorf("ObjectExists = %v, want %v", exists, tc.wantExists)
+			}
+		})
+	}
+}
+
+// getOnlyStore has no metadata lookup, so ObjectExists falls back to
+// GetObject.
+type getOnlyStore struct {
+	objects map[string]bool
+	err     error
+}
+
+func (s getOnlyStore) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if !s.objects[bucket+"/"+object] {
+		return nil, fmt.Errorf("%w: %s/%s", ErrObjectNotFound, bucket, object)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (getOnlyStore) PutObject(context.Context, string, string, io.Reader) error { return nil }
+
+func TestObjectExistsFallsBackToGetObject(t *testing.T) {
+	ctx := context.Background()
+	store := getOnlyStore{objects: map[string]bool{"bkt/present": true}}
+
+	if exists, err := ObjectExists(ctx, store, "gs://bkt/present"); err != nil || !exists {
+		t.Errorf("ObjectExists(present) = %v, %v; want true, nil", exists, err)
+	}
+	if exists, err := ObjectExists(ctx, store, "gs://bkt/absent"); err != nil || exists {
+		t.Errorf("ObjectExists(absent) = %v, %v; want false, nil", exists, err)
+	}
+	failing := getOnlyStore{err: errors.New("unavailable")}
+	if _, err := ObjectExists(ctx, failing, "gs://bkt/present"); err == nil {
+		t.Error("ObjectExists with a failing store succeeded, want error")
 	}
 }

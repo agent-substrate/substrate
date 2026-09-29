@@ -4361,6 +4361,9 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if got := upload.GetDesiredScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		t.Errorf("upload desired_scope = %v, want FULL (template default)", got)
 	}
+	if got := upload.GetCapturedScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+		t.Errorf("upload captured_scope = %v, want FULL (the pause's scope)", got)
+	}
 
 	actor := suspended.GetActor()
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
