@@ -75,14 +75,15 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
+// prepareOCIDirectory assembles the OCI bundle at bundlePath for one of the
+// actor's containers: it pulls the image, writes the overlay spec ateom
+// composes the rootfs from, and writes the runtime-neutral OCI spec.
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, bundlePath, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
 	span.SetAttributes(attribute.String("image", ref))
 	defer span.End()
-
-	bundlePath := ateletpath.OCIBundlePath(actorUID, containerName)
 
 	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
 	// already wiped the bundle dir on the Run/Restore path).
