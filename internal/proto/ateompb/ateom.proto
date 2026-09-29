@@ -127,13 +127,23 @@ message ActorDirs {
 }
 
 message TerminateWorkloadRequest {
+  // +k8s:optional
   string atespace = 1;
+  // +k8s:optional
   string actor_name = 2;
+  // +k8s:optional
   string actor_uid = 3;
+  // +k8s:optional
   string actor_template_atespace = 4;
+  // +k8s:optional
   string actor_template_name = 5;
+  // +k8s:optional
   string runsc_path = 6;
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 8;
 }
 
@@ -141,31 +151,49 @@ message TerminateWorkloadResponse {
 }
 
 message RunWorkloadRequest {
+  // +k8s:optional
   string atespace = 1;
+  // +k8s:optional
   string actor_name = 2;
+  // +k8s:optional
   string actor_uid = 3;
+  // +k8s:optional
   string actor_template_atespace = 4;
+  // +k8s:optional
   string actor_template_name = 5;
 
+  // +k8s:optional
   string runsc_path = 6;
 
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
   // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
   // "virtiofsd", "kata-kernel", "kata-image")
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+  //
+  // +k8s:optional
   map<string, string> runtime_asset_paths = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   optional EgressGateway egress_gateway = 10;
 
   // The actor's declared size, from the ActorTemplate's resource limits. ateom
   // sizes the sandbox to these (cgroup caps via the OCI spec, and for the
   // micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
   // runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
+  //
+  // +k8s:optional
   int64 cpu_milli = 11;    // CPU limit in millicores (1000 = one core).
+  // +k8s:optional
   int64 memory_bytes = 12; // Memory limit in bytes.
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 13;
 }
 
@@ -303,14 +331,22 @@ enum SnapshotFidelity {
 }
 
 message CheckpointWorkloadRequest {
+  // +k8s:optional
   string atespace = 1;
+  // +k8s:optional
   string actor_name = 2;
+  // +k8s:optional
   string actor_uid = 3;
+  // +k8s:optional
   string actor_template_atespace = 4;
+  // +k8s:optional
   string actor_template_name = 5;
 
+  // +k8s:optional
   string runsc_path = 6;
 
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
   // The object storage URI of the snapshot to write. Object names are appended
@@ -323,14 +359,22 @@ message CheckpointWorkloadRequest {
   // The control plane sends an ActorSnapshot's snapshot_uri, which sits under
   // the prefix of the resource that owns the snapshot. For example:
   // "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
+  //
+  // +k8s:optional
   string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  //
+  // +k8s:optional
   map<string, string> runtime_asset_paths = 9;
 
   // Fidelity the checkpoint captures.
+  //
+  // +k8s:optional
   SnapshotFidelity fidelity = 10;
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 11;
 }
 
@@ -346,40 +390,64 @@ message CheckpointWorkloadResponse {
 }
 
 message RestoreWorkloadRequest {
+  // +k8s:optional
   string atespace = 1;
+  // +k8s:optional
   string actor_name = 2;
+  // +k8s:optional
   string actor_uid = 3;
+  // +k8s:optional
   string actor_template_atespace = 4;
+  // +k8s:optional
   string actor_template_name = 5;
 
+  // +k8s:optional
   string runsc_path = 6;
 
+  // +k8s:optional
+  // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
   // The object storage URI of the snapshot to restore. Object names are
   // appended to it; it addresses the snapshot, not any one object.
+  //
+  // +k8s:optional
   string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  //
+  // +k8s:optional
   map<string, string> runtime_asset_paths = 9;
 
   // Fidelity to restore from the snapshot.
+  //
+  // +k8s:optional
   SnapshotFidelity fidelity = 10;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   optional EgressGateway egress_gateway = 12;
 
   // The actor's declared size, from the ActorTemplate's resource limits. Used to
   // (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
   // MEMORY micro-VM restore the size baked into the snapshot is authoritative and
   // these are ignored. Zero means "unset": keep the runtime default.
+  //
+  // +k8s:optional
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  // +k8s:optional
   int64 memory_bytes = 15; // Memory limit in bytes.
+  // +k8s:optional
+  // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 16;
 
   // actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
   // ateom must not delete or modify files in it.
+  //
+  // +k8s:optional
   bool preserve_restore_dir = 17;
 }
 
@@ -391,6 +459,8 @@ message GetWorkloadStatsRequest {
   // between the caller's view of the world and this call, so ateom answers
   // NOT_FOUND on a mismatch rather than reporting a different actor's numbers
   // under the requested actor's identity.
+  //
+  // +k8s:optional
   string actor_uid = 1;
 }
 

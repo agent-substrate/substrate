@@ -315,17 +315,27 @@ func (x *ActorDirs) GetVolumesDir() string {
 }
 
 type TerminateWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	ActorDirs             *ActorDirs             `protobuf:"bytes,8,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:optional
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:optional
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:optional
+	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
+	ActorDirs     *ActorDirs `protobuf:"bytes,8,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TerminateWorkloadRequest) Reset() {
@@ -451,27 +461,45 @@ func (*TerminateWorkloadResponse) Descriptor() ([]byte, []int) {
 }
 
 type RunWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:optional
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:optional
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:optional
+	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
 	// "virtiofsd", "kata-kernel", "kata-image")
 	// to the local on-disk path atelet fetched it to (content-addressed, like
 	// runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+	//
+	// +k8s:optional
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// When absent the actor has no egress: its TCP is captured and refused.
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,10,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. ateom
 	// sizes the sandbox to these (cgroup caps via the OCI spec, and for the
 	// micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
 	// runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
-	CpuMilli      int64      `protobuf:"varint,11,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
-	MemoryBytes   int64      `protobuf:"varint,12,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	//
+	// +k8s:optional
+	CpuMilli int64 `protobuf:"varint,11,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	// +k8s:optional
+	MemoryBytes int64 `protobuf:"varint,12,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
 	ActorDirs     *ActorDirs `protobuf:"bytes,13,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1285,14 +1313,22 @@ func (*RunWorkloadResponse) Descriptor() ([]byte, []int) {
 }
 
 type CheckpointWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:optional
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:optional
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:optional
+	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI of the snapshot to write. Object names are appended
 	// to it, so it addresses the snapshot as a whole rather than any one object.
 	//
@@ -1303,13 +1339,21 @@ type CheckpointWorkloadRequest struct {
 	// The control plane sends an ActorSnapshot's snapshot_uri, which sits under
 	// the prefix of the resource that owns the snapshot. For example:
 	// "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
+	//
+	// +k8s:optional
 	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+	//
+	// +k8s:optional
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Fidelity the checkpoint captures.
-	Fidelity      SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateom.SnapshotFidelity" json:"fidelity,omitempty"`
-	ActorDirs     *ActorDirs       `protobuf:"bytes,11,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	//
+	// +k8s:optional
+	Fidelity SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateom.SnapshotFidelity" json:"fidelity,omitempty"`
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
+	ActorDirs     *ActorDirs `protobuf:"bytes,11,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1479,33 +1523,57 @@ func (x *CheckpointWorkloadResponse) GetDataSnapshotFiles() []string {
 }
 
 type RestoreWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:optional
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:optional
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// +k8s:optional
+	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:optional
+	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	// +k8s:optional
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI of the snapshot to restore. Object names are
 	// appended to it; it addresses the snapshot, not any one object.
+	//
+	// +k8s:optional
 	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+	//
+	// +k8s:optional
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Fidelity to restore from the snapshot.
+	//
+	// +k8s:optional
 	Fidelity SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateom.SnapshotFidelity" json:"fidelity,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
+	//
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. Used to
 	// (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
 	// MEMORY micro-VM restore the size baked into the snapshot is authoritative and
 	// these are ignored. Zero means "unset": keep the runtime default.
-	CpuMilli    int64      `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
-	MemoryBytes int64      `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
-	ActorDirs   *ActorDirs `protobuf:"bytes,16,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	//
+	// +k8s:optional
+	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	// +k8s:optional
+	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	// +k8s:optional
+	// +k8s:opaqueType # tagged in a follow-up
+	ActorDirs *ActorDirs `protobuf:"bytes,16,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	// actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
 	// ateom must not delete or modify files in it.
+	//
+	// +k8s:optional
 	PreserveRestoreDir bool `protobuf:"varint,17,opt,name=preserve_restore_dir,json=preserveRestoreDir,proto3" json:"preserve_restore_dir,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
@@ -1688,6 +1756,8 @@ type GetWorkloadStatsRequest struct {
 	// between the caller's view of the world and this call, so ateom answers
 	// NOT_FOUND on a mismatch rather than reporting a different actor's numbers
 	// under the requested actor's identity.
+	//
+	// +k8s:optional
 	ActorUid      string `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
