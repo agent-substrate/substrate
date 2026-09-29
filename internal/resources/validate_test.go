@@ -15,7 +15,6 @@
 package resources
 
 import (
-	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -274,72 +273,32 @@ func TestValidateUUID(t *testing.T) {
 	}
 }
 
-// ValidateWorkerResources is held to the generated rules by controlapi's
-// TestValidateWorkerResourcesParity; this covers the package's own contract,
-// including the ValidateLimits hook it shares with controlapi.
-func TestValidateWorkerResources(t *testing.T) {
-	limitsPath := field.NewPath("capacity", "resources", "limits")
-	withLimits := func(l ...*ateapipb.Limits) *ateapipb.WorkerResources {
-		return &ateapipb.WorkerResources{Resources: &ateapipb.Resources{Limits: l}}
-	}
+func TestValidateLimits(t *testing.T) {
+	path := field.NewPath("limits")
+	q := func(i int) *field.Path { return path.Index(i).Child("quantity") }
 	tests := []struct {
-		name string
-		obj  *ateapipb.WorkerResources
-		want field.ErrorList
-	}{{
-		name: "nil",
-	}, {
-		name: "empty",
-		obj:  &ateapipb.WorkerResources{},
-	}, {
-		name: "valid",
-		obj:  &ateapipb.WorkerResources{Actors: 2, Resources: CPUMemory(1500, 1<<30)},
-	}, {
-		name: "negative actors",
-		obj:  &ateapipb.WorkerResources{Actors: -1},
-		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
-	}, {
-		name: "nil limit and too many",
-		obj:  withLimits(nil, &ateapipb.Limits{Name: "cpu", Quantity: "1"}, &ateapipb.Limits{Name: "memory", Quantity: "1Gi"}),
-		want: field.ErrorList{
-			field.Required(limitsPath.Index(0), ""),
-			field.TooMany(limitsPath, 3, 2).WithOrigin("maxItems"),
+		name   string
+		limits []*ateapipb.Limits
+		want   field.ErrorList
+	}{
+		{name: "empty"},
+		{name: "valid", limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "999"}, {Name: "memory", Quantity: "1Gi"}}},
+		{name: "nil entry left to tags", limits: []*ateapipb.Limits{nil}},
+		{name: "missing quantity left to tags", limits: []*ateapipb.Limits{{Name: "cpu"}}},
+		{
+			name:   "unsupported name",
+			limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}},
+			want:   field.ErrorList{field.NotSupported[string](path.Index(0).Child("name"), nil, nil)},
 		},
-	}, {
-		name: "missing name",
-		obj:  withLimits(&ateapipb.Limits{Quantity: "1"}),
-		want: field.ErrorList{
-			field.Required(limitsPath.Index(0).Child("name"), ""),
-			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
-		},
-	}, {
-		name: "unsupported name",
-		obj:  withLimits(&ateapipb.Limits{Name: "gpu", Quantity: "1"}),
-		want: field.ErrorList{field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil)},
-	}, {
-		name: "duplicate name",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1"}, &ateapipb.Limits{Name: "cpu", Quantity: "2"}),
-		want: field.ErrorList{field.Duplicate(limitsPath.Index(1), nil)},
-	}, {
-		name: "missing quantity",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu"}),
-		want: field.ErrorList{field.Required(limitsPath.Index(0).Child("quantity"), "")},
-	}, {
-		name: "zero quantity",
-		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: "0"}),
-		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "cpu at the bound",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1000"}),
-		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "cpu just under the bound",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "999999m"}),
-	}}
+		{name: "malformed quantity", limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "x"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
+		{name: "zero quantity", limits: []*ateapipb.Limits{{Name: "memory", Quantity: "0"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
+		{name: "negative quantity", limits: []*ateapipb.Limits{{Name: "memory", Quantity: "-1"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
+		{name: "cpu at the bound", limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1000"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
+		{name: "memory has no upper bound", limits: []*ateapipb.Limits{{Name: "memory", Quantity: "1000"}}},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ValidateWorkerResources(context.Background(), field.NewPath("capacity"), tt.obj)
-			field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, tt.want, got)
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateLimits(path, tt.limits))
 		})
 	}
 }

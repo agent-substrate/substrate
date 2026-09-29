@@ -18,8 +18,6 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
-import "pkg/proto/ateapipb/ateapi.proto";
-
 // AteomSupport provides callouts for ateom.
 //
 // Called by individual ateom pods over a local connection, authenticated with
@@ -48,18 +46,54 @@ service AteomSupport {
 }
 
 message SetWorkerCapacityRequest {
-  // What the worker can supply, in the same vocabulary the control plane
-  // records and an ActorTemplate asks in.
-  //
-  // Opaque: validation-gen only follows a type into another package if that
-  // package holds its custom hooks, and ateapipb is generated proto code. The
-  // custom validation applies the same rules as the tags on
-  // ateapi.WorkerResources, shared through internal/resources.
+  // What the worker can supply. atelet converts it to the control plane's
+  // WorkerResources when forwarding.
   //
   // +k8s:required
-  // +k8s:opaqueType
-  // +k8s:customValidation # ateapi.WorkerResources rules
-  ateapi.WorkerResources capacity = 1;
+  WorkerResources capacity = 1;
+}
+
+// WorkerResources is what a worker can supply. It mirrors the control plane's
+// WorkerResources and is validated by the same rules.
+message WorkerResources {
+  // Resources are matched by name against actors' resources for placement.
+  //
+  // +k8s:optional
+  Resources resources = 1;
+
+  // A count of Actors. Workers can use this to limit the number of Actors
+  // that can be placed on them, constraining costs not captured in the
+  // resources above.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int32 actors = 2;
+}
+
+message Resources {
+  // limits is the maximum amount of compute resources allowed. Only "cpu"
+  // and "memory" are supported, each at most once, and each quantity must be
+  // greater than zero; the cpu limit must be less than 1000 cores.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=2
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
+  // +k8s:customValidation # names, quantity parse/positivity, cpu bound
+  repeated Limits limits = 1;
+}
+
+message Limits {
+  // +k8s:required
+  // +k8s:maxLength=16 # the hook on Resources.limits restricts values to cpu/memory
+  string name = 1;
+
+  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
+  // "2Gi").
+  //
+  // +k8s:required
+  // +k8s:maxLength=32 # the hook on Resources.limits requires a parseable quantity
+  string quantity = 2;
 }
 
 message SetWorkerCapacityResponse {

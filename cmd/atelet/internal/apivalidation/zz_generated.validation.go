@@ -23,12 +23,84 @@ import (
 	context "context"
 
 	ateletpb "github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	ateapipb "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	operation "k8s.io/apimachinery/pkg/api/operation"
 	safe "k8s.io/apimachinery/pkg/api/safe"
 	validate "k8s.io/apimachinery/pkg/api/validate"
 	field "k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// Validate_Limits validates an instance of Limits according
+// to declarative validation rules in the API schema.
+func Validate_Limits(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.Limits) (errs field.ErrorList) {
+
+	{ // field ateletpb.Limits.Name
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 16); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Limits) *string {
+				return &oldObj.Name
+			})
+		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.Limits.Quantity
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 32); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Limits) *string {
+				return &oldObj.Quantity
+			})
+		errs = append(errs, fn(fldPath.Child("quantity"), &obj.Quantity, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
 
 // Validate_MintActorCertificateRequest validates an instance of MintActorCertificateRequest according
 // to declarative validation rules in the API schema.
@@ -272,6 +344,65 @@ func Validate_RequestActorSuspendRequest(
 	return errs
 }
 
+// Validate_Resources validates an instance of Resources according
+// to declarative validation rules in the API schema.
+func Validate_Resources(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.Resources) (errs field.ErrorList) {
+
+	{ // field ateletpb.Resources.Limits
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateletpb.Limits,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateletpb.Limits](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 2).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_Resources_Limits(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.Limits, b *ateletpb.Limits) bool { return a.Name == b.Name }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.Limits, b *ateletpb.Limits) bool { return a.Name == b.Name }, ateDeepEqual, Validate_Limits); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Resources) []*ateletpb.Limits {
+				return oldObj.Limits
+			})
+		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_SetWorkerCapacityRequest validates an instance of SetWorkerCapacityRequest according
 // to declarative validation rules in the API schema.
 func Validate_SetWorkerCapacityRequest(
@@ -281,7 +412,7 @@ func Validate_SetWorkerCapacityRequest(
 	{ // field ateletpb.SetWorkerCapacityRequest.Capacity
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.WorkerResources,
+			obj, oldObj *ateletpb.WorkerResources,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -298,17 +429,85 @@ func Validate_SetWorkerCapacityRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_SetWorkerCapacityRequest_Capacity(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			// call the type's validation function
+			errs = append(errs, Validate_WorkerResources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SetWorkerCapacityRequest) *ateletpb.WorkerResources {
+				return oldObj.Capacity
+			})
+		errs = append(errs, fn(fldPath.Child("capacity"), obj.Capacity, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_WorkerResources validates an instance of WorkerResources according
+// to declarative validation rules in the API schema.
+func Validate_WorkerResources(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.WorkerResources) (errs field.ErrorList) {
+
+	{ // field ateletpb.WorkerResources.Resources
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.WorkerResources) *ateletpb.Resources {
+				return oldObj.Resources
+			})
+		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.WorkerResources.Actors
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.SetWorkerCapacityRequest) *ateapipb.WorkerResources {
-				return oldObj.Capacity
+			func(oldObj *ateletpb.WorkerResources) *int32 {
+				return &oldObj.Actors
 			})
-		errs = append(errs, fn(fldPath.Child("capacity"), obj.Capacity, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("actors"), &obj.Actors, oldVal, oldObj != nil)...)
 	}
 
 	return errs

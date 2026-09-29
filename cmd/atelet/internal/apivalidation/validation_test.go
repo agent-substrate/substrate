@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -172,9 +171,9 @@ func TestValidateMintActorCertificateRequest(t *testing.T) {
 }
 
 func TestValidateSetWorkerCapacityRequest(t *testing.T) {
-	withLimits := func(limits ...*ateapipb.Limits) *ateletpb.SetWorkerCapacityRequest {
+	withLimits := func(limits ...*ateletpb.Limits) *ateletpb.SetWorkerCapacityRequest {
 		return &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Resources: &ateapipb.Resources{Limits: limits}},
+			Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{Limits: limits}},
 		}
 	}
 	limitsPath := field.NewPath("capacity", "resources", "limits")
@@ -185,7 +184,7 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 		want field.ErrorList
 	}{{
 		name: "valid",
-		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{}},
+		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{}},
 	}, {
 		name: "missing capacity",
 		obj:  &ateletpb.SetWorkerCapacityRequest{},
@@ -193,66 +192,69 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	}, {
 		name: "full capacity",
 		obj: &ateletpb.SetWorkerCapacityRequest{
-			Capacity: &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{
-				Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "8Gi"}},
+			Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
+				Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "8Gi"}},
 			}},
 		},
 	}, {
 		name: "negative actors",
-		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: -1}},
+		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: -1}},
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "unsupported resource name",
-		obj:  withLimits(&ateapipb.Limits{Name: "gpu", Quantity: "1"}),
+		obj:  withLimits(&ateletpb.Limits{Name: "gpu", Quantity: "1"}),
 		want: field.ErrorList{field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil)},
 	}, {
 		name: "missing resource name",
-		obj:  withLimits(&ateapipb.Limits{Quantity: "1"}),
+		obj:  withLimits(&ateletpb.Limits{Quantity: "1"}),
 		want: field.ErrorList{
 			field.Required(limitsPath.Index(0).Child("name"), ""),
 			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
 		},
 	}, {
 		name: "resource name too long",
-		obj:  withLimits(&ateapipb.Limits{Name: strings.Repeat("x", 17), Quantity: "1"}),
+		obj:  withLimits(&ateletpb.Limits{Name: strings.Repeat("x", 17), Quantity: "1"}),
 		want: field.ErrorList{
 			field.TooLong(limitsPath.Index(0).Child("name"), nil, 16).WithOrigin("maxLength"),
 			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
 		},
 	}, {
 		name: "quantity too long",
-		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: strings.Repeat("1", 33)}),
+		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: strings.Repeat("1", 33)}),
 		want: field.ErrorList{field.TooLong(limitsPath.Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength")},
 	}, {
 		name: "duplicate resource name",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1"}, &ateapipb.Limits{Name: "cpu", Quantity: "2"}),
+		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "1"}, &ateletpb.Limits{Name: "cpu", Quantity: "2"}),
 		want: field.ErrorList{field.Duplicate(limitsPath.Index(1), nil)},
 	}, {
 		name: "missing quantity",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu"}),
+		obj:  withLimits(&ateletpb.Limits{Name: "cpu"}),
 		want: field.ErrorList{field.Required(limitsPath.Index(0).Child("quantity"), "")},
 	}, {
 		name: "malformed quantity",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "not-a-quantity"}),
+		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "not-a-quantity"}),
 		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
 		name: "negative quantity",
-		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: "-1Gi"}),
+		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: "-1Gi"}),
 		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
 		name: "zero quantity",
-		obj:  withLimits(&ateapipb.Limits{Name: "memory", Quantity: "0"}),
+		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: "0"}),
 		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
+		name: "cpu below the bound",
+		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "999"}),
+	}, {
 		name: "cpu at the bound",
-		obj:  withLimits(&ateapipb.Limits{Name: "cpu", Quantity: "1000"}),
+		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "1000"}),
 		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
 		name: "too many limits",
 		obj: withLimits(
-			&ateapipb.Limits{Name: "cpu", Quantity: "1"},
-			&ateapipb.Limits{Name: "memory", Quantity: "1Gi"},
-			&ateapipb.Limits{Name: "cpu", Quantity: "2"},
+			&ateletpb.Limits{Name: "cpu", Quantity: "1"},
+			&ateletpb.Limits{Name: "memory", Quantity: "1Gi"},
+			&ateletpb.Limits{Name: "cpu", Quantity: "2"},
 		),
 		want: field.ErrorList{field.TooMany(limitsPath, 3, 2).WithOrigin("maxItems")},
 	}, {

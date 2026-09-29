@@ -119,18 +119,32 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 	if err := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	// Forwarded as reported: the worker speaks the vocabulary the control plane
-	// records, so there is nothing to translate.
 	if _, err := s.workers.SetWorkerCapacity(ctx, &ateapipb.SetWorkerCapacityRequest{
 		// Workers are global-scoped and named by their pod UID.
 		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity: req.GetCapacity(),
+		Capacity: toWorkerResources(req.GetCapacity()),
 	}); err != nil {
 		return nil, err
 	}
 	slog.InfoContext(ctx, "Recorded worker capacity",
 		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()))
 	return &ateletpb.SetWorkerCapacityResponse{}, nil
+}
+
+// toWorkerResources converts atelet's WorkerResources to the control plane's,
+// which it mirrors field for field.
+func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
+	if in == nil {
+		return nil
+	}
+	out := &ateapipb.WorkerResources{Actors: in.GetActors()}
+	if r := in.GetResources(); r != nil {
+		out.Resources = &ateapipb.Resources{}
+		for _, l := range r.GetLimits() {
+			out.Resources.Limits = append(out.Resources.Limits, &ateapipb.Limits{Name: l.GetName(), Quantity: l.GetQuantity()})
+		}
+	}
+	return out
 }
 
 // RequestActorSuspend forwards a worker's request to suspend an actor it hosts

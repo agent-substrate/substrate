@@ -113,71 +113,78 @@ func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ate
 	return &ateapipb.MintAteomActorCertificateResponse{}, nil
 }
 
-func TestSetWorkerCapacityRecordsWhatTheWorkerSays(t *testing.T) {
-	workers := &fakeWorkerService{}
-	svc := &ateomSupportServer{workers: workers}
-
-	ctx := workerContext(t, "pod-a")
-	reported := &ateapipb.WorkerResources{
-		Actors:    4,
-		Resources: resources.CPUMemory(2000, 4294967296),
-	}
-	if _, err := svc.SetWorkerCapacity(ctx, &ateletpb.SetWorkerCapacityRequest{
-		Capacity: reported,
-	}); err != nil {
-		t.Fatalf("SetWorkerCapacity() failed: %v", err)
-	}
-
-	want := []*ateapipb.SetWorkerCapacityRequest{{
+func TestSetWorkerCapacity(t *testing.T) {
+	forwarded := func(capacity *ateapipb.WorkerResources) []*ateapipb.SetWorkerCapacityRequest {
 		// The Worker is named after the worker pod UID, taken from the
 		// certificate rather than the request.
-		Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
-		Capacity: reported,
+		return []*ateapipb.SetWorkerCapacityRequest{{Worker: &ateapipb.ObjectRef{Name: "pod-a"}, Capacity: capacity}}
+	}
+
+	tests := []struct {
+		name string
+		// unauthenticated drops the peer certificate from the context.
+		unauthenticated bool
+		// serviceErr is what the control plane answers with.
+		serviceErr    error
+		req           *ateletpb.SetWorkerCapacityRequest
+		wantCode      codes.Code
+		wantForwarded []*ateapipb.SetWorkerCapacityRequest
+	}{{
+		name: "records what the worker says",
+		req: &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
+			Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
+		}}},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, Resources: resources.CPUMemory(2000, 4294967296)}),
+	}, {
+		name:          "omits undetermined compute",
+		req:           &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}),
+	}, {
+		name:          "forwards empty resources",
+		req:           &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{}}},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Resources: &ateapipb.Resources{}}),
+	}, {
+		name: "rejects invalid capacity without forwarding",
+		req: &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{
+			Limits: []*ateletpb.Limits{{Name: "gpu", Quantity: "1"}},
+		}}},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name:     "rejects missing capacity without forwarding",
+		req:      &ateletpb.SetWorkerCapacityRequest{},
+		wantCode: codes.InvalidArgument,
+	}, {
+		// A worker may report only what its certificate proves it is.
+		name:            "requires a certificate",
+		unauthenticated: true,
+		req:             &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		wantCode:        codes.Unauthenticated,
+	}, {
+		// The Worker record may not exist yet. The error must reach the
+		// worker so it retries: it reports once, so a swallowed failure
+		// leaves the Worker with no capacity forever.
+		name:       "surfaces the control plane's rejection",
+		serviceErr: errors.New("no such worker"),
+		req:        &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		wantCode:   codes.Unknown,
 	}}
-	if diff := cmp.Diff(want, workers.got, protocmp.Transform()); diff != "" {
-		t.Errorf("recorded capacity mismatch (-want +got):\n%s", diff)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workers := &fakeWorkerService{err: tt.serviceErr}
+			svc := &ateomSupportServer{workers: workers}
+			ctx := workerContext(t, "pod-a")
+			if tt.unauthenticated {
+				ctx = context.Background()
+			}
 
-func TestSetWorkerCapacityOmitsUndeterminedCompute(t *testing.T) {
-	workers := &fakeWorkerService{}
-	svc := &ateomSupportServer{workers: workers}
-
-	ctx := workerContext(t, "pod-a")
-	if _, err := svc.SetWorkerCapacity(ctx, &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}}); err != nil {
-		t.Fatalf("SetWorkerCapacity() failed: %v", err)
-	}
-
-	if got := workers.got[0].GetCapacity().GetResources(); got != nil {
-		t.Errorf("compute the worker could not determine was recorded as %v, want none", got)
-	}
-}
-
-func TestSetWorkerCapacityRequiresACertificate(t *testing.T) {
-	workers := &fakeWorkerService{}
-	svc := &ateomSupportServer{workers: workers}
-
-	// No peer identity: a worker may report only what its certificate proves
-	// it is, so there is nothing to attribute this to.
-	_, err := svc.SetWorkerCapacity(context.Background(), &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}})
-	if status.Code(err) != codes.Unauthenticated {
-		t.Errorf("unauthenticated report returned %v, want Unauthenticated", err)
-	}
-	if len(workers.got) != 0 {
-		t.Errorf("unauthenticated report still recorded %v", workers.got)
-	}
-}
-
-func TestSetWorkerCapacitySurfacesRejection(t *testing.T) {
-	// The Worker record may not exist yet. The error must reach the worker so
-	// it retries: it reports once, so a swallowed failure leaves the Worker
-	// with no capacity forever.
-	workers := &fakeWorkerService{err: errors.New("no such worker")}
-	svc := &ateomSupportServer{workers: workers}
-
-	ctx := workerContext(t, "pod-a")
-	if _, err := svc.SetWorkerCapacity(ctx, &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}}); err == nil {
-		t.Error("a rejected report returned success, so the worker would not retry")
+			_, err := svc.SetWorkerCapacity(ctx, tt.req)
+			if got := status.Code(err); got != tt.wantCode {
+				t.Errorf("SetWorkerCapacity() code = %v (%v), want %v", got, err, tt.wantCode)
+			}
+			if diff := cmp.Diff(tt.wantForwarded, workers.got, protocmp.Transform()); diff != "" {
+				t.Errorf("forwarded requests mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

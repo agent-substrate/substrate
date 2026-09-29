@@ -295,11 +295,7 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 	return nil
 }
 
-// ValidateCustom_Resources_Limits validates the resource limits: only cpu
-// and memory limits are supported, each quantity must be greater than zero,
-// and the cpu limit must be less than 1000 cores. Presence and uniqueness
-// of names are enforced by tags. The rule is shared through
-// internal/resources so atelet applies the same one.
+// ValidateCustom_Resources_Limits applies resources.ValidateLimits.
 func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.Limits) field.ErrorList {
 	return resources.ValidateLimits(fldPath, value)
 }
