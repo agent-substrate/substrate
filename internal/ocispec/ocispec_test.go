@@ -257,3 +257,25 @@ func TestBuild_ResourcesApplied(t *testing.T) {
 		t.Errorf("Memory.Limit = %d, want 67108864", *spec.Linux.Resources.Memory.Limit)
 	}
 }
+
+func TestBuild_NoFileLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		limit uint64
+		want  uint64
+	}{
+		{name: "unset uses default", limit: 0, want: DefaultNoFileLimit},
+		{name: "override", limit: 65536, want: 65536},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			spec := Build(Options{Args: []string{"/app"}, NoFileLimit: tt.limit})
+			want := []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE", Hard: tt.want, Soft: tt.want}}
+			if got := spec.Process.Rlimits; !slices.Equal(got, want) {
+				t.Errorf("Build(NoFileLimit: %d).Process.Rlimits = %v, want %v", tt.limit, got, want)
+			}
+		})
+	}
+}

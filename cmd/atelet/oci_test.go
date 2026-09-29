@@ -15,11 +15,16 @@
 package main
 
 import (
+	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/spf13/pflag"
 )
 
 func TestResolveActorEnv(t *testing.T) {
@@ -225,6 +230,72 @@ func TestResolveCapabilities(t *testing.T) {
 			got := resolveCapabilities(tt.caps)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("resolveCapabilities() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActorNoFileLimitFlagDefault(t *testing.T) {
+	t.Parallel()
+	f := pflag.CommandLine.Lookup("actor-nofile-limit")
+	if f == nil {
+		t.Fatal("--actor-nofile-limit is not registered")
+	}
+	if got, want := f.DefValue, strconv.Itoa(ocispec.DefaultNoFileLimit); got != want {
+		t.Errorf("--actor-nofile-limit default = %s, want %s", got, want)
+	}
+}
+
+func TestValidateActorNoFileLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		limit   uint64
+		wantErr bool
+	}{
+		{name: "default", limit: ocispec.DefaultNoFileLimit},
+		{name: "raised", limit: 65536},
+		{name: "ceiling", limit: maxActorNoFileLimit},
+		{name: "zero", limit: 0, wantErr: true},
+		{name: "above ceiling", limit: maxActorNoFileLimit + 1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateActorNoFileLimit(tt.limit)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateActorNoFileLimit(%d) = %v, wantErr %v", tt.limit, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestWriteOCIBundle_NoFileLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		limit uint64
+		want  uint64
+	}{
+		{name: "unset uses default", limit: 0, want: ocispec.DefaultNoFileLimit},
+		{name: "raised", limit: 65536, want: 65536},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ref := imageVolumeTestRegistry(t) + "/app:v1"
+			pushTestImage(t, ref, singleFileLayer(t, "app", "binary"))
+			bundlePath := filepath.Join(t.TempDir(), "bundle")
+			if err := writeOCIBundle(t.Context(), newImageVolumeStore(t), bundlePath, "actor-uid", "app", ref, []string{"/app"}, nil, nil, "", nil, nil, nil, nil, tt.limit); err != nil {
+				t.Fatalf("writeOCIBundle() = %v", err)
+			}
+			spec, err := ocispec.Load(bundlePath)
+			if err != nil {
+				t.Fatalf("ocispec.Load(%q) = %v", bundlePath, err)
+			}
+			want := []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE", Hard: tt.want, Soft: tt.want}}
+			if got := spec.Process.Rlimits; !slices.Equal(got, want) {
+				t.Errorf("writeOCIBundle(noFileLimit: %d) Process.Rlimits = %v, want %v", tt.limit, got, want)
 			}
 		})
 	}

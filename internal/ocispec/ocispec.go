@@ -34,6 +34,10 @@ const specFile = "config.json"
 // hostname is the UTS hostname for actor containers.
 const hostname = "actor"
 
+// DefaultNoFileLimit is the RLIMIT_NOFILE soft and hard limit for an actor
+// container whose Options leave NoFileLimit unset.
+const DefaultNoFileLimit = 1024
+
 // Options describes one actor container. Args, Env and Capabilities arrive
 // already resolved.
 type Options struct {
@@ -46,6 +50,9 @@ type Options struct {
 	Capabilities []string
 	// Resources are the container's own declared limits, or nil for none.
 	Resources *ateletpb.ResourceLimits
+	// NoFileLimit is the RLIMIT_NOFILE soft and hard limit, or 0 for
+	// DefaultNoFileLimit.
+	NoFileLimit uint64
 
 	// The actor's directories the bind mount sources are joined from, one
 	// subdirectory per volume name.
@@ -89,6 +96,10 @@ func ociResources(r *ateletpb.ResourceLimits) *specs.LinuxResources {
 
 // Build returns a runtime-neutral OCI spec for an actor container.
 func Build(o Options) *specs.Spec {
+	noFile := o.NoFileLimit
+	if noFile == 0 {
+		noFile = DefaultNoFileLimit
+	}
 	spec := &specs.Spec{
 		Process: &specs.Process{
 			User: specs.User{
@@ -110,8 +121,8 @@ func Build(o Options) *specs.Spec {
 			Rlimits: []specs.POSIXRlimit{
 				{
 					Type: "RLIMIT_NOFILE",
-					Hard: 1024,
-					Soft: 1024,
+					Hard: noFile,
+					Soft: noFile,
 				},
 			},
 		},

@@ -204,6 +204,9 @@ func main() {
 	if err := validateImageCacheGCFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
 	}
+	if err := validateActorNoFileLimit(*actorNoFileLimit); err != nil {
+		serverboot.Fatal(ctx, "Invalid actor nofile limit", err)
+	}
 	imageCache, err := imagecache.New(*imageCacheDir,
 		imagecache.WithAuthenticator(gcpRegistryAuthn),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
@@ -296,6 +299,7 @@ func main() {
 		volPlugins,
 		csiDriverConfigLister,
 		systemInfoVolumes,
+		*actorNoFileLimit,
 	)
 	go systemInfoVolumes.run(ctx)
 
@@ -441,6 +445,7 @@ type AteomHerder struct {
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	systemInfoVolumes     *systemInfoVolumeRefresher
+	actorNoFileLimit      uint64
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -456,6 +461,7 @@ func NewService(
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
 	systemInfoVolumes *systemInfoVolumeRefresher,
+	actorNoFileLimit uint64,
 ) *AteomHerder {
 	wms := &AteomHerder{
 		ateomDialer:           ateomDialer,
@@ -466,6 +472,7 @@ func NewService(
 		volumePlugins:         volumePlugins,
 		csiDriverConfigLister: csiDriverConfigLister,
 		systemInfoVolumes:     systemInfoVolumes,
+		actorNoFileLimit:      actorNoFileLimit,
 	}
 	return wms
 }
@@ -1582,6 +1589,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			nil,
 			nil, // pause only reaps; it needs no capabilities.
 			nil, // pause carries no user-declared limits.
+			s.actorNoFileLimit,
 		); err != nil {
 			return wrapFileSystemErr("while creating pause OCI bundle", err)
 		}
@@ -1610,6 +1618,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				ctr.GetVolumeMounts(),
 				resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
 				ctr.GetResources(),
+				s.actorNoFileLimit,
 			); err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}

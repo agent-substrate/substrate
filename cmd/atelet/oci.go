@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/spf13/pflag"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -75,15 +76,32 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
+// actorNoFileLimit is the RLIMIT_NOFILE for every actor container on this node.
+var actorNoFileLimit = pflag.Uint64("actor-nofile-limit", ocispec.DefaultNoFileLimit, "RLIMIT_NOFILE soft and hard limit for actor containers. Changing it makes existing snapshots unrestorable until they are recut.")
+
+// maxActorNoFileLimit is Linux's default fs.nr_open, the ceiling a kernel
+// allows RLIMIT_NOFILE to reach.
+const maxActorNoFileLimit = 1 << 20
+
+func validateActorNoFileLimit(limit uint64) error {
+	if limit < 1 || limit > maxActorNoFileLimit {
+		return fmt.Errorf("--actor-nofile-limit %d out of range [1,%d]", limit, maxActorNoFileLimit)
+	}
+	return nil
+}
+
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits, noFileLimit uint64) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
 	span.SetAttributes(attribute.String("image", ref))
 	defer span.End()
 
-	bundlePath := ateletpath.OCIBundlePath(actorUID, containerName)
+	return writeOCIBundle(ctx, imageCache, ateletpath.OCIBundlePath(actorUID, containerName), actorUID, containerName, ref, command, args, env, netns, volumes, volumeMounts, capabilities, resources, noFileLimit)
+}
 
+// writeOCIBundle prepares the container bundle at bundlePath.
+func writeOCIBundle(ctx context.Context, imageCache *imagecache.Store, bundlePath, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits, noFileLimit uint64) error {
 	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
 	// already wiped the bundle dir on the Run/Restore path).
 	if err := imagecache.RemoveAllWritable(bundlePath); err != nil {
@@ -156,6 +174,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		VolumeMounts:              volumeMounts,
 		Capabilities:              capabilities,
 		Resources:                 resources,
+		NoFileLimit:               noFileLimit,
 		DurableDirVolumeMountsDir: ateletpath.DurableDirVolumeMountsDir(actorUID),
 		VolumesDir:                ateletpath.VolumesDir(actorUID),
 		SystemInfoVolumeRootsDir:  ateletpath.SystemInfoVolumeRootsDir(actorUID),
