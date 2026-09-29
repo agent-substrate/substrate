@@ -52,6 +52,11 @@ func resolvConfPath(actorDirs *ateompb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "resolv.conf")
 }
 
+// localCheckpointsDir is where atelet stores local (pause) snapshots.
+func localCheckpointsDir(actorDirs *ateompb.ActorDirs) string {
+	return filepath.Join(actorDirs.GetRootDir(), "local-checkpoint")
+}
+
 // resetRunscStateAndPidFileDirs empties both directories for a new activation.
 // runsc can leave mounts behind in its state directory (its null-netns), which
 // must be detached in this mount namespace before they can be removed.

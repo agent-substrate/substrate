@@ -18,11 +18,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"golang.org/x/sys/unix"
 )
 
 const testActorUID = "0b5f3c1e-7a2d-4e8f-9c61-2d4a8b7e5f10"
@@ -44,6 +49,21 @@ func newCkptFixture(t *testing.T, procs map[string]string) ckptFixture {
 	}
 	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), list)
 	mustWrite(t, filepath.Join(f.leaf, "memory.max"), "805306368\n")
+
+	origMovePID := movePID
+	t.Cleanup(func() { movePID = origMovePID })
+	movePID = func(dir string, pid int) error {
+		if err := writeCgroupPID(dir, pid); err != nil {
+			return err
+		}
+		// Emulate cgroup2 migration out of the sibling checkpoint cgroup so rmdir
+		// succeeds once the sentry moves back into its pause leaf.
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		if dir != ckptDir {
+			_ = os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
+		}
+		return nil
+	}
 	return f
 }
 
@@ -98,6 +118,9 @@ func TestIsolateCheckpointCacheMovesOnlyTheSentry(t *testing.T) {
 	if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "101" {
 		t.Errorf("pause leaf cgroup.procs after restore = %q, want 101", got)
 	}
+	if err := c.remove(); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
 }
 
 func TestIsolateCheckpointCacheWithoutSentry(t *testing.T) {
@@ -131,6 +154,32 @@ func TestCheckpointCgroupRestoreAfterLeafGone(t *testing.T) {
 	}
 }
 
+func TestCheckpointCgroupRestoreSkipsExitedOrRecycledSentry(t *testing.T) {
+	f := newCkptFixture(t, leafProcs)
+	c, err := isolateCheckpointCache(f.root, f.proc, testActorUID)
+	if err != nil {
+		t.Fatalf("isolateCheckpointCache: %v", err)
+	}
+
+	// If PID 101 was recycled by a non-sentry process, restore must not move it
+	// into the pause leaf.
+	mustWrite(t, filepath.Join(f.proc, "101", "cmdline"), "other-process\x00")
+	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), "100\n")
+	if err := c.restore(); err != nil {
+		t.Fatalf("restore with recycled PID: %v", err)
+	}
+	if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "100\n" {
+		t.Errorf("pause leaf cgroup.procs = %q, want unchanged \"100\\n\"", got)
+	}
+
+	// If the sentry exits between findSentry and movePID (ESRCH), restore returns nil.
+	mustWrite(t, filepath.Join(f.proc, "101", "cmdline"), "runsc-sandbox\x00")
+	movePID = func(string, int) error { return unix.ESRCH }
+	if err := c.restore(); err != nil {
+		t.Errorf("restore on ESRCH = %v, want nil", err)
+	}
+}
+
 func TestCheckpointCgroupNilIsNoop(t *testing.T) {
 	var c *checkpointCgroup
 	if err := c.restore(); err != nil {
@@ -141,6 +190,140 @@ func TestCheckpointCgroupNilIsNoop(t *testing.T) {
 	}
 }
 
+func TestCheckpointFull(t *testing.T) {
+	t.Run("terminates before removing checkpoint cgroup on success", func(t *testing.T) {
+		f := newCkptFixture(t, leafProcs)
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		actorDirs := &ateompb.ActorDirs{CheckpointDir: t.TempDir()}
+		var terminated bool
+
+		err := checkpointFull(
+			context.Background(),
+			f.root, f.proc, testActorUID, actorDirs, nil,
+			func(_ context.Context, container, _ string) error {
+				if container != ocispec.PauseContainer {
+					t.Errorf("checkpoint container = %q, want %q", container, ocispec.PauseContainer)
+				}
+				if got := mustRead(t, filepath.Join(ckptDir, "cgroup.procs")); got != "101" {
+					t.Errorf("checkpoint cgroup.procs during checkpoint = %q, want 101", got)
+				}
+				return nil
+			},
+			func() error {
+				terminated = true
+				// Emulate container teardown emptying the checkpoint cgroup so rmdir succeeds.
+				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
+			},
+		)
+		if err != nil {
+			t.Fatalf("checkpointFull: %v", err)
+		}
+		if !terminated {
+			t.Error("terminate was not called")
+		}
+		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+			t.Errorf("checkpoint cgroup still exists after checkpointFull: stat err = %v", err)
+		}
+	})
+
+	t.Run("restores sentry and keeps workload alive when checkpoint fails", func(t *testing.T) {
+		f := newCkptFixture(t, leafProcs)
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		actorDirs := &ateompb.ActorDirs{CheckpointDir: t.TempDir()}
+		var terminated bool
+
+		err := checkpointFull(
+			context.Background(),
+			f.root, f.proc, testActorUID, actorDirs, nil,
+			func(context.Context, string, string) error {
+				return errors.New("checkpoint boom")
+			},
+			func() error {
+				terminated = true
+				return nil
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "checkpoint boom") {
+			t.Fatalf("checkpointFull err = %v, want checkpoint boom", err)
+		}
+		if terminated {
+			t.Error("terminate called after successful cgroup rollback")
+		}
+		if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "101" {
+			t.Errorf("pause leaf cgroup.procs = %q, want 101", got)
+		}
+		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
+		}
+	})
+
+	t.Run("terminates workload if both checkpoint and cgroup restore fail", func(t *testing.T) {
+		f := newCkptFixture(t, leafProcs)
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		actorDirs := &ateompb.ActorDirs{CheckpointDir: t.TempDir()}
+		var terminated bool
+
+		err := checkpointFull(
+			context.Background(),
+			f.root, f.proc, testActorUID, actorDirs, nil,
+			func(context.Context, string, string) error {
+				movePID = func(string, int) error { return unix.EACCES }
+				return errors.New("checkpoint boom")
+			},
+			func() error {
+				terminated = true
+				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
+			},
+		)
+		if err == nil {
+			t.Fatal("checkpointFull succeeded on checkpoint error")
+		}
+		if !terminated {
+			t.Error("terminate was not called when restore failed; sentry would stay in unlimited cgroup")
+		}
+		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
+		}
+	})
+
+	t.Run("terminates before removing cgroup when durable volume archiving fails", func(t *testing.T) {
+		f := newCkptFixture(t, leafProcs)
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		var terminated bool
+		containers := []*ateompb.Container{{
+			Name:                   "app",
+			DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{{VolumeName: "vol"}},
+		}}
+
+		// Point checkpointPath at a regular file so tarDurableVolumes fails deterministically.
+		badCheckpointPath := filepath.Join(t.TempDir(), "not-a-dir")
+		mustWrite(t, badCheckpointPath, "x")
+		actorDirs := &ateompb.ActorDirs{
+			CheckpointDir:             badCheckpointPath,
+			DurableDirVolumeMountsDir: t.TempDir(),
+		}
+
+		err := checkpointFull(
+			context.Background(),
+			f.root, f.proc, testActorUID, actorDirs, containers,
+			func(context.Context, string, string) error { return nil },
+			func() error {
+				terminated = true
+				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "while archiving durable-dir volumes") {
+			t.Fatalf("checkpointFull err = %v, want durable-dir error", err)
+		}
+		if !terminated {
+			t.Error("terminate was not called after tarDurableVolumes failure")
+		}
+		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
+		}
+	})
+}
+
 func TestRemoveStaleCheckpointCgroups(t *testing.T) {
 	root := t.TempDir()
 	stale := checkpointCgroupDir(root, testActorUID)
@@ -149,7 +332,7 @@ func TestRemoveStaleCheckpointCgroups(t *testing.T) {
 	mustMkdir(t, busy)
 	// A non-empty directory stands in for a cgroup that still has processes:
 	// rmdir fails on both.
-	mustWrite(t, filepath.Join(busy, "cgroup.procs"), "42")
+	mustWrite(t, filepath.Join(busy, "cgroup.procs"), strconv.Itoa(42))
 	leaf := filepath.Join(root, ocispec.GVisorCgroupLeaf(testActorUID, ocispec.PauseContainer))
 	mustMkdir(t, leaf)
 
@@ -175,9 +358,20 @@ func TestDropCheckpointPageCache(t *testing.T) {
 	manifest := filepath.Join(sub, "manifest.json")
 	mustWrite(t, manifest, "{}")
 
-	targets := findCheckpointImagesInDirs(dir, filepath.Join(dir, "missing"))
-	if len(targets) != 1 || targets[0].path != img {
-		t.Fatalf("findCheckpointImagesInDirs = %+v, want [%s]", targets, img)
+	// A hard-linked copy in restore-state shares the same inode and must be deduplicated.
+	restoreDir := filepath.Join(dir, "restore-state")
+	mustMkdir(t, restoreDir)
+	if err := os.Link(img, filepath.Join(restoreDir, "pages.img")); err != nil {
+		t.Fatal(err)
+	}
+
+	actorDirs := &ateompb.ActorDirs{
+		RootDir:    dir,
+		RestoreDir: restoreDir,
+	}
+	targets := findCheckpointImages(actorDirs)
+	if len(targets) != 1 {
+		t.Fatalf("findCheckpointImages returned %d targets (%+v), want 1 deduplicated inode", len(targets), targets)
 	}
 	if !evictCheckpointImages(targets) {
 		t.Errorf("evictCheckpointImages() = false for existing inode, want true")
@@ -187,9 +381,9 @@ func TestDropCheckpointPageCache(t *testing.T) {
 	}
 
 	// Replacing the file with a new inode stops eviction for the old target.
-	replacement := filepath.Join(sub, "pages.img.new")
+	replacement := filepath.Join(restoreDir, "pages.img.new")
 	mustWrite(t, replacement, "new checkpoint pages")
-	if err := os.Rename(replacement, img); err != nil {
+	if err := os.Rename(replacement, targets[0].path); err != nil {
 		t.Fatal(err)
 	}
 	if evictCheckpointImages(targets) {

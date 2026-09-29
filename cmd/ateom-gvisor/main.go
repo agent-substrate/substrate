@@ -673,6 +673,20 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
 
+	// Cleanup the containers after checkpointing. This also unhosts the actor,
+	// before the snapshot listing below can fail.
+	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
+	terminate := func() error {
+		err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
+		if err != nil {
+			slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
+				slog.String("actor", attribution.Ref.String()),
+				slog.String("actorUID", attribution.UID),
+				slog.Any("err", err))
+		}
+		return err
+	}
+
 	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
 	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
 	switch req.GetScope() {
@@ -695,46 +709,14 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if tarErr != nil {
 			return nil, fmt.Errorf("while archiving durable-dir volumes: %w", tarErr)
 		}
+		_ = terminate()
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		ckptCgroup, err := isolateCheckpointCache(s.cgroupRoot, s.procRoot, req.GetActorUid())
-		if err != nil {
-			slog.WarnContext(ctx, "Checkpointing without page cache isolation",
-				slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
-		}
-		defer func() {
-			if err := ckptCgroup.remove(); err != nil {
-				slog.WarnContext(ctx, "Failed to remove the checkpoint cgroup",
-					slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
-			}
-		}()
-		// Checkpoint pause container (root of the sandbox)
-		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
-		if err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath); err != nil {
-			if rerr := ckptCgroup.restore(); rerr != nil {
-				slog.WarnContext(ctx, "Failed to move the sentry back into its pause leaf",
-					slog.String("actorUID", req.GetActorUid()), slog.Any("err", rerr))
-			}
-			return nil, fmt.Errorf("while checkpointing pause: %w", err)
-		}
-		if hasDurableVolumes(req.GetSpec().GetContainers()) {
-			if err := tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath); err != nil {
-				return nil, fmt.Errorf("while archiving durable-dir volumes: %w", err)
-			}
+		if err := checkpointFull(ctx, s.cgroupRoot, s.procRoot, req.GetActorUid(), req.GetActorDirs(), req.GetSpec().GetContainers(), rcmd.cmdCheckpoint, terminate); err != nil {
+			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unsupported snapshot scope: %v", req.GetScope())
 	}
-
-	// Cleanup the containers after checkpointing. This also unhosts the actor,
-	// before the snapshot listing below can fail.
-	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
-		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", attribution.Ref.String()),
-			slog.String("actorUID", attribution.UID),
-			slog.Any("err", err))
-	}
-
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img plus any pages images), rather than a hardcoded list.
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
@@ -960,12 +942,14 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	switch req.GetScope() {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		dropActorCheckpointCacheAsync(req.GetActorUid(), checkpointDir)
-	}
 	if err := s.tunnel.Activate(ateomstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
 		return nil, err
+	}
+	switch req.GetScope() {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		dropActorCheckpointCacheAsync(req.GetActorUid(), req.GetActorDirs(), func(waitCtx context.Context) error {
+			return rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer)
+		})
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)

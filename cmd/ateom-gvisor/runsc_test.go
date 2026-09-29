@@ -69,6 +69,28 @@ func TestWaitArgs(t *testing.T) {
 	}
 }
 
+func TestWaitRestoreArgs(t *testing.T) {
+	r := &runsc{
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
+	}
+
+	got := r.waitRestoreArgs(ocispec.PauseContainer)
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", "/node/actors/test-actor-123/runsc-state",
+		"wait",
+		"-restore",
+		ocispec.PauseContainer,
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("waitRestoreArgs() = %v, want %v", got, want)
+	}
+}
+
 func TestPauseArgs(t *testing.T) {
 	r := &runsc{
 		path:      "/usr/bin/runsc",

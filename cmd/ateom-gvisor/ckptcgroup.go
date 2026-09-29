@@ -25,12 +25,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"golang.org/x/sys/unix"
 )
 
@@ -42,25 +43,28 @@ import (
 // (forcing disk reads on local Resume) or OOM-killing the sentry when writeback
 // lags.
 //
-// Moving the sentry into a sibling <uid>-ckpt cgroup (memory.max = "max")
-// before checkpoint charges newly written image pages to <uid>-ckpt while
-// existing guest memory remains charged to <uid>-_pause. Removing <uid>-ckpt
+// Moving the sentry into a sibling <uid>-_ckpt cgroup (memory.max = "max")
+// before checkpoint charges newly written image pages to <uid>-_ckpt while
+// existing guest memory remains charged to <uid>-_pause. Removing <uid>-_ckpt
 // after sandbox teardown reparents the cache to the worker scope for fast
 // local Resume, and dropActorCheckpointCacheAsync evicts the .img cache via
 // POSIX_FADV_DONTNEED once Restore completes.
 
 const (
-	checkpointCgroupSuffix = "-ckpt"
+	// checkpointCgroupSuffix uses a leading underscore like _pause so it cannot
+	// collide with a DNS-label application container leaf (<uid>-<container>).
+	checkpointCgroupSuffix = "-_ckpt"
 	// sentryArgv0 identifies the sandbox process; systrap stubs have an empty
 	// cmdline and gofers use "runsc-gofer".
-	sentryArgv0     = "runsc-sandbox"
-	defaultProcRoot = "/proc"
+	sentryArgv0        = "runsc-sandbox"
+	defaultProcRoot    = "/proc"
+	waitRestoreTimeout = 30 * time.Second
 )
 
 type checkpointCgroup struct {
-	leaf string
-	dir  string
-	pid  int
+	leaf     string
+	dir      string
+	procRoot string
 }
 
 func checkpointCgroupDir(root, actorUID string) string {
@@ -68,7 +72,7 @@ func checkpointCgroupDir(root, actorUID string) string {
 }
 
 // isolateCheckpointCache moves the actor's sentry from its pause leaf into a
-// sibling <uid>-ckpt cgroup.
+// sibling <uid>-_ckpt cgroup.
 func isolateCheckpointCache(root, procRoot, actorUID string) (*checkpointCgroup, error) {
 	leaf := filepath.Join(root, ocispec.GVisorCgroupLeaf(actorUID, ocispec.PauseContainer))
 	pid, err := findSentry(leaf, procRoot)
@@ -80,7 +84,7 @@ func isolateCheckpointCache(root, procRoot, actorUID string) (*checkpointCgroup,
 	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, fmt.Errorf("while creating cgroup %q: %w", dir, err)
 	}
-	c := &checkpointCgroup{leaf: leaf, dir: dir, pid: pid}
+	c := &checkpointCgroup{leaf: leaf, dir: dir, procRoot: procRoot}
 	if err := movePID(dir, pid); err != nil {
 		return nil, errors.Join(err, c.remove())
 	}
@@ -90,7 +94,7 @@ func isolateCheckpointCache(root, procRoot, actorUID string) (*checkpointCgroup,
 func findSentry(leaf, procRoot string) (int, error) {
 	procs, err := os.ReadFile(filepath.Join(leaf, "cgroup.procs"))
 	if err != nil {
-		return 0, fmt.Errorf("while listing the pause leaf: %w", err)
+		return 0, fmt.Errorf("while listing the cgroup %q: %w", leaf, err)
 	}
 	for _, f := range strings.Fields(string(procs)) {
 		pid, err := strconv.Atoi(f)
@@ -109,7 +113,10 @@ func findSentry(leaf, procRoot string) (int, error) {
 	return 0, fmt.Errorf("no %s process in %q", sentryArgv0, leaf)
 }
 
-func movePID(dir string, pid int) error {
+// movePID is a var so tests can model cgroup2 PID migration on a temp dir.
+var movePID = writeCgroupPID
+
+func writeCgroupPID(dir string, pid int) error {
 	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
 		return fmt.Errorf("while moving PID %d into cgroup %q: %w", pid, dir, err)
 	}
@@ -121,8 +128,12 @@ func (c *checkpointCgroup) restore() error {
 	if c == nil {
 		return nil
 	}
-	err := movePID(c.leaf, c.pid)
-	if errors.Is(err, fs.ErrNotExist) {
+	pid, err := findSentry(c.dir, c.procRoot)
+	if err != nil {
+		return nil
+	}
+	err = movePID(c.leaf, pid)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, unix.ESRCH) {
 		return nil
 	}
 	return err
@@ -139,7 +150,56 @@ func (c *checkpointCgroup) remove() error {
 	return nil
 }
 
-// removeStaleCheckpointCgroups removes empty *-ckpt cgroups left behind on restart.
+// checkpointFull isolates the sentry into a sibling cgroup, runs `runsc
+// checkpoint` and optional durable-volume archiving, and tears down the
+// workload before removing the sibling cgroup so its page cache reparents
+// cleanly. If `runsc checkpoint` fails, it moves the sentry back into its pause
+// leaf (or terminates the workload if that rollback fails).
+func checkpointFull(
+	ctx context.Context,
+	cgroupRoot, procRoot, actorUID string,
+	actorDirs *ateompb.ActorDirs,
+	containers []*ateompb.Container,
+	checkpoint func(context.Context, string, string) error,
+	terminate func() error,
+) error {
+	ckptCgroup, err := isolateCheckpointCache(cgroupRoot, procRoot, actorUID)
+	if err != nil {
+		slog.WarnContext(ctx, "Checkpointing without page cache isolation",
+			slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
+	terminateOnExit := true
+	defer func() {
+		if terminateOnExit {
+			_ = terminate()
+		}
+		if err := ckptCgroup.remove(); err != nil {
+			slog.WarnContext(ctx, "Failed to remove the checkpoint cgroup",
+				slog.String("actorUID", actorUID), slog.Any("err", err))
+		}
+	}()
+
+	checkpointPath := actorDirs.GetCheckpointDir()
+	// Checkpoint pause container (root of the sandbox).
+	// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
+	if err := checkpoint(ctx, ocispec.PauseContainer, checkpointPath); err != nil {
+		if rerr := ckptCgroup.restore(); rerr != nil {
+			slog.WarnContext(ctx, "Failed to move the sentry back into its pause leaf; terminating workload",
+				slog.String("actorUID", actorUID), slog.Any("err", rerr))
+		} else {
+			terminateOnExit = false
+		}
+		return fmt.Errorf("while checkpointing pause: %w", err)
+	}
+	if hasDurableVolumes(containers) {
+		if err := tarDurableVolumes(ctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointPath); err != nil {
+			return fmt.Errorf("while archiving durable-dir volumes: %w", err)
+		}
+	}
+	return nil
+}
+
+// removeStaleCheckpointCgroups removes empty *-_ckpt cgroups left behind on restart.
 func removeStaleCheckpointCgroups(ctx context.Context, root string) {
 	dirs, err := filepath.Glob(filepath.Join(root, "*"+checkpointCgroupSuffix))
 	if err != nil {
@@ -157,15 +217,26 @@ type cachedImageFile struct {
 	info fs.FileInfo
 }
 
-// dropActorCheckpointCacheAsync evicts the actor's .img files from page cache
-// in the background, pinned by inode so delayed post-writeback passes cannot
-// evict newer checkpoints.
-func dropActorCheckpointCacheAsync(actorUID string, extraDirs ...string) {
-	targets := findCheckpointImages(actorUID, extraDirs...)
+// dropActorCheckpointCacheAsync waits for background restore page loading to
+// finish and then evicts the actor's .img files from page cache in the
+// background, pinned by inode so delayed post-writeback passes cannot evict
+// newer checkpoints.
+func dropActorCheckpointCacheAsync(actorUID string, actorDirs *ateompb.ActorDirs, waitRestore func(context.Context) error) {
+	targets := findCheckpointImages(actorDirs)
 	if len(targets) == 0 {
 		return
 	}
 	go func() {
+		if waitRestore != nil {
+			waitCtx, cancel := context.WithTimeout(context.Background(), waitRestoreTimeout)
+			err := waitRestore(waitCtx)
+			cancel()
+			if err != nil {
+				slog.Warn("Skipping checkpoint page cache eviction after wait -restore error",
+					slog.String("actorUID", actorUID), slog.Any("err", err))
+				return
+			}
+		}
 		if !evictCheckpointImages(targets) {
 			return
 		}
@@ -178,30 +249,23 @@ func dropActorCheckpointCacheAsync(actorUID string, extraDirs ...string) {
 	}()
 }
 
-func findCheckpointImages(actorUID string, extraDirs ...string) []cachedImageFile {
-	dirs := append([]string{
-		ateompath.RestoreStateDir(actorUID),
-		filepath.Join(ateompath.ActorPath(actorUID), "local-checkpoint"),
-	}, extraDirs...)
-	return findCheckpointImagesInDirs(dirs...)
-}
-
-func findCheckpointImagesInDirs(dirs ...string) []cachedImageFile {
+func findCheckpointImages(actorDirs *ateompb.ActorDirs) []cachedImageFile {
 	var targets []cachedImageFile
-	seen := make(map[string]bool)
-	for _, dir := range dirs {
+	for _, dir := range []string{actorDirs.GetRestoreDir(), localCheckpointsDir(actorDirs)} {
 		if dir == "" {
 			continue
 		}
 		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || !d.Type().IsRegular() || filepath.Ext(d.Name()) != ".img" || seen[path] {
+			if err != nil || !d.Type().IsRegular() || filepath.Ext(d.Name()) != ".img" {
 				return nil
 			}
 			info, err := d.Info()
 			if err != nil {
 				return nil
 			}
-			seen[path] = true
+			if slices.ContainsFunc(targets, func(t cachedImageFile) bool { return os.SameFile(t.info, info) }) {
+				return nil
+			}
 			targets = append(targets, cachedImageFile{path: path, info: info})
 			return nil
 		})
