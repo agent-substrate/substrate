@@ -273,6 +273,14 @@ var Registry = []Setting{
 	},
 
 	{
+		// Comma-separated, as the components' own --preview flag is. The
+		// registry has no list kind, so the value is carried as written and
+		// split where it is used.
+		Key: "preview", Env: "ATE_PREVIEW", Flag: "preview", Kind: KindString,
+		Usage: "Preview gates every substrate component runs with, comma-separated; '*' enables all",
+	},
+
+	{
 		Key: "benchmark.actorMemory", Env: "BENCHMARK_ACTOR_MEMORY", Flag: "benchmark-actor-memory",
 		Kind:  KindString,
 		Usage: "Memory limit for benchmark actors",

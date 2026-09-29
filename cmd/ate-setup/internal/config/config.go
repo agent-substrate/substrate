@@ -204,6 +204,9 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+	// PreviewGates is the --preview value every substrate component is
+	// deployed with: gate names, or "*" for all of them.
+	PreviewGates []string
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string

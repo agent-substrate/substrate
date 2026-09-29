@@ -26,6 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/internal/preview"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
@@ -257,6 +258,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
 		OtlpEndpoint:                   r.String("otlpEndpoint"),
 		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
+		PreviewGates:                   splitList(r.String("preview")),
 		kubeconfigEnv:                  kubeconfigEnv,
 		shellEnv:                       env,
 		resolved:                       r,
@@ -266,6 +268,18 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// splitList splits a comma-separated value, dropping empty items, so an empty
+// value is no items rather than one empty one.
+func splitList(raw string) []string {
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // splitKubeconfig divides the setting into the path handed to client-go and the
@@ -387,6 +401,12 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			return &ConflictError{A: extproc, B: dataplane,
 				Why: "an additional ext_proc filter requires dataplane " + RouterEnvoy}
 		}
+	}
+	// A gate the components do not know makes each of them refuse to start, so
+	// catch it here rather than as a failed rollout.
+	if err := preview.Verify(cfg.PreviewGates...); err != nil {
+		gates, _ := r.Value("preview")
+		return fmt.Errorf("%w (from %s)", err, gates.From.Describe(gates.Setting))
 	}
 	// Parsed here so a malformed provider is rejected with the rest of the
 	// configuration rather than part-way through a deploy. Whether one is

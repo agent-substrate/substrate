@@ -102,6 +102,8 @@ func valueFor(key string) string {
 		return "https://idp.example.com"
 	case "csi.setup":
 		return "none"
+	case "preview":
+		return "*"
 	}
 	return "set"
 }

@@ -359,9 +359,13 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 
 	for _, p := range paths {
 		t.Run(filepath.Base(p), func(t *testing.T) {
-			out, err := resolver.ResolvePath(context.Background(), p)
+			manifest, err := kube.ReadPath(p)
 			if err != nil {
-				t.Fatalf("ResolvePath() = %v", err)
+				t.Fatalf("ReadPath() = %v", err)
+			}
+			out, err := resolver.ResolveBytes(context.Background(), manifest)
+			if err != nil {
+				t.Fatalf("ResolveBytes() = %v", err)
 			}
 			if refs := koRefPattern.FindAllString(string(out), -1); len(refs) > 0 {
 				t.Errorf("unresolved references survived: %v", refs)
