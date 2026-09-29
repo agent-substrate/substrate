@@ -766,6 +766,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			},
 			SnapshotFiles: src.SnapshotFiles,
 			Scope:         scope,
+			// Golden snapshots, and the golden tag an actor borrows until
+			// its first suspend, are owned in the golden atespace.
+			FromGoldenSnapshot: src.SnapshotURI.Atespace() == resources.GoldenActorAtespace,
 			// Empty unless this is a Golden data resume.
 			GoldenSnapshotUri:   goldenSnapshotURI,
 			GoldenSnapshotFiles: goldenSnapshotFiles,

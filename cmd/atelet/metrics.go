@@ -81,9 +81,8 @@ type snapshotOp struct {
 	sandboxClass      string
 }
 
-// attrs omits kind and sandbox class while they are unknown (a restore that
-// failed before reading the snapshot manifest) rather than emitting an
-// empty-string series.
+// attrs omits kind and sandbox class while they are unknown rather than
+// emitting an empty-string series.
 func (o snapshotOp) attrs() []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 5)
 	attrs = append(attrs,
@@ -155,19 +154,12 @@ func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Du
 
 // restoreSnapshotKind classifies which snapshot a restore reads. A local
 // restore is evident from the wire; golden and latest both arrive as an external
-// URI prefix, so they are told apart by the identity the manifest records for
-// the actor that wrote the snapshot. An empty result means the manifest has not
-// been read yet, so the kind is not knowable.
-func restoreSnapshotKind(req *ateletpb.RestoreRequest, rec *sandboxAssetsRecord) string {
+// URI prefix, so the control plane says which one it sent.
+func restoreSnapshotKind(req *ateletpb.RestoreRequest) string {
 	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
 		return ateattr.SnapshotKindLocal
 	}
-	if rec == nil {
-		return ""
-	}
-	// Manifests written before the identity fields existed carry no atespace and
-	// fall through to latest, which is the common case for them anyway.
-	if rec.Atespace == resources.GoldenActorAtespace {
+	if req.GetFromGoldenSnapshot() {
 		return ateattr.SnapshotKindGolden
 	}
 	return ateattr.SnapshotKindLatest

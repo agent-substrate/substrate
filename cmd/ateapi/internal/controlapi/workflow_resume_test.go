@@ -1925,6 +1925,79 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			if got := restore.GetGoldenSnapshotFiles(); !slices.Equal(got, wantGoldenFiles) {
 				t.Errorf("GoldenSnapshotFiles = %q, want %q", got, wantGoldenFiles)
 			}
+			// An external restore is golden when the snapshot it reads is
+			// owned in the golden atespace.
+			wantFromGolden := false
+			if tt.want.checkpointType == ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL {
+				uri, err := resources.ParseSnapshotURI(tt.want.snapshotURI)
+				if err != nil {
+					t.Fatalf("ParseSnapshotURI(%q): %v", tt.want.snapshotURI, err)
+				}
+				wantFromGolden = uri.Atespace() == resources.GoldenActorAtespace
+			}
+			if got := restore.GetFromGoldenSnapshot(); got != wantFromGolden {
+				t.Errorf("FromGoldenSnapshot = %v, want %v", got, wantFromGolden)
+			}
+		})
+	}
+}
+
+// TestResumeActor_FromGoldenSnapshot pins the restore metric label: a restore
+// is golden when its snapshot is owned in the golden atespace, which covers an
+// actor still borrowing the golden tag's snapshot after CreateActor.
+func TestResumeActor_FromGoldenSnapshot(t *testing.T) {
+	tmpl := &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+		SandboxConfig: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "gvisor",
+		},
+	}
+	tests := []struct {
+		name        string
+		snapshotURI string
+		want        bool
+	}{
+		{"borrowed golden tag snapshot", mustTagSnapshotURI(t, tmpl, resources.GoldenActorAtespace, "golden-tag-uid").String(), true},
+		{"golden actor's own snapshot", someActorSnapshotURI(t, testStorageLocation, resources.GoldenActorAtespace, "snap-1"), true},
+		{"borrowed user tag snapshot", mustTagSnapshotURI(t, tmpl, "team-a", "user-tag-uid").String(), false},
+		{"actor's own snapshot", someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			w, atelet := newWireCaptureWorkflow(t, persistence)
+
+			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+			if _, err := persistence.CreateActorTemplate(ctx, proto.CloneOf(tmpl)); err != nil {
+				t.Fatalf("create template: %v", err)
+			}
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+				a.Status.WorkerAssignment = wireTestAssignment()
+				a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+					SnapshotUri:   tt.snapshotURI,
+					ContentScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+					SnapshotFiles: []string{"checkpoint.img"},
+				}
+			})
+
+			actor, loadedTmpl, src, err := w.loadActorForResume(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("loadActorForResume: %v", err)
+			}
+			if _, err := w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, src); err != nil {
+				t.Fatalf("ensureAteletRestored: %v", err)
+			}
+			restore, _ := atelet.requests()
+			if restore == nil {
+				t.Fatal("atelet received no Restore")
+			}
+			if got := restore.GetFromGoldenSnapshot(); got != tt.want {
+				t.Errorf("FromGoldenSnapshot = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }

@@ -173,7 +173,7 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 
 	inst.recordRestore(context.Background(),
 		snapshotOp{scope: ateattr.SnapshotScopeFull},
-		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
+		phase{ateattr.SnapshotPhaseVolumeMount, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
 		phase{ateattr.SnapshotPhaseAteomRestore, 0},
 		phase{ateattr.SnapshotPhaseTotal, 2 * time.Second})
@@ -187,9 +187,9 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 	}
 }
 
-// TestSnapshotOpAttrsOmitsUnknownDimensions covers a restore that fails before
-// the manifest resolves: kind and sandbox class are unknowable there, and an
-// empty-string series would be indistinguishable from a real one.
+// TestSnapshotOpAttrsOmitsUnknownDimensions covers an operation whose kind
+// and sandbox class are unknown: an empty-string series would be
+// indistinguishable from a real one.
 func TestSnapshotOpAttrsOmitsUnknownDimensions(t *testing.T) {
 	attrs := snapshotOp{
 		templateNamespace: testTemplateNamespace,
@@ -203,7 +203,7 @@ func TestSnapshotOpAttrsOmitsUnknownDimensions(t *testing.T) {
 	}
 }
 
-// TestSnapshotOpAttrsNormalizesSandboxClass keeps an unvalidated manifest value
+// TestSnapshotOpAttrsNormalizesSandboxClass keeps an unvalidated sandbox class
 // from becoming an unbounded label.
 func TestSnapshotOpAttrsNormalizesSandboxClass(t *testing.T) {
 	attrs := snapshotOp{sandboxClass: "definitely-not-a-runtime"}.attrs()
@@ -281,44 +281,22 @@ func TestRestoreSnapshotKind(t *testing.T) {
 	tests := []struct {
 		name string
 		req  *ateletpb.RestoreRequest
-		rec  *sandboxAssetsRecord
 		want string
 	}{
 		{
 			name: "local pause snapshot",
 			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "local restore is classifiable before the manifest is read",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL},
-			rec:  nil,
-			want: ateattr.SnapshotKindLocal,
-		},
-		{
-			name: "external snapshot written by a golden actor",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
-			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			name: "external golden snapshot",
+			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL, FromGoldenSnapshot: true},
 			want: ateattr.SnapshotKindGolden,
 		},
 		{
-			name: "external snapshot written by a tenant actor",
+			name: "external snapshot of the actor",
 			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLatest,
-		},
-		{
-			name: "manifest predating the identity fields",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
-			rec:  &sandboxAssetsRecord{},
-			want: ateattr.SnapshotKindLatest,
-		},
-		{
-			name: "external kind is unknowable until the manifest is read",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
-			rec:  nil,
-			want: "",
 		},
 		{
 			name: "data on golden keeps the actor snapshot's own kind",
@@ -326,13 +304,12 @@ func TestRestoreSnapshotKind(t *testing.T) {
 				Type:  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
 			},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLocal,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := restoreSnapshotKind(tt.req, tt.rec); got != tt.want {
+			if got := restoreSnapshotKind(tt.req); got != tt.want {
 				t.Errorf("restoreSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})

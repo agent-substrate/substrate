@@ -402,7 +402,6 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotScopeUnknown, "unknown"},
 
 		{SnapshotPhaseVolumeMount, "volume_mount"},
-		{SnapshotPhaseManifestFetch, "manifest_fetch"},
 		{SnapshotPhaseSandboxAssets, "sandbox_assets"},
 		{SnapshotPhaseDownload, "download"},
 		{SnapshotPhaseOCIUnpack, "oci_unpack"},
@@ -694,9 +693,8 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 	}
 }
 
-// TestNormalizeSandboxClass covers the cardinality guard: atelet reads the class
-// out of a snapshot manifest nothing validates, so anything unrecognized has to
-// collapse onto a single value.
+// TestNormalizeSandboxClass covers the cardinality guard: anything
+// unrecognized has to collapse onto a single value.
 func TestNormalizeSandboxClass(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -708,7 +706,7 @@ func TestNormalizeSandboxClass(t *testing.T) {
 		{name: "empty", class: "", want: SandboxClassUnknown},
 		{name: "unknown runtime", class: "kvm", want: SandboxClassUnknown},
 		{name: "casing is not normalized away", class: "GVISOR", want: SandboxClassUnknown},
-		{name: "attacker-controlled manifest value", class: "gvisor\";evil=\"1", want: SandboxClassUnknown},
+		{name: "attacker-controlled value", class: "gvisor\";evil=\"1", want: SandboxClassUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

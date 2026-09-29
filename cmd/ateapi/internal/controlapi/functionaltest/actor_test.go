@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -4362,7 +4363,10 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 		t.Errorf("upload desired_scope = %v, want FULL (template default)", got)
 	}
 	if got := upload.GetCapturedScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
-		t.Errorf("upload captured_scope = %v, want FULL (the pause's scope)", got)
+		t.Errorf("upload captured_scope = %v, want FULL (what the pause captured)", got)
+	}
+	if got, want := upload.GetSandboxClass(), string(atev1alpha1.SandboxClassGvisor); got != want {
+		t.Errorf("upload sandbox_class = %q, want the template's %q", got, want)
 	}
 
 	actor := suspended.GetActor()

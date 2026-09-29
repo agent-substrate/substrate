@@ -645,7 +645,7 @@ type RunRequest struct {
 	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
-	// so a later Checkpoint can pin the same version into the snapshot manifest.
+	// so a later Checkpoint runs the same version.
 	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
@@ -924,9 +924,7 @@ type SandboxAssets struct {
 	SandboxClass string                 `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`                                           // e.g. "gvisor"
 	Assets       map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // arch -> {name -> file}
 	// pause_image is the image for the sandbox's root container. Like the
-	// binaries above it is sandbox configuration, not workload configuration,
-	// and atelet pins it into the snapshot manifest so a restore rebuilds the
-	// sandbox from the same image.
+	// binaries above it is sandbox configuration, not workload configuration.
 	PauseImage    string `protobuf:"bytes,3,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2203,8 +2201,8 @@ type CheckpointRequest struct {
 	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on checkpoint: atelet uses the version the
-	// actor is currently running (recorded with the actor's on-node state at
-	// Run/Restore) and records it into the snapshot manifest.
+	// actor is currently running, recorded with the actor's on-node state at
+	// Run/Restore.
 	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
@@ -2414,8 +2412,8 @@ type UploadPausedCheckpointRequest struct {
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
 	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
-	// When it differs from the captured scope, atelet converts where possible
-	// (a FULL capture to a DATA upload by selecting the durable-dir tar) and
+	// When it differs from captured_scope, atelet converts where possible (a
+	// FULL capture to a DATA upload by selecting the durable-dir tar) and
 	// rejects otherwise.
 	DesiredScope SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	// The files of the local snapshot, as recorded when the pause captured it.
@@ -2423,9 +2421,13 @@ type UploadPausedCheckpointRequest struct {
 	SnapshotFiles []string `protobuf:"bytes,9,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
 	// The scope the pause checkpoint captured (FULL or DATA), as recorded on
 	// the actor's LocalSnapshot. With desired_scope and snapshot_files it
-	// determines the files the upload writes, which lets a retry recognize an
-	// upload that already finished after the local snapshot was pruned.
+	// determines the files the upload writes, including on a retry after the
+	// local snapshot was pruned.
 	CapturedScope SnapshotScope `protobuf:"varint,10,opt,name=captured_scope,json=capturedScope,proto3,enum=atelet.SnapshotScope" json:"captured_scope,omitempty"`
+	// The sandbox class the pause checkpoint was captured with (e.g.
+	// "gvisor"), from the ActorTemplate's sandbox_config. It decides whether a
+	// FULL capture can be uploaded as DATA and labels the upload metrics.
+	SandboxClass  string `protobuf:"bytes,11,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2530,6 +2532,13 @@ func (x *UploadPausedCheckpointRequest) GetCapturedScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
+func (x *UploadPausedCheckpointRequest) GetSandboxClass() string {
+	if x != nil {
+		return x.SandboxClass
+	}
+	return ""
+}
+
 type UploadPausedCheckpointResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The files the uploaded snapshot consists of, as relative names in the
@@ -2618,8 +2627,12 @@ type RestoreRequest struct {
 	SnapshotFiles []string `protobuf:"bytes,17,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
 	// The files of the golden snapshot. Set only with golden_snapshot_uri.
 	GoldenSnapshotFiles []string `protobuf:"bytes,18,rep,name=golden_snapshot_files,json=goldenSnapshotFiles,proto3" json:"golden_snapshot_files,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// True when the snapshot referenced by `config` is owned in the golden
+	// atespace: a golden snapshot, including the golden tag an actor created
+	// from it reads until its first suspend. Used only to label metrics.
+	FromGoldenSnapshot bool `protobuf:"varint,19,opt,name=from_golden_snapshot,json=fromGoldenSnapshot,proto3" json:"from_golden_snapshot,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
@@ -2787,6 +2800,13 @@ func (x *RestoreRequest) GetGoldenSnapshotFiles() []string {
 		return x.GoldenSnapshotFiles
 	}
 	return nil
+}
+
+func (x *RestoreRequest) GetFromGoldenSnapshot() bool {
+	if x != nil {
+		return x.FromGoldenSnapshot
+	}
+	return false
 }
 
 type isRestoreRequest_Config interface {
@@ -3001,7 +3021,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\";\n" +
 	"\x12CheckpointResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xea\x03\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x8f\x04\n" +
 	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3014,9 +3034,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\x12%\n" +
 	"\x0esnapshot_files\x18\t \x03(\tR\rsnapshotFiles\x12<\n" +
 	"\x0ecaptured_scope\x18\n" +
-	" \x01(\x0e2\x15.atelet.SnapshotScopeR\rcapturedScope\"G\n" +
+	" \x01(\x0e2\x15.atelet.SnapshotScopeR\rcapturedScope\x12#\n" +
+	"\rsandbox_class\x18\v \x01(\tR\fsandboxClass\"G\n" +
 	"\x1eUploadPausedCheckpointResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x85\a\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xb7\a\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3037,7 +3058,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
 	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12%\n" +
 	"\x0esnapshot_files\x18\x11 \x03(\tR\rsnapshotFiles\x122\n" +
-	"\x15golden_snapshot_files\x18\x12 \x03(\tR\x13goldenSnapshotFilesB\b\n" +
+	"\x15golden_snapshot_files\x18\x12 \x03(\tR\x13goldenSnapshotFiles\x120\n" +
+	"\x14from_golden_snapshot\x18\x13 \x01(\bR\x12fromGoldenSnapshotB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*\x9a\x01\n" +

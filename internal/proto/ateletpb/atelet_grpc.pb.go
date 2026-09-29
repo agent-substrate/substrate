@@ -278,8 +278,8 @@ type AteomHerderClient interface {
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
 	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
 	// disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
-	// paused, its sandbox is gone; the checkpoint files plus their manifest
-	// already sit under the actor's local-checkpoints directory.
+	// paused, its sandbox is gone; the checkpoint files already sit under the
+	// actor's local-checkpoints directory.
 	UploadPausedCheckpoint(ctx context.Context, in *UploadPausedCheckpointRequest, opts ...grpc.CallOption) (*UploadPausedCheckpointResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
@@ -364,8 +364,8 @@ type AteomHerderServer interface {
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
 	// disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
-	// paused, its sandbox is gone; the checkpoint files plus their manifest
-	// already sit under the actor's local-checkpoints directory.
+	// paused, its sandbox is gone; the checkpoint files already sit under the
+	// actor's local-checkpoints directory.
 	UploadPausedCheckpoint(context.Context, *UploadPausedCheckpointRequest) (*UploadPausedCheckpointResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.

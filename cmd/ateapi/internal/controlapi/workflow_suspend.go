@@ -232,8 +232,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	}
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
-	// actor is currently running (recorded on-node at Run/Restore) and pins it
-	// into the snapshot manifest.
+	// actor is currently running, recorded on-node at Run/Restore.
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:        assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
@@ -307,6 +306,9 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		DesiredScope:  actorSnapshotContentScopeToAtelet(commitSnapshotScope(actor.GetMetadata().GetAtespace(), actorTemplate)),
 		CapturedScope: actorSnapshotContentScopeToAtelet(pausedContentScope(local, actorTemplate)),
 		SnapshotFiles: local.GetSnapshotFiles(),
+		// SandboxConfig is immutable, so the template's class is the one the
+		// pause captured with.
+		SandboxClass: sandboxClassString(actorTemplate.GetSandboxConfig().GetSandboxClass()),
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 

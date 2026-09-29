@@ -179,8 +179,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	}
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
-	// actor is currently running (recorded on-node at Run/Restore) and pins it
-	// into the snapshot manifest.
+	// actor is currently running, recorded on-node at Run/Restore.
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:        assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),

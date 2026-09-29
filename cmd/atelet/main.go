@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -498,7 +498,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 
 	// Record the sandbox binaries this actor is running so a later Checkpoint
 	// (whose request no longer carries the sandbox config) can re-fetch the same
-	// version and pin it into the snapshot manifest.
+	// version.
 	if err := writeSandboxRecord(actorUID, sandboxRec); err != nil {
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
@@ -615,8 +615,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	// Checkpoint requests no longer carry the sandbox config; recover the
 	// version this actor was started with from the on-node record and re-fetch
-	// it (a cache hit) so ateom can drive runsc, and so we can pin it into the
-	// snapshot manifest below.
+	// it (a cache hit) so ateom can drive runsc.
 	sandboxRec, err := readSandboxRecord(actorUID)
 	if err != nil {
 		return nil, err
@@ -666,16 +665,10 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	s.systemInfoVolumes.Deregister(actorUID)
 
-	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
-	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
+	snapshotFiles := resp.GetSnapshotFiles()
+	if len(snapshotFiles) == 0 && shouldHaveSnapshots(req) {
 		return nil, fmt.Errorf("ateom reported no snapshot files for checkpoint")
 	}
-	sandboxRec.Atespace = req.GetAtespace()
-	sandboxRec.ActorName = req.GetActorName()
-	sandboxRec.ActorUID = req.GetActorUid()
-	sandboxRec.ActorTemplateAtespace = req.GetActorTemplateAtespace()
-	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
-	sandboxRec.Scope = ateattr.SnapshotScopeValue(req.GetScope())
 
 	// No earlier pause snapshot can ever be restored again, so remove them
 	// all: the actor's current state was just captured by CheckpointWorkload,
@@ -694,12 +687,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, snapshotFiles); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, snapshotFiles); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
 		}
@@ -717,7 +710,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	return &ateletpb.CheckpointResponse{SnapshotFiles: sandboxRec.SnapshotFiles}, nil
+	return &ateletpb.CheckpointResponse{SnapshotFiles: snapshotFiles}, nil
 }
 
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
@@ -732,14 +725,14 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	}
 }
 
-func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, snapshotFiles []string) error {
 	localCheckpointPath := ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalConfig().GetSnapshotName())
 	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
 	}
 
 	// Move exactly the files ateom reported.
-	for _, fileName := range rec.SnapshotFiles {
+	for _, fileName := range snapshotFiles {
 		src := filepath.Join(checkpointDir, fileName)
 		dst := filepath.Join(localCheckpointPath, fileName)
 		recordSnapshotSize(ctx, fileName, src, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
@@ -748,16 +741,6 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
 		}
 	}
-
-	// Write the self-describing snapshot manifest beside the images.
-	manifest, err := json.Marshal(rec)
-	if err != nil {
-		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(localCheckpointPath, sandboxManifestName), manifest, 0o600); err != nil {
-		return fmt.Errorf("while writing snapshot manifest: %w", err)
-	}
-
 	return nil
 }
 
@@ -775,23 +758,22 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 	return false
 }
 
-func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
+func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, snapshotFiles []string) error {
 	uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri())
 	if err != nil {
 		return err
 	}
-	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+	return s.uploadSnapshot(ctx, uri, checkpointDir, snapshotFiles, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 }
 
-// uploadSnapshot uploads rec's snapshot files from srcDir to uri (each
-// zstd-compressed, concurrently), then the marshaled manifest. The manifest
-// goes last, never in parallel: its presence is the commit marker — readers
-// assume every file it lists is already present. A crash mid-upload thus
-// leaves only orphaned files, never a manifest pointing at files that never
-// landed; retries overwrite the deterministic object names.
-func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string) error {
+// uploadSnapshot uploads snapshotFiles from srcDir to uri, each
+// zstd-compressed, concurrently. The snapshot is committed only when the
+// control plane records it after this RPC returns, so a crash mid-upload
+// leaves orphaned objects that nothing references; retries overwrite the
+// deterministic object names.
+func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, snapshotFiles []string, templateAtespace, templateName string) error {
 	g, gCtx := errgroup.WithContext(ctx)
-	for _, fileName := range rec.SnapshotFiles {
+	for _, fileName := range snapshotFiles {
 		local := filepath.Join(srcDir, fileName)
 		recordSnapshotSize(ctx, fileName, local, templateAtespace, templateName)
 		g.Go(func() error {
@@ -805,28 +787,13 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	manifest, err := json.Marshal(rec)
-	if err != nil {
-		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
-	}
-	manifestURI, err := uri.ObjectURI(sandboxManifestName)
-	if err != nil {
-		return fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
-	}
-	if err := ategcs.SendBytesToGCS(ctx, s.gcsClient, manifestURI, manifest); err != nil {
-		return fmt.Errorf("while uploading snapshot manifest: %w", err)
-	}
-	return nil
+	return g.Wait()
 }
 
 // UploadPausedCheckpoint copies a paused actor's local checkpoint to object
 // storage. It drives no ateom — the actor's sandbox is gone; the checkpoint
-// files and their self-describing manifest already sit under the actor's
-// local-checkpoints directory, written by an earlier local Checkpoint (pause).
+// files already sit under the actor's local-checkpoints directory, written by
+// an earlier local Checkpoint (pause).
 func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
 	if err := validateUploadPausedCheckpointRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -839,8 +806,9 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		templateName:      req.GetActorTemplateName(),
 		// Always the actor's durable latest: golden actors are never paused
 		// (validation above rejects the golden atespace).
-		kind:  ateattr.SnapshotKindLatest,
-		scope: ateattr.SnapshotScopeValue(req.GetDesiredScope()),
+		kind:         ateattr.SnapshotKindLatest,
+		scope:        ateattr.SnapshotScopeValue(req.GetDesiredScope()),
+		sandboxClass: req.GetSandboxClass(),
 	}
 	defer func() {
 		s.instruments.recordCheckpoint(ctx, op,
@@ -855,9 +823,8 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 	localDir := ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
 
 	tPersist := time.Now()
-	sandboxClass, snapshotFiles, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
+	snapshotFiles, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
 	dPersist = time.Since(tPersist)
-	op.sandboxClass = sandboxClass
 	if err != nil {
 		return nil, err
 	}
@@ -873,89 +840,69 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 
 // uploadLocalCheckpointDir uploads the local checkpoint in localDir to uri,
 // converting the captured scope to the requested one where possible. It
-// returns the sandbox class recorded in the snapshot manifest (empty when the
-// manifest was not read) and the files the uploaded snapshot consists of.
-// Parameterized by localDir for tests.
-func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, localDir string, uri resources.SnapshotURI) (string, []string, error) {
-	manifest, err := os.ReadFile(filepath.Join(localDir, sandboxManifestName))
-	if errors.Is(err, os.ErrNotExist) {
-		files, err := s.alreadyUploadedFiles(ctx, req, uri)
-		return "", files, err
-	}
+// returns the files the uploaded snapshot consists of. Parameterized by
+// localDir for tests.
+func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, localDir string, uri resources.SnapshotURI) ([]string, error) {
+	files, err := uploadFiles(req)
 	if err != nil {
-		return "", nil, wrapFileSystemErr("while reading local snapshot manifest", err)
+		return nil, err
 	}
 
-	rec, err := unmarshalSandboxRecord(manifest)
-	if err != nil {
-		return "", nil, err
+	if _, err := os.Stat(localDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return s.alreadyUploadedFiles(ctx, req, uri, files)
+		}
+		return nil, wrapFileSystemErr("while reading local snapshot", err)
 	}
 
-	capturedScope := rec.Scope
-	if capturedScope == "" {
-		return rec.SandboxClass, nil, status.Errorf(codes.FailedPrecondition, "local snapshot %q has no scope recorded in its manifest (written by an older atelet); resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
+	if err := s.uploadSnapshot(ctx, uri, localDir, files, req.GetActorTemplateAtespace(), req.GetActorTemplateName()); err != nil {
+		return nil, err
 	}
+	return files, nil
+}
+
+// uploadFiles returns the files an upload of req writes: the captured files,
+// narrowed to the durable data when a FULL capture is uploaded as DATA.
+func uploadFiles(req *ateletpb.UploadPausedCheckpointRequest) ([]string, error) {
+	capturedScope := ateattr.SnapshotScopeValue(req.GetCapturedScope())
 	desiredScope := ateattr.SnapshotScopeValue(req.GetDesiredScope())
-
+	files := req.GetSnapshotFiles()
 	switch {
 	case capturedScope == desiredScope:
+		return files, nil
 	case capturedScope == ateattr.SnapshotScopeData && desiredScope == ateattr.SnapshotScopeFull:
 		// The control plane rejects this before marking SUSPENDING; reaching
 		// it here means the template changed mid-flight or store state drifted.
-		return rec.SandboxClass, nil, status.Errorf(codes.FailedPrecondition, "pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedScope, desiredScope)
+		return nil, status.Errorf(codes.FailedPrecondition, "pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedScope, desiredScope)
 	default: // captured FULL, DATA wanted
-		if err := narrowFullCaptureToData(rec); err != nil {
-			return rec.SandboxClass, nil, err
-		}
+		return narrowFullCaptureToData(req.GetSandboxClass(), files)
 	}
-
-	if err := s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName()); err != nil {
-		return rec.SandboxClass, nil, err
-	}
-	return rec.SandboxClass, rec.SnapshotFiles, nil
 }
 
-// narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA
-// snapshot. Each sandbox class owns one branch: micro-VM durable data is a
-// self-contained tar that can be carved out of the full file set; gVisor's
+// narrowFullCaptureToData returns the files of a FULL capture that make up a
+// DATA snapshot. Each sandbox class owns one branch: micro-VM durable data is
+// a self-contained tar that can be carved out of the full file set; gVisor's
 // full checkpoint is monolithic until split checkpoints land.
-func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
-	switch atev1alpha1.SandboxClass(rec.SandboxClass) {
+func narrowFullCaptureToData(sandboxClass string, files []string) ([]string, error) {
+	switch atev1alpha1.SandboxClass(sandboxClass) {
 	case atev1alpha1.SandboxClassMicroVM, atev1alpha1.SandboxClassGvisor:
-		files, ok := durableDataFiles(rec.SnapshotFiles)
-		if !ok {
+		if !slices.Contains(files, ateompath.DurableDirTarFile) {
 			// No durable-dir volumes were attached at pause: this snapshot
 			// holds no data, and never will — not retryable.
-			return status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", rec.SandboxClass, ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
+			return nil, status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", sandboxClass, ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
 		}
-		rec.SnapshotFiles = files
-		rec.Scope = ateattr.SnapshotScopeData
-		return nil
+		return []string{ateompath.DurableDirTarFile}, nil
 
 	default:
-		// The manifest's class is unvalidated input from disk/object storage.
-		return status.Errorf(codes.FailedPrecondition, "unknown sandbox class %q in snapshot manifest", rec.SandboxClass)
+		return nil, status.Errorf(codes.FailedPrecondition, "unknown sandbox class %q", sandboxClass)
 	}
-}
-
-// durableDataFiles returns the files of a FULL capture that a DATA upload
-// writes, and false when the capture holds no durable data.
-func durableDataFiles(files []string) ([]string, bool) {
-	if !slices.Contains(files, ateompath.DurableDirTarFile) {
-		return nil, false
-	}
-	return []string{ateompath.DurableDirTarFile}, true
 }
 
 // alreadyUploadedFiles handles a retry whose local snapshot was already
 // uploaded and pruned. The destination is unique to this suspend and objects
 // appear only when complete, so if every expected file exists it returns them;
 // otherwise the snapshot is lost.
-func (s *AteomHerder) alreadyUploadedFiles(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, uri resources.SnapshotURI) ([]string, error) {
-	files, err := retriedUploadFiles(req)
-	if err != nil {
-		return nil, fmt.Errorf("local snapshot %q is gone and no uploaded copy can be identified: %w", req.GetLocalSnapshotName(), err)
-	}
+func (s *AteomHerder) alreadyUploadedFiles(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, uri resources.SnapshotURI, files []string) ([]string, error) {
 	// Look every file up concurrently, like uploadSnapshot writes them.
 	present := make([]bool, len(files))
 	g, gCtx := errgroup.WithContext(ctx)
@@ -989,29 +936,6 @@ func (s *AteomHerder) alreadyUploadedFiles(ctx context.Context, req *ateletpb.Up
 	return files, nil
 }
 
-// retriedUploadFiles returns the files a completed upload of req wrote, using
-// the same scope conversion as uploadLocalCheckpointDir.
-func retriedUploadFiles(req *ateletpb.UploadPausedCheckpointRequest) ([]string, error) {
-	capturedScope := ateattr.SnapshotScopeValue(req.GetCapturedScope())
-	desiredScope := ateattr.SnapshotScopeValue(req.GetDesiredScope())
-	files := req.GetSnapshotFiles()
-	switch {
-	case len(files) == 0:
-		return nil, errors.New("the request lists no snapshot files")
-	case capturedScope != ateattr.SnapshotScopeFull && capturedScope != ateattr.SnapshotScopeData:
-		return nil, fmt.Errorf("the request has no captured scope (got %q)", capturedScope)
-	case capturedScope == desiredScope:
-		return files, nil
-	case capturedScope == ateattr.SnapshotScopeData:
-		return nil, fmt.Errorf("a %s capture cannot have been uploaded as %s", capturedScope, desiredScope)
-	}
-	dataFiles, ok := durableDataFiles(files)
-	if !ok {
-		return nil, fmt.Errorf("a %s capture without %s cannot have been uploaded as %s", capturedScope, ateompath.DurableDirTarFile, desiredScope)
-	}
-	return dataFiles, nil
-}
-
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
 	if err := validateRestoreRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -1022,9 +946,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// The sandbox (binaries + pause image) that runs the restored workload
 	// comes from the request, resolved by the control plane from the
-	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
-	// files to restore and the actor identity. Resolved before any on-node
-	// work so an invalid request changes nothing.
+	// ActorTemplate's SandboxConfig, as do the snapshot files to restore.
+	// Resolved before any on-node work so an invalid request changes nothing.
 	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid sandbox_assets: %v", err)
@@ -1035,10 +958,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// the way out, so a failed restore still accounts for the phases it completed.
 	// Phases left at zero never ran.
 	tStart := time.Now()
-	var dMount, dManifest, dAssets, dDownload, dBundles, dAteom time.Duration
+	var dMount, dAssets, dDownload, dBundles, dAteom time.Duration
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
+		kind:              restoreSnapshotKind(req),
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
 		sandboxClass:      req.GetSandboxAssets().GetSandboxClass(),
 	}
@@ -1053,7 +977,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		// about how long the restore took.
 		phases := []phase{
 			{ateattr.SnapshotPhaseVolumeMount, dMount},
-			{ateattr.SnapshotPhaseManifestFetch, dManifest},
 			{ateattr.SnapshotPhaseSandboxAssets, dAssets},
 			{ateattr.SnapshotPhaseDownload, dDownload},
 			{ateattr.SnapshotPhaseOCIUnpack, dBundles},
@@ -1080,76 +1003,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	checkpointDir := ateompath.RestoreStateDir(actorUID)
 
-	// Fetch the snapshot manifest stored beside the checkpoint images
-	// first: it lists the checkpoint files to download and records the actor
-	// identity used to label the restore's metrics.
-	tManifest := time.Now()
-	manifestDone := false
-	defer func() {
-		if !manifestDone {
-			dManifest = time.Since(tManifest)
-		}
-	}()
-	var sandboxRec *sandboxAssetsRecord
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri())
-		if err != nil {
-			return nil, err
-		}
-		manifestURI, err := uri.ObjectURI(sandboxManifestName)
-		if err != nil {
-			return nil, err
-		}
-		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
-		if err != nil {
-			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
-		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		manifest, err := os.ReadFile(filepath.Join(ateompath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()), sandboxManifestName))
-		if err != nil {
-			return nil, wrapFileSystemErr("while reading local snapshot manifest", err)
-		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
-	}
-
-	// On a DATA_ON_GOLDEN restore the actor's snapshot holds only durable-dir data; the guest
-	// state (memory + VM state) comes from the template's golden snapshot. Fetch
-	// the golden manifest too: its SnapshotFiles complete the restore set below.
-	var goldenRec *sandboxAssetsRecord
-	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		goldenURI, err := resources.ParseSnapshotURI(req.GetGoldenSnapshotUri())
-		if err != nil {
-			return nil, err
-		}
-		manifestURI, err := goldenURI.ObjectURI(sandboxManifestName)
-		if err != nil {
-			return nil, err
-		}
-		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
-		if err != nil {
-			return nil, fmt.Errorf("while fetching golden snapshot manifest: %w", err)
-		}
-		if goldenRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, fmt.Errorf("while unmarshalling golden sandbox record: %w", err)
-		}
-		if goldenRec.SandboxClass != sandboxRec.SandboxClass {
-			return nil, status.Errorf(codes.FailedPrecondition, "golden snapshot sandbox class %q does not match actor snapshot sandbox class %q", goldenRec.SandboxClass, sandboxRec.SandboxClass)
-		}
-	}
-	dManifest = time.Since(tManifest)
-	manifestDone = true
-
-	// The manifest is what tells a golden restore from a latest one, so the
-	// snapshot kind only becomes knowable here.
-	op.kind = restoreSnapshotKind(req, sandboxRec)
+	snapshotFiles := req.GetSnapshotFiles()
+	goldenSnapshotFiles := req.GetGoldenSnapshotFiles()
 
 	// Undo the Register if the restore fails.
 	defer func() {
@@ -1179,33 +1034,27 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 			if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-				if goldenRec == nil {
-					return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
-				}
-				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
+				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, snapshotFiles, goldenSnapshotFiles); err != nil {
 					return err
 				}
-			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, snapshotFiles); err != nil {
 				return err
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
 			combineWithGolden := req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			if combineWithGolden && goldenRec == nil {
-				return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
-			}
 			// A local (pause) checkpoint may still combine with the golden
 			// snapshot: the actor's files come from the local checkpoint dir,
 			// the golden's from object storage, concurrently.
 			gLocal, gLocalCtx := errgroup.WithContext(gctx)
 			gLocal.Go(func() error {
-				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, snapshotFiles); err != nil {
 					return err
 				}
 				return nil
 			})
 			if combineWithGolden {
 				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
+					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(snapshotFiles, goldenSnapshotFiles)); err != nil {
 						return err
 					}
 					return nil
@@ -1794,10 +1643,54 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		if _, err := resources.ParseSnapshotURI(req.GetGoldenSnapshotUri()); err != nil {
 			return fmt.Errorf("invalid golden_snapshot_uri: %w", err)
 		}
-	} else if req.GetGoldenSnapshotUri() != "" {
-		return fmt.Errorf("golden_snapshot_uri is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
+		if len(req.GetGoldenSnapshotFiles()) == 0 {
+			return fmt.Errorf("golden_snapshot_files is required with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
+		}
+	} else if req.GetGoldenSnapshotUri() != "" || len(req.GetGoldenSnapshotFiles()) > 0 {
+		return fmt.Errorf("golden_snapshot_uri and golden_snapshot_files are only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
 	}
-	return nil
+	// A DATA snapshot of an actor without durable-dir volumes has no files;
+	// any other snapshot does.
+	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL && len(req.GetSnapshotFiles()) == 0 {
+		return fmt.Errorf("snapshot_files is required with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL)
+	}
+	errs = append(errs, validateSnapshotFiles(req.GetSnapshotFiles(), field.NewPath("snapshot_files"))...)
+	errs = append(errs, validateSnapshotFiles(req.GetGoldenSnapshotFiles(), field.NewPath("golden_snapshot_files"))...)
+	return errs.ToAggregate()
+}
+
+// maxSnapshotFiles bounds a snapshot's file list, matching the control
+// plane's validation of the lists it records.
+const maxSnapshotFiles = 64
+
+// validateSnapshotFiles checks a snapshot's file list: each name is joined
+// into a snapshot directory on this node, so it must be a single path
+// segment.
+func validateSnapshotFiles(files []string, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	if len(files) > maxSnapshotFiles {
+		errs = append(errs, field.TooMany(fldPath, len(files), maxSnapshotFiles))
+	}
+	seen := make(map[string]bool, len(files))
+	for i, name := range files {
+		idxPath := fldPath.Index(i)
+		if name == "" {
+			errs = append(errs, field.Required(idxPath, ""))
+			continue
+		}
+		if len(name) > 255 {
+			errs = append(errs, field.TooLong(idxPath, name, 255))
+		}
+		// The k8s-path-segment-name rule the control plane applies.
+		if name == "." || name == ".." || strings.ContainsAny(name, "/%") {
+			errs = append(errs, field.Invalid(idxPath, name, `must be a single path segment: not "." or "..", and without "/" or "%"`))
+		}
+		if seen[name] {
+			errs = append(errs, field.Duplicate(idxPath, name))
+		}
+		seen[name] = true
+	}
+	return errs
 }
 
 func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
@@ -1845,14 +1738,23 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
 		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
 	}
-	// Uploads only ever produce FULL or DATA snapshots; DATA_ON_GOLDEN is a
-	// restore-time combination.
-	switch req.GetDesiredScope() {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-	default:
-		errs = append(errs, field.NotSupported(field.NewPath("desired_scope"), req.GetDesiredScope(),
-			[]string{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL.String(), ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA.String()}))
+	// Pause checkpoints and uploads only ever are FULL or DATA snapshots;
+	// DATA_ON_GOLDEN is a restore-time combination.
+	for _, f := range []struct {
+		name  string
+		scope ateletpb.SnapshotScope
+	}{
+		{"desired_scope", req.GetDesiredScope()},
+		{"captured_scope", req.GetCapturedScope()},
+	} {
+		switch f.scope {
+		case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		default:
+			errs = append(errs, field.NotSupported(field.NewPath(f.name), f.scope,
+				[]string{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL.String(), ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA.String()}))
+		}
 	}
+	errs = append(errs, validateSnapshotFiles(req.GetSnapshotFiles(), field.NewPath("snapshot_files"))...)
 	return errs.ToAggregate()
 }
 

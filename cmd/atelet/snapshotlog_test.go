@@ -138,7 +138,6 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			op:   fullOp,
 			phases: []phase{
 				{ateattr.SnapshotPhaseVolumeMount, 4 * time.Millisecond},
-				{ateattr.SnapshotPhaseManifestFetch, 21 * time.Millisecond},
 				{ateattr.SnapshotPhaseSandboxAssets, 10 * time.Millisecond},
 				{ateattr.SnapshotPhaseDownload, 310 * time.Millisecond},
 				{ateattr.SnapshotPhaseOCIUnpack, 50 * time.Millisecond},
@@ -156,10 +155,9 @@ func TestSnapshotLogAttrs(t *testing.T) {
 				"ate.sandbox.class":     "gvisor",
 			},
 			wantNumbers: map[string]float64{
-				"ate.actor.restore.duration.volume_mount":   0.004,
-				"ate.actor.restore.duration.manifest_fetch": 0.021,
-				"ate.actor.restore.duration.download":       0.310,
-				"ate.actor.restore.duration.total":          0.420,
+				"ate.actor.restore.duration.volume_mount": 0.004,
+				"ate.actor.restore.duration.download":     0.310,
+				"ate.actor.restore.duration.total":        0.420,
 			},
 			// The phase key names the one step a datapoint timed; this record has
 			// them all, so borrowing it here would give one key two meanings.
@@ -175,7 +173,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			wantAbsent: []string{"ate.actor.restore.duration.download"},
 		},
 		{
-			name: "a restore that died before the manifest omits the dimensions it never learned",
+			name: "an operation omits the dimensions it never learned",
 			op: snapshotOp{
 				templateNamespace: testTemplateNamespace,
 				templateName:      testTemplateName,
@@ -191,7 +189,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			wantAbsent: []string{"ate.snapshot.kind", "ate.sandbox.class"},
 		},
 		{
-			name: "a sandbox class the manifest invented is bounded, not passed through",
+			name: "an unrecognized sandbox class is bounded, not passed through",
 			op: snapshotOp{
 				templateNamespace: testTemplateNamespace,
 				templateName:      testTemplateName,

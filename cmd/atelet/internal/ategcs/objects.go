@@ -114,7 +114,7 @@ func ObjectExists(ctx context.Context, client ObjectStorage, gsURL string) (bool
 }
 
 // SendBytesToGCS uploads the given bytes (uncompressed) to gsURL. Intended for
-// small objects such as the snapshot manifest.
+// small objects.
 func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {
 	ctx, span := tracer.Start(ctx, "sendBytesToGCS")
 	defer span.End()
