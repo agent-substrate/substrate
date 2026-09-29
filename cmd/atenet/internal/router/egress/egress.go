@@ -192,9 +192,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 }
 
 // connectMetadata builds the dynamic metadata returned on an allowed CONNECT:
-// the policy's allowed SNI patterns under dev.ate.policy.egress, plus the one
-// address the passthrough chain may dial (as IP:port) when an address rule
-// allowed it.
+// the policy's allowed SNI patterns under dev.ate.policy.egress.
 func connectMetadata(allowedSNIs []string) *structpb.Struct {
 	sniValues := make([]*structpb.Value, len(allowedSNIs))
 	for i, sni := range allowedSNIs {

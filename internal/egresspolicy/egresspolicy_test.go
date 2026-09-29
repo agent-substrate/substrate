@@ -392,15 +392,15 @@ func TestHostnamePatterns(t *testing.T) {
 		want   []string
 	}{
 		{name: "no rules", policy: &ateapipb.EgressPolicy{}},
-		{name: "cidrs only", policy: policy(ipBlockRule("10.0.0.0/8"))},
-		{name: "all only", policy: policy(allRule())},
-		{name: "single hostname rule", policy: policy(hostnameRule("api.example.com", "*.example.org")), want: []string{"api.example.com", "*.example.org"}},
-		{name: "multiple hostname rules mixed with cidr", policy: policy(
-			hostnameRule("api.example.com"),
-			ipBlockRule("10.0.0.0/8"),
-			hostnameRule("*.example.org", "foo.bar.com"),
+		{name: "http only", policy: policy(httpRule("api.example.com"))},
+		{name: "https rule", policy: policy(httpsRule("api.example.com", "*.example.org")), want: []string{"api.example.com", "*.example.org"}},
+		{name: "tls_passthrough rule", policy: policy(passthroughRule(ports(443), "tls.example.com", "*")), want: []string{"tls.example.com", "*"}},
+		{name: "https and tls_passthrough mixed with http", policy: policy(
+			httpsRule("api.example.com"),
+			httpRule("plain.example.com"),
+			passthroughRule(ports(443), "*.example.org", "foo.bar.com"),
 		), want: []string{"api.example.com", "*.example.org", "foo.bar.com"}},
-		{name: "invalid patterns dropped", policy: policy(hostnameRule("good.example.com", "not a hostname")), want: []string{"good.example.com"}},
+		{name: "invalid patterns dropped", policy: policy(httpsRule("good.example.com", "not a hostname")), want: []string{"good.example.com"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

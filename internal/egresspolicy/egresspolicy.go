@@ -165,12 +165,15 @@ func (r compiledRule) matchesPort(port uint16) bool {
 	return r.anyPort || slices.Contains(r.ports, port)
 }
 
-// HostnamePatterns returns all compiled hostname patterns across the policy's
-// rules, in rule order.
+// HostnamePatterns returns all compiled SNI patterns from the policy's https
+// and tls_passthrough rules, in rule order.
 func (p *Policy) HostnamePatterns() []string {
 	var patterns []string
 	for _, rule := range p.rules {
-		for _, pattern := range rule.hostnames {
+		if rule.protocol != protocolHTTPS && rule.protocol != protocolTLSPassthrough {
+			continue
+		}
+		for _, pattern := range rule.patterns {
 			patterns = append(patterns, pattern.String())
 		}
 	}

@@ -337,14 +337,28 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
 
-	for name, policy := range map[string]*ateapipb.EgressPolicy{
-		"http":            httpPolicy("api.example.com"),
-		"https":           httpsPolicy("api.example.com"),
-		"tls passthrough": passthroughPolicy(ports(443), "*"),
-		"allow all":       allowAllPolicy(),
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := New(&egressMockClient{actor: runningActor(), policy: policy}, ca.roots(), 0, nil, "")
+	tests := []struct {
+		name     string
+		policy   *ateapipb.EgressPolicy
+		wantSNIs []string
+	}{
+		{name: "http", policy: httpPolicy("api.example.com")},
+		{name: "https", policy: httpsPolicy("api.example.com"), wantSNIs: []string{"api.example.com"}},
+		{name: "tls passthrough", policy: passthroughPolicy(ports(443), "*"), wantSNIs: []string{"*"}},
+		{name: "allow all", policy: allowAllPolicy(), wantSNIs: []string{"*"}},
+		{
+			name: "multiple https and tls passthrough rules",
+			policy: combined(
+				httpsPolicy("api.example.com", "*.example.org"),
+				httpPolicy("plain.example.com"),
+				passthroughPolicy(ports(443), "foo.bar.com"),
+			),
+			wantSNIs: []string{"api.example.com", "*.example.org", "foo.bar.com"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0, nil, "")
 			md := egressMetadata(xfccHeader(leaf))
 			md.Host = "93.184.216.34:443"
 			md.Headers[":authority"] = md.Host
@@ -379,55 +393,6 @@ func allowedSNIsOf(t *testing.T, res extproc.Result) []string {
 		out[i] = v.GetStringValue()
 	}
 	return out
-}
-
-// An address match opens the tunnel and names what the passthrough chain may
-// dial; hostname rules alone open it with nothing to dial; neither refuses it.
-func TestConnectLegDecidesAddressRules(t *testing.T) {
-	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
-	both := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{hostnamesPolicy("api.example.com").Rules[0], cidrsPolicy("93.184.216.0/24").Rules[0]}}
-	multipleHostnames := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
-		hostnamesPolicy("api.example.com", "*.example.org").Rules[0],
-		cidrsPolicy("93.184.216.0/24").Rules[0],
-		hostnamesPolicy("foo.bar.com").Rules[0],
-	}}
-
-	tests := []struct {
-		name      string
-		policy    *ateapipb.EgressPolicy
-		authority string
-		want      envoy_type.StatusCode // 0 means the tunnel opens
-		wantDial  string                // "" means no passthrough destination
-		wantSNIs  []string
-	}{
-		{name: "all", policy: allowAllPolicy(), authority: "93.184.216.34:80", wantDial: "93.184.216.34:80"},
-		{name: "address in a cidr", policy: cidrsPolicy("93.184.216.0/24"), authority: "93.184.216.34:443", wantDial: "93.184.216.34:443"},
-		{name: "ipv6 address in a cidr", policy: cidrsPolicy("2001:db8::/32"), authority: "[2001:db8::7]:5432", wantDial: "[2001:db8::7]:5432"},
-		{name: "address rule later in the policy", policy: both, authority: "93.184.216.34:443", wantDial: "93.184.216.34:443", wantSNIs: []string{"api.example.com"}},
-		{name: "hostname rules only defer to the request legs", policy: hostnamesPolicy("api.example.com"), authority: "93.184.216.34:443", wantSNIs: []string{"api.example.com"}},
-		{name: "multiple hostname rules and patterns", policy: multipleHostnames, authority: "198.51.100.1:443", wantSNIs: []string{"api.example.com", "*.example.org", "foo.bar.com"}},
-		{name: "address outside the cidr with hostname rules defers", policy: both, authority: "198.51.100.1:443", wantSNIs: []string{"api.example.com"}},
-		{name: "address outside the cidr and no hostname rules", policy: cidrsPolicy("203.0.113.0/24"), authority: "93.184.216.34:443", want: envoy_type.StatusCode_Forbidden},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0, nil, "")
-			md := egressMetadata(xfccHeader(leaf))
-			md.Host = "93.184.216.34:443"
-			md.Headers[":authority"] = md.Host
-			res, err := h.HandleRequestHeaders(context.Background(), md)
-			if err != nil {
-				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
-			}
-			if got := passthroughDestinationOf(res); got != "" {
-				t.Errorf("passthrough destination = %q, want none", got)
-			}
-			if got := allowedSNIsOf(t, res); !slices.Equal(got, tc.wantSNIs) {
-				t.Errorf("allowed SNIs = %v, want %v", got, tc.wantSNIs)
-			}
-		})
-	}
 }
 
 // A callout with no filter chain name gets the same answer: the tunnel opens
