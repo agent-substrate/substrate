@@ -32,6 +32,7 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
 | `--credential-provider JSON` | `--credential-provider JSON`, or `ATE_CREDENTIAL_PROVIDER` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/egress-credential-injection.md`](../../docs/egress-credential-injection.md) |
 | `--otlp-endpoint URL` | `--otlp-endpoint URL`, or `ATE_OTLP_ENDPOINT=URL` | Send control plane telemetry to `URL` instead of the cluster default (see [`benchmarking/telemetry/README.md`](../../benchmarking/telemetry/README.md)) |
+| `--enable-preview` | `--enable-preview` | Enable preview features |
 | `--context NAME` | `KUBECTL_CONTEXT=NAME` | Kubeconfig context; still defaults to `KUBECTL_CONTEXT` |
 | `--kubeconfig PATH` | `KUBECONFIG=PATH` | Explicit kubeconfig path |
 | `--no-dev-env` | `NO_DEV_ENV=1` | Skip `.ate-dev-env.sh` at the repository root |
