@@ -238,12 +238,11 @@ const (
 	ImageCacheOutcomeTimeout   = "timeout"
 )
 
-// Values for RouterOutcomeKey. RouterOutcomeNoCapacity is the fleet having no
-// free worker, the same condition scheduling.ErrNoCapacity reports; it is a
-// capacity problem, not a defect. Everything else that denies a request
-// without a matching gRPC code, such as a full parking lot, a denied
-// request, or a failed dependency lookup, is RouterOutcomeUnavailable or one
-// of the other values below, never no_capacity.
+// Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
+// that meets the constraints of the actor had room. scheduling.ErrNoCapacity
+// reports the same condition. It is a capacity signal, not a defect. A 503
+// without a gRPC cause, such as a full parking lot, a denied egress request,
+// or a failed policy lookup, is RouterOutcomeUnavailable.
 const (
 	RouterOutcomeOK                 = "ok"
 	RouterOutcomeCancelled          = "cancelled"
