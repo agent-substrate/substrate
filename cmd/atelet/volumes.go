@@ -22,6 +22,7 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
@@ -30,6 +31,9 @@ import (
 )
 
 func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+	if !preview.IsEnabled(preview.GateExternalVolumes) {
+		return nil
+	}
 	for _, vol := range volumes {
 		ext := vol.GetExternal()
 		if ext == nil {
@@ -57,6 +61,9 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 }
 
 func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+	if !preview.IsEnabled(preview.GateExternalVolumes) {
+		return nil
+	}
 	var errs []error
 	for _, vol := range volumes {
 		ext := vol.GetExternal()

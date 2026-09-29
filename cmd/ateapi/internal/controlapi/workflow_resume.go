@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/hardware"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -721,6 +722,11 @@ func (w *ActorWorkflow) appliesWithFallback(worker *ateapipb.Worker, constraints
 func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (_ map[string]map[string]string, err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
+
+	if !preview.IsEnabled(preview.GateExternalVolumes) {
+		markSkipped(ctx, "external volumes are disabled")
+		return nil, nil
+	}
 
 	node := worker.GetNodeName()
 	if node == "" {

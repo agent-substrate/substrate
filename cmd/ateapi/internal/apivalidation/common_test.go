@@ -16,6 +16,9 @@ package apivalidation
 
 import (
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/preview"
@@ -33,14 +36,32 @@ const (
 	someActorUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
 )
 
-// setPreviewForTest sets all preview gates on or off for the duration of t.
-func setPreviewForTest(t *testing.T, enabled bool) {
+// assertValidate checks validate against want with no preview gates enabled.
+// Then, for each entry in wantWithPreview, it enables the gates the key names
+// and checks validate against that entry's errors. Only cases that set fields
+// behind a preview gate need wantWithPreview.
+func assertValidate(t *testing.T, validate func() field.ErrorList, want field.ErrorList, wantWithPreview map[string]field.ErrorList) {
 	t.Helper()
-	if enabled {
-		preview.InitForTest(t, "*")
-	} else {
-		preview.InitForTest(t)
+	setPreviewForTest(t, "")
+	assertValidateErr(t, validate(), want)
+	for _, gates := range slices.Sorted(maps.Keys(wantWithPreview)) {
+		t.Run("preview="+gates, func(t *testing.T) {
+			t.Helper()
+			setPreviewForTest(t, gates)
+			assertValidateErr(t, validate(), wantWithPreview[gates])
+		})
 	}
+}
+
+// setPreviewForTest enables the preview gates named by gates, a --preview
+// value such as "*", for the duration of t. An empty value enables none.
+func setPreviewForTest(t *testing.T, gates string) {
+	t.Helper()
+	var values []string
+	if gates != "" {
+		values = strings.Split(gates, ",")
+	}
+	preview.InitForTest(t, values...)
 }
 
 func selectorLabelsOfSize(n int) map[string]string {

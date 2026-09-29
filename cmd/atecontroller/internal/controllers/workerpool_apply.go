@@ -16,6 +16,7 @@ package controllers
 
 import (
 	"slices"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -145,10 +146,18 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 	)
 
 	// ateom gets preview features when the controller has them.
-	previewArg := "--preview="
-	if preview.IsEnabled(preview.GatePreview) {
-		previewArg += "*"
+	enabledGates := func() []string {
+		ret := []string{}
+		for k, v := range preview.AsMap() {
+			if v {
+				ret = append(ret, k)
+			}
+		}
+		// Map order is random; a stable arg avoids needless rollouts.
+		slices.Sort(ret)
+		return ret
 	}
+	previewArg := "--preview=" + strings.Join(enabledGates(), ",")
 	args = append(args, previewArg)
 
 	containerAC := corev1ac.Container().

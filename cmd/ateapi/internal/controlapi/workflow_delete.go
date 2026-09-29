@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -166,25 +167,27 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		}
 		workloadSpec = spec
 	} else {
-		// When the template is missing/deleted, build a fallback workload spec with
-		// all external volumes recorded on the actor so atelet can unmount them on the node.
-		slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
-			slog.String("actor", actorRef.Name),
-			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
-			slog.String("templateName", actor.GetActorTemplate().GetName()))
 		workloadSpec = &ateletpb.WorkloadSpec{}
-		for _, vol := range actor.GetStatus().GetExternalVolumes() {
-			// StorageVolumeId is only populated once the volume is provisioned.
-			// Skip volumes that were never created (e.g. failed during PENDING state).
-			if vol.GetStorageVolumeId() != "" {
-				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-					Name: vol.GetName(),
-					External: &ateletpb.ExternalVolumeSource{
-						StorageVolumeId: vol.GetStorageVolumeId(),
-						VolumeType:      vol.GetVolumeType(),
-						VolumeContext:   vol.GetVolumeContext(),
-					},
-				})
+		if preview.IsEnabled(preview.GateExternalVolumes) {
+			// When the template is missing/deleted, build a fallback workload spec with
+			// all external volumes recorded on the actor so atelet can unmount them on the node.
+			slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
+				slog.String("actor", actorRef.Name),
+				slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
+				slog.String("templateName", actor.GetActorTemplate().GetName()))
+			for _, vol := range actor.GetStatus().GetExternalVolumes() {
+				// StorageVolumeId is only populated once the volume is provisioned.
+				// Skip volumes that were never created (e.g. failed during PENDING state).
+				if vol.GetStorageVolumeId() != "" {
+					workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+						Name: vol.GetName(),
+						External: &ateletpb.ExternalVolumeSource{
+							StorageVolumeId: vol.GetStorageVolumeId(),
+							VolumeType:      vol.GetVolumeType(),
+							VolumeContext:   vol.GetVolumeContext(),
+						},
+					})
+				}
 			}
 		}
 	}
@@ -214,6 +217,11 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
+
+	if !preview.IsEnabled(preview.GateExternalVolumes) {
+		markSkipped(ctx, "external volumes are disabled")
+		return nil
+	}
 
 	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
@@ -352,6 +360,11 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 	st := actor.GetStatus().GetState()
 	if st != ateapipb.ActorState_ACTOR_STATE_DELETING {
 		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
+	}
+
+	if !preview.IsEnabled(preview.GateExternalVolumes) {
+		markSkipped(ctx, "external volumes are disabled")
+		return nil
 	}
 
 	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes()); err != nil {
