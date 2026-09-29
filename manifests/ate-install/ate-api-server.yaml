@@ -197,7 +197,8 @@ spec:
           failureThreshold: 24
         # /healthz stays 200 while a terminating pod drains; /readyz
         # turns 503, so liveness and readiness diverge correctly during
-        # shutdown.
+        # shutdown. /readyz also turns 503 while the store is unreachable,
+        # and /healthz stays 200: the pool reconnects without a restart.
         livenessProbe:
           httpGet:
             path: /healthz
