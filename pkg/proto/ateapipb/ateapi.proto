@@ -750,8 +750,10 @@ message ActorCrash {
 //
 // This is a denormalized snapshot, not merely a reference: atenet reads
 // worker_pod_ips on the request-routing path and must not need a second lookup,
-// and kubectl-ate displays the pod name. The copies stay valid for the life of
-// the assignment because a Worker's identity fields are immutable.
+// and kubectl-ate displays the pod name. The identity fields are immutable on a
+// Worker, so their copies stay valid for the life of the assignment.
+// worker_pod_ips is the exception: the control plane rewrites it when the
+// Worker's ips change.
 //
 // Pass `worker` to GetWorker; none of the denormalized fields identify the
 // Worker to the API.
@@ -790,7 +792,9 @@ message WorkerAssignment {
   // +k8s:format=k8s-uuid
   string worker_pod_uid = 4;
 
-  // worker_pod_ips are the IPs of worker_pod, copied from Worker.ips.
+  // worker_pod_ips are the IPs of worker_pod, copied from Worker.ips. Until
+  // status.observed_ips_generation on the Worker catches up with its
+  // status.ips_generation, they may still be the pod's previous IPs.
   //
   // +k8s:required
   // +k8s:maxItems=2
@@ -810,6 +814,13 @@ message WorkerAssignment {
   // +k8s:optional
   // +k8s:minimum=0
   int64 worker_epoch = 8;
+
+  // worker_ips_generation is the Worker's status.ips_generation whose ips
+  // worker_pod_ips holds.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 worker_ips_generation = 9;
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -2018,7 +2029,7 @@ message ListActorsResponse {
 // by the control plane and is opaque to clients — never parse it or derive it
 // from anything else; read pod identity from the named fields below.
 //
-// labels and epoch are the only mutable fields; every other field is
+// labels, epoch and ips are the only mutable fields; every other field is
 // either immutable after creation or output-only. UpdateWorker replaces the whole resource, so
 // an immutable field that a request changes — including by omitting it, which
 // would clear it — is rejected with INVALID_ARGUMENT.
@@ -2059,7 +2070,6 @@ message Worker {
   // +k8s:maxItems=2
   // +k8s:listType=atomic
   // +k8s:customValidation # until `format=k8s-ip` is supported
-  // +k8s:immutable
   repeated string ips = 7;
 
   // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
@@ -2144,6 +2154,22 @@ message WorkerStatus {
   // +k8s:optional
   // +k8s:minimum=0
   int64 observed_epoch = 4;
+
+  // ips_generation counts the changes to ips. It never decreases, so ips that
+  // change and change back still raise it.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 ips_generation = 5;
+
+  // observed_ips_generation is the latest ips_generation whose ips the control
+  // plane has written to every Actor assigned to the Worker. While it is below
+  // ips_generation, some of those Actors may still route to IPs the pod no
+  // longer has.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 observed_ips_generation = 6;
 }
 
 // WorkerResources represents a set of resources.
@@ -2204,6 +2230,22 @@ message ActorAssignment {
   // +k8s:optional
   // +k8s:minimum=0
   int64 worker_epoch = 7;
+
+  // worker_pod_ips are the IPs of the Worker's pod. Until
+  // status.observed_ips_generation on the Worker catches up with its
+  // status.ips_generation, they may still be the pod's previous IPs.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
+  repeated string worker_pod_ips = 8;
+
+  // worker_ips_generation is the Worker's status.ips_generation whose ips
+  // worker_pod_ips holds.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 worker_ips_generation = 9;
 }
 
 // WorkerService is how a Worker tells the control plane what it observes. It is

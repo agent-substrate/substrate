@@ -2515,6 +2515,115 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
+	t.Run("SetAssignmentWorkerPodIPs", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		bind(t, s, testWorkerName, newTestAssignment("uid-1", 500, 1<<20))
+		bind(t, s, testWorkerName, newTestAssignment("uid-2", 250, 1<<21))
+		worker, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		before, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1")
+		if err != nil {
+			t.Fatalf("GetWorkerAssignment failed: %v", err)
+		}
+		other, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-2")
+		if err != nil {
+			t.Fatalf("GetWorkerAssignment failed: %v", err)
+		}
+
+		ips := []string{"10.9.9.9", "fd00::9"}
+		generation := before.GetWorkerIpsGeneration() + 2
+		if err := s.SetAssignmentWorkerPodIPs(ctx, testWorkerName, "uid-1", ips, generation); err != nil {
+			t.Fatalf("SetAssignmentWorkerPodIPs failed: %v", err)
+		}
+		after, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1")
+		if err != nil {
+			t.Fatalf("GetWorkerAssignment failed: %v", err)
+		}
+		if diff := cmp.Diff(ips, after.GetWorkerPodIps()); diff != "" {
+			t.Errorf("worker_pod_ips mismatch (-want +got):\n%s", diff)
+		}
+		if got := after.GetWorkerIpsGeneration(); got != generation {
+			t.Errorf("worker_ips_generation = %d, want %d", got, generation)
+		}
+		if got, want := after.GetMetadata().GetVersion(), before.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("assignment version = %d, want %d", got, want)
+		}
+		// Nothing else on the assignment moves.
+		after.WorkerPodIps, after.WorkerIpsGeneration, after.Metadata = before.GetWorkerPodIps(), before.GetWorkerIpsGeneration(), before.GetMetadata()
+		if diff := cmp.Diff(before, after, protocmp.Transform()); diff != "" {
+			t.Errorf("assignment changed beyond worker_pod_ips (-want +got):\n%s", diff)
+		}
+
+		// At that generation or an earlier one: no write, whatever the ips.
+		for _, g := range []int64{generation, generation - 1} {
+			if err := s.SetAssignmentWorkerPodIPs(ctx, testWorkerName, "uid-1", []string{"10.8.8.8"}, g); err != nil {
+				t.Fatalf("SetAssignmentWorkerPodIPs at generation %d failed: %v", g, err)
+			}
+			again, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1")
+			if err != nil {
+				t.Fatalf("GetWorkerAssignment failed: %v", err)
+			}
+			if got, want := again.GetMetadata().GetVersion(), before.GetMetadata().GetVersion()+1; got != want {
+				t.Errorf("assignment version = %d after a set at generation %d, want %d", got, g, want)
+			}
+			if diff := cmp.Diff(ips, again.GetWorkerPodIps()); diff != "" {
+				t.Errorf("worker_pod_ips after a set at generation %d mismatch (-want +got):\n%s", g, diff)
+			}
+		}
+
+		// The Worker and its other assignments are untouched.
+		gotOther, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-2")
+		if err != nil {
+			t.Fatalf("GetWorkerAssignment failed: %v", err)
+		}
+		if diff := cmp.Diff(other, gotOther, protocmp.Transform()); diff != "" {
+			t.Errorf("another assignment changed (-want +got):\n%s", diff)
+		}
+		gotWorker, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if gotWorker.GetMetadata().GetVersion() != worker.GetMetadata().GetVersion() {
+			t.Errorf("worker version moved from %d to %d", worker.GetMetadata().GetVersion(), gotWorker.GetMetadata().GetVersion())
+		}
+	})
+
+	t.Run("SetAssignmentWorkerPodIPs_NotHosted", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		for _, pod := range []string{"pod-1", "pod-2"} {
+			if _, err := s.CreateWorker(ctx, newTestWorker("worker-"+pod, pod)); err != nil {
+				t.Fatalf("CreateWorker failed: %v", err)
+			}
+		}
+		bind(t, s, "worker-pod-1", newTestAssignment("uid-1", 0, 0))
+
+		for _, tc := range []struct{ name, worker, actorUID string }{
+			{"another worker's actor", "worker-pod-2", "uid-1"},
+			{"unbound actor", "worker-pod-1", "uid-2"},
+		} {
+			err := s.SetAssignmentWorkerPodIPs(ctx, tc.worker, tc.actorUID, []string{"10.9.9.9"}, 1)
+			if !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("%s: SetAssignmentWorkerPodIPs = %v, want ErrNotFound", tc.name, err)
+			}
+		}
+		got, err := s.GetWorkerAssignment(ctx, "worker-pod-1", "uid-1")
+		if err != nil {
+			t.Fatalf("GetWorkerAssignment failed: %v", err)
+		}
+		if slices.Contains(got.GetWorkerPodIps(), "10.9.9.9") {
+			t.Errorf("worker_pod_ips = %v, want the assignment left alone", got.GetWorkerPodIps())
+		}
+	})
+
 	t.Run("ListWorkerAssignments_ScopedToOneWorker", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

@@ -529,9 +529,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	newAssignment := workerAssignmentFrom(assignedWorker)
-	// The cached Worker may predate a raised epoch; the bind read it under the
-	// Worker's row lock.
+	// The cached Worker may predate a raised epoch or changed ips; the bind
+	// read them, and the ips' generation, under the Worker's row lock.
 	newAssignment.WorkerEpoch = assignment.GetWorkerEpoch()
+	newAssignment.WorkerPodIps = assignment.GetWorkerPodIps()
+	newAssignment.WorkerIpsGeneration = assignment.GetWorkerIpsGeneration()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment

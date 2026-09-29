@@ -284,9 +284,11 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	}
 	if !isWorkerEligible(pod) {
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues
-		// it. A registered Worker still takes a raised epoch: an ateom that is
-		// restarting is not Ready, but its Actors are already lost.
-		return s.raiseEpoch(ctx, key, pod)
+		// it. A registered Worker still takes a raised epoch and new IPs: an
+		// ateom that is restarting is not Ready, but its Actors are already lost,
+		// and every pass the new IPs wait is one more that Actors are routed to
+		// the old ones.
+		return s.updateRestartedWorker(ctx, key, pod)
 	}
 	return s.createOrUpdateWorker(ctx, key, pod)
 }
@@ -305,12 +307,11 @@ func podEpoch(pod *corev1.Pod) int64 {
 	return 0
 }
 
-// raiseEpoch writes the pod's epoch to its registered Worker if it is higher
-// than the one recorded there. A pod that is not registered is left to
-// createOrUpdateWorker.
-func (s *WorkerPoolSyncer) raiseEpoch(ctx context.Context, key workerKey, pod *corev1.Pod) error {
-	epoch := podEpoch(pod)
-	if epoch == 0 {
+// updateRestartedWorker writes the pod's epoch and IPs to its registered Worker
+// where they have moved on from the ones recorded there. A pod that is not
+// registered is left to createOrUpdateWorker.
+func (s *WorkerPoolSyncer) updateRestartedWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
+	if podEpoch(pod) == 0 && len(pod.Status.PodIPs) == 0 {
 		return nil
 	}
 	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
@@ -320,14 +321,31 @@ func (s *WorkerPoolSyncer) raiseEpoch(ctx context.Context, key workerKey, pod *c
 	if err != nil {
 		return fmt.Errorf("getting worker: %w", err)
 	}
-	if epoch <= w.GetEpoch() {
+	if !applyRestart(ctx, key, w, pod) {
 		return nil
 	}
-	slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
-		append(key.logAttrs(), slog.Int64("epoch", epoch))...)
-	w.Epoch = epoch
 	_, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})
 	return err
+}
+
+// applyRestart edits the pod's epoch and IPs onto the worker where they have
+// moved on from it, and reports whether it did. Both can move while the pod
+// keeps its UID.
+func applyRestart(ctx context.Context, key workerKey, w *ateapipb.Worker, pod *corev1.Pod) bool {
+	var changed bool
+	if epoch := podEpoch(pod); epoch > w.GetEpoch() {
+		slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
+			append(key.logAttrs(), slog.Int64("epoch", epoch))...)
+		w.Epoch = epoch
+		changed = true
+	}
+	if ips := podIPs(pod); len(ips) != 0 && !slices.Equal(ips, w.GetIps()) {
+		slog.InfoContext(ctx, "Syncer: updating worker (pod IPs changed)",
+			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
+		w.Ips = ips
+		changed = true
+	}
+	return changed
 }
 
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
@@ -383,13 +401,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	// rejected as INVALID_ARGUMENT. Everything else on a Worker is immutable
 	// after create, so drift there cannot be repaired by an update; it takes a
 	// new pod, which arrives under a new key.
-	var changed bool
-	if epoch := podEpoch(pod); epoch > w.GetEpoch() {
-		slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
-			append(key.logAttrs(), slog.Int64("epoch", epoch))...)
-		w.Epoch = epoch
-		changed = true
-	}
+	changed := applyRestart(ctx, key, w, pod)
 	if !maps.Equal(w.GetLabels(), pool.GetLabels()) {
 		slog.InfoContext(ctx, "Syncer: updating worker (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()
@@ -404,14 +416,6 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		// scheduler if it were not.
 		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
 			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.SandboxClass)))...)
-	}
-	if ips := podIPs(pod); !slices.Equal(w.GetIps(), ips) {
-		// TODO: I don't think this is possible, but handling this case so we can
-		// log it just in case we can reproduce it. It is logged rather than
-		// repaired because ips is immutable on a registered Worker: writing the
-		// pod's value back would be rejected rather than applied.
-		slog.WarnContext(ctx, "Syncer: registered worker IPs disagree with its pod",
-			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
 	}
 	if !changed {
 		return nil
