@@ -25,6 +25,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -193,6 +194,11 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
+
+	if !preview.IsEnabled(preview.GatePreview) {
+		markSkipped(ctx, "external volumes are disabled")
+		return actor, nil
+	}
 
 	pending := false
 	for _, vol := range actor.GetStatus().GetActorVolumes() {
@@ -579,6 +585,11 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
+
+	if !preview.IsEnabled(preview.GatePreview) {
+		markSkipped(ctx, "external volumes are disabled")
+		return nil
+	}
 
 	node := worker.GetNodeName()
 	if node == "" {

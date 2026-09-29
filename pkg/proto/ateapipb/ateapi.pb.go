@@ -1752,6 +1752,7 @@ type ActorStatus struct {
 	// They are deleted when the actor is deleted. Each template volume
 	// appears at most once.
 	//
+	// +k8s:ifDisabled(Preview)=+k8s:forbidden
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches the template's volumes bound
 	// +k8s:listType=map
@@ -3341,6 +3342,7 @@ type Volume struct {
 	// +k8s:optional
 	// +k8s:unionMember
 	DurableDir *DurableDirVolumeSource `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
+	// +k8s:ifDisabled(Preview)=+k8s:forbidden
 	// +k8s:optional
 	// +k8s:unionMember
 	ExternalVolumeTemplate *ExternalVolumeTemplate `protobuf:"bytes,3,opt,name=external_volume_template,json=externalVolumeTemplate,proto3" json:"external_volume_template,omitempty"`

@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -324,6 +325,11 @@ func newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *atea
 func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, spanName, op string) (err error) {
 	ctx, done := stepSpan(ctx, spanName)
 	defer func() { err = done(err) }()
+
+	if !preview.IsEnabled(preview.GatePreview) {
+		markSkipped(ctx, "external volumes are disabled")
+		return nil
+	}
 
 	return detachActorVolumes(ctx, w.impl, w.pluginRegistry, actor, actorTemplate, op)
 }

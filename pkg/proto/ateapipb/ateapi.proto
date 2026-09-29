@@ -738,6 +738,7 @@ message ActorStatus {
   // They are deleted when the actor is deleted. Each template volume
   // appears at most once.
   //
+  // +k8s:ifDisabled(Preview)=+k8s:forbidden
   // +k8s:optional
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
@@ -1257,6 +1258,7 @@ message Volume {
   // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
 
+  // +k8s:ifDisabled(Preview)=+k8s:forbidden
   // +k8s:optional
   // +k8s:unionMember
   ExternalVolumeTemplate external_volume_template = 3;

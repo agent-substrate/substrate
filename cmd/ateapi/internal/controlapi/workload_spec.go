@@ -17,6 +17,7 @@ package controlapi
 import (
 	"fmt"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -47,7 +48,8 @@ func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) 
 }
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
-// container env is copied verbatim.
+// container env is copied verbatim. External volumes are included only when
+// the Preview gate is enabled.
 func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
 	workloadSpec := &ateletpb.WorkloadSpec{}
 
@@ -119,8 +121,10 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 
 	// TODO: order may be important for nested mounts. Also need to think about
 	// nested mount support in general.
-	if err := appendExternalVolumes(workloadSpec, actorTemplate, actor); err != nil {
-		return nil, err
+	if preview.IsEnabled(preview.GatePreview) {
+		if err := appendExternalVolumes(workloadSpec, actorTemplate, actor); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, ctr := range actorTemplate.GetContainers() {
