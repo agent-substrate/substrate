@@ -16,13 +16,11 @@ package apivalidation
 
 import (
 	"context"
-	"reflect"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -59,22 +57,8 @@ func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *fi
 	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
 }
 
-// ateDeepEqual compares two values of any type, using proto.Equal if both are
-// proto messages, and reflect.DeepEqual otherwise. This is called by
-// declarative validation's generated code. It is a copy of controlapi's
-// ateDeepEqual: the generated code calls it as a package-level identifier, so
-// each generating package carries its own.
+// ateDeepEqual is the deep-equal function declarative validation's generated
+// code calls by name; it delegates to resources.DeepEqual.
 func ateDeepEqual[T any](a, b T) bool {
-	asProto := func(x any) proto.Message {
-		pm, ok := x.(proto.Message)
-		if !ok {
-			return nil
-		}
-		return pm
-	}
-
-	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
-		return proto.Equal(pa, pb)
-	}
-	return reflect.DeepEqual(a, b)
+	return resources.DeepEqual(a, b)
 }

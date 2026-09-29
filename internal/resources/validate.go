@@ -20,14 +20,34 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// DeepEqual compares two values of any type, using proto.Equal if both are
+// proto messages, and reflect.DeepEqual otherwise. Declarative validation's
+// generated code reaches it through each generating package's ateDeepEqual.
+func DeepEqual[T any](a, b T) bool {
+	asProto := func(x any) proto.Message {
+		pm, ok := x.(proto.Message)
+		if !ok {
+			return nil
+		}
+		return pm
+	}
+
+	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
+		return proto.Equal(pa, pb)
+	}
+	return reflect.DeepEqual(a, b)
+}
 
 // ValidateResourceName checks that a string conforms to Agent Substrate's
 // rules for a resource name, which is a subset of the rules for an RFC-1123

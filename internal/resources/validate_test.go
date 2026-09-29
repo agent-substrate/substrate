@@ -24,6 +24,33 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+func TestDeepEqual(t *testing.T) {
+	// Proto messages carry internal state that reflect.DeepEqual would
+	// compare; proto.Equal compares only field values.
+	a := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	b := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	_ = a.String() // populates a's internal state, not b's
+
+	tests := []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{name: "equal protos", got: DeepEqual(a, b), want: true},
+		{name: "different protos", got: DeepEqual(a, &ateapipb.ObjectRef{Atespace: "a", Name: "y"}), want: false},
+		{name: "nil protos", got: DeepEqual[*ateapipb.ObjectRef](nil, nil), want: true},
+		{name: "equal non-protos", got: DeepEqual([]string{"a"}, []string{"a"}), want: true},
+		{name: "different non-protos", got: DeepEqual(1, 2), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("DeepEqual() = %v, want %v", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsValidResourceName(t *testing.T) {
 	tests := []struct {
 		name  string

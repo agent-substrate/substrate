@@ -16,13 +16,12 @@ package controlapi
 
 import (
 	"context"
-	"reflect"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -59,22 +58,10 @@ func scrubResourceMetadataForUpdate(in *ateapipb.ResourceMetadata) {
 	in.UpdateTime = nil // will be set later
 }
 
-// ateDeepEqual compares two values of any type, using proto.Equal if both are
-// proto messages, and reflect.DeepEqual otherwise.  This is called by
-// declarative validation's generated code.
+// ateDeepEqual is the deep-equal function declarative validation's generated
+// code calls by name; it delegates to resources.DeepEqual.
 func ateDeepEqual[T any](a, b T) bool {
-	asProto := func(x any) proto.Message {
-		pm, ok := x.(proto.Message)
-		if !ok {
-			return nil
-		}
-		return pm
-	}
-
-	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
-		return proto.Equal(pa, pb)
-	}
-	return reflect.DeepEqual(a, b)
+	return resources.DeepEqual(a, b)
 }
 
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,
