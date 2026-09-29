@@ -22,8 +22,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
 // koRef matches a whole ko:// reference: the prefix plus everything up to the
@@ -66,19 +64,6 @@ type Prebuilt struct {
 // turns a tag into the image it names; callers outside tests pass RemoteDigest.
 func NewPrebuilt(src Source, digest Digester) *Prebuilt {
 	return &Prebuilt{src: src, digest: digest, pinned: make(map[string]string)}
-}
-
-// ResolvePath rewrites the manifests a path covers.
-func (p *Prebuilt) ResolvePath(ctx context.Context, path string) ([]byte, error) {
-	manifest, err := kube.ReadPath(path)
-	if err != nil {
-		return nil, err
-	}
-	out, err := p.rewrite(ctx, manifest)
-	if err != nil {
-		return nil, fmt.Errorf("in %s: %w", path, err)
-	}
-	return out, nil
 }
 
 // ResolveBytes rewrites an in-memory manifest, such as kustomize output.
