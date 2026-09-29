@@ -1726,9 +1726,6 @@ message MintActorCertificateRequest {
   // +k8s:required
   // +k8s:maxBytes=16384
   bytes certificate_signing_request = 2;
-
-  reserved 4;
-  reserved "purpose";
 }
 
 // Response message for MintActorCertificate.
