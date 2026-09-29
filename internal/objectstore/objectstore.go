@@ -24,11 +24,14 @@ package objectstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 
+	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/aws/smithy-go"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -52,7 +55,7 @@ type Store interface {
 
 // DeletePrefix removes every object under uri: one external snapshot, or
 // every snapshot an owner holds. A prefix with no objects left is already
-// collected, so it succeeds.
+// collected, so it succeeds, including when its bucket no longer exists.
 func DeletePrefix(ctx context.Context, s Store, uri resources.StoragePrefix) error {
 	bucket, prefix, err := BucketPrefix(uri)
 	if err != nil {
@@ -60,19 +63,32 @@ func DeletePrefix(ctx context.Context, s Store, uri resources.StoragePrefix) err
 	}
 	objects, err := s.List(ctx, bucket, prefix)
 	if err != nil {
+		if isMissingBucket(err) {
+			return nil
+		}
 		return fmt.Errorf("while listing %s: %w", uri, err)
 	}
 	group, ctx := errgroup.WithContext(ctx)
 	group.SetLimit(prefixConcurrency)
 	for _, object := range objects {
 		group.Go(func() error {
-			if err := s.Delete(ctx, bucket, object); err != nil {
+			if err := s.Delete(ctx, bucket, object); err != nil && !isMissingBucket(err) {
 				return fmt.Errorf("while deleting %s from bucket %s: %w", object, bucket, err)
 			}
 			return nil
 		})
 	}
 	return group.Wait()
+}
+
+// isMissingBucket accepts only provider errors identifying a missing bucket;
+// other failures must still prevent cleanup from being marked complete.
+func isMissingBucket(err error) bool {
+	if errors.Is(err, storage.ErrBucketNotExist) {
+		return true
+	}
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchBucket"
 }
 
 // CopyPrefix copies every object of the external snapshot at src to dst,
