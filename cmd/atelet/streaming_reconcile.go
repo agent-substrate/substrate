@@ -42,8 +42,8 @@ func scanActiveStreamedLeases(actorsDir string) ([]*imagestreaming.ActiveLease, 
 	}
 
 	activeMap := make(map[string]*imagestreaming.ActiveLease)
-	recordLease := func(imageRef, imageDigest string, layers []string) {
-		if len(layers) == 0 || !isStreamedLayerSet(layers) {
+	recordLease := func(imageRef, imageDigest string, streamed bool, layers []string) {
+		if len(layers) == 0 || (!streamed && !isStreamedLayerSet(layers)) {
 			return
 		}
 		key := imageRef
@@ -88,9 +88,9 @@ func scanActiveStreamedLeases(actorsDir string) ([]*imagestreaming.ActiveLease, 
 			if err != nil || spec == nil {
 				continue
 			}
-			recordLease(spec.ImageRef, spec.ImageDigest, spec.Layers)
+			recordLease(spec.ImageRef, spec.ImageDigest, spec.Streamed, spec.Layers)
 			for _, vol := range spec.ImageVolumes {
-				recordLease(vol.ImageRef, vol.ImageDigest, vol.Layers)
+				recordLease(vol.ImageRef, vol.ImageDigest, vol.Streamed, vol.Layers)
 			}
 		}
 	}

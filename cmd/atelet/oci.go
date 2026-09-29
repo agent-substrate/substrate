@@ -116,6 +116,19 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 		img          *imagecache.Image
 		imageVolumes []imagecache.ImageVolumeOverlay
 	)
+	releaseAcquired := func() {
+		if streamer == nil {
+			return
+		}
+		if img != nil && img.Streamed && ref != "" {
+			_ = streamer.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ref})
+		}
+		for _, v := range imageVolumes {
+			if v.Streamed && v.ImageRef != "" {
+				_ = streamer.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: v.ImageRef})
+			}
+		}
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
@@ -130,6 +143,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 		return err
 	})
 	if err := g.Wait(); err != nil {
+		releaseAcquired()
 		return err
 	}
 
@@ -137,6 +151,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 	// any spec so an invalid container config fails fast.
 	resolvedArgs, err := resolveProcessArgs(&img.Config, command, args)
 	if err != nil {
+		releaseAcquired()
 		return fmt.Errorf("while resolving process args for container %q: %w", containerName, err)
 	}
 	resolvedEnv := resolveActorEnv(&img.Config, env)
@@ -151,10 +166,12 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
 		ImageRef:     ref,
+		Streamed:     img.Streamed,
 		Layers:       img.LayerDirs,
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
 	}); err != nil {
+		releaseAcquired()
 		return fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
@@ -170,6 +187,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, stre
 		Capabilities:  capabilities,
 		Resources:     resources,
 	})); err != nil {
+		_ = os.Remove(path.Join(bundlePath, imagecache.OverlaySpecFileName))
+		releaseAcquired()
 		return fmt.Errorf("while writing OCI spec: %w", err)
 	}
 
@@ -215,12 +234,20 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, stre
 				Name:        vol.GetName(),
 				ImageDigest: img.Digest.String(),
 				ImageRef:    ref,
+				Streamed:    img.Streamed,
 				Layers:      img.LayerDirs,
 			}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
+		if streamer != nil {
+			for _, v := range out {
+				if v.Streamed && v.ImageRef != "" {
+					_ = streamer.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: v.ImageRef})
+				}
+			}
+		}
 		return nil, err
 	}
 	return out, nil
@@ -336,6 +363,7 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
 				} else {
 					d, c, err := fetchImageConfig(ctx, ref, keychain)
 					if err != nil {
+						_ = streamer.ReleaseLayers(ctx, req)
 						instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))
 						slog.WarnContext(ctx, "Failed to resolve image config for streamed image; falling back to cache",
 							slog.String("image", ref),
@@ -357,6 +385,7 @@ func ensureContainerImage(ctx context.Context, imageCache *imagecache.Store, str
 					Digest:    digest,
 					Config:    cfg,
 					LayerDirs: res.LayerDirs,
+					Streamed:  true,
 				}, nil
 			} else {
 				instruments.RecordImageStreaming(ctx, streamer.Name(), ateattr.ImageStreamingOutcomeFallback, time.Since(t0))

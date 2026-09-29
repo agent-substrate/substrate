@@ -208,6 +208,13 @@ type imageLease struct {
 	refCount     int
 }
 
+type resolvedImageMeta struct {
+	digest       string
+	config       *v1.Config
+	diffIDs      []string
+	layerDigests []string
+}
+
 type inflightPrep struct {
 	done chan struct{}
 	err  error
@@ -236,6 +243,7 @@ type Driver struct {
 	conn         *grpc.ClientConn
 	keychainConn *grpc.ClientConn
 	leases       map[string]*imageLease
+	resolvedMeta map[string]*resolvedImageMeta
 	declined     map[string]time.Time
 	inflight     map[string]*inflightPrep
 	chainLocks   map[string]*sync.Mutex
@@ -252,6 +260,7 @@ func New(opts ...Option) (*Driver, error) {
 		listableInterval: DefaultListableInterval,
 		declineTTL:       DefaultDeclineTTL,
 		leases:           make(map[string]*imageLease),
+		resolvedMeta:     make(map[string]*resolvedImageMeta),
 		declined:         make(map[string]time.Time),
 		inflight:         make(map[string]*inflightPrep),
 		chainLocks:       make(map[string]*sync.Mutex),
@@ -278,6 +287,7 @@ func NewRiptide(opts ...Option) (*Driver, error) {
 		listableInterval: DefaultListableInterval,
 		declineTTL:       DefaultDeclineTTL,
 		leases:           make(map[string]*imageLease),
+		resolvedMeta:     make(map[string]*resolvedImageMeta),
 		declined:         make(map[string]time.Time),
 		inflight:         make(map[string]*inflightPrep),
 		chainLocks:       make(map[string]*sync.Mutex),
@@ -303,6 +313,7 @@ func NewSOCI(opts ...Option) (*Driver, error) {
 		listableInterval: DefaultListableInterval,
 		declineTTL:       DefaultDeclineTTL,
 		leases:           make(map[string]*imageLease),
+		resolvedMeta:     make(map[string]*resolvedImageMeta),
 		declined:         make(map[string]time.Time),
 		inflight:         make(map[string]*inflightPrep),
 		chainLocks:       make(map[string]*sync.Mutex),
@@ -590,11 +601,32 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		return nil, fmt.Errorf("connecting to snapshotter %s: %w", d.name, err)
 	}
 
-	resolveStart := time.Now()
-	digest, cfg, diffIDs, layerDigests, err := d.imageResolver(ctx, req.ImageRef, req.AuthConfig)
-	resolveDur := time.Since(resolveStart)
-	if err != nil {
-		return nil, fmt.Errorf("resolving image %s: %w", req.ImageRef, err)
+	var (
+		digest       string
+		cfg          *v1.Config
+		diffIDs      []string
+		layerDigests []string
+		resolveDur   time.Duration
+	)
+	d.mu.Lock()
+	var cachedMeta *resolvedImageMeta
+	if d.resolvedMeta != nil {
+		cachedMeta = d.resolvedMeta[req.ImageRef]
+	}
+	d.mu.Unlock()
+
+	if cachedMeta != nil && len(cachedMeta.diffIDs) > 0 {
+		digest = cachedMeta.digest
+		cfg = cachedMeta.config
+		diffIDs = append([]string(nil), cachedMeta.diffIDs...)
+		layerDigests = append([]string(nil), cachedMeta.layerDigests...)
+	} else {
+		resolveStart := time.Now()
+		digest, cfg, diffIDs, layerDigests, err = d.imageResolver(ctx, req.ImageRef, req.AuthConfig)
+		resolveDur = time.Since(resolveStart)
+		if err != nil {
+			return nil, fmt.Errorf("resolving image %s: %w", req.ImageRef, err)
+		}
 	}
 
 	criImageRef := canonicalImageRef(req.ImageRef, digest)
@@ -606,6 +638,15 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		lease.config = cfg
 		if lease.digest == "" {
 			lease.digest = digest
+		}
+		if d.resolvedMeta == nil {
+			d.resolvedMeta = make(map[string]*resolvedImageMeta)
+		}
+		d.resolvedMeta[req.ImageRef] = &resolvedImageMeta{
+			digest:       lease.digest,
+			config:       lease.config,
+			diffIDs:      append([]string(nil), diffIDs...),
+			layerDigests: append([]string(nil), layerDigests...),
 		}
 		lease.refCount++
 		res := &imagestreaming.StreamResult{
@@ -731,6 +772,8 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		ImageRef:     req.ImageRef,
 		Digest:       digest,
 		Config:       cfg,
+		DiffIDs:      diffIDs,
+		LayerDigests: layerDigests,
 		SnapshotKeys: snapshotKeys,
 		LayerDirs:    layerDirs,
 	}); err != nil {
@@ -740,9 +783,13 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 	wrapperDur += time.Since(leaseWriteStart)
 
 	d.mu.Lock()
+	var staleSnapshotKeys []string
 	newRefCount := 1
-	if prev, ok := d.leases[req.ImageRef]; ok && prev != nil && prev.refCount > 0 {
-		newRefCount = prev.refCount + 1
+	if prev, ok := d.leases[req.ImageRef]; ok && prev != nil {
+		if prev.refCount > 0 {
+			newRefCount = prev.refCount + 1
+		}
+		staleSnapshotKeys = append(staleSnapshotKeys, prev.snapshotKeys...)
 	}
 	d.leases[req.ImageRef] = &imageLease{
 		digest:       digest,
@@ -752,7 +799,24 @@ func (d *Driver) prepareLayersCold(ctx context.Context, req *imagestreaming.Stre
 		workDir:      imageWorkDir,
 		refCount:     newRefCount,
 	}
+	if d.resolvedMeta == nil {
+		d.resolvedMeta = make(map[string]*resolvedImageMeta)
+	}
+	metaEntry := &resolvedImageMeta{
+		digest:       digest,
+		config:       cfg,
+		diffIDs:      append([]string(nil), diffIDs...),
+		layerDigests: append([]string(nil), layerDigests...),
+	}
+	d.resolvedMeta[req.ImageRef] = metaEntry
+	if criImageRef != "" {
+		d.resolvedMeta[criImageRef] = metaEntry
+	}
 	d.mu.Unlock()
+
+	for _, key := range staleSnapshotKeys {
+		d.removeSnapshot(client, snapshotter, key)
+	}
 
 	slog.InfoContext(ctx, "PrepareLayers timing breakdown",
 		slog.String("streamer", d.name),
@@ -781,6 +845,8 @@ type persistedLease struct {
 	ImageRef     string     `json:"imageRef"`
 	Digest       string     `json:"digest,omitempty"`
 	Config       *v1.Config `json:"config,omitempty"`
+	DiffIDs      []string   `json:"diffIDs,omitempty"`
+	LayerDigests []string   `json:"layerDigests,omitempty"`
 	SnapshotKeys []string   `json:"snapshotKeys,omitempty"`
 	LayerDirs    []string   `json:"layerDirs,omitempty"`
 }
@@ -949,22 +1015,52 @@ func (d *Driver) ReleaseLayers(ctx context.Context, req *imagestreaming.StreamRe
 		return nil
 	}
 
+	var (
+		lease  *imageLease
+		flight *inflightPrep
+	)
 	d.mu.Lock()
-	lease, ok := d.leases[req.ImageRef]
-	if !ok {
+	for {
+		var ok bool
+		lease, ok = d.leases[req.ImageRef]
+		if !ok {
+			d.mu.Unlock()
+			return nil
+		}
+		if existingFlight, inflight := d.inflight[req.ImageRef]; inflight {
+			d.mu.Unlock()
+			select {
+			case <-existingFlight.done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			d.mu.Lock()
+			continue
+		}
+		lease.refCount--
+		if lease.refCount > 0 {
+			d.mu.Unlock()
+			return nil
+		}
+		delete(d.leases, req.ImageRef)
+		if lease.digest != "" && d.leases[lease.digest] == lease {
+			delete(d.leases, lease.digest)
+		}
+		if d.inflight == nil {
+			d.inflight = make(map[string]*inflightPrep)
+		}
+		flight = &inflightPrep{done: make(chan struct{})}
+		d.inflight[req.ImageRef] = flight
 		d.mu.Unlock()
-		return nil
+		break
 	}
-	lease.refCount--
-	if lease.refCount > 0 {
+
+	defer func() {
+		d.mu.Lock()
+		delete(d.inflight, req.ImageRef)
+		close(flight.done)
 		d.mu.Unlock()
-		return nil
-	}
-	delete(d.leases, req.ImageRef)
-	if lease.digest != "" && d.leases[lease.digest] == lease {
-		delete(d.leases, lease.digest)
-	}
-	d.mu.Unlock()
+	}()
 
 	client, err := d.getClient(ctx)
 	if err == nil && client != nil {
@@ -1050,6 +1146,17 @@ func (d *Driver) ReconcileLeases(ctx context.Context, active []*imagestreaming.A
 			}
 			if len(existing.layers) == 0 && len(meta.LayerDirs) > 0 {
 				existing.layers = append([]string(nil), meta.LayerDirs...)
+			}
+			if len(meta.DiffIDs) > 0 {
+				if d.resolvedMeta == nil {
+					d.resolvedMeta = make(map[string]*resolvedImageMeta)
+				}
+				d.resolvedMeta[key] = &resolvedImageMeta{
+					digest:       existing.digest,
+					config:       existing.config,
+					diffIDs:      append([]string(nil), meta.DiffIDs...),
+					layerDigests: append([]string(nil), meta.LayerDigests...),
+				}
 			}
 		}
 		if al.ImageDigest != "" && al.ImageDigest != key {

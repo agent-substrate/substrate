@@ -1267,3 +1267,153 @@ func TestNewSOCI_DoesNotConfigureRiptideKeychainSocket(t *testing.T) {
 		t.Errorf("sociDriver.keychainSocket = %q, want empty string", sociDriver.keychainSocket)
 	}
 }
+
+func TestPrepareLayers_CachesResolvedMetadataAcrossZeroToOneTransitions(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+	kcSrv, kcSock := setupMockRiptideKeychainServer(t)
+	driver.keychainSocket = kcSock
+
+	diff0 := "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	mount0 := t.TempDir()
+	srv.remoteMounts = map[string][]*snapshots.Mount{
+		diff0: {{Type: "bind", Source: mount0}},
+	}
+
+	var resolverCalls int
+	driver.imageResolver = func(context.Context, string, *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		resolverCalls++
+		if resolverCalls > 1 {
+			return "", nil, nil, nil, errors.New("UNAUTHORIZED: token expired")
+		}
+		return "sha256:cachedmanifest", &v1.Config{Cmd: []string{"/cached-app"}}, []string{diff0}, []string{"sha256:blob0"}, nil
+	}
+
+	req1 := &imagestreaming.StreamRequest{
+		ImageRef: "us-docker.pkg.dev/proj/repo/private:v1",
+		AuthConfig: &imagestreaming.AuthConfig{
+			Username: "oauth2accesstoken",
+			Password: "token-1",
+		},
+	}
+
+	// First 0 -> 1 transition resolves image metadata and commits chainID in snapshotter.
+	res1, err := driver.PrepareLayers(ctx, req1)
+	if err != nil {
+		t.Fatalf("first PrepareLayers error: %v", err)
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("resolverCalls = %d, want 1", resolverCalls)
+	}
+
+	// Release drops refCount 1 -> 0 and removes view snapshot + workDir.
+	if err := driver.ReleaseLayers(ctx, req1); err != nil {
+		t.Fatalf("ReleaseLayers error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(res1.LayerDirs[0])); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected workDir removed after ReleaseLayers, got err=%v", err)
+	}
+
+	// Second 0 -> 1 transition must reuse cached resolvedImageMeta without
+	// calling imageResolver over the network, while still pushing credentials
+	// to Riptide keychain and creating a fresh view from the committed chainID.
+	req2 := &imagestreaming.StreamRequest{
+		ImageRef: "us-docker.pkg.dev/proj/repo/private:v1",
+		AuthConfig: &imagestreaming.AuthConfig{
+			Username: "oauth2accesstoken",
+			Password: "token-2",
+		},
+	}
+	res2, err := driver.PrepareLayers(ctx, req2)
+	if err != nil {
+		t.Fatalf("second PrepareLayers after ReleaseLayers error: %v", err)
+	}
+	if resolverCalls != 1 {
+		t.Errorf("resolverCalls after 0->1 re-prepare = %d, want 1 (cached metadata must avoid network fetch)", resolverCalls)
+	}
+	if res2.Config == nil || !slices.Equal(res2.Config.Cmd, []string{"/cached-app"}) {
+		t.Errorf("res2.Config = %+v, want Cmd=[/cached-app]", res2.Config)
+	}
+	kcSrv.mu.Lock()
+	defer kcSrv.mu.Unlock()
+	if len(kcSrv.updates) != 2 || kcSrv.updates[1].GetAuth().GetPassword() != "token-2" {
+		t.Errorf("keychain updates = %+v, want 2 updates with latest password token-2", kcSrv.updates)
+	}
+}
+
+func TestReleaseAndPrepareLayers_ConcurrentZeroTransitionNoRace(t *testing.T) {
+	ctx := context.Background()
+	srv, driver := setupTestRemoteSnapshotter(t, ProviderRiptide)
+
+	diff0 := "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+	mount0 := t.TempDir()
+	srv.remoteMounts = map[string][]*snapshots.Mount{
+		diff0: {{Type: "bind", Source: mount0}},
+	}
+	driver.imageResolver = func(context.Context, string, *imagestreaming.AuthConfig) (string, *v1.Config, []string, []string, error) {
+		return "sha256:racedigest", &v1.Config{Cmd: []string{"/race-app"}}, []string{diff0}, []string{"sha256:blob0"}, nil
+	}
+
+	req := &imagestreaming.StreamRequest{ImageRef: "example.com/race:v1"}
+	if _, err := driver.PrepareLayers(ctx, req); err != nil {
+		t.Fatalf("initial PrepareLayers error: %v", err)
+	}
+
+	removeEntered := make(chan struct{})
+	releaseRemove := make(chan struct{})
+	var once sync.Once
+	srv.mu.Lock()
+	srv.removeFunc = func(context.Context, *snapshots.RemoveSnapshotRequest) (*emptypb.Empty, error) {
+		once.Do(func() {
+			close(removeEntered)
+			srv.mu.Unlock()
+			<-releaseRemove
+			srv.mu.Lock()
+		})
+		return &emptypb.Empty{}, nil
+	}
+	srv.mu.Unlock()
+
+	var (
+		wg      sync.WaitGroup
+		prepRes *imagestreaming.StreamResult
+		prepErr error
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = driver.ReleaseLayers(ctx, req)
+	}()
+
+	// Wait until ReleaseLayers has dropped refCount to 0 and is inside client.Remove
+	// (before os.RemoveAll(lease.workDir)).
+	<-removeEntered
+
+	// Start a concurrent PrepareLayers (0 -> 1) for the same image while ReleaseLayers
+	// is still tearing down the old lease.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		prepRes, prepErr = driver.PrepareLayers(ctx, req)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	close(releaseRemove)
+	wg.Wait()
+
+	if prepErr != nil {
+		t.Fatalf("concurrent PrepareLayers error: %v", prepErr)
+	}
+	if prepRes == nil || len(prepRes.LayerDirs) != 1 {
+		t.Fatalf("concurrent PrepareLayers result = %+v, want 1 LayerDir", prepRes)
+	}
+	// Verify that ReleaseLayers's os.RemoveAll(workDir) did NOT delete the new lease's wrapper directory.
+	fsLink := filepath.Join(prepRes.LayerDirs[0], "fs")
+	target, err := os.Readlink(fsLink)
+	if err != nil {
+		t.Fatalf("new lease layer-0/fs missing after concurrent ReleaseLayers: %v", err)
+	}
+	if target != mount0 {
+		t.Errorf("new lease layer-0/fs = %q, want %q", target, mount0)
+	}
+}

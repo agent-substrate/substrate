@@ -284,6 +284,9 @@ type Image struct {
 	// LayerDirs are the absolute cached layer directories, bottom-most layer
 	// first. Each contains the unpacked tree under "fs/".
 	LayerDirs []string
+	// Streamed reports whether LayerDirs hold an active ImageStreamer lease
+	// rather than unpacked layers in Store.
+	Streamed bool
 }
 
 // imageRecord is the persisted form of a cached image, stored under

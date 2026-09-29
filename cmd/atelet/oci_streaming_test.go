@@ -674,3 +674,136 @@ func TestInitImageStreamer_SocketFlagValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestReleaseStreamedLayersForActor_SkipsCachedImages(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := context.Background()
+
+	regHost := imageVolumeTestRegistry(t)
+	cachedRef := regHost + "/cached-only:v1"
+	pushTestImage(t, cachedRef, singleFileLayer(t, "file.txt", "hello"))
+	streamedRef := "example.com/streamed-only:v1"
+
+	store, err := imagecache.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("imagecache.New: %v", err)
+	}
+
+	m := mock.New()
+	m.CanStreamFunc = func(_ context.Context, req *imagestreaming.StreamRequest) (bool, error) {
+		return req.ImageRef == streamedRef, nil
+	}
+	m.PrepareLayersFunc = func(_ context.Context, req *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
+		return &imagestreaming.StreamResult{
+			ImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+			Config:      &v1.Config{Cmd: []string{"/streamed-app"}},
+			LayerDirs:   []string{"/var/lib/ateom-gvisor/streaming/riptide/layer-0"},
+		}, nil
+	}
+
+	actorUID := "123e4567-e89b-12d3-a456-426614174099"
+	if err := prepareOCIDirectory(ctx, store, m, nil, nil, actorUID, "c-streamed", streamedRef, []string{"/app"}, nil, nil, "/proc/1/ns/net", nil, nil, nil, nil); err != nil {
+		t.Fatalf("prepareOCIDirectory(streamed): %v", err)
+	}
+	if err := prepareOCIDirectory(ctx, store, m, nil, nil, actorUID, "c-cached", cachedRef, []string{"/app"}, nil, nil, "/proc/1/ns/net", nil, nil, nil, nil); err != nil {
+		t.Fatalf("prepareOCIDirectory(cached): %v", err)
+	}
+
+	s := &AteomHerder{imageStreamer: m, imageCache: store}
+	actorRef := resources.ActorRef{Atespace: "test", Name: "actor-mixed"}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{
+			{Name: "c-streamed", Image: streamedRef},
+			{Name: "c-cached", Image: cachedRef},
+		},
+	}
+
+	s.releaseStreamedLayersForActor(ctx, actorUID, actorRef, spec)
+	if len(m.ReleaseLayersCalls) != 1 || m.ReleaseLayersCalls[0].ImageRef != streamedRef {
+		t.Fatalf("ReleaseLayersCalls = %+v, want exactly 1 call for %q", m.ReleaseLayersCalls, streamedRef)
+	}
+
+	// Second call must be idempotent once rootfs-overlay.json has been consumed.
+	s.releaseStreamedLayersForActor(ctx, actorUID, actorRef, spec)
+	if len(m.ReleaseLayersCalls) != 1 {
+		t.Fatalf("ReleaseLayersCalls after second call = %d, want 1", len(m.ReleaseLayersCalls))
+	}
+}
+
+func TestPrepareOCIDirectory_ReleasesStreamedLeaseOnError(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := context.Background()
+
+	m := mock.New()
+	m.CanStreamFunc = func(context.Context, *imagestreaming.StreamRequest) (bool, error) {
+		return true, nil
+	}
+	m.PrepareLayersFunc = func(context.Context, *imagestreaming.StreamRequest) (*imagestreaming.StreamResult, error) {
+		// Empty Config (no Entrypoint or Cmd) causes resolveProcessArgs to fail
+		// after PrepareLayers has already acquired a streaming lease.
+		return &imagestreaming.StreamResult{
+			ImageDigest: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+			Config:      &v1.Config{},
+			LayerDirs:   []string{"/streamed/layer-0"},
+		}, nil
+	}
+
+	ref := "example.com/no-cmd:v1"
+	err := prepareOCIDirectory(ctx, nil, m, nil, nil, "123e4567-e89b-12d3-a456-426614174088", "app", ref, nil, nil, nil, "/proc/1/ns/net", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected prepareOCIDirectory to fail when neither image nor container specifies a command")
+	}
+	if len(m.PrepareLayersCalls) != 1 {
+		t.Fatalf("PrepareLayersCalls = %d, want 1", len(m.PrepareLayersCalls))
+	}
+	if len(m.ReleaseLayersCalls) != 1 || m.ReleaseLayersCalls[0].ImageRef != ref {
+		t.Fatalf("ReleaseLayersCalls = %+v, want 1 release for %q on prepareOCIDirectory error", m.ReleaseLayersCalls, ref)
+	}
+}
+
+func TestTerminate_MissingSandboxRecordAfterFailedRestore(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := context.Background()
+
+	const (
+		atespace  = "ate-demo"
+		actorName = "stuck-actor"
+		actorUID  = "123e4567-e89b-12d3-a456-426614174077"
+		ateomUID  = "123e4567-e89b-12d3-a456-426614174066"
+		imageRef  = "example.com/streamed:v1"
+	)
+
+	// Simulate an actor directory where resetActorDirs ran and prepareOCIDirectory
+	// wrote a streamed bundle spec, but Restore failed before sandbox.json existed.
+	bundlePath := ateompath.OCIBundlePath(actorUID, "app")
+	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
+		ImageRef: imageRef,
+		Streamed: true,
+		Layers:   []string{"/var/lib/ateom-gvisor/streaming/riptide/layer-0"},
+	}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+
+	m := mock.New()
+	s := &AteomHerder{imageStreamer: m}
+	_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: atespace,
+		ActorTemplateName:     "tpl",
+		TargetAteomUid:        ateomUID,
+		Spec: &ateletpb.WorkloadSpec{
+			Containers: []*ateletpb.Container{{Name: "app", Image: imageRef}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Terminate with missing sandbox.json returned error: %v, want nil", err)
+	}
+	if len(m.ReleaseLayersCalls) != 1 || m.ReleaseLayersCalls[0].ImageRef != imageRef {
+		t.Errorf("ReleaseLayersCalls = %+v, want 1 call for %q", m.ReleaseLayersCalls, imageRef)
+	}
+}

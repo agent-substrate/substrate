@@ -9,7 +9,7 @@
 ---
 
 ## 1. Context & Motivation
-Agent Substrate’s goal is sub-500ms agent startup. Profiling shows that container image downloading and unpacking (taking 1.5 to 4+ minutes for 2GB–50GB images) is the primary bottleneck.
+Agent Substrate’s goal is sub-500ms agent startup. Profiling shows that container image downloading and unpacking is the primary bottleneck.
 
 Image streaming addresses this by replacing upfront layer downloads with lazy loading over FUSE: because agent workloads typically touch only 5%–15% of their rootfs during startup (and restored actors load their application memory pages from Golden Snapshots), streaming reduces cold-node actor restore (`AteomHerder/Restore`) from **28.5s down to 1.36s–3.70s** (a **7.7x–21.0x** end-to-end restore speedup, based on the benchmark using a 1.19 GB compressed / ~3.5 GB unpacked `demos/sandbox` workload image built on `gcr.io/cloud-builders/gcloud:latest`).
 

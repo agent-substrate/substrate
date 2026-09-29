@@ -670,6 +670,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	defer func() {
 		if err != nil {
 			s.systemInfoVolumes.Deregister(actorUID)
+			s.releaseStreamedLayersForActor(ctx, actorUID, actorRef, req.GetSpec())
 		}
 	}()
 	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
@@ -881,7 +882,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	// Release streamed image layers when actor sleeps/pauses (Approach 1: active-only leases)
-	s.releaseStreamedLayers(ctx, actorRef, req.GetSpec())
+	s.releaseStreamedLayersForActor(ctx, actorUID, actorRef, req.GetSpec())
 
 	// Note: we do not crash the actor if resetting the directory fails.
 	if err := resetActorDirs(actorUID); err != nil {
@@ -889,6 +890,61 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+// releaseStreamedLayersForActor releases streamed image leases for containers
+// and mounted image volumes belonging to actorUID. When the actor's bundle
+// directories exist on disk, it inspects each bundle's rootfs-overlay.json so
+// only images that were actually streamed (not served from imageCache) are
+// released, and removes the overlay spec after releasing to make repeated
+// calls idempotent.
+func (s *AteomHerder) releaseStreamedLayersForActor(ctx context.Context, actorUID string, actorRef resources.ActorRef, spec *ateletpb.WorkloadSpec) {
+	if s.imageStreamer == nil || spec == nil {
+		return
+	}
+	if actorUID == "" {
+		s.releaseStreamedLayers(ctx, actorRef, spec)
+		return
+	}
+	bundlesDir := filepath.Join(ateompath.ActorsDir, actorUID, "bundles")
+	if _, err := os.Stat(bundlesDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		s.releaseStreamedLayers(ctx, actorRef, spec)
+		return
+	}
+	releaseRef := func(ref string) {
+		if ref == "" {
+			return
+		}
+		if err := s.imageStreamer.ReleaseLayers(ctx, &imagestreaming.StreamRequest{ImageRef: ref}); err != nil {
+			slog.WarnContext(ctx, "Failed to release streamed layers",
+				slog.String("actor", actorRef.String()),
+				slog.String("image", ref),
+				slog.Any("err", err))
+		}
+	}
+	for _, ctr := range spec.GetContainers() {
+		bundlePath := ateompath.OCIBundlePath(actorUID, ctr.GetName())
+		overlaySpec, err := imagecache.ReadSpec(bundlePath)
+		if err != nil || overlaySpec == nil {
+			continue
+		}
+		if overlaySpec.Streamed || isStreamedLayerSet(overlaySpec.Layers) {
+			ref := overlaySpec.ImageRef
+			if ref == "" {
+				ref = ctr.GetImage()
+			}
+			releaseRef(ref)
+		}
+		for _, vol := range overlaySpec.ImageVolumes {
+			if vol.Streamed || isStreamedLayerSet(vol.Layers) {
+				releaseRef(vol.ImageRef)
+			}
+		}
+		_ = os.Remove(filepath.Join(bundlePath, imagecache.OverlaySpecFileName))
+	}
 }
 
 func (s *AteomHerder) releaseStreamedLayers(ctx context.Context, actorRef resources.ActorRef, spec *ateletpb.WorkloadSpec) {
@@ -1302,10 +1358,20 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		runtimeRec = goldenRec
 	}
 
-	// Undo the Register if the restore fails.
+	// Record the (manifest-pinned) sandbox binaries on-node before starting
+	// bundle prep or RestoreWorkload so a subsequent Checkpoint or Terminate
+	// (if Restore fails partway through) can always locate the sandbox record.
+	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
+		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
+	}
+
+	// Undo the Register and release any streamed image leases if the restore fails.
 	defer func() {
 		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+			if s.systemInfoVolumes != nil {
+				s.systemInfoVolumes.Deregister(actorUID)
+			}
+			s.releaseStreamedLayersForActor(ctx, actorUID, actorRef, req.GetSpec())
 		}
 	}()
 
@@ -1441,16 +1507,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
 
-	// Record the (manifest-pinned) sandbox binaries on-node so a subsequent
-	// Checkpoint of this restored actor can re-pin the same version. For a
-	// DATA_ON_GOLDEN restore that is the golden's set — those are the binaries
-	// actually running the guest (Checkpoint overwrites the identity fields
-	// from its own request).
-	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
-		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
-		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
-	}
-
 	completed = true
 	return &ateletpb.RestoreResponse{}, nil
 }
@@ -1465,47 +1521,53 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	var assetPaths map[string]string
 	sandboxRec, err := readSandboxRecord(actorUID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	assetPaths = paths
-
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-
-	spec, err := buildAteomWorkloadSpec(req.GetSpec())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
-	}
-	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
-		Atespace:              req.GetAtespace(),
-		ActorName:             req.GetActorName(),
-		ActorUid:              req.GetActorUid(),
-		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-		ActorTemplateName:     req.GetActorTemplateName(),
-		RunscPath:             runscPathFor(assetPaths),
-		Spec:                  spec,
-	}); err != nil {
-		if status.Code(err) == codes.NotFound {
-			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+		if errors.Is(err, os.ErrNotExist) {
+			slog.InfoContext(ctx, "sandbox record not found on disk during terminate; skipping ateom workload teardown",
+				slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
 		} else {
-			return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+	} else {
+		assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+
+		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+
+		spec, err := buildAteomWorkloadSpec(req.GetSpec())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		}
+		if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
+			Atespace:              req.GetAtespace(),
+			ActorName:             req.GetActorName(),
+			ActorUid:              req.GetActorUid(),
+			ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+			ActorTemplateName:     req.GetActorTemplateName(),
+			RunscPath:             runscPathFor(assetPaths),
+			Spec:                  spec,
+		}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+			} else {
+				return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+			}
 		}
 	}
 
 	// Deregister after teardown succeeds
-	s.systemInfoVolumes.Deregister(actorUID)
+	if s.systemInfoVolumes != nil {
+		s.systemInfoVolumes.Deregister(actorUID)
+	}
 
 	// Release any streamed image layers for this actor's containers
-	s.releaseStreamedLayers(ctx, actorRef, req.GetSpec())
+	s.releaseStreamedLayersForActor(ctx, actorUID, actorRef, req.GetSpec())
 
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
