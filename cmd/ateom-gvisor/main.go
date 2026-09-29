@@ -530,18 +530,10 @@ func containerNames(containers []*ateompb.Container) []string {
 	return names
 }
 
-// validateActorDirs rejects a request whose actor directories are unusable.
 // validateRunscPath ensures we only execute runsc from the static files dir
 func validateRunscPath(p string) error {
 	if errs := resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runsc_path")); len(errs) > 0 {
 		return resources.ToAPIError(errs)
-	}
-	return nil
-}
-
-func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
-	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil
 }
@@ -565,9 +557,6 @@ func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	if err := ateomvalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
-		return nil, err
-	}
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
 	if err := validateRunscPath(req.GetRunscPath()); err != nil {
@@ -698,9 +687,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
@@ -899,9 +885,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
@@ -1097,9 +1080,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
 	if err := ateomvalidation.ValidateTerminateWorkloadRequest(ctx, req); err != nil {
-		return nil, err
-	}
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
 	if err := validateRunscPath(req.GetRunscPath()); err != nil {

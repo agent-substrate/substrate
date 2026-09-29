@@ -79,6 +79,19 @@ func ValidateCustom_RestoreWorkloadRequest_SnapshotUri(_ context.Context, _ oper
 	return validateSnapshotURI(fldPath, *value)
 }
 
+// ValidateCustom_CheckpointWorkloadRequest_SnapshotUri applies the
+// snapshot_uri rule to the URI a checkpoint is written to.
+func ValidateCustom_CheckpointWorkloadRequest_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSnapshotURI(fldPath, *value)
+}
+
+// ValidateCustom_ActorDirs holds every directory to an absolute, clean path.
+// Presence and length are the tags' job. The rule is the one both ateom
+// binaries applied by hand before, shared through internal/resources.
+func ValidateCustom_ActorDirs(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateompb.ActorDirs) field.ErrorList {
+	return resources.ValidateActorDirs(value, fldPath)
+}
+
 func validateSnapshotURI(fldPath *field.Path, uri string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(uri); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, uri, err.Error())}

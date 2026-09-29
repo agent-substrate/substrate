@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -209,33 +210,22 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 		inFlight: actorlock.NewInFlight(),
 	}
 
+	noDirs := validRestoreRequest()
+	noDirs.ActorDirs = nil
+	noRestoreDir := validRestoreRequest()
+	noRestoreDir.ActorDirs.RestoreDir = ""
 	for _, tc := range []struct {
 		name string
 		req  *ateompb.RestoreWorkloadRequest
+		want string
 	}{
-		{
-			name: "nil actor_dirs",
-			req:  &ateompb.RestoreWorkloadRequest{ActorUid: "actor-a"},
-		},
-		{
-			name: "empty restore_dir",
-			req: &ateompb.RestoreWorkloadRequest{
-				ActorUid: "actor-a",
-				ActorDirs: &ateompb.ActorDirs{
-					RootDir:                   "/node/actors/actor-a",
-					OciBundleDir:              "/node/actors/actor-a/bundle",
-					CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-					DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-					SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-					VolumesDir:                "/node/actors/actor-a/volumes",
-				},
-			},
-		},
+		{name: "nil actor_dirs", req: noDirs, want: "actor_dirs"},
+		{name: "empty restore_dir", req: noRestoreDir, want: "restore_dir"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.RestoreWorkload(context.Background(), tc.req)
-			if apierror.Code(err) != codes.InvalidArgument {
-				t.Fatalf("RestoreWorkload() code = %v, want %v (err: %v)", apierror.Code(err), codes.InvalidArgument, err)
+			if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("RestoreWorkload() = %v, want InvalidArgument naming %s", err, tc.want)
 			}
 		})
 	}

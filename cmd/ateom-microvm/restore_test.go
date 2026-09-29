@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -228,33 +229,22 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 		inFlight: actorlock.NewInFlight(),
 	}
 
+	noDirs := validRestoreRequest()
+	noDirs.ActorDirs = nil
+	noRestoreDir := validRestoreRequest()
+	noRestoreDir.ActorDirs.RestoreDir = ""
 	for _, tc := range []struct {
 		name string
 		req  *ateompb.RestoreWorkloadRequest
+		want string
 	}{
-		{
-			name: "nil actor_dirs",
-			req:  &ateompb.RestoreWorkloadRequest{ActorUid: "actor-a"},
-		},
-		{
-			name: "empty restore_dir",
-			req: &ateompb.RestoreWorkloadRequest{
-				ActorUid: "actor-a",
-				ActorDirs: &ateompb.ActorDirs{
-					RootDir:                   "/node/actors/actor-a",
-					OciBundleDir:              "/node/actors/actor-a/bundle",
-					CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-					DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-					SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-					VolumesDir:                "/node/actors/actor-a/volumes",
-				},
-			},
-		},
+		{name: "nil actor_dirs", req: noDirs, want: "actor_dirs"},
+		{name: "empty restore_dir", req: noRestoreDir, want: "restore_dir"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.RestoreWorkload(context.Background(), tc.req)
-			if apierror.Code(err) != codes.InvalidArgument {
-				t.Fatalf("RestoreWorkload() code = %v, want %v (err: %v)", apierror.Code(err), codes.InvalidArgument, err)
+			if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("RestoreWorkload() = %v, want InvalidArgument naming %s", err, tc.want)
 			}
 		})
 	}
@@ -410,28 +400,24 @@ func TestNewReseedNonce(t *testing.T) {
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 	s := &AteomService{}
 	ctx := context.Background()
-	dirs := &ateompb.ActorDirs{
-		RootDir:                   "/node/actors/actor-a",
-		OciBundleDir:              "/node/actors/actor-a/bundle",
-		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-		RestoreDir:                "/node/actors/actor-a/restore",
-		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		VolumesDir:                "/node/actors/actor-a/volumes",
-	}
 	assets := map[string]string{assetCH: "/bin/sh"}
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
-			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			req := validRunRequest()
+			req.RuntimeAssetPaths = assets
+			_, err := s.RunWorkload(ctx, req)
 			return err
 		},
 		"RestoreWorkload": func() error {
-			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			req := validRestoreRequest()
+			req.RuntimeAssetPaths = assets
+			_, err := s.RestoreWorkload(ctx, req)
 			return err
 		},
 	} {
-		if got := apierror.Code(call()); got != codes.InvalidArgument {
-			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
+		err := call()
+		if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "runtime_asset_paths") {
+			t.Errorf("%s() = %v, want InvalidArgument naming runtime_asset_paths", name, err)
 		}
 	}
 }

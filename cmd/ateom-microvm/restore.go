@@ -109,9 +109,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := ateomvalidation.ValidateRestoreWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}

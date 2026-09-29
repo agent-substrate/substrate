@@ -27,8 +27,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
-// Every RPC rejects a request without ActorDirs before touching any state.
-func TestRPCsRejectMissingActorDirs(t *testing.T) {
+// Every RPC with a request body rejects an empty one before touching any
+// state: the generated validators run first in each handler.
+func TestRPCsRejectInvalidRequests(t *testing.T) {
 	s := &AteomService{}
 	ctx := context.Background()
 	for name, call := range map[string]func() error{
@@ -46,6 +47,10 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 		},
 		"TerminateWorkload": func() error {
 			_, err := s.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{})
+			return err
+		},
+		"GetWorkloadStats": func() error {
+			_, err := s.GetWorkloadStats(ctx, &ateompb.GetWorkloadStatsRequest{})
 			return err
 		},
 	} {

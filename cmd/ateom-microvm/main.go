@@ -411,14 +411,6 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 	return release, nil
 }
 
-// validateActorDirs rejects a request whose actor directories are unusable.
-func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
-	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
-}
-
 // supportedFidelities are the snapshot fidelities this runtime serves: the
 // rootfs upper is host-backed, so it ships with or without guest memory.
 var supportedFidelities = []ateompb.SnapshotFidelity{

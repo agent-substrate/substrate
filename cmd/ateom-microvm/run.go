@@ -236,9 +236,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := ateomvalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
 	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}

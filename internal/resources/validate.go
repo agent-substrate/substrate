@@ -106,10 +106,11 @@ func ValidateWorkerPodUID(workerPodUID string) error {
 }
 
 // ValidateActorDirs checks that every directory atelet passes to ateom is
-// set, absolute and clean.
+// absolute and clean. Presence is enforced by the tags on the message; it
+// backs the ateompb.ActorDirs custom validation hook.
 func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
 	if actorDirs == nil {
-		return field.ErrorList{field.Required(fldPath, "")}
+		return nil
 	}
 	var errs field.ErrorList
 	for _, actorDir := range []struct{ name, path string }{
@@ -146,7 +147,7 @@ func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ate
 
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	if dir == "" {
-		return field.ErrorList{field.Required(fldPath, "")}
+		return nil // required is enforced by tags
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}

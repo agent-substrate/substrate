@@ -215,21 +215,44 @@ func (StatsSource) EnumDescriptor() ([]byte, []int) {
 // it shares with ateom. ateom takes them from the RPC instead of deriving
 // them from the actor UID.
 // Every directory is under root_dir.
+//
+// +k8s:customValidation # each directory is an absolute, clean path
 type ActorDirs struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor's own directory.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096 # PATH_MAX
 	RootDir string `protobuf:"bytes,1,opt,name=root_dir,json=rootDir,proto3" json:"root_dir,omitempty"`
 	// Holds one OCI bundle per container, named after the container.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096 # PATH_MAX
 	OciBundleDir string `protobuf:"bytes,2,opt,name=oci_bundle_dir,json=ociBundleDir,proto3" json:"oci_bundle_dir,omitempty"`
 	// Where CheckpointWorkload writes the snapshot files.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096 # PATH_MAX
 	CheckpointDir string `protobuf:"bytes,3,opt,name=checkpoint_dir,json=checkpointDir,proto3" json:"checkpoint_dir,omitempty"`
 	// Where the snapshot files RestoreWorkload reads have been downloaded to.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096 # PATH_MAX
 	RestoreDir string `protobuf:"bytes,4,opt,name=restore_dir,json=restoreDir,proto3" json:"restore_dir,omitempty"`
 	// Holds one subdirectory per durable-dir volume.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096 # PATH_MAX
 	DurableDirVolumeMountsDir string `protobuf:"bytes,5,opt,name=durable_dir_volume_mounts_dir,json=durableDirVolumeMountsDir,proto3" json:"durable_dir_volume_mounts_dir,omitempty"`
 	// Holds one subdirectory per system-info volume.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096 # PATH_MAX
 	SystemInfoVolumeRootsDir string `protobuf:"bytes,6,opt,name=system_info_volume_roots_dir,json=systemInfoVolumeRootsDir,proto3" json:"system_info_volume_roots_dir,omitempty"`
 	// Holds one mount point per CSI volume.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096 # PATH_MAX
 	VolumesDir    string `protobuf:"bytes,7,opt,name=volumes_dir,json=volumesDir,proto3" json:"volumes_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -342,7 +365,6 @@ type TerminateWorkloadRequest struct {
 	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// +k8s:required
-	// +k8s:opaqueType # tagged in a follow-up
 	ActorDirs     *ActorDirs `protobuf:"bytes,8,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -502,8 +524,8 @@ type RunWorkloadRequest struct {
 	// the gVisor runtime, which uses runsc_path.
 	//
 	// +k8s:optional
-	// +k8s:maxProperties=8 # six names exist across the two runtimes
-	// +k8s:eachKey=+k8s:maxLength=64
+	// +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
+	// +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
 	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// When absent the actor has no egress: its TCP is captured and refused.
@@ -524,7 +546,6 @@ type RunWorkloadRequest struct {
 	// +k8s:minimum=1
 	MemoryBytes int64 `protobuf:"varint,12,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// +k8s:required
-	// +k8s:opaqueType # tagged in a follow-up
 	ActorDirs     *ActorDirs `protobuf:"bytes,13,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1339,19 +1360,27 @@ func (*RunWorkloadResponse) Descriptor() ([]byte, []int) {
 
 type CheckpointWorkloadRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// Empty for runtimes that do not use runsc.
+	//
 	// +k8s:optional
+	// +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI of the snapshot to write. Object names are appended
@@ -1365,19 +1394,25 @@ type CheckpointWorkloadRequest struct {
 	// the prefix of the resource that owns the snapshot. For example:
 	// "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
 	//
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:maxLength=2048
+	// +k8s:customValidation # a scheme, a bucket, and a path, nothing else
 	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	//
 	// +k8s:optional
+	// +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
+	// +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
+	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Fidelity the checkpoint captures.
 	//
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
 	Fidelity SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateom.SnapshotFidelity" json:"fidelity,omitempty"`
-	// +k8s:optional
-	// +k8s:opaqueType # tagged in a follow-up
+	// +k8s:required
 	ActorDirs     *ActorDirs `protobuf:"bytes,11,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1583,8 +1618,8 @@ type RestoreWorkloadRequest struct {
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	//
 	// +k8s:optional
-	// +k8s:maxProperties=8 # six names exist across the two runtimes
-	// +k8s:eachKey=+k8s:maxLength=64
+	// +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
+	// +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
 	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Fidelity to restore from the snapshot.
@@ -1611,7 +1646,6 @@ type RestoreWorkloadRequest struct {
 	// +k8s:minimum=1
 	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// +k8s:required
-	// +k8s:opaqueType # tagged in a follow-up
 	ActorDirs *ActorDirs `protobuf:"bytes,16,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	// actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
 	// ateom must not delete or modify files in it.

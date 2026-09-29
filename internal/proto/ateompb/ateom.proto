@@ -109,20 +109,43 @@ service Ateom {
 // it shares with ateom. ateom takes them from the RPC instead of deriving
 // them from the actor UID.
 // Every directory is under root_dir.
+//
+// +k8s:customValidation # each directory is an absolute, clean path
 message ActorDirs {
   // The actor's own directory.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string root_dir = 1;
   // Holds one OCI bundle per container, named after the container.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string oci_bundle_dir = 2;
   // Where CheckpointWorkload writes the snapshot files.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string checkpoint_dir = 3;
   // Where the snapshot files RestoreWorkload reads have been downloaded to.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string restore_dir = 4;
   // Holds one subdirectory per durable-dir volume.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string durable_dir_volume_mounts_dir = 5;
   // Holds one subdirectory per system-info volume.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string system_info_volume_roots_dir = 6;
   // Holds one mount point per CSI volume.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string volumes_dir = 7;
 }
 
@@ -153,7 +176,6 @@ message TerminateWorkloadRequest {
   // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
   // +k8s:required
-  // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 8;
 }
 
@@ -194,8 +216,8 @@ message RunWorkloadRequest {
   // the gVisor runtime, which uses runsc_path.
   //
   // +k8s:optional
-  // +k8s:maxProperties=8 # six names exist across the two runtimes
-  // +k8s:eachKey=+k8s:maxLength=64
+  // +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
+  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 8;
 
@@ -218,7 +240,6 @@ message RunWorkloadRequest {
   // +k8s:minimum=1
   int64 memory_bytes = 12; // Memory limit in bytes.
   // +k8s:required
-  // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 13;
 }
 
@@ -357,21 +378,29 @@ enum SnapshotFidelity {
 }
 
 message CheckpointWorkloadRequest {
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
+  // Empty for runtimes that do not use runsc.
+  //
   // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
 
-  // +k8s:optional
+  // +k8s:required
   // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
@@ -386,21 +415,27 @@ message CheckpointWorkloadRequest {
   // the prefix of the resource that owns the snapshot. For example:
   // "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # a scheme, a bucket, and a path, nothing else
   string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   //
   // +k8s:optional
+  // +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
+  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
+  // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 9;
 
   // Fidelity the checkpoint captures.
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 10;
-  // +k8s:optional
-  // +k8s:opaqueType # tagged in a follow-up
+  // +k8s:required
   ActorDirs actor_dirs = 11;
 }
 
@@ -454,8 +489,8 @@ message RestoreWorkloadRequest {
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   //
   // +k8s:optional
-  // +k8s:maxProperties=8 # six names exist across the two runtimes
-  // +k8s:eachKey=+k8s:maxLength=64
+  // +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
+  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 9;
 
@@ -485,7 +520,6 @@ message RestoreWorkloadRequest {
   // +k8s:minimum=1
   int64 memory_bytes = 15; // Memory limit in bytes.
   // +k8s:required
-  // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 16;
 
   // actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:

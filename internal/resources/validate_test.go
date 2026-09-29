@@ -346,8 +346,9 @@ func TestValidateActorDirs(t *testing.T) {
 		wantField string
 	}{
 		{"valid", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { return actorDirs }, ""},
-		{"nil", func(*ateompb.ActorDirs) *ateompb.ActorDirs { return nil }, "actor_dirs"},
-		{"missing dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { actorDirs.RestoreDir = ""; return actorDirs }, "actor_dirs.restore_dir"},
+		// Presence is the tags' job: nil and empty are not this check's to report.
+		{"nil", func(*ateompb.ActorDirs) *ateompb.ActorDirs { return nil }, ""},
+		{"missing dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { actorDirs.RestoreDir = ""; return actorDirs }, ""},
 		{"relative dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
 			actorDirs.OciBundleDir = "bundles"
 			return actorDirs
