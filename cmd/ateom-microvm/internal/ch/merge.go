@@ -130,14 +130,9 @@ func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {
 		return fmt.Errorf("MergeDeltaIntoBase: size mismatch base=%d delta=%d", bi.Size(), di.Size())
 	}
 
-	// The fast path below MUTATES baseFile's inode in place, which is only safe while
-	// baseFile is the sole name for it. atelet stages restore-state by linking from
-	// this actor's local pause snapshot rather than copying it, so a second link means
-	// the overlay would rewrite that cached snapshot too, corrupting the actor's only
-	// local restore point. Copy in that case, which is what MergeSparseOverlay does.
-	// atelet holds that snapshot for the whole checkpoint, so this is the normal path
-	// for a locally staged restore; the in-place path below is for one staged from
-	// object storage.
+	// The fast path below renames baseFile and mutates its inode in place, so it
+	// is only for an expendable staging file. Preserved snapshots use
+	// MergeSparseOverlay directly; a shared inode (Nlink > 1) falls back to it too.
 	if st, ok := bi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
 		return MergeSparseOverlay(ctx, baseFile, deltaFile, deltaFile)
 	}

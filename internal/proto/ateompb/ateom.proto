@@ -344,6 +344,10 @@ message RestoreWorkloadRequest {
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.
   ActorDirs actor_dirs = 16;
+
+  // actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
+  // ateom must not delete or modify files in it.
+  bool preserve_restore_dir = 17;
 }
 
 message RestoreWorkloadResponse {

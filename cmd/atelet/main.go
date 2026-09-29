@@ -1097,7 +1097,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
-	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+	directLocal := req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+	if directLocal {
 		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
 	}
 
@@ -1168,7 +1169,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	g.Go(func() (err error) {
 		t := time.Now()
 		defer func() {
-			dDownload = time.Since(t)
+			if !directLocal {
+				dDownload = time.Since(t)
+			}
 			downloadErr = err
 		}()
 		switch req.GetType() {
@@ -1177,13 +1180,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				return err
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-			// Local (pause) checkpoint: files are already on disk in
-			// LocalSnapshotDir; verify they exist and restore directly from
-			// there without staging them into RestoreStateDir.
-			for _, fileName := range sandboxRec.SnapshotFiles {
-				if _, err := os.Stat(filepath.Join(checkpointDir, fileName)); err != nil {
-					return wrapFileSystemErr("while checking local checkpoint file", err)
-				}
+			// Restore in place from LocalSnapshotDir; no staging.
+			if err := checkLocalSnapshotFiles(checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -1249,6 +1248,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              req.GetActorUid(),
 		ActorDirs:             actorDirs,
+		PreserveRestoreDir:    directLocal,
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
@@ -1340,6 +1340,21 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 
 	return &ateletpb.TerminateResponse{}, nil
+}
+
+// checkLocalSnapshotFiles verifies each snapshot file exists in dir as a
+// regular file. Lstat, so a symlink cannot point ateom outside the snapshot.
+func checkLocalSnapshotFiles(dir string, files []string) error {
+	for _, name := range files {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			return wrapFileSystemErr("while checking local checkpoint file", err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("local checkpoint file %s is not a regular file", name)
+		}
+	}
+	return nil
 }
 
 // copyLocalCheckpoint stages files from the local checkpoint snapshotName under

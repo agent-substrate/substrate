@@ -17,14 +17,22 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+
+	"github.com/agent-substrate/substrate/internal/actorlock"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
-var testActorDirs = &ateompb.ActorDirs{RootDir: "/node/actors/test-actor-123"}
+var testActorDirs = &ateompb.ActorDirs{
+	RootDir:      "/node/actors/test-actor-123",
+	OciBundleDir: "/node/actors/test-actor-123/bundle",
+}
 
 func TestKillArgs(t *testing.T) {
 	r := &runsc{
@@ -108,5 +116,71 @@ func TestResumeArgs(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resumeArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestRestoreArgs(t *testing.T) {
+	r := &runsc{
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
+	}
+	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
+
+	got := r.restoreArgs(ocispec.PauseContainer, checkpointDir)
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", "/node/actors/test-actor-123/runsc-state",
+		"--cpu-num-from-quota",
+		"restore",
+		"-bundle", "/node/actors/test-actor-123/bundle/" + ocispec.PauseContainer,
+		"-image-path", checkpointDir,
+		"-pid-file", "/node/actors/test-actor-123/pidfiles/" + ocispec.PauseContainer + ".pid",
+		"-background",
+		"-detach",
+		ocispec.PauseContainer,
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("restoreArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
+	s := &AteomService{
+		locks:    actorlock.New(),
+		inFlight: actorlock.NewInFlight(),
+	}
+
+	for _, tc := range []struct {
+		name string
+		req  *ateompb.RestoreWorkloadRequest
+	}{
+		{
+			name: "nil actor_dirs",
+			req:  &ateompb.RestoreWorkloadRequest{ActorUid: "actor-a"},
+		},
+		{
+			name: "empty restore_dir",
+			req: &ateompb.RestoreWorkloadRequest{
+				ActorUid: "actor-a",
+				ActorDirs: &ateompb.ActorDirs{
+					RootDir:                   "/node/actors/actor-a",
+					OciBundleDir:              "/node/actors/actor-a/bundle",
+					CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
+					DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
+					SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
+					VolumesDir:                "/node/actors/actor-a/volumes",
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.RestoreWorkload(context.Background(), tc.req)
+			if apierror.Code(err) != codes.InvalidArgument {
+				t.Fatalf("RestoreWorkload() code = %v, want %v (err: %v)", apierror.Code(err), codes.InvalidArgument, err)
+			}
+		})
 	}
 }

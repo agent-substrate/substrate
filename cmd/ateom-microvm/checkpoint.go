@@ -275,13 +275,8 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 		slog.InfoContext(ctx, "Snapshot is self-contained (eager restore); skipping merge",
 			slog.String("id", actorUID))
 	} else if ra != nil && ra.restoreSourceDir != "" {
-		base := filepath.Join(ra.restoreSourceDir, "memory-ranges")
-		delta := filepath.Join(checkpointDir, "memory-ranges")
 		tMerge := time.Now()
-		// Reuse base's on-disk working set (rename + overlay) instead of copying it —
-		// CH is paused and about to be torn down, and base is discarded after. See
-		// MergeDeltaIntoBase. (Falls back to the copying merge across filesystems.)
-		if err := ch.MergeDeltaIntoBase(ctx, base, delta); err != nil {
+		if err := mergeOnDemandDelta(ctx, ra.restoreSourceDir, checkpointDir, ra.preserveRestoreSource); err != nil {
 			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}
 		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
@@ -291,6 +286,17 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
 	return dSnapshot, nil
+}
+
+// mergeOnDemandDelta merges the OnDemand delta in checkpointDir with the base in
+// restoreSourceDir. A preserved base is copied, never modified in place.
+func mergeOnDemandDelta(ctx context.Context, restoreSourceDir, checkpointDir string, preserveRestoreSource bool) error {
+	base := filepath.Join(restoreSourceDir, "memory-ranges")
+	delta := filepath.Join(checkpointDir, "memory-ranges")
+	if preserveRestoreSource {
+		return ch.MergeSparseOverlay(ctx, base, delta, delta)
+	}
+	return ch.MergeDeltaIntoBase(ctx, base, delta)
 }
 
 // listFiles returns the (relative) names of regular files directly under dir.

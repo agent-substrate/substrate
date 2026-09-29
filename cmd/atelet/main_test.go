@@ -369,6 +369,34 @@ func TestCopyLocalCheckpointRejectsSymlinkOutsideRoot(t *testing.T) {
 	}
 }
 
+func TestCheckLocalSnapshotFilesRejectsSymlink(t *testing.T) {
+	parent := t.TempDir()
+	snapshotDir := filepath.Join(parent, "local-checkpoint", "pause-1")
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "config.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(snapshotDir, "checkpoint.img")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := checkLocalSnapshotFiles(snapshotDir, []string{"config.json"}); err != nil {
+		t.Errorf("checkLocalSnapshotFiles(regular file) = %v, want nil", err)
+	}
+	if err := checkLocalSnapshotFiles(snapshotDir, []string{"config.json", "checkpoint.img"}); err == nil {
+		t.Error("checkLocalSnapshotFiles accepted a symlink, want an error")
+	}
+	if err := checkLocalSnapshotFiles(snapshotDir, []string{"missing"}); err == nil {
+		t.Error("checkLocalSnapshotFiles accepted a missing file, want an error")
+	}
+}
+
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "actor-id")
