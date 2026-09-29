@@ -227,6 +227,7 @@ data:
                     receiving_namespaces:
                       untyped:
                       - dev.ate.egress
+                      - dev.ate.policy.egress
               # The address the passthrough chains may dial, from the CONNECT
               # leg's answer, shared with the inner listener as the filter state
               # the ORIGINAL_DST cluster reads. With no answer nothing is written
@@ -242,6 +243,14 @@ data:
                     format_string:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.egress:passthrough_destination)%"
+                      omit_empty_values: true
+                  - object_key: dev.ate.policy.egress
+                    factory_key: envoy.string
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
                       omit_empty_values: true
               - name: envoy.filters.http.router
                 typed_config:
@@ -308,10 +317,47 @@ data:
         - name: envoy.filters.listener.http_inspector
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector
+        - name: envoy.filters.listener.dynamic_modules
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter
+            dynamic_module_config:
+              name: envoy_substrate_egress_policy
+            filter_name: envoy_substrate_egress_policy
+        filter_chain_matcher:
+          matcher_tree:
+            input:
+              name: filter_state
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput
+                key: dev.ate.egress.filter_chain
+            exact_match_map:
+              map:
+                "mitm":
+                  action:
+                    name: egress_tls_mitm
+                    typed_config:
+                      "@type": type.googleapis.com/google.protobuf.StringValue
+                      value: egress_tls_mitm
+                "passthrough":
+                  action:
+                    name: egress_passthrough
+                    typed_config:
+                      "@type": type.googleapis.com/google.protobuf.StringValue
+                      value: egress_passthrough
+                "cleartext":
+                  action:
+                    name: egress_cleartext
+                    typed_config:
+                      "@type": type.googleapis.com/google.protobuf.StringValue
+                      value: egress_cleartext
+                "denied":
+                  action:
+                    name: non_existent_filter_chain
+                    typed_config:
+                      "@type": type.googleapis.com/google.protobuf.StringValue
+                      value: denied
         filter_chains:
         - name: egress_tls_mitm
-          filter_chain_match:
-            transport_protocol: tls
           filters:
           - name: envoy.filters.network.http_connection_manager
             typed_config:

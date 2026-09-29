@@ -125,7 +125,7 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 		Args:      []string{"/app"},
 		Resources: &ateletpb.ResourceLimits{MemoryBytes: declared},
 	})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 // RAM is the real ceiling, and a cap equal to the whole guest can never bind.
 func TestShapeMicroVM_LeavesUndeclaredContainerUnlimited(t *testing.T) {
 	spec := Build(Options{Args: []string{"/app"}})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorUID: testActorUID, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 

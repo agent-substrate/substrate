@@ -165,6 +165,21 @@ func (r compiledRule) matchesPort(port uint16) bool {
 	return r.anyPort || slices.Contains(r.ports, port)
 }
 
+// HostnamePatterns returns all compiled SNI patterns from the policy's https
+// and tls_passthrough rules, in rule order.
+func (p *Policy) HostnamePatterns() []string {
+	var patterns []string
+	for _, rule := range p.rules {
+		if rule.protocol != protocolHTTPS && rule.protocol != protocolTLSPassthrough {
+			continue
+		}
+		for _, pattern := range rule.patterns {
+			patterns = append(patterns, pattern.String())
+		}
+	}
+	return patterns
+}
+
 // EvaluateRequest decides one request the gateway can read, on the name or
 // address in its authority and the port the actor dialed. decrypted selects
 // the https rules, for a request the gateway terminated TLS for; otherwise

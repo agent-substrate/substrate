@@ -96,6 +96,13 @@ build-ate-setup:
 build-atenet:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BINDIR)/atenet ./cmd/atenet
 
+# Registers the JUnit files a CI run will write, and verifies they hold tests.
+# Separate module, so it builds by path. -o keeps the binary in $(BINDIR),
+# which is gitignored and removed by `clean`.
+.PHONY: build-junittool
+build-junittool:
+	$(GO) -C tools/junittool build -o $(CURDIR)/$(BINDIR)/junittool .
+
 .PHONY: build-demos
 build-demos:
 	$(KO) build $(KO_NAMING) $(KO_FLAGS) \

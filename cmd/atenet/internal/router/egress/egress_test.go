@@ -27,6 +27,7 @@ import (
 	"math/big"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -336,14 +337,28 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
 
-	for name, policy := range map[string]*ateapipb.EgressPolicy{
-		"http":            httpPolicy("api.example.com"),
-		"https":           httpsPolicy("api.example.com"),
-		"tls passthrough": passthroughPolicy(ports(443), "*"),
-		"allow all":       allowAllPolicy(),
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := New(&egressMockClient{actor: runningActor(), policy: policy}, ca.roots(), 0, nil, "")
+	tests := []struct {
+		name     string
+		policy   *ateapipb.EgressPolicy
+		wantSNIs []string
+	}{
+		{name: "http", policy: httpPolicy("api.example.com")},
+		{name: "https", policy: httpsPolicy("api.example.com"), wantSNIs: []string{"api.example.com"}},
+		{name: "tls passthrough", policy: passthroughPolicy(ports(443), "*"), wantSNIs: []string{"*"}},
+		{name: "allow all", policy: allowAllPolicy(), wantSNIs: []string{"*"}},
+		{
+			name: "multiple https and tls passthrough rules",
+			policy: combined(
+				httpsPolicy("api.example.com", "*.example.org"),
+				httpPolicy("plain.example.com"),
+				passthroughPolicy(ports(443), "foo.bar.com"),
+			),
+			wantSNIs: []string{"api.example.com", "*.example.org", "foo.bar.com"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0, nil, "")
 			md := egressMetadata(xfccHeader(leaf))
 			md.Host = "93.184.216.34:443"
 			md.Headers[":authority"] = md.Host
@@ -354,8 +369,30 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 			if got := passthroughDestinationOf(res); got != "" {
 				t.Errorf("passthrough destination = %q, want none", got)
 			}
+			if got := allowedSNIsOf(t, res); !slices.Equal(got, tc.wantSNIs) {
+				t.Errorf("allowed SNIs = %v, want %v", got, tc.wantSNIs)
+			}
 		})
 	}
+}
+
+// allowedSNIsOf reads the allowed SNI patterns a CONNECT decision handed back
+// under dev.ate.policy.egress.
+func allowedSNIsOf(t *testing.T, res extproc.Result) []string {
+	t.Helper()
+	policyStruct := res.DynamicMetadata.GetFields()[extproc.EgressPolicyMetadataNamespace].GetStructValue()
+	if policyStruct == nil {
+		t.Fatalf("missing %q struct in DynamicMetadata", extproc.EgressPolicyMetadataNamespace)
+	}
+	listVal := policyStruct.GetFields()[extproc.EgressAllowedSNIsKey].GetListValue()
+	if listVal == nil {
+		t.Fatalf("missing %q list in %q DynamicMetadata", extproc.EgressAllowedSNIsKey, extproc.EgressPolicyMetadataNamespace)
+	}
+	out := make([]string, len(listVal.GetValues()))
+	for i, v := range listVal.GetValues() {
+		out[i] = v.GetStringValue()
+	}
+	return out
 }
 
 // A callout with no filter chain name gets the same answer: the tunnel opens
