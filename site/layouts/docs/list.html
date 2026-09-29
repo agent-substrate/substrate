@@ -14,11 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
 {{ define "main" -}}
-<div class="td-content">
-  <p class="td-content__eyebrow display-6">{{ .Site.Title }}</p>
-  <h1 class="display-1">{{ .Title }}</h1>
-  {{ with .Params.description }}<div class="lead">{{ . | markdownify }}</div>{{ end }}
-  {{ .Content }}
-  {{ partial "section-index.html" . -}}
+<div class="td-content as-prose">
+  <div class="as-doc-header">
+    <h1>{{ .Title }}</h1>
+    {{ with .Params.description }}<p class="as-doc-lead">{{ . | markdownify }}</p>{{ end }}
+    <div class="as-doc-meta">
+      <button type="button" class="as-copy-page-btn" data-copy-page="true">
+        <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+        <span class="as-copy-page-btn__label">Copy as Markdown</span>
+      </button>
+    </div>
+  </div>
+  <div class="as-doc-body">
+    {{ .Content }}
+    {{ partial "section-index.html" . -}}
+  </div>
+  <script type="application/json" id="as-page-markdown">{{ partial "raw-markdown.html" . | jsonify | safeJS }}</script>
+  {{ partial "feedback.html" . -}}
+  {{ partial "pager.html" . -}}
 </div>
 {{ end -}}

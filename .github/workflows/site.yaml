@@ -20,14 +20,12 @@ on:
     paths:
       - 'site/**'
       - 'docs/**'
-      - 'README.md'
       - '.github/workflows/site.yaml'
   push:
     branches: [main]
     paths:
       - 'site/**'
       - 'docs/**'
-      - 'README.md'
       - '.github/workflows/site.yaml'
   workflow_dispatch:
 permissions:

@@ -1,7 +1,7 @@
 ---
-title: "User Guides"
-linkTitle: "User Guides"
-weight: 3
+title: "How-to Guides"
+linkTitle: "How-to Guides"
+weight: 4
 description: >
-  Configure, operate, and observe Agent Substrate.
+  Task-oriented recipes for installing, configuring, operating, and scaling Agent Substrate.
 ---

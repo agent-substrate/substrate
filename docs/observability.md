@@ -280,10 +280,8 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed allocated size in bytes of each snapshot image written during checkpoint (`st_blocks * 512`, excluding sparse holes in microVM `memory-ranges`) (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
-| `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels
-`ate.workerpool.namespace`, `ate.workerpool.name`) |
-| `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
-`ate.workerpool.namespace`, `ate.workerpool.name`) |
+| `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels `ate.workerpool.namespace`, `ate.workerpool.name`) |
+| `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`partial`/`at_capacity`/`unschedulable`) and sandbox class to provide fleet capacity and saturation at a glance. Every ateapi replica reports the whole fleet: take the `max` by pool namespace, pool, state, and sandbox class first, then `sum` (example query below the table) |
 | `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, snapshot kind on resume, and snapshot fidelity on resume and suspend; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
 | `ate.scheduler.assignment.duration` | ateapi | histogram | time of one attempt to assign a worker to an actor, with one record for each resume (ateapi retries an attempt that loses a race for a worker and records only the last attempt), with the outcome (`assigned` / `no_capacity` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
@@ -487,6 +485,38 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 > Each of these components reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
 > Workers don't read the ConfigMap at all. They normally export through the [`atelet` relay](#the-ateworker-otlp-relay), which forwards to `atelet`'s own endpoint, so restarting `atelet` moves the relayed workers to a new endpoint. `ate-controller` also copies the value into each worker pod at creation, for the direct fallback. That copy changes only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
+
+<div class="code-tabs">
+<div class="code-tab" data-tab="Kind (Local)" data-persist="kind">
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-otel-config
+  namespace: ate-system
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector.otel-system.svc:4317
+  OTEL_METRIC_EXPORT_INTERVAL: "10000"
+  OTEL_METRIC_EXPORT_TIMEOUT: "10000"
+  OTEL_LOGS_EXPORTER: otlp
+```
+
+</div>
+<div class="code-tab" data-tab="GKE (Google Cloud)" data-persist="gke">
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-otel-config
+  namespace: ate-system
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+```
+
+</div>
+</div>
 
 ### The ateworker OTLP relay
 

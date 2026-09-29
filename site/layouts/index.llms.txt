@@ -1,0 +1,39 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+# Agent Substrate
+
+> Agent Substrate is a secure-by-default execution runtime for Kubernetes engineered to run millions of stateful agent sandboxes (gVisor and Kata microVMs) with 10x+ higher density and sub-500ms checkpoint/restore latency.
+
+Agent Substrate decouples the logical **Actor** (a stateful agent or workload instance addressed by `(atespace, name)` and instantiated from an `ActorTemplate`) from the physical **Worker** (a pre-warmed Kubernetes Pod in a `WorkerPool`). Idle actors are checkpointed to object storage (GCS or S3) and evicted from compute; when a request arrives with the `ate-target-actor: <atespace>/<actor>` header, the Substrate router (`atenet`) and control plane (`ate-api-server`) assign a ready worker and the node-level supervisor (`atelet`) coordinates with the in-pod sandbox herder (`ateom`) to restore the actor's memory and filesystem state in under 500ms—bypassing the Kubernetes control plane on the request path.
+
+## Consolidated Reference Bundle
+
+- [Full Documentation Bundle (llms-full.txt)]({{ "llms-full.txt" | absURL }}): Single-file compilation of all Agent Substrate conceptual, architecture, how-to, CLI reference, API, and security documentation for AI context windows.
+{{- $docs := site.GetPage "/docs" -}}
+{{- if $docs -}}
+{{- range $section := $docs.Sections.ByWeight }}
+
+## {{ $section.LinkTitle | default $section.Title }}
+{{- range $p := $section.RegularPages.ByWeight }}
+- [{{ $p.Title }}]({{ $p.Permalink }}): {{ with $p.Params.description }}{{ replaceRE `\s+` " " (strings.TrimSpace .) }}{{ else }}Agent Substrate documentation for {{ $p.Title }}.{{ end }}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+## Optional
+
+- [Tutorials Overview]({{ "docs/tutorials/" | absURL }}): Interactive step-by-step example workloads demonstrating stateful actors, sandboxes, request parking, egress, and autoscaling.
+- [GitHub Repository](https://github.com/agent-substrate/substrate): Source code, issue tracker, manifests, and release artifacts for Agent Substrate.

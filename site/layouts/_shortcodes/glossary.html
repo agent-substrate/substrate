@@ -1,0 +1,37 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+{{- $rawTerm := "" -}}
+{{- $label := "" -}}
+{{- if .IsNamedParams -}}
+  {{- $rawTerm = .Get "term" -}}
+  {{- $label = .Get "text" | default $rawTerm -}}
+{{- else -}}
+  {{- $rawTerm = .Get 0 -}}
+  {{- $label = .Get 1 | default $rawTerm -}}
+{{- end -}}
+{{- $key := lower $rawTerm -}}
+{{- $defs := dict
+  "atespace" (dict "anchor" "atespace" "title" "Atespace" "desc" "The global isolation boundary an Actor and ActorTemplate belong to, and the first half of an actor's <code>(atespace, name)</code> address.")
+  "atelet" (dict "anchor" "atelet" "title" "atelet" "desc" "The node-level supervisor DaemonSet. Pulls images, drives sandboxes on the node via <code>ateom</code>, and streams snapshots to/from object storage.")
+  "ateom" (dict "anchor" "ateom" "title" "ateom" "desc" "The coordinator inside each worker Pod that drives the gVisor or microVM sandbox runtime on behalf of <code>atelet</code> and hosts <code>atunnel</code>.")
+  "atenet" (dict "anchor" "atenet" "title" "atenet" "desc" "The Agent Substrate networking stack and Envoy-based router that intercepts traffic, triggers on-demand Actor resume, and tunnels to the assigned worker.")
+  "ate" (dict "anchor" "ate" "title" "ATE vs. Agent Substrate" "desc" "<strong>Agent Substrate</strong> is the platform runtime; <code>ate</code> (Agent Task/Execution Engine) is the internal prefix used for binaries (<code>atelet</code>, <code>ateom</code>, <code>atenet</code>), CRDs, and <code>kubectl-ate</code>.")
+  "actor" (dict "anchor" "actor" "title" "Actor" "desc" "A stateful agent or workload instance derived from an <code>ActorTemplate</code> and addressed by <code>(atespace, name)</code>. Suspended when idle, resumed on any warm worker.")
+  "worker" (dict "anchor" "worker" "title" "Worker" "desc" "A pre-warmed Kubernetes Pod in a <code>WorkerPool</code> running a gVisor or microVM sandbox that hosts active actors on demand.")
+-}}
+{{- $entry := index $defs $key | default (dict "anchor" $key "title" $rawTerm "desc" "See definition in the Agent Substrate Glossary.") -}}
+{{- $glossaryURL := printf "%s#%s" ("docs/reference/glossary/" | relURL) $entry.anchor -}}
+<span class="as-glossary-wrap" data-glossary="{{ $entry.title }}" tabindex="0"><a href="{{ $glossaryURL }}" class="as-glossary-word">{{ $label }}</a><span class="as-glossary-pop" role="tooltip"><span class="as-glossary-pop__eyebrow">GLOSSARY</span><span class="as-glossary-pop__title">{{ $entry.title }}</span><span class="as-glossary-pop__desc">{{ $entry.desc | safeHTML }}</span><a href="{{ $glossaryURL }}" class="as-glossary-pop__link">Open in glossary &rarr;</a></span></span>

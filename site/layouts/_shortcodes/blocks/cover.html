@@ -25,7 +25,8 @@ limitations under the License.
           {{ $img := .Resize "480x webp" -}}
           <img class="cover-logo" src="{{ $img.RelPermalink }}" width="{{ div $img.Width 2 }}" height="{{ div $img.Height 2 }}" alt="Yolo the octopus, the Agent Substrate mascot">
         {{ end -}}
-        {{ with .Get "title" }}<h1 class="display-1 mt-4 cover-title">{{ . }}</h1>{{ end }}
+        {{ with .Get "eyebrow" }}<div class="cover-eyebrow">{{ . }}</div>{{ end }}
+        {{ with .Get "title" }}<h1 class="display-1 cover-headline mt-3">{{ . }}</h1>{{ end }}
         {{ with .Get "subtitle" }}<p class="display-6">{{ . }}</p>{{ end }}
         <div class="pt-3 lead">
           {{ .Inner | safeHTML }}

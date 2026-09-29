@@ -1,0 +1,336 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+{{ $running := slice 3 17 41 58 96 133 187 222 -}}
+{{ $resuming := slice 72 164 -}}
+{{ $pods := slice
+  (dict "id" "worker-1" "name" "counter-3" "width" 40 "resuming" false)
+  (dict "id" "worker-2" "name" "claude-code-17" "width" 53 "resuming" false)
+  (dict "id" "worker-3" "name" "sandbox-41" "width" 66 "resuming" false)
+  (dict "id" "worker-4" "name" "adk-58" "width" 79 "resuming" false)
+  (dict "id" "worker-5" "name" "mcp-96" "width" 92 "resuming" false)
+  (dict "id" "worker-6" "name" "counter-133" "width" 50 "resuming" false)
+  (dict "id" "worker-7" "name" "langchain-187" "width" 63 "resuming" false)
+  (dict "id" "worker-8" "name" "resuming… 312ms" "width" 100 "resuming" true)
+-}}
+
+<div class="as-home">
+  <!-- Hero -->
+  <section class="as-hero">
+    <div class="as-hero__inner">
+      <div class="as-hero__copy">
+        <div class="as-hero__eyebrow">
+          <span class="as-hero__eyebrow-dot"></span>
+          <span class="as-hero__eyebrow-desktop">Open source · Kubernetes-native agent runtime</span>
+          <span class="as-hero__eyebrow-mobile">Open source · Kubernetes-native</span>
+        </div>
+        <h1 class="as-hero__title">Run millions of agents on <span class="as-accent">Kubernetes</span>.</h1>
+        <p class="as-hero__lead">A secure-by-default execution runtime. Idle agents suspend, resume in under a second on any ready worker, and keep their memory and filesystem state.</p>
+        <div class="as-hero__actions">
+          <a href="{{ "docs/get-started/quickstart/" | relURL }}" class="as-btn-primary">
+            <span>Get started</span>
+            <svg class="ic" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          </a>
+          <a href="#see-it-run" class="as-btn-secondary">
+            <svg class="ic" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><polygon points="7 5 19 12 7 19 7 5"></polygon></svg>
+            <span>Watch the demo</span>
+          </a>
+        </div>
+        <div class="as-hero__cmd">
+          <span class="as-hero__cmd-prompt mono">$</span>
+          <span class="as-hero__cmd-text mono" id="hero-cli-cmd">kubectl ate create actor my-agent --template counter</span>
+          <button type="button" class="as-copy-btn" data-copy-target="hero-cli-cmd" aria-label="Copy command" title="Copy command">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Hero visualization: actors multiplexed onto workers -->
+      <div class="as-viz">
+        {{ with resources.Get "icons/logo.png" -}}
+          {{ $img := .Resize "240x webp" -}}
+          <img class="as-viz__mascot" src="{{ $img.RelPermalink }}" width="{{ div $img.Width 2 }}" height="{{ div $img.Height 2 }}" alt="Yolo, the Agent Substrate mascot">
+        {{- end }}
+        <div class="as-viz__top">
+          <div class="as-viz__ns">
+            <span class="as-viz__live-dot blink"></span>
+            <span class="mono">atespace / ate-demo</span>
+          </div>
+        </div>
+
+        <div class="as-viz__group">
+          <div class="as-viz__group-header">
+            <span class="as-viz__group-label">ACTORS</span>
+            <span class="as-viz__group-meta mono"><span class="as-text-bright">250</span> <span class="d-none d-sm-inline">registered </span>· <span class="as-accent">8</span> running</span>
+          </div>
+          <div class="as-viz__dots" aria-label="250 registered actors, 8 running, 2 resuming">
+            {{- range $i := seq 0 249 -}}
+              {{- if in $running $i -}}
+                <span class="as-viz__dot as-viz__dot--running"></span>
+              {{- else if in $resuming $i -}}
+                <span class="as-viz__dot as-viz__dot--resuming pulse"></span>
+              {{- else if or (eq (mod $i 7) 0) (eq (mod $i 11) 0) -}}
+                <span class="as-viz__dot as-viz__dot--snapshot"></span>
+              {{- else -}}
+                <span class="as-viz__dot"></span>
+              {{- end -}}
+            {{- end -}}
+          </div>
+        </div>
+
+        <div class="as-viz__router">
+          <div class="as-viz__router-line"></div>
+          <div class="as-viz__router-pill">
+            <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" style="color: #66B8DD"><path d="M4 7h11l-3-3M20 17H9l3 3"></path></svg>
+            <span class="mono">atenet router</span>
+            <span class="as-viz__router-sub">routes &amp; resumes on request</span>
+          </div>
+          <div class="as-viz__router-line"></div>
+        </div>
+
+        <div class="as-viz__group">
+          <div class="as-viz__group-header">
+            <span class="as-viz__group-label">WORKERS</span>
+            <span class="as-viz__group-meta mono"><span class="as-text-bright">8</span> pods · 31×<span class="d-none d-sm-inline"> oversubscribed</span></span>
+          </div>
+          <div class="as-viz__pods">
+            {{- range $pods -}}
+              <div class="as-viz__pod{{ if .resuming }} as-viz__pod--resuming{{ end }}">
+                <div class="as-viz__pod-top">
+                  <span class="as-viz__pod-id mono">{{ .id }}</span>
+                  <span class="as-viz__pod-dot{{ if .resuming }} as-viz__pod-dot--resuming pulse{{ end }}"></span>
+                </div>
+                <span class="as-viz__pod-name mono">{{ .name }}</span>
+                <div class="as-viz__pod-track">
+                  <div class="as-viz__pod-bar{{ if .resuming }} as-viz__pod-bar--resuming slide{{ end }}" style="width: {{ .width }}%"></div>
+                </div>
+              </div>
+            {{- end -}}
+          </div>
+        </div>
+
+        <div class="as-viz__legend">
+          <span><i class="as-viz__swatch as-viz__swatch--running"></i>Running</span>
+          <span><i class="as-viz__swatch as-viz__swatch--resuming"></i>Resuming</span>
+          <span><i class="as-viz__swatch as-viz__swatch--snapshot"></i>Suspended (snapshot)</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stats -->
+  <section class="as-container">
+    <div class="as-stats">
+      <div class="as-stats__item">
+        <span class="as-stats__val">&lt;500<small>ms</small></span>
+        <span class="as-stats__desc">to resume a suspended actor on any ready worker</span>
+      </div>
+      <div class="as-stats__item">
+        <span class="as-stats__val">500+<small>/s</small></span>
+        <span class="as-stats__desc">suspend and resume activations per second</span>
+      </div>
+      <div class="as-stats__item">
+        <span class="as-stats__val">10<small>×</small></span>
+        <span class="as-stats__desc">higher density than standard container runtimes</span>
+      </div>
+      <div class="as-stats__item">
+        <span class="as-stats__val">2<small> isolation modes</small></span>
+        <span class="as-stats__desc">gVisor and microVM sandboxes, one lifecycle</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Capabilities: HOW IT WORKS -->
+  <section class="as-container as-section">
+    <div class="as-section__head-row">
+      <div class="as-section__head-left">
+        <span class="as-eyebrow">HOW IT WORKS</span>
+        <h2 class="as-h2 as-h2--lg">Agents are idle most of the time. Stop paying for it.</h2>
+      </div>
+      <a href="{{ "docs/concepts/architecture/" | relURL }}" class="as-arrow-link">
+        <span>Read the architecture</span>
+        <svg class="ic" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      </a>
+    </div>
+
+    <div class="as-cap-grid">
+      <a href="{{ "docs/concepts/architecture/" | relURL }}" class="as-cap-card card-h">
+        <div class="as-cap-card__icon as-cap-card__icon--blue">
+          <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"></path></svg>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">Actor Teleport</div>
+          <p class="as-cap-card__desc">Suspend an actor and resume it on any available worker in the pool, with sub-second activation.</p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--blue">
+          <span>Suspend &amp; resume</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
+
+      <a href="{{ "docs/get-started/overview/" | relURL }}" class="as-cap-card card-h">
+        <div class="as-cap-card__icon as-cap-card__icon--yellow">
+          <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">State Persistence</div>
+          <p class="as-cap-card__desc">Memory and filesystem state survive hibernation through full-state snapshots, so actors pick up where they left off.</p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--yellow">
+          <span>Snapshots</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
+
+      <a href="{{ "docs/concepts/request-parking/" | relURL }}" class="as-cap-card card-h">
+        <div class="as-cap-card__icon as-cap-card__icon--pink">
+          <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">Agent Multiplexing</div>
+          <p class="as-cap-card__desc">Pack a large registry of stateful actors onto a small pool of shared Pods. The demo runs about 250 actors on 8.</p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--pink">
+          <span>WorkerPools</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
+    </div>
+  </section>
+
+  <!-- Get started + See it run -->
+  <section class="as-container as-section as-split-grid" id="see-it-run">
+    <div class="as-split-col">
+      <span class="as-eyebrow">GET STARTED</span>
+      <h2 class="as-h2">Your first actor in five minutes</h2>
+      <div class="as-term-card">
+        <div class="as-term-card__bar">
+          <div role="tablist" class="as-term-card__tabs" aria-label="Deployment environment">
+            <button type="button" role="tab" class="as-term-tab is-active" aria-selected="true" data-term-tab="kind">Local (kind)</button>
+            <button type="button" role="tab" class="as-term-tab" aria-selected="false" data-term-tab="gke">GKE</button>
+          </div>
+          <button type="button" class="as-copy-btn" data-copy-active-term="true" aria-label="Copy commands" title="Copy commands">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+          </button>
+        </div>
+        <pre class="as-term-card__pre mono is-active" data-term-pane="kind" id="term-pane-kind"><span class="as-term-comment"># 1 · create a cluster and install the system</span>
+hack/create-kind-cluster.sh
+hack/install-ate-kind.sh --deploy-ate-system --deploy-demo-counter
+
+<span class="as-term-comment"># 2 · create an actor</span>
+go install ./cmd/kubectl-ate
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
+
+<span class="as-term-comment"># 3 · send it a request (it resumes on demand)</span>
+curl -X POST -H <span class="as-term-str">"ate-target-actor: ate-demo-counter/my-counter-1"</span> \
+  http://localhost:8000/</pre>
+        <pre class="as-term-card__pre mono" data-term-pane="gke" id="term-pane-gke" hidden><span class="as-term-comment"># 1 · configure your project</span>
+cp hack/ate-dev-env.sh.example .ate-dev-env.sh &amp;&amp; source .ate-dev-env.sh
+gcloud auth application-default login --project=<span class="as-term-str">${PROJECT_ID}</span>
+
+<span class="as-term-comment"># 2 · provision GKE, GCS and IAM</span>
+go run ./tools/setup-gcp bootstrap
+
+<span class="as-term-comment"># 3 · install Agent Substrate and a demo</span>
+./hack/install-ate.sh --deploy-ate-system --deploy-demo-counter</pre>
+      </div>
+      <a href="{{ "docs/get-started/quickstart/" | relURL }}" class="as-arrow-link">
+        <span>Full quickstart guide</span>
+        <svg class="ic" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      </a>
+    </div>
+
+    <div class="as-split-col">
+      <span class="as-eyebrow">SEE IT RUN</span>
+      <h2 class="as-h2">~250 stateful actors, 8 physical pods</h2>
+      <a href="https://www.youtube.com/watch?v=ZEzkCFJkzjY" target="_blank" rel="noopener" class="as-video-card card-h" id="home-demo-video-card" data-youtube-embed="https://www.youtube-nocookie.com/embed/ZEzkCFJkzjY?autoplay=1">
+        <div class="as-video-card__dots"></div>
+        <div class="as-video-card__play">
+          <svg class="ic" width="30" height="30" viewBox="0 0 24 24" aria-hidden="true" style="fill: currentColor"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>
+        </div>
+        <div class="as-video-card__meta">
+          <span>Actor teleport, state persistence, multiplexing</span>
+          <span class="mono as-muted">YouTube</span>
+        </div>
+      </a>
+      <div class="as-example-links">
+        <a href="{{ "docs/tutorials/counter/" | relURL }}" class="as-example-pill">Counter demo</a>
+        <a href="{{ "docs/tutorials/sandbox/" | relURL }}" class="as-example-pill">Sandbox</a>
+        <a href="{{ "docs/tutorials/claude-code-multiplex/" | relURL }}" class="as-example-pill">Claude Code multiplex</a>
+        <a href="{{ "docs/tutorials/parking/" | relURL }}" class="as-example-pill">Request parking</a>
+        <a href="{{ "docs/tutorials/" | relURL }}" class="as-example-more">All 8 examples →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Works with + ecosystem -->
+  <section class="as-container as-section as-compat-section">
+    <div class="as-compat-section__head">
+      <span class="as-eyebrow">FRAMEWORK AGNOSTIC</span>
+      <h2 class="as-h2">Bring any agent. It is just an OCI container.</h2>
+    </div>
+
+    <div class="as-compat-pills">
+      <span class="as-compat-pill">Agent Development Kit</span>
+      <span class="as-compat-pill">LangChain</span>
+      <span class="as-compat-pill">Claude Code</span>
+      <span class="as-compat-pill">Codex</span>
+      <span class="as-compat-pill">Antigravity</span>
+      <span class="as-compat-pill">MCP servers</span>
+    </div>
+
+    <div class="as-eco-grid">
+      <a href="https://github.com/google/ax" target="_blank" rel="noopener" class="as-eco-card card-h">
+        <div class="as-eco-card__body">
+          <span class="as-eco-card__eyebrow">BUILT ON SUBSTRATE</span>
+          <span class="as-eco-card__title">Agent Executor</span>
+          <span class="as-eco-card__desc">A distributed agent runtime: a secure, hyper-scalable agent harness on Agent Substrate.</span>
+        </div>
+        <svg class="ic as-eco-card__arrow" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"></path></svg>
+      </a>
+
+      <a href="https://github.com/kagent-dev/kagent" target="_blank" rel="noopener" class="as-eco-card card-h">
+        <div class="as-eco-card__body">
+          <span class="as-eco-card__eyebrow">BUILT ON SUBSTRATE · CNCF SANDBOX</span>
+          <span class="as-eco-card__title">kagent</span>
+          <span class="as-eco-card__desc">A Kubernetes-native framework that runs sandboxed, stateful agent workloads on Agent Substrate.</span>
+        </div>
+        <svg class="ic as-eco-card__arrow" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"></path></svg>
+      </a>
+    </div>
+  </section>
+
+  <!-- Community band -->
+  <section class="as-container as-section">
+    <div class="as-community-band">
+      <div class="as-community-band__intro">
+        <h2 class="as-community-band__title">Build it with us</h2>
+        <span class="as-community-band__sub">Community meeting every Thursday, 10–11am PT.</span>
+      </div>
+      <a href="https://slack.cncf.io/" target="_blank" rel="noopener" class="as-community-band__item">
+        <span class="as-community-band__item-title">CNCF Slack</span>
+        <span class="as-community-band__item-sub">#substrate-users · #substrate-dev</span>
+      </a>
+      <a href="https://groups.google.com/g/ate-dev" target="_blank" rel="noopener" class="as-community-band__item">
+        <span class="as-community-band__item-title">Mailing list</span>
+        <span class="as-community-band__item-sub">ate-dev on Google Groups</span>
+      </a>
+      <a href="{{ "docs/project/contributing/" | relURL }}" class="as-community-band__item">
+        <span class="as-community-band__item-title">Contribute</span>
+        <span class="as-community-band__item-sub">Start with the contributing guide</span>
+      </a>
+    </div>
+  </section>
+</div>

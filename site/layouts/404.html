@@ -14,14 +14,110 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
 {{ define "main" -}}
-<div class="contain error-page">
-  <h1>404: page not found</h1>
-  <ul>
-    {{ range .Site.Menus.main -}}
-    <li>
-      <a href="{{ with .Page }}{{ .RelPermalink }}{{ else }}{{ .URL | relLangURL }}{{ end }}">{{ .Name }}</a>
-    </li>
-    {{ end -}}
-  </ul>
+<div class="container error-page">
+  <div class="error-page__hero">
+    <span class="error-page__code">404</span>
+    <h1 class="error-page__title">Page not found</h1>
+    <p class="error-page__lead">
+      We couldn't find the page you were looking for. It may have been moved, renamed, or removed.
+      Search the documentation below or jump directly to one of our popular pages.
+    </p>
+
+    <form class="error-page__search" role="search" onsubmit="return false;">
+      <div class="error-page__search-input">
+        {{ partial "search-input.html" . }}
+      </div>
+      <button type="submit" class="btn error-page__search-btn">
+        <i class="fa-solid fa-magnifying-glass me-1" aria-hidden="true"></i> Search
+      </button>
+    </form>
+  </div>
+
+  <section class="error-page__popular" aria-labelledby="popular-pages-heading">
+    <h2 id="popular-pages-heading" class="error-page__section-title">Popular Pages</h2>
+    <div class="error-page__grid">
+      <a class="error-page__card" href="{{ "docs/get-started/overview/" | relLangURL }}">
+        <div class="error-page__card-header">
+          <i class="fa-solid fa-compass error-page__card-icon" aria-hidden="true"></i>
+          <span class="error-page__card-title">Overview</span>
+        </div>
+        <p class="error-page__card-desc">
+          Learn what Agent Substrate is, why it exists, and how stateful actors map onto warm workers.
+        </p>
+      </a>
+
+      <a class="error-page__card" href="{{ "docs/get-started/quickstart/" | relLangURL }}">
+        <div class="error-page__card-header">
+          <i class="fa-solid fa-rocket error-page__card-icon" aria-hidden="true"></i>
+          <span class="error-page__card-title">Getting Started</span>
+        </div>
+        <p class="error-page__card-desc">
+          Deploy Agent Substrate on a local Kind cluster or GKE and verify your first stateful actor.
+        </p>
+      </a>
+
+      <a class="error-page__card" href="{{ "docs/reference/kubectl-ate/" | relLangURL }}">
+        <div class="error-page__card-header">
+          <i class="fa-solid fa-terminal error-page__card-icon" aria-hidden="true"></i>
+          <span class="error-page__card-title">CLI Reference</span>
+        </div>
+        <p class="error-page__card-desc">
+          Manage atespaces, ActorTemplates, actors, snapshots, and logs with the kubectl-ate plugin.
+        </p>
+      </a>
+
+      <a class="error-page__card" href="{{ "docs/concepts/architecture/" | relLangURL }}">
+        <div class="error-page__card-header">
+          <i class="fa-solid fa-diagram-project error-page__card-icon" aria-hidden="true"></i>
+          <span class="error-page__card-title">Architecture</span>
+        </div>
+        <p class="error-page__card-desc">
+          Explore the control plane, atelet node supervisor, ateom sandboxes, and atenet routing.
+        </p>
+      </a>
+
+      <a class="error-page__card" href="{{ "docs/guides/observability/" | relLangURL }}">
+        <div class="error-page__card-header">
+          <i class="fa-solid fa-chart-line error-page__card-icon" aria-hidden="true"></i>
+          <span class="error-page__card-title">Actor Observability</span>
+        </div>
+        <p class="error-page__card-desc">
+          Correlate actor logs, OpenTelemetry metrics, and distributed traces across suspend/resume cycles.
+        </p>
+      </a>
+
+      <a class="error-page__card" href="{{ "docs/project/community/" | relLangURL }}">
+        <div class="error-page__card-header">
+          <i class="fa-solid fa-users error-page__card-icon" aria-hidden="true"></i>
+          <span class="error-page__card-title">Community</span>
+        </div>
+        <p class="error-page__card-desc">
+          Join CNCF Slack channels, the ate-dev mailing list, and the weekly community sync meeting.
+        </p>
+      </a>
+    </div>
+  </section>
+
+  <div class="error-page__actions">
+    <a class="btn error-page__btn-home" href="{{ .Site.Home.RelPermalink }}">
+      <i class="fa-solid fa-house me-1" aria-hidden="true"></i> Back to Home
+    </a>
+    <a class="btn error-page__btn-docs" href="{{ "docs/" | relLangURL }}">
+      Browse All Documentation <i class="fa-solid fa-arrow-right ms-1" aria-hidden="true"></i>
+    </a>
+  </div>
 </div>
+<script>
+  (function() {
+    const form = document.querySelector('.error-page__search');
+    if (!form) return;
+    const input = form.querySelector('.td-search__input');
+    if (!input) return;
+    input.placeholder = 'Search documentation (e.g., WorkerPool, kubectl ate, gVisor)…';
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  })();
+</script>
 {{ end -}}

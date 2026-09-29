@@ -64,8 +64,28 @@ imaging:
   quality: 85
   anchor: Smart
 
+mediaTypes:
+  text/llms:
+    suffixes:
+      - txt
+  text/llms-full:
+    suffixes:
+      - txt
+
+outputFormats:
+  LLMS:
+    mediaType: text/llms
+    baseName: llms
+    isPlainText: true
+    notAlternative: true
+  LLMSFULL:
+    mediaType: text/llms-full
+    baseName: llms-full
+    isPlainText: true
+    notAlternative: true
+
 outputs:
-  home: [HTML]
+  home: [HTML, LLMS, LLMSFULL]
   section: [HTML]
 
 params:
@@ -83,15 +103,20 @@ params:
 
   offlineSearch: true
 
+  mermaid:
+    theme: dark
+
   ui:
     navbar_logo: true
     sidebar_menu_compact: true
     sidebar_menu_foldable: true
     sidebar_search_disable: true
-    breadcrumb_disable: true
+    breadcrumb_disable: false
     footer_about_disable: true
     feedback:
-      enable: false
+      enable: true
+      yes: 'Glad to hear it! Please <a href="https://github.com/agent-substrate/substrate/issues/new?title=docs:+feedback" target="_blank" rel="noopener">tell us how we can improve</a>.'
+      no: 'Sorry to hear that. Please <a href="https://github.com/agent-substrate/substrate/issues/new?title=docs:+feedback" target="_blank" rel="noopener">tell us how we can improve</a>.'
 
   links:
     user:
@@ -128,10 +153,6 @@ module:
     # Docs are rendered straight from the repository rather than copied. Each
     # file listed here is available to the include-file shortcode as
     # repo/<path from the repository root>.
-    - source: ../
-      target: assets/repo
-      disableWatch: false
-      files: ["README.md"]
     - source: ../docs
       target: assets/repo/docs
       disableWatch: false
@@ -141,15 +162,49 @@ module:
         - "authentication.md"
         - "csi-deployment.md"
         - "csi-volumes.md"
+        - "dev/best-practices/metrics.md"
         - "egress-traffic.md"
         - "egress-trust-bundle.md"
         - "glossary.md"
+        - "integration-repos.md"
         - "network-egress.md"
         - "observability.md"
         - "request-parking.md"
         - "roadmap.md"
         - "threat-model.md"
         - "upgrade.md"
+    - source: ..
+      target: assets/repo
+      disableWatch: true
+      files:
+        - "CONTRIBUTING.md"
+    - source: ../demos
+      target: assets/repo/demos
+      disableWatch: false
+      files:
+        - "autoscaled-workerpool/README.md"
+        - "claude-code-multiplex/README.md"
+        - "counter/README.md"
+        - "egress/README.md"
+        - "jupyter/README.md"
+        - "multi-template/README.md"
+        - "parking/README.md"
+        - "sandbox/README.md"
+    - source: ../cmd/kubectl-ate
+      target: assets/repo/cmd/kubectl-ate
+      disableWatch: false
+      files:
+        - "README.md"
+    - source: ../tools/setup-gcp
+      target: assets/repo/tools/setup-gcp
+      disableWatch: false
+      files:
+        - "README.md"
+    - source: ../benchmarking
+      target: assets/repo/benchmarking
+      disableWatch: false
+      files:
+        - "README.md"
     # Keep in sync with params.repo_static_dirs.
     - source: ../docs/assets
       target: static/docs/assets
