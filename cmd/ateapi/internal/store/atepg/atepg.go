@@ -280,32 +280,11 @@ func unmarshalStored(b []byte, m proto.Message) error {
 	return nil
 }
 
-// TODO: EOL this in favor of setCreateMetadata
-func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
-	now := timestamppb.Now()
-	return &ateapipb.ResourceMetadata{
-		Atespace:   atespace,
-		Name:       name,
-		Uid:        uuid.NewString(),
-		Version:    1,
-		CreateTime: now,
-		UpdateTime: now,
-	}
-}
-
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Uid = uuid.NewString()
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
-}
-
-// TODO: EOL this in favor of setUpdateMetadata
-func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
-	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
-	metadata.Version++
-	metadata.UpdateTime = timestamppb.Now()
-	return metadata
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database
