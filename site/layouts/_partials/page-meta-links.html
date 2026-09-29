@@ -13,18 +13,5 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
-{{/* Source and issue links. Pages that render a repository file via
-     repo_source link to that file, not to the stub under content/. */ -}}
-{{ if .File -}}
-{{ $repo := $.Param "github_repo" -}}
-{{ $branch := $.Param "github_branch" | default "main" -}}
-{{ $path := .Params.repo_source -}}
-{{ if not $path -}}
-  {{ $path = path.Join ($.Param "github_subdir") (strings.TrimPrefix (add hugo.WorkingDir "/") .File.Filename) -}}
-{{ end -}}
-<div class="td-page-meta ms-2 pb-1 pt-2 mb-0">
-  <a href="{{ printf "%s/blob/%s/%s" $repo $branch $path }}" class="td-page-meta__view" target="_blank" rel="noopener"><i class="fa-solid fa-file-lines fa-fw"></i> {{ T "post_view_this" }}</a>
-  <a href="{{ printf "%s/edit/%s/%s" $repo $branch $path }}" class="td-page-meta__edit" target="_blank" rel="noopener"><i class="fa-solid fa-pen-to-square fa-fw"></i> {{ T "post_edit_this" }}</a>
-  <a href="{{ printf "%s/issues/new?title=%s" $repo (urlquery (printf "docs: %s" .Title)) }}" class="td-page-meta__issue" target="_blank" rel="noopener"><i class="fa-solid fa-list-check fa-fw"></i> {{ T "post_create_issue" }}</a>
-</div>
-{{ end -}}
+{{/* Intentionally empty: source, edit, and issue links are rendered in the
+     global page footer (_partials/footer.html) to keep the right rail clean. */ -}}

@@ -14,11 +14,43 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
 {{ define "main" -}}
-<div class="td-content">
-  <p class="td-content__eyebrow display-6">{{ .Site.Title }}</p>
-  <h1 class="display-1">{{ .Title }}</h1>
-  {{ with .Params.description }}<div class="lead">{{ . | markdownify }}</div>{{ end }}
-  {{ .Content }}
-
+<div class="td-content as-prose">
+  <div class="as-doc-header">
+    <h1>{{ .Title }}</h1>
+    {{ with .Params.description }}<p class="as-doc-lead">{{ . | markdownify }}</p>{{ end }}
+    <div class="as-doc-meta">
+      {{- $status := .Params.status -}}
+      {{- if and (not $status) (in .Content "Much of this architecture is aspirational") -}}
+        {{- $status = "Partially implemented" -}}
+      {{- end -}}
+      {{- with $status }}
+      <span class="as-doc-status"><span class="as-doc-status__dot"></span>{{ . }}</span>
+      <span class="as-doc-meta__sep">·</span>
+      {{- end }}
+      {{- with .Params.estimated_time }}
+      <span class="as-doc-time">⏱️ {{ . }}</span>
+      <span class="as-doc-meta__sep">·</span>
+      {{- end }}
+      <span>{{ math.Max 1 .ReadingTime }} min read</span>
+      <span class="as-doc-meta__sep">·</span>
+      <button type="button" class="as-copy-page-btn" data-copy-page="true">
+        <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+        <span class="as-copy-page-btn__label">Copy as Markdown</span>
+      </button>
+    </div>
+  </div>
+  <div class="as-doc-body">
+    {{- $content := .Content -}}
+    {{- if eq .Params.repo_source "docs/glossary.md" -}}
+      {{- range slice "ActorTemplate" "WorkerPool" "SandboxConfig" "Atespace" "Actor" "Worker" "ate-api-server" "atecontroller" "atelet" "ateom" "atenet" "podcertcontroller" "kubectl-ate" "Suspend" "Pause" "Resume" -}}
+        {{- $id := lower . -}}
+        {{- $content = replace $content (printf "<strong>%s</strong>" .) (printf `<strong id="%s">%s</strong>` $id .) -}}
+      {{- end -}}
+    {{- end -}}
+    {{ $content | safeHTML }}
+  </div>
+  <script type="application/json" id="as-page-markdown">{{ partial "raw-markdown.html" . | jsonify | safeJS }}</script>
+  {{ partial "feedback.html" . -}}
+  {{ partial "pager.html" . -}}
 </div>
 {{ end -}}

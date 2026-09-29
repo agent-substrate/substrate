@@ -21,7 +21,15 @@ limitations under the License.
     {{ range $pages -}}
     <div class="entry">
       <a href="{{ .RelPermalink }}">
-        <p class="title">{{ .LinkTitle }}</p>
+        <div class="entry-header">
+          <p class="title">
+            {{- with .Params.card_icon }}<i class="{{ . }} entry-icon" aria-hidden="true"></i>{{ end -}}
+            <span>{{ .LinkTitle }}</span>
+          </p>
+          {{- with .Params.estimated_time }}
+          <span class="entry-time">⏱️ {{ . }}</span>
+          {{- end }}
+        </div>
         <p class="description">{{ .Description | markdownify }}</p>
       </a>
     </div>

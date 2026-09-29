@@ -13,30 +13,74 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
-{{ $links := .Site.Params.links -}}
-<footer class="td-footer row d-print-none">
-  <div class="container-fluid">
-    <div class="row mx-md-2">
-      <div class="td-footer__left col-6 col-sm-4 order-sm-1">
-        {{ with $links }}{{ with index . "user" }}{{ template "footer-links-block" . }}{{ end }}{{ end -}}
+{{ if .IsHome -}}
+<footer class="td-footer as-footer as-footer--home d-print-none">
+  <div class="as-footer__inner">
+    <div class="as-footer__grid">
+      <div class="as-footer__brand-col">
+        <a href="{{ .Site.Home.RelPermalink }}" class="as-footer__brand">
+          {{ with resources.Get "icons/logo.png" -}}
+            {{ $img := .Resize "x96 webp" -}}
+            <img src="{{ $img.RelPermalink }}" width="{{ div $img.Width 2 }}" height="{{ div $img.Height 2 }}" alt="Agent Substrate logo">
+          {{- end }}
+          <span>Agent Substrate</span>
+        </a>
+        <p class="as-footer__tagline">A secure-by-default runtime for running agents at scale on Kubernetes.</p>
       </div>
-      <div class="td-footer__right col-6 col-sm-4 order-sm-3 text-end">
-        {{ with $links }}{{ with index . "developer" }}{{ template "footer-links-block" . }}{{ end }}{{ end -}}
+
+      <div class="as-footer__col">
+        <span class="as-footer__col-title">Docs</span>
+        <a href="{{ "docs/get-started/quickstart/" | relURL }}">Getting started</a>
+        <a href="{{ "docs/concepts/" | relURL }}">Concepts</a>
+        <a href="{{ "docs/tutorials/" | relURL }}">Examples</a>
+        <a href="{{ "docs/reference/" | relURL }}">Reference</a>
+        <a href="{{ "llms.txt" | relURL }}">llms.txt</a>
       </div>
-      <div class="td-footer__center col-12 col-sm-4 text-center py-2 order-sm-2">
-        {{ with .Site.Params.copyright }}<small>&copy; {{ now.Year }} {{ . }}. Licensed under Apache 2.0.</small>{{ end }}
+
+      <div class="as-footer__col">
+        <span class="as-footer__col-title">Community</span>
+        <a href="https://slack.cncf.io/" target="_blank" rel="noopener">Slack</a>
+        <a href="https://groups.google.com/g/ate-dev" target="_blank" rel="noopener">Mailing list</a>
+        <a href="https://www.youtube.com/watch?v=ZEzkCFJkzjY" target="_blank" rel="noopener">YouTube</a>
+        <a href="{{ "docs/project/community/" | relURL }}">Weekly meeting</a>
       </div>
+
+      <div class="as-footer__col">
+        <span class="as-footer__col-title">Project</span>
+        <a href="https://github.com/agent-substrate/substrate" target="_blank" rel="noopener">GitHub</a>
+        <a href="{{ "docs/project/roadmap/" | relURL }}">Roadmap</a>
+        <a href="{{ "docs/security/" | relURL }}">Security</a>
+        <a href="{{ "docs/project/contributing/" | relURL }}">Governance</a>
+      </div>
+    </div>
+
+    <div class="as-footer__bottom">
+      <span>&copy; {{ now.Year }} {{ .Site.Params.copyright }}. Licensed under Apache 2.0.</span>
+      <span class="as-footer__theme-label">Light / Dark</span>
     </div>
   </div>
 </footer>
-{{ define "footer-links-block" -}}
-<ul class="td-footer__links-list">
-  {{ range . -}}
-  <li class="td-footer__links-item" data-bs-toggle="tooltip" title="{{ .name }}" aria-label="{{ .name }}">
-    <a target="_blank" rel="noopener" href="{{ .url }}" aria-label="{{ .name }}">
-      <i class="{{ .icon }}"></i>
-    </a>
-  </li>
-  {{ end -}}
-</ul>
+{{ else -}}
+{{ $repo := $.Param "github_repo" -}}
+{{ $branch := $.Param "github_branch" | default "main" -}}
+{{ $path := .Params.repo_source -}}
+{{ if and (not $path) .File -}}
+  {{ $path = path.Join ($.Param "github_subdir") (strings.TrimPrefix (add hugo.WorkingDir "/") .File.Filename) -}}
+{{ end -}}
+<footer class="td-footer as-footer as-footer--docs d-print-none">
+  <div class="as-footer__docs-bar">
+    <span>&copy; {{ now.Year }} {{ .Site.Params.copyright }}. Licensed under Apache 2.0.</span>
+    {{ if and $repo $path -}}
+    <div class="as-footer__docs-meta">
+      <a href="{{ printf "%s/blob/%s/%s" $repo $branch $path }}" target="_blank" rel="noopener" class="td-page-meta__view">Source: {{ $path }}</a>
+      <span class="as-footer__docs-sep">·</span>
+      <a href="{{ printf "%s/edit/%s/%s" $repo $branch $path }}" target="_blank" rel="noopener" class="td-page-meta__edit">Edit this page</a>
+      <span class="as-footer__docs-sep">·</span>
+      <a href="{{ printf "%s/issues/new?title=%s" $repo (urlquery (printf "docs: %s" .Title)) }}" target="_blank" rel="noopener" class="td-page-meta__issue">Report an issue</a>
+      <span class="as-footer__docs-sep">·</span>
+      <a href="{{ "llms.txt" | relURL }}">llms.txt</a>
+    </div>
+    {{ end -}}
+  </div>
+</footer>
 {{ end -}}

@@ -13,58 +13,50 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
-{{/* Docsy's navbar, with the logo rendered as a resized image instead of an inline SVG. */ -}}
-{{ $cover := and
-    (.HasShortcode "blocks/cover")
-    (not .Site.Params.ui.navbar_translucent_over_cover_disable)
--}}
-{{ $baseURL := urls.Parse $.Site.Params.Baseurl -}}
+{{ $p := . -}}
+<div class="as-header-wrap">
+  <div class="as-pre-banner">
+    <span class="as-pre-banner__pill">Pre-1.0</span>
+    <span class="as-pre-banner__text-desktop">APIs and behavior may still change significantly.</span>
+    <span class="as-pre-banner__text-mobile">APIs may change.</span>
+    <a href="{{ "docs/project/roadmap/" | relURL }}" class="as-pre-banner__link">
+      <span class="as-pre-banner__link-desktop">See the roadmap</span>
+      <span class="as-pre-banner__link-mobile">Roadmap</span>
+      <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+    </a>
+  </div>
 
-<nav class="td-navbar js-navbar-scroll
-            {{- if $cover }} td-navbar-cover {{- end }}" data-bs-theme="dark">
-<div class="container-fluid flex-column flex-md-row">
-  <a class="navbar-brand" href="{{ .Site.Home.RelPermalink }}">
-    {{- if ne .Site.Params.ui.navbar_logo false -}}
-      {{ with resources.Get "icons/logo.png" -}}
-        {{ $img := .Resize "x96 webp" -}}
-        <span class="navbar-brand__logo navbar-logo">
-          <img src="{{ $img.RelPermalink }}" width="{{ div $img.Width 2 }}" height="{{ div $img.Height 2 }}" alt="">
-        </span>
-      {{- end }}
-    {{- end -}}
-    <span class="navbar-brand__name">
-      {{- .Site.Title -}}
-    </span>
-  </a>
-  <div class="td-navbar-nav-scroll ms-md-auto" id="main_navbar">
-    <ul class="navbar-nav">
-      {{ $p := . -}}
-      {{ range .Site.Menus.main -}}
-      <li class="nav-item">
-        {{ $active := or ($p.IsMenuCurrent "main" .) ($p.HasMenuCurrent "main" .) -}}
-        {{ $href := "" -}}
-        {{ with .Page -}}
-          {{ $active = or $active ( $.IsDescendant .) -}}
-          {{ $href = .RelPermalink -}}
-        {{ else -}}
-          {{ $href = .URL | relLangURL -}}
-        {{ end -}}
-        {{ $isExternal := ne $baseURL.Host (urls.Parse .URL).Host -}}
-        <a {{/**/ -}}
-          class="nav-link {{- if $active }} active {{- end }}" {{/**/ -}}
-          href="{{ $href }}"
-          {{- if $isExternal }} target="_blank" rel="noopener" {{- end -}}
-        >
-            {{- .Pre -}}
-            <span>{{ .Name }}</span>
-            {{- .Post -}}
+  <nav class="td-navbar as-navbar" data-bs-theme="dark">
+    <div class="as-navbar__inner">
+      <div class="as-navbar__left">
+        <a class="as-navbar__brand" href="{{ .Site.Home.RelPermalink }}">
+          {{- if ne .Site.Params.ui.navbar_logo false -}}
+            {{ with resources.Get "icons/logo.png" -}}
+              {{ $img := .Resize "x96 webp" -}}
+              <img src="{{ $img.RelPermalink }}" width="{{ div $img.Width 2 }}" height="{{ div $img.Height 2 }}" alt="Agent Substrate logo">
+            {{- end }}
+          {{- end -}}
+          <span>{{- .Site.Title -}}</span>
         </a>
-      </li>
-      {{ end -}}
-    </ul>
-  </div>
-  <div class="d-none d-lg-block">
-    {{ partial "search-input.html" . }}
-  </div>
+        <div class="as-navbar__links" id="main_navbar">
+          <a href="{{ "docs/" | relURL }}" class="as-navbar__link{{ if and (strings.HasPrefix $p.RelPermalink ("docs/" | relURL)) (not (strings.HasPrefix $p.RelPermalink ("docs/tutorials/" | relURL))) (not (strings.HasPrefix $p.RelPermalink ("docs/project/community/" | relURL))) (not (strings.HasPrefix $p.RelPermalink ("docs/project/roadmap/" | relURL))) }} is-active{{ end }}">Docs</a>
+          <a href="{{ "docs/tutorials/" | relURL }}" class="as-navbar__link{{ if strings.HasPrefix $p.RelPermalink ("docs/tutorials/" | relURL) }} is-active{{ end }}">Examples</a>
+          <a href="{{ "docs/project/community/" | relURL }}" class="as-navbar__link{{ if strings.HasPrefix $p.RelPermalink ("docs/project/community/" | relURL) }} is-active{{ end }}">Community</a>
+          <a href="{{ "docs/project/roadmap/" | relURL }}" class="as-navbar__link{{ if strings.HasPrefix $p.RelPermalink ("docs/project/roadmap/" | relURL) }} is-active{{ end }}">Roadmap</a>
+        </div>
+      </div>
+
+      <div class="as-navbar__right">
+        <div class="as-navbar__search">
+          <svg class="ic as-navbar__search-icon" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+          {{ partial "search-input.html" . }}
+          <span class="as-navbar__kbd mono" aria-hidden="true">⌘K</span>
+        </div>
+        <a href="https://github.com/agent-substrate/substrate" target="_blank" rel="noopener" class="as-navbar__gh">
+          <svg class="ic" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 6.5 7 .8-5.2 4.8 1.4 7L12 17.6 5.8 21l1.4-7L2 9.3l7-.8z"></path></svg>
+          <span>Star on GitHub</span>
+        </a>
+      </div>
+    </div>
+  </nav>
 </div>
-</nav>

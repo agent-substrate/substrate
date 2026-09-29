@@ -1,0 +1,85 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{- define "walk-sidebar-pages" -}}
+  {{- $s := .section -}}
+  {{- $scratch := .scratch -}}
+  {{- $items := where (union $s.Pages $s.Sections).ByWeight ".Params.toc_hide" "!=" true -}}
+  {{- range $items -}}
+    {{- if .IsPage -}}
+      {{- $scratch.Add "pages" (slice .) -}}
+    {{- else if .IsSection -}}
+      {{- template "walk-sidebar-pages" (dict "section" . "scratch" $scratch) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- $root := .FirstSection -}}
+{{- $scratch := newScratch -}}
+{{- $scratch.Set "pages" slice -}}
+{{- template "walk-sidebar-pages" (dict "section" $root "scratch" $scratch) -}}
+{{- $pages := $scratch.Get "pages" -}}
+
+{{- $prev := false -}}
+{{- $next := false -}}
+
+{{- if .IsPage -}}
+  {{- range $i, $p := $pages -}}
+    {{- if eq $p.RelPermalink $.RelPermalink -}}
+      {{- if gt $i 0 -}}
+        {{- $prev = index $pages (sub $i 1) -}}
+      {{- end -}}
+      {{- if lt (add $i 1) (len $pages) -}}
+        {{- $next = index $pages (add $i 1) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- else if and .IsSection (ne .RelPermalink $root.RelPermalink) -}}
+  {{- $children := where .Pages.ByWeight ".Params.toc_hide" "!=" true -}}
+  {{- if gt (len $children) 0 -}}
+    {{- $firstChild := index $children 0 -}}
+    {{- range $i, $p := $pages -}}
+      {{- if eq $p.RelPermalink $firstChild.RelPermalink -}}
+        {{- if gt $i 0 -}}
+          {{- $prev = index $pages (sub $i 1) -}}
+        {{- end -}}
+        {{- $next = $firstChild -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if or $prev $next -}}
+<nav class="td-pager" aria-label="Documentation page navigation">
+  {{- with $prev }}
+  <a class="td-pager__link td-pager__link--prev card-h" href="{{ .RelPermalink }}">
+    <span class="td-pager__direction">&larr; Previous</span>
+    <span class="td-pager__title">{{ .LinkTitle }}</span>
+  </a>
+  {{- else }}
+  <div class="td-pager__spacer"></div>
+  {{- end }}
+
+  {{- with $next }}
+  <a class="td-pager__link td-pager__link--next card-h" href="{{ .RelPermalink }}">
+    <span class="td-pager__direction">Next &rarr;</span>
+    <span class="td-pager__title">{{ .LinkTitle }}</span>
+  </a>
+  {{- else }}
+  <div class="td-pager__spacer"></div>
+  {{- end }}
+</nav>
+{{- end -}}

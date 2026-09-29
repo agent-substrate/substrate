@@ -38,8 +38,11 @@ Callers must use {{% %}} so that Hugo renders the returned Markdown.
   {{- errorf "include-file: %s: %q is not mounted under assets/repo; add it to module.mounts in hugo.yaml" .Page.File.Path $file -}}
 {{- end -}}
 
-{{/* The page title replaces the file's leading H1. */ -}}
-{{- $content := replaceRE `\A\s*# [^\n]*\n+` "" $res.Content 1 -}}
+{{/* The page title replaces the file's leading H1 (after any leading HTML license comments). */ -}}
+{{- $content := replaceRE `\A(?s:\s*(?:<!--.*?-->\s*)*)# [^\n]*\n+` "" $res.Content 1 -}}
+{{- if .Get "shift_headings" -}}
+  {{- $content = replaceRE `(?m)^(#{2,5}) ` "#$1 " $content -}}
+{{- end -}}
 
 {{- $repo := site.Params.github_repo -}}
 {{- $branch := site.Params.github_branch | default "main" -}}
@@ -57,7 +60,8 @@ Callers must use {{% %}} so that Hugo renders the returned Markdown.
     {{- end -}}
     {{- $repoPath := path.Join $dir $rel -}}
     {{- $url := "" -}}
-    {{- with where site.Pages "Params.repo_source" $repoPath -}}
+    {{- $matchedPages := or (where site.Pages "Params.repo_source" $repoPath) (where site.Pages "Params.repo_sources" "intersect" (slice $repoPath)) -}}
+    {{- with $matchedPages -}}
       {{- $url = (index . 0).RelPermalink -}}
     {{- else -}}
       {{- range site.Params.repo_static_dirs -}}

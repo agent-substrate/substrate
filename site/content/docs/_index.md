@@ -13,5 +13,6 @@ lower latency than Kubernetes alone. It maps a large set of *actors*
 (Kubernetes Pods), and takes the Kubernetes control plane out of the critical
 path when actors are created, suspended, and resumed.
 
-Start with the [Overview](overview/), then read about the
+Start with the [Overview](get-started/overview/), deploy your first actor in
+[Quickstart](get-started/quickstart/), or read about the
 [Architecture](concepts/architecture/).

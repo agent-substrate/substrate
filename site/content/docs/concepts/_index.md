@@ -3,5 +3,5 @@ title: "Concepts"
 linkTitle: "Concepts"
 weight: 2
 description: >
-  How Agent Substrate is put together and the vocabulary it uses.
+  High-level mental models and architectural explanations of how Agent Substrate works.
 ---

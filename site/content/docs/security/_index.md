@@ -1,7 +1,7 @@
 ---
 title: "Security"
 linkTitle: "Security"
-weight: 4
+weight: 6
 description: >
-  The security model of Agent Substrate.
+  Security models, threat analysis, TLS MITM interception, and egress policies in Agent Substrate.
 ---
