@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
@@ -30,6 +31,21 @@ func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
 	_, err := connectStore(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "--postgres-read-write-connection-string is required") {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
+	}
+}
+
+func TestConnectStoreRejectsNegativeMaxConnectionLifetime(t *testing.T) {
+	oldDSN, oldLifetime := *postgresReadWriteConnectionString, *postgresMaxConnLifetime
+	t.Cleanup(func() {
+		*postgresReadWriteConnectionString = oldDSN
+		*postgresMaxConnLifetime = oldLifetime
+	})
+	*postgresReadWriteConnectionString = "postgres://runtime@postgres/atepg"
+	*postgresMaxConnLifetime = -time.Second
+
+	_, err := connectStore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--postgres-max-conn-lifetime must not be negative") {
+		t.Fatalf("connectStore() error = %v, want invalid-lifetime error", err)
 	}
 }
 

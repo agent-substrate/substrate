@@ -67,12 +67,28 @@ func Bootstrap(ctx context.Context, cfg BootstrapConfig) error {
 		}
 	}
 
-	ownerPoolConfig, err := pgxpool.ParseConfig(cfg.EndpointSource)
+	source, err := newConnectionStringSource(cfg.EndpointSource)
+	if err != nil {
+		return err
+	}
+	dsn, err := source()
+	if err != nil {
+		return err
+	}
+	ownerPoolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return errors.New("parsing PostgreSQL bootstrap connection string: invalid value")
 	}
 	connConfig := ownerPoolConfig.ConnConfig
-	readWritePoolConfig, err := pgxpool.ParseConfig(cfg.ReadWriteSource)
+	readWriteSource, err := newConnectionStringSource(cfg.ReadWriteSource)
+	if err != nil {
+		return err
+	}
+	readWriteDSN, err := readWriteSource()
+	if err != nil {
+		return err
+	}
+	readWritePoolConfig, err := pgxpool.ParseConfig(readWriteDSN)
 	if err != nil {
 		return errors.New("parsing PostgreSQL read/write connection string: invalid value")
 	}

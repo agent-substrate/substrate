@@ -75,11 +75,12 @@ var (
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
 	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
-	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN or URI).")
+	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN, URI, or @file:/absolute/path).")
+	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN, URI, or @file:/absolute/path).")
 	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	postgresMaxConnLifetime           = pflag.Duration("postgres-max-conn-lifetime", 0, "Maximum lifetime for PostgreSQL connections. The pgx default is used when unset.")
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
 	postgresBootstrap                 = pflag.Bool("postgres-bootstrap", false, "Create missing fixed PostgreSQL identities before migrations.")
 	postgresAdminUsernameFile         = pflag.String("postgres-admin-username-file", "", "File that contains the PostgreSQL administrator username.")
@@ -453,6 +454,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-read-write-role", *postgresReadWriteRole),
 		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Duration("postgres-max-conn-lifetime", *postgresMaxConnLifetime),
 		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
@@ -499,6 +501,9 @@ func connectStore(ctx context.Context) (*atepg.Persistence, error) {
 	if *postgresReadWriteConnectionString == "" {
 		return nil, fmt.Errorf("--postgres-read-write-connection-string is required")
 	}
+	if *postgresMaxConnLifetime < 0 {
+		return nil, fmt.Errorf("--postgres-max-conn-lifetime must not be negative")
+	}
 	if *postgresPoolMaxConns < 0 {
 		return nil, fmt.Errorf("--postgres-pool-max-conns must not be negative")
 	}
@@ -517,7 +522,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole, *postgresSchema, *postgresPoolMaxConns)
+		persistence, err := atepg.Connect(ctx, *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole, *postgresSchema, *postgresMaxConnLifetime, *postgresPoolMaxConns)
 		if err == nil {
 			return persistence, nil
 		}
