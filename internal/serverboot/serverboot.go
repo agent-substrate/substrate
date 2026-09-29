@@ -26,7 +26,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
@@ -296,27 +299,80 @@ func ShutdownProvider(name string, shutdown func(context.Context) error) {
 	}
 }
 
+// checkTimeout bounds the dependency checks of one /readyz request. It sits
+// under the kubelet's default 1s probe timeout so a hung dependency gets a 503
+// rather than a timed-out probe.
+const checkTimeout = 500 * time.Millisecond
+
 // Readiness is a predicate for process readiness. The zero value
 // reports ready. Calling MarkNotReady flips it permanently to not ready,
 // which causes /readyz to start returning "Service Unavailable" (503).
+// Checks added with AddCheck make /readyz return 503 only while they fail.
 type Readiness struct {
 	notReady atomic.Bool
+
+	mu     sync.RWMutex
+	checks []*readinessCheck
+}
+
+type readinessCheck struct {
+	name    string
+	fn      func(context.Context) error
+	failing atomic.Bool
 }
 
 // MarkNotReady makes /readyz return 503 from now on.
 func (r *Readiness) MarkNotReady() { r.notReady.Store(true) }
 
-// Ready reports whether /readyz returns 200.
+// Ready reports whether MarkNotReady has not been called. It does not run the
+// checks added with AddCheck.
 func (r *Readiness) Ready() bool { return !r.notReady.Load() }
+
+// AddCheck registers a dependency check that /readyz runs on every request.
+// While it returns an error, or does not return within checkTimeout, /readyz
+// returns 503, and it returns 200 again once the check passes. Liveness is
+// unaffected. Check errors are logged when a check starts and stops failing,
+// and never sent to the client.
+func (r *Readiness) AddCheck(name string, check func(context.Context) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checks = append(r.checks, &readinessCheck{name: name, fn: check})
+}
+
+// notReadyReason returns why /readyz should answer 503, or "" if it should
+// answer 200. Draining wins over the checks, which are not run.
+func (r *Readiness) notReadyReason(ctx context.Context) string {
+	if !r.Ready() {
+		return "draining"
+	}
+	r.mu.RLock()
+	checks := slices.Clone(r.checks)
+	r.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	for _, c := range checks {
+		if err := c.fn(ctx); err != nil {
+			if !c.failing.Swap(true) {
+				slog.WarnContext(ctx, "Readiness check failing", slog.String("check", c.name), slog.Any("err", err))
+			}
+			return c.name + " check failed"
+		}
+		if c.failing.Swap(false) {
+			slog.InfoContext(ctx, "Readiness check recovered", slog.String("check", c.name))
+		}
+	}
+	return ""
+}
 
 // MetricsServerOptions configures StartMetricsServer.
 type MetricsServerOptions struct {
 	// Addr is the TCP listen address (e.g. ":9090").
 	Addr string
 	// Readiness, if non-nil, enables a /readyz handler: 200 while
-	// Ready, 503 after MarkNotReady. A zero-value Readiness never
-	// flips, giving a static 200 for binaries with no drain sequence.
-	// Nil serves no /readyz at all.
+	// Ready and every check passes, 503 after MarkNotReady or while a
+	// check fails. A zero-value Readiness never flips, giving a static
+	// 200 for binaries with no drain sequence. Nil serves no /readyz at all.
 	Readiness *Readiness
 	// EnableHealthz adds an always-200 /healthz for liveness probes,
 	// which must keep succeeding while a draining server fails /readyz.
@@ -371,9 +427,9 @@ func readinessMux(readiness *Readiness) *http.ServeMux {
 }
 
 func readinessHandler(readiness *Readiness) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if !readiness.Ready() {
-			http.Error(w, "draining", http.StatusServiceUnavailable)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if reason := readiness.notReadyReason(r.Context()); reason != "" {
+			http.Error(w, reason, http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)

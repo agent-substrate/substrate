@@ -310,7 +310,10 @@ func main() {
 	ateapipb.RegisterControlServer(mux, controlSrv)
 	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
 
+	// Every RPC needs the store, so a replica that cannot reach it leaves the
+	// Service until it can. Liveness stays green: the pool reconnects on its own.
 	readiness := &serverboot.Readiness{}
+	readiness.AddCheck("store", pool.Ping)
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
 		Addr:          *metricsListenAddr,
 		Readiness:     readiness,

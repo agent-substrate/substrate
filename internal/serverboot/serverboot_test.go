@@ -17,10 +17,12 @@ package serverboot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -199,6 +201,108 @@ func TestReadyzStaticWithZeroValueReadiness(t *testing.T) {
 	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
 		t.Errorf("/readyz with zero-value Readiness = %d, want %d", got, http.StatusOK)
+	}
+}
+
+func TestReadyzFollowsCheck(t *testing.T) {
+	var down atomic.Bool
+	readiness := &Readiness{}
+	readiness.AddCheck("store", func(context.Context) error {
+		if down.Load() {
+			return errors.New("failed to connect to host=db.internal user=ate")
+		}
+		return nil
+	})
+	mux := metricsMux(MetricsServerOptions{Readiness: readiness, EnableHealthz: true})
+
+	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz with a passing check = %d, want %d", got, http.StatusOK)
+	}
+
+	down.Store(true)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz with a failing check = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(rec.Body.String(), "store") || strings.Contains(rec.Body.String(), "db.internal") {
+		t.Errorf("/readyz body = %q, want it to name the check and not leak the error", rec.Body.String())
+	}
+	if got := getCode(t, mux, "/healthz"); got != http.StatusOK {
+		t.Errorf("/healthz with a failing check = %d, want %d (liveness must not follow a dependency)", got, http.StatusOK)
+	}
+
+	down.Store(false)
+	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz after the check recovers = %d, want %d", got, http.StatusOK)
+	}
+}
+
+func TestReadyzCheckTimeout(t *testing.T) {
+	readiness := &Readiness{}
+	readiness.AddCheck("store", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	mux := readinessMux(readiness)
+
+	start := time.Now()
+	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz with a hung check = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("/readyz took %v with a hung check, want under the 1s kubelet probe timeout", elapsed)
+	}
+}
+
+func TestReadyzDrainSkipsChecks(t *testing.T) {
+	var calls atomic.Int32
+	readiness := &Readiness{}
+	readiness.AddCheck("store", func(context.Context) error {
+		calls.Add(1)
+		return nil
+	})
+	mux := readinessMux(readiness)
+
+	readiness.MarkNotReady()
+	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz during drain = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("check ran %d times during drain, want 0", got)
+	}
+}
+
+func TestReadyzLogsCheckTransitionsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var down atomic.Bool
+	readiness := &Readiness{}
+	readiness.AddCheck("store", func(context.Context) error {
+		if down.Load() {
+			return errors.New("connection refused")
+		}
+		return nil
+	})
+	mux := readinessMux(readiness)
+
+	down.Store(true)
+	for range 3 {
+		getCode(t, mux, "/readyz")
+	}
+	down.Store(false)
+	for range 3 {
+		getCode(t, mux, "/readyz")
+	}
+
+	if got := strings.Count(buf.String(), "Readiness check failing"); got != 1 {
+		t.Errorf("logged failure %d times over 3 failing requests, want 1:\n%s", got, buf.String())
+	}
+	if got := strings.Count(buf.String(), "Readiness check recovered"); got != 1 {
+		t.Errorf("logged recovery %d times over 3 passing requests, want 1:\n%s", got, buf.String())
 	}
 }
 
