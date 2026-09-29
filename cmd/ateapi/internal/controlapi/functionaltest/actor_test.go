@@ -3380,7 +3380,7 @@ func TestSuspendActor(t *testing.T) {
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
+			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(), SnapshotFiles: checkpointFiles},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			StorageLocation:  tmpl.GetSnapshotConfig().GetStorageLocation(),
 		},
@@ -3488,6 +3488,7 @@ func TestSuspendActor(t *testing.T) {
 				SnapshotUri:      snapshotURI,
 				ContentScope:     sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(),
 				ActorTemplateUid: tmpl.GetMetadata().GetUid(),
+				SnapshotFiles:    checkpointFiles,
 			},
 		},
 	}
@@ -3782,6 +3783,7 @@ func TestPauseActor(t *testing.T) {
 			LocalSnapshot: &ateapipb.LocalSnapshot{
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				SnapshotFiles:             checkpointFiles,
 			},
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
