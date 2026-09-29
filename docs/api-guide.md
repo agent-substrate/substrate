@@ -254,6 +254,8 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 
 The process runs as the image's `USER`, resolved as Docker does against the image's own `/etc/passwd` and `/etc/group`: a numeric `uid:gid` as is; a bare uid with its login group, or gid 0 when it has no entry; a name must have an entry or `Run`/`Restore` fails. Group memberships become supplementary groups. Ids are at most 2147483647. No `USER` means root. There is no `runAsUser` field.
 
+The process starts in the image's `WORKDIR`, or in `/` when the image sets none. A `WORKDIR` the image lacks is created in the actor's writable layer. There is no `workingDir` field.
+
 ### Container Capabilities (`securityContext.capabilities`)
 
 Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, `KILL` and `NET_BIND_SERVICE`. `securityContext.capabilities` adjusts that set, mirroring `securityContext.capabilities` on a Kubernetes Pod container.

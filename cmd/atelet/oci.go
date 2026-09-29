@@ -141,13 +141,20 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, bund
 	if err != nil {
 		return fmt.Errorf("while resolving user for container %q: %w", containerName, err)
 	}
+	cwd, err := resolveCwd(&img.Config)
+	if err != nil {
+		return fmt.Errorf("while resolving working directory for container %q: %w", containerName, err)
+	}
 
-	// Every bind target must exist in the rootfs for the mount to attach;
-	// ateom creates them through the mounted overlay (they land in the
-	// actor's upper).
+	// Every bind target must exist in the rootfs for the mount to attach, and
+	// the working directory for the process to start; ateom creates them
+	// through the mounted overlay (they land in the actor's upper).
 	var extraDirs []string
 	for _, vm := range volumeMounts {
 		extraDirs = append(extraDirs, vm.GetMountPath())
+	}
+	if cwd != "/" {
+		extraDirs = append(extraDirs, cwd)
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
@@ -172,6 +179,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, bund
 		SystemInfoVolumeRootsDir:  ateletpath.SystemInfoVolumeRootsDir(actorUID),
 		BundlePath:                bundlePath,
 		User:                      identity,
+		Cwd:                       cwd,
 	})); err != nil {
 		return fmt.Errorf("while writing OCI spec: %w", err)
 	}
@@ -324,4 +332,16 @@ func resolveUser(userSpec string, passwd, group io.Reader) (specs.User, error) {
 		identity.AdditionalGids = append(identity.AdditionalGids, uint32(gid))
 	}
 	return identity, nil
+}
+
+// resolveCwd reads the image's WORKDIR; none means "/". The OCI spec requires
+// an absolute path.
+func resolveCwd(imageCfg *v1.Config) (string, error) {
+	if imageCfg == nil || imageCfg.WorkingDir == "" {
+		return "/", nil
+	}
+	if !path.IsAbs(imageCfg.WorkingDir) {
+		return "", fmt.Errorf("image WorkingDir %q is not absolute", imageCfg.WorkingDir)
+	}
+	return path.Clean(imageCfg.WorkingDir), nil
 }

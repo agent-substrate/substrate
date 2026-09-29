@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -206,8 +207,27 @@ func TestResolveUser(t *testing.T) {
 	}
 }
 
-// The resolved identity reaches the bundle's config.json, for the pause
-// container too.
+func TestResolveCwd(t *testing.T) {
+	for _, tc := range []struct {
+		image   *v1.Config
+		want    string
+		wantErr bool
+	}{
+		{image: nil, want: "/"},
+		{image: &v1.Config{}, want: "/"},
+		{image: &v1.Config{WorkingDir: "/home/jovyan"}, want: "/home/jovyan"},
+		{image: &v1.Config{WorkingDir: "/app/"}, want: "/app"},
+		{image: &v1.Config{WorkingDir: "app"}, wantErr: true},
+	} {
+		got, err := resolveCwd(tc.image)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("resolveCwd(%+v) = %q, %v; want %q, wantErr %v", tc.image, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
+// User and cwd reach the bundle's config.json, for the pause container too;
+// the cwd is created through ExtraDirs.
 func TestPrepareOCIDirectory(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	etc := []v1.Layer{
@@ -231,7 +251,7 @@ func TestPrepareOCIDirectory(t *testing.T) {
 	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ref := fmt.Sprintf("%s/user%d:v1", host, i)
-			pushTestImageWithConfig(t, ref, v1.Config{User: tc.user, Cmd: []string{"/app"}}, tc.layers...)
+			pushTestImageWithConfig(t, ref, v1.Config{User: tc.user, Cmd: []string{"/app"}, WorkingDir: "/home/nonroot"}, tc.layers...)
 			bundle := t.TempDir()
 			err := prepareOCIDirectory(t.Context(), newImageVolumeStore(t), bundle, "actor-uid", tc.container, ref, nil, nil, nil, "", nil, nil, nil, nil)
 			if tc.wantErr {
@@ -249,6 +269,16 @@ func TestPrepareOCIDirectory(t *testing.T) {
 			}
 			if !reflect.DeepEqual(spec.Process.User, tc.want) {
 				t.Errorf("Process.User = %+v, want %+v", spec.Process.User, tc.want)
+			}
+			if spec.Process.Cwd != "/home/nonroot" {
+				t.Errorf("Process.Cwd = %q, want /home/nonroot", spec.Process.Cwd)
+			}
+			overlay, err := imagecache.ReadSpec(bundle)
+			if err != nil {
+				t.Fatalf("imagecache.ReadSpec: %v", err)
+			}
+			if !slices.Contains(overlay.ExtraDirs, "/home/nonroot") {
+				t.Errorf("ExtraDirs = %v, want the working directory", overlay.ExtraDirs)
 			}
 		})
 	}

@@ -150,6 +150,15 @@ func TestBuild_ProcessUser(t *testing.T) {
 	}
 }
 
+func TestBuild_Cwd(t *testing.T) {
+	if got := Build(Options{Args: []string{"/app"}, Cwd: "/work"}).Process.Cwd; got != "/work" {
+		t.Errorf("Process.Cwd = %q, want /work", got)
+	}
+	if got := Build(Options{Args: []string{"/app"}}).Process.Cwd; got != "/" {
+		t.Errorf("Process.Cwd = %q, want /", got)
+	}
+}
+
 // The pause container gets no capabilities.
 func TestBuild_NoCapabilitiesForPause(t *testing.T) {
 	spec := Build(Options{Args: []string{"/pause"}})

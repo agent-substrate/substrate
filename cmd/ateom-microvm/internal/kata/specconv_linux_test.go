@@ -175,3 +175,10 @@ func TestSpecToAgentPB_ForwardsProcessUser(t *testing.T) {
 		t.Fatalf("Process.User = %v, want 65532:65534 +44", u)
 	}
 }
+
+func TestSpecToAgentPB_ForwardsCwd(t *testing.T) {
+	got := SpecToAgentPB(&specs.Spec{Process: &specs.Process{Cwd: "/work"}})
+	if got.GetProcess().GetCwd() != "/work" {
+		t.Fatalf("Process.Cwd = %q, want /work", got.GetProcess().GetCwd())
+	}
+}
