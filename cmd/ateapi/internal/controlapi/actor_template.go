@@ -295,9 +295,10 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 	return nil
 }
 
-// ValidateCustom_Resources_Limits applies resources.ValidateLimits.
-func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.Limits) field.ErrorList {
-	return resources.ValidateLimits(fldPath, value)
+// ValidateCustom_Limits validates one limit with resources.ValidateLimit.
+// Presence and uniqueness of names are enforced by tags.
+func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Limits) field.ErrorList {
+	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
 }
 
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an

@@ -52,10 +52,11 @@ func toInvalidArgument(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 }
 
-// ValidateCustom_Resources_Limits applies resources.ValidateLimits, the same
-// rules the control plane uses.
-func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateletpb.Limits) field.ErrorList {
-	return resources.ValidateLimits(fldPath, value)
+// ValidateCustom_Limits validates one limit with resources.ValidateLimit, the
+// rule the control plane applies to its own Limits. Presence and uniqueness
+// of names are enforced by tags.
+func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.Limits) field.ErrorList {
+	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
 }
 
 // ateDeepEqual compares two values of any type, using proto.Equal if both are

@@ -325,7 +325,6 @@ type Resources struct {
 	// +k8s:maxItems=2
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
-	// +k8s:customValidation # names, quantity parse/positivity, cpu bound
 	Limits        []*Limits `protobuf:"bytes,1,rep,name=limits,proto3" json:"limits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -368,16 +367,17 @@ func (x *Resources) GetLimits() []*Limits {
 	return nil
 }
 
+// +k8s:customValidation # names, quantity parse/positivity, cpu bound
 type Limits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
-	// +k8s:maxLength=16 # the hook on Resources.limits restricts values to cpu/memory
+	// +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
 	// "2Gi").
 	//
 	// +k8s:required
-	// +k8s:maxLength=32 # the hook on Resources.limits requires a parseable quantity
+	// +k8s:maxLength=32 # the Limits hook requires a parseable quantity
 	Quantity      string `protobuf:"bytes,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

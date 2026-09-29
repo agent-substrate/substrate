@@ -35,6 +35,11 @@ func Validate_Limits(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.Limits) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_Limits(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateletpb.Limits.Name
 		fn := func(
 			fldPath *field.Path,
@@ -376,10 +381,6 @@ func Validate_Resources(
 			}
 			if earlyReturn {
 				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_Resources_Limits(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,

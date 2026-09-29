@@ -274,32 +274,28 @@ func TestValidateUUID(t *testing.T) {
 	}
 }
 
-func TestValidateLimits(t *testing.T) {
-	path := field.NewPath("limits")
-	q := func(i int) *field.Path { return path.Index(i).Child("quantity") }
+func TestValidateLimit(t *testing.T) {
+	path := field.NewPath("limits").Index(0)
+	quantityPath := path.Child("quantity")
 	tests := []struct {
-		name   string
-		limits []*ateapipb.Limits
-		want   field.ErrorList
+		name     string
+		limit    string
+		quantity string
+		want     field.ErrorList
 	}{
-		{name: "empty"},
-		{name: "valid", limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "999"}, {Name: "memory", Quantity: "1Gi"}}},
-		{name: "nil entry left to tags", limits: []*ateapipb.Limits{nil}},
-		{name: "missing quantity left to tags", limits: []*ateapipb.Limits{{Name: "cpu"}}},
-		{
-			name:   "unsupported name",
-			limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}},
-			want:   field.ErrorList{field.NotSupported[string](path.Index(0).Child("name"), nil, nil)},
-		},
-		{name: "malformed quantity", limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "x"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
-		{name: "zero quantity", limits: []*ateapipb.Limits{{Name: "memory", Quantity: "0"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
-		{name: "negative quantity", limits: []*ateapipb.Limits{{Name: "memory", Quantity: "-1"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
-		{name: "cpu at the bound", limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1000"}}, want: field.ErrorList{field.Invalid(q(0), nil, "")}},
-		{name: "memory has no upper bound", limits: []*ateapipb.Limits{{Name: "memory", Quantity: "1000"}}},
+		{name: "cpu below the bound", limit: "cpu", quantity: "999"},
+		{name: "memory", limit: "memory", quantity: "1Gi"},
+		{name: "memory has no upper bound", limit: "memory", quantity: "1000"},
+		{name: "missing quantity left to tags", limit: "cpu"},
+		{name: "unsupported name", limit: "gpu", quantity: "1", want: field.ErrorList{field.NotSupported[string](path.Child("name"), nil, nil)}},
+		{name: "malformed quantity", limit: "cpu", quantity: "x", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "zero quantity", limit: "memory", quantity: "0", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "negative quantity", limit: "memory", quantity: "-1", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu at the bound", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateLimits(path, tt.limits))
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateLimit(path, tt.limit, tt.quantity))
 		})
 	}
 }

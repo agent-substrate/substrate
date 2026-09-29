@@ -24,7 +24,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -245,43 +244,27 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 // cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
 var cpuLimitMax = resource.MustParse("1k")
 
-// Limit is a resource limit entry. Both the control plane's and atelet's
-// Limits messages satisfy it, so they share one set of rules.
-type Limit interface {
-	GetName() string
-	GetQuantity() string
-	ProtoReflect() protoreflect.Message
-}
-
-// ValidateLimits validates resource limits: only cpu and memory limits are
-// supported, each quantity must be greater than zero, and the cpu limit must
-// be less than 1000 cores. Nil entries, presence, and uniqueness of names are
-// left to declarative tags.
-func ValidateLimits[L Limit](fldPath *field.Path, limits []L) field.ErrorList {
+// ValidateLimit validates one resource limit entry at fldPath: only cpu and
+// memory are supported, the quantity must be greater than zero, and the cpu
+// limit must be less than 1000 cores. An empty quantity is left to the
+// required tag.
+func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
+	if name != ResourceCPU && name != ResourceMemory {
+		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
+	}
+	if quantity == "" {
+		return nil
+	}
+	q, err := resource.ParseQuantity(quantity)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath.Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
+	}
 	var errs field.ErrorList
-	for i, limit := range limits {
-		if !limit.ProtoReflect().IsValid() {
-			continue // a nil entry; required is enforced by tags
-		}
-		name, quantity := limit.GetName(), limit.GetQuantity()
-		if name != ResourceCPU && name != ResourceMemory {
-			errs = append(errs, field.NotSupported(fldPath.Index(i).Child("name"), name, []string{ResourceCPU, ResourceMemory}))
-			continue
-		}
-		if quantity == "" {
-			continue // required is enforced by tags
-		}
-		q, err := resource.ParseQuantity(quantity)
-		if err != nil {
-			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err)))
-			continue
-		}
-		if q.Sign() <= 0 {
-			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), quantity, "must be greater than zero"))
-		}
-		if name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
-			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), quantity, "cpu limit must be less than 1000 cores"))
-		}
+	if q.Sign() <= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
+	}
+	if name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be less than 1000 cores"))
 	}
 	return errs
 }

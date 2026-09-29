@@ -79,20 +79,20 @@ message Resources {
   // +k8s:maxItems=2
   // +k8s:listType=map
   // +k8s:listMapKey=name
-  // +k8s:customValidation # names, quantity parse/positivity, cpu bound
   repeated Limits limits = 1;
 }
 
+// +k8s:customValidation # names, quantity parse/positivity, cpu bound
 message Limits {
   // +k8s:required
-  // +k8s:maxLength=16 # the hook on Resources.limits restricts values to cpu/memory
+  // +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
   string name = 1;
 
   // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
   // "2Gi").
   //
   // +k8s:required
-  // +k8s:maxLength=32 # the hook on Resources.limits requires a parseable quantity
+  // +k8s:maxLength=32 # the Limits hook requires a parseable quantity
   string quantity = 2;
 }
 
