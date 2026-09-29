@@ -2943,10 +2943,12 @@ func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapip
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{{
-				Name:    "main",
-				Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-				Command: []string{"/main"},
+				Name:         "main",
+				Image:        "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				Command:      []string{"/main"},
+				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
+			Volumes: []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}},
 			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},

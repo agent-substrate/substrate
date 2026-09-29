@@ -1429,7 +1429,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes
+  // +k8s:customValidation # volume references and DATA snapshot support
   ActorTemplate actor_template = 1;
 }
 
