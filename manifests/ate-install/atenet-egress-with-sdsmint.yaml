@@ -227,6 +227,7 @@ data:
                     receiving_namespaces:
                       untyped:
                       - dev.ate.egress
+                      - dev.ate.policy.egress
               # The address the passthrough chains may dial, from the CONNECT
               # leg's answer, shared with the inner listener as the filter state
               # the ORIGINAL_DST cluster reads. With no answer nothing is written
@@ -242,6 +243,14 @@ data:
                     format_string:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.egress:passthrough_destination)%"
+                      omit_empty_values: true
+                  - object_key: dev.ate.policy.egress
+                    factory_key: envoy.string
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
                       omit_empty_values: true
               - name: envoy.filters.http.router
                 typed_config:
@@ -308,6 +317,12 @@ data:
         - name: envoy.filters.listener.http_inspector
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector
+        - name: envoy.filters.listener.dynamic_modules
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter
+            dynamic_module_config:
+              name: envoy_substrate_egress_policy
+            filter_name: envoy_substrate_egress_policy
         filter_chains:
         - name: egress_tls_mitm
           filter_chain_match:
@@ -1139,6 +1154,8 @@ spec:
         - atenet-egress
         - --service-cluster
         - atenet-egress
+        - --log-level
+        - trace
         # Prevents Envoy from fast-exiting on SIGTERM before the ext-proc
         # sidecar finishes its drain sequence. Polls for the drain-complete
         # marker the sidecar writes on the shared emptyDir, terminating Envoy

@@ -59,6 +59,12 @@ const (
 	// allowed it. The outer chain copies it into the ORIGINAL_DST filter state;
 	// absent, a TLS or opaque connection has no upstream and is closed.
 	EgressPassthroughDestinationKey = "passthrough_destination"
+	// EgressPolicyMetadataNamespace is the dynamic-metadata namespace carrying
+	// the actor's egress policy on the CONNECT leg.
+	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
+	// EgressAllowedSNIsKey, under EgressPolicyMetadataNamespace, is the list
+	// of allowed SNI patterns from the actor's egress policy.
+	EgressAllowedSNIsKey = "allowed_snis"
 	// EgressDialKey, under EgressMetadataNamespace, is a request leg's answer
 	// for an allowed request: where it goes. The manifests' routes match on
 	// it, one route per value and none without, so a request with no answer

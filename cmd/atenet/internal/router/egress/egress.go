@@ -180,12 +180,36 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 
 	// This also warms the cache for the requests inside the tunnel, and
 	// refuses an actor whose policy could allow nothing.
-	if _, err := h.lookupPolicy(ctx, leg, ref); err != nil {
+	policy, err := h.lookupPolicy(ctx, leg, ref)
+	if err != nil {
 		return extproc.Result{}, err
 	}
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
 		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host))
-	return allow(), nil
+	res := allow()
+	res.DynamicMetadata = connectMetadata(policy.HostnamePatterns())
+	return res, nil
+}
+
+// connectMetadata builds the dynamic metadata returned on an allowed CONNECT:
+// the policy's allowed SNI patterns under dev.ate.policy.egress, plus the one
+// address the passthrough chain may dial (as IP:port) when an address rule
+// allowed it.
+func connectMetadata(allowedSNIs []string) *structpb.Struct {
+	sniValues := make([]*structpb.Value, len(allowedSNIs))
+	for i, sni := range allowedSNIs {
+		sniValues[i] = structpb.NewStringValue(sni)
+	}
+	fields := map[string]*structpb.Value{
+		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				extproc.EgressAllowedSNIsKey: structpb.NewListValue(&structpb.ListValue{
+					Values: sniValues,
+				}),
+			},
+		}),
+	}
+	return &structpb.Struct{Fields: fields}
 }
 
 // metadataAnswer is a one-entry answer in the egress metadata namespace.

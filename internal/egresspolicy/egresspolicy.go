@@ -165,6 +165,18 @@ func (r compiledRule) matchesPort(port uint16) bool {
 	return r.anyPort || slices.Contains(r.ports, port)
 }
 
+// HostnamePatterns returns all compiled hostname patterns across the policy's
+// rules, in rule order.
+func (p *Policy) HostnamePatterns() []string {
+	var patterns []string
+	for _, rule := range p.rules {
+		for _, pattern := range rule.hostnames {
+			patterns = append(patterns, pattern.String())
+		}
+	}
+	return patterns
+}
+
 // EvaluateRequest decides one request the gateway can read, on the name or
 // address in its authority and the port the actor dialed. decrypted selects
 // the https rules, for a request the gateway terminated TLS for; otherwise

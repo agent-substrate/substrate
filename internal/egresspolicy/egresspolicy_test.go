@@ -384,3 +384,36 @@ func TestEvaluateRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestHostnamePatterns(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy *ateapipb.EgressPolicy
+		want   []string
+	}{
+		{name: "no rules", policy: &ateapipb.EgressPolicy{}},
+		{name: "cidrs only", policy: policy(ipBlockRule("10.0.0.0/8"))},
+		{name: "all only", policy: policy(allRule())},
+		{name: "single hostname rule", policy: policy(hostnameRule("api.example.com", "*.example.org")), want: []string{"api.example.com", "*.example.org"}},
+		{name: "multiple hostname rules mixed with cidr", policy: policy(
+			hostnameRule("api.example.com"),
+			ipBlockRule("10.0.0.0/8"),
+			hostnameRule("*.example.org", "foo.bar.com"),
+		), want: []string{"api.example.com", "*.example.org", "foo.bar.com"}},
+		{name: "invalid patterns dropped", policy: policy(hostnameRule("good.example.com", "not a hostname")), want: []string{"good.example.com"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			compiled, _ := Compile(tc.policy)
+			got := compiled.HostnamePatterns()
+			if len(got) != len(tc.want) {
+				t.Fatalf("HostnamePatterns() = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("HostnamePatterns()[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
