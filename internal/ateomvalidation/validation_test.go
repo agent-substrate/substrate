@@ -16,15 +16,19 @@ package ateomvalidation
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"google.golang.org/grpc/codes"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// Every request field is gated optional and the message-typed ones are
-// opaque, so nothing is rejected yet. These tests hold that line: an empty
-// request and a fully populated one both pass, for every RPC. Rules land
-// field by field in follow-ups, each with its own negative cases.
+// Run, Checkpoint, and Restore are still gated optional with their
+// message-typed fields opaque, so nothing on them is rejected yet. Their tests
+// hold that line: an empty request and a fully populated one both pass. Rules
+// land message by message in follow-ups, each with its own negative cases.
 
 func fullSpec() *ateompb.WorkloadSpec {
 	return &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{
@@ -128,37 +132,137 @@ func TestValidateRestoreWorkloadRequest(t *testing.T) {
 	}
 }
 
+func validTerminateWorkloadRequest(mutate ...func(*ateompb.TerminateWorkloadRequest)) *ateompb.TerminateWorkloadRequest {
+	r := &ateompb.TerminateWorkloadRequest{
+		Atespace:              "team-a",
+		ActorName:             "actor-1",
+		ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+		ActorTemplateAtespace: "team-a",
+		ActorTemplateName:     "template-1",
+		RunscPath:             "/opt/runsc",
+		Spec:                  fullSpec(),
+		ActorDirs:             fullActorDirs(),
+	}
+	for _, m := range mutate {
+		m(r)
+	}
+	return r
+}
+
 func TestValidateTerminateWorkloadRequest(t *testing.T) {
-	for name, req := range map[string]*ateompb.TerminateWorkloadRequest{
-		"empty": {},
-		"full": {
-			Atespace:              "team-a",
-			ActorName:             "actor-1",
-			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
-			ActorTemplateAtespace: "team-a",
-			ActorTemplateName:     "template-1",
-			RunscPath:             "/opt/runsc",
-			Spec:                  fullSpec(),
-			ActorDirs:             fullActorDirs(),
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := ValidateTerminateWorkloadRequest(context.Background(), req); err != nil {
-				t.Fatalf("ValidateTerminateWorkloadRequest() = %v, want nil", err)
-			}
+	valid := validTerminateWorkloadRequest
+
+	tests := []struct {
+		name string
+		obj  *ateompb.TerminateWorkloadRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "valid: no template ref, no runsc_path",
+		obj: valid(func(r *ateompb.TerminateWorkloadRequest) {
+			r.ActorTemplateAtespace, r.ActorTemplateName, r.RunscPath = "", "", ""
+		}),
+	}, {
+		name: "missing atespace",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.Atespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name: "invalid atespace: uppercase",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.Atespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_name",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.ActorName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		name: "invalid actor_name: trailing dash",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.ActorName = "actor-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_uid",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid: not a uuid",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.ActorUid = "uid-a" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid actor_template_atespace: uppercase",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.ActorTemplateAtespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid actor_template_name: underscore",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.ActorTemplateName = "template_1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "runsc_path too long",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.RunscPath = "/" + strings.Repeat("x", 4096) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("runsc_path"), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "missing spec",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.Spec = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
+	}, {
+		name: "missing actor_dirs",
+		obj:  valid(func(r *ateompb.TerminateWorkloadRequest) { r.ActorDirs = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_dirs"), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_TerminateWorkloadRequest(context.Background(), createOp(), nil, tt.obj, nil))
 		})
 	}
 }
 
+// TestValidateTerminateWorkloadRequestEdge covers the handler-facing wrapper:
+// valid passes, invalid comes back as InvalidArgument.
+func TestValidateTerminateWorkloadRequestEdge(t *testing.T) {
+	if err := ValidateTerminateWorkloadRequest(context.Background(), validTerminateWorkloadRequest()); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	err := ValidateTerminateWorkloadRequest(context.Background(), &ateompb.TerminateWorkloadRequest{})
+	if apierror.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty request error = %v, want InvalidArgument", err)
+	}
+}
+
 func TestValidateGetWorkloadStatsRequest(t *testing.T) {
-	for name, req := range map[string]*ateompb.GetWorkloadStatsRequest{
-		"empty": {},
-		"full":  {ActorUid: "01234567-89ab-cdef-0123-456789abcdef"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := ValidateGetWorkloadStatsRequest(context.Background(), req); err != nil {
-				t.Fatalf("ValidateGetWorkloadStatsRequest() = %v, want nil", err)
-			}
+	tests := []struct {
+		name string
+		obj  *ateompb.GetWorkloadStatsRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  &ateompb.GetWorkloadStatsRequest{ActorUid: "01234567-89ab-cdef-0123-456789abcdef"},
+	}, {
+		name: "missing actor_uid",
+		obj:  &ateompb.GetWorkloadStatsRequest{},
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid: not a uuid",
+		obj:  &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"},
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_GetWorkloadStatsRequest(context.Background(), createOp(), nil, tt.obj, nil))
 		})
+	}
+}
+
+// TestValidateGetWorkloadStatsRequestEdge covers the handler-facing wrapper:
+// valid passes, invalid comes back as InvalidArgument.
+func TestValidateGetWorkloadStatsRequestEdge(t *testing.T) {
+	valid := &ateompb.GetWorkloadStatsRequest{ActorUid: "01234567-89ab-cdef-0123-456789abcdef"}
+	if err := ValidateGetWorkloadStatsRequest(context.Background(), valid); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	err := ValidateGetWorkloadStatsRequest(context.Background(), &ateompb.GetWorkloadStatsRequest{})
+	if apierror.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty request error = %v, want InvalidArgument", err)
 	}
 }

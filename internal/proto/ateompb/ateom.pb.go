@@ -316,22 +316,32 @@ func (x *ActorDirs) GetVolumesDir() string {
 
 type TerminateWorkloadRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// Empty for runtimes that do not use runsc.
+	//
 	// +k8s:optional
+	// +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	// +k8s:optional
+	// Names the containers to stop.
+	//
+	// +k8s:required
 	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:opaqueType # tagged in a follow-up
 	ActorDirs     *ActorDirs `protobuf:"bytes,8,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1757,7 +1767,8 @@ type GetWorkloadStatsRequest struct {
 	// NOT_FOUND on a mismatch rather than reporting a different actor's numbers
 	// under the requested actor's identity.
 	//
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid      string `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

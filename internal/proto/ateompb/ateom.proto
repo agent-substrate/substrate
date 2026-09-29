@@ -127,22 +127,32 @@ message ActorDirs {
 }
 
 message TerminateWorkloadRequest {
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
+  // Empty for runtimes that do not use runsc.
+  //
   // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
-  // +k8s:optional
+  // Names the containers to stop.
+  //
+  // +k8s:required
   // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
-  // +k8s:optional
+  // +k8s:required
   // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 8;
 }
@@ -460,7 +470,8 @@ message GetWorkloadStatsRequest {
   // NOT_FOUND on a mismatch rather than reporting a different actor's numbers
   // under the requested actor's identity.
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 1;
 }
 

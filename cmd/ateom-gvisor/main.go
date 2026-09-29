@@ -44,6 +44,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomphaselog"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
+	"github.com/agent-substrate/substrate/internal/ateomvalidation"
 	"github.com/agent-substrate/substrate/internal/childreap"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -563,6 +564,9 @@ func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
 }
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
+	if err := ateomvalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
+		return nil, err
+	}
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -689,6 +693,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (_ *ateompb.CheckpointWorkloadResponse, err error) {
+	if err := ateomvalidation.ValidateCheckpointWorkloadRequest(ctx, req); err != nil {
+		return nil, err
+	}
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
@@ -887,6 +894,9 @@ func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name str
 }
 
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
+	if err := ateomvalidation.ValidateRestoreWorkloadRequest(ctx, req); err != nil {
+		return nil, err
+	}
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
@@ -1086,6 +1096,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 }
 
 func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	if err := ateomvalidation.ValidateTerminateWorkloadRequest(ctx, req); err != nil {
+		return nil, err
+	}
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}

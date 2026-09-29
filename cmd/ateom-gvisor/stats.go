@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ateomvalidation"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -93,8 +94,8 @@ const sandboxCgroupContainer = ocispec.PauseContainer
 // boots and checkpoints: polls would stall behind runsc, and a checkpoint
 // would wait on telemetry. The cgroup files are read with no lock held.
 func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
-	if req.GetActorUid() == "" {
-		return nil, apierror.InvalidArgument("actor_uid is required")
+	if err := ateomvalidation.ValidateGetWorkloadStatsRequest(ctx, req); err != nil {
+		return nil, err
 	}
 
 	// NOT_FOUND rather than FAILED_PRECONDITION: the requested actor is not
