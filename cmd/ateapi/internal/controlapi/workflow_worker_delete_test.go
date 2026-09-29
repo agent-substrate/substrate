@@ -320,8 +320,22 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 				t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, tc.wantCode)
 			}
 
-			if _, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
-				t.Errorf("worker gone after a failed release: %v", err)
+			worker, err := persistence.GetWorker(ctx, apiWorkerName)
+			if err != nil {
+				t.Fatalf("worker gone after a failed release: %v", err)
+			}
+			if worker.GetMetadata().GetDeleteTime() == nil {
+				t.Errorf("a failed delete left delete_time unset")
+			}
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
+				t.Fatal("retried DeleteWorker() = nil error, want the release failure reported")
+			}
+			retried, err := persistence.GetWorker(ctx, apiWorkerName)
+			if err != nil {
+				t.Fatalf("worker gone after a retried failed release: %v", err)
+			}
+			if got, want := retried.GetMetadata().GetVersion(), worker.GetMetadata().GetVersion(); got != want {
+				t.Errorf("a retried delete moved the worker version to %d, want %d", got, want)
 			}
 			got, err := persistence.GetActor(ctx, apiActorRef)
 			if err != nil {
@@ -365,7 +379,7 @@ func TestDeleteWorkerWorkflow_AbsentReportsNotFoundThroughStepWrap(t *testing.T)
 	if got := status.Code(err); got != codes.NotFound {
 		t.Fatalf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.NotFound)
 	}
-	if want := "step LoadWorkerForDelete"; !strings.Contains(err.Error(), want) {
+	if want := "step MarkWorkerForDeletion"; !strings.Contains(err.Error(), want) {
 		t.Errorf("DeleteWorker() error = %q, want it to name the step it failed at (%q)", err, want)
 	}
 }
@@ -379,4 +393,31 @@ type failingUpdateActorStore struct {
 
 func (f failingUpdateActorStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	return nil, f.err
+}
+
+func TestDeleteWorkerWorkflow_DrainedWorkerIsStillAdmitted(t *testing.T) {
+	ctx := context.Background()
+	wf, persistence := newWorkerDeleteWorkflow(t)
+	worker := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	drained, err := persistence.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+		if toUpdate.Status == nil {
+			toUpdate.Status = &ateapipb.WorkerStatus{}
+		}
+		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+
+	deleted, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+	if err != nil {
+		t.Fatalf("DeleteWorker() failed: %v", err)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Fatal("an operator-drained worker was removed without being marked for deletion")
+	}
+	if got, want := deleted.GetMetadata().GetVersion(), drained.GetMetadata().GetVersion()+1; got != want {
+		t.Errorf("version = %d, want %d: admission is one write", got, want)
+	}
 }

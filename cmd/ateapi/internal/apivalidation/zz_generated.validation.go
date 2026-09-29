@@ -6174,6 +6174,38 @@ func Validate_ResourceMetadata(
 		errs = append(errs, fn(fldPath.Child("update_time"), obj.UpdateTime, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ResourceMetadata.DeleteTime
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *timestamppb.Timestamp,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if e := validate.UpdatePointer(ctx, op, fldPath, obj, oldObj, validate.NoUnset, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ResourceMetadata) *timestamppb.Timestamp {
+				return oldObj.DeleteTime
+			})
+		errs = append(errs, fn(fldPath.Child("delete_time"), obj.DeleteTime, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

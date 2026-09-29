@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
@@ -156,5 +157,6 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted atespace: %w", err)
 	}
+	out.Metadata.DeleteTime = timestamppb.Now()
 	return out, nil
 }

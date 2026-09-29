@@ -660,11 +660,8 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(toUpdate *ateapipb.Actor) error {
-				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-				return nil
-			}); err != nil {
-				t.Fatalf("racing writer: mark deleting: %v", err)
+			if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil); err != nil {
+				t.Fatalf("racing writer: mark for deletion: %v", err)
 			}
 			if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("racing writer: DeleteActor: %v", err)

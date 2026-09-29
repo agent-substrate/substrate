@@ -239,7 +239,7 @@ Clients update by read-modify-write: `Get` the resource, change the fields they 
 Rules:
 - RPC name **must** begin with `Update` followed by the singular resource name.
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
-  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
+  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, `delete_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
   - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
 - Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
@@ -387,6 +387,9 @@ message ResourceMetadata {
 
   // update_time is the time the resource was last updated by a user action.
   google.protobuf.Timestamp update_time = 6;
+
+  // delete_time is the time the resource started its deletion.
+  google.protobuf.Timestamp delete_time = 7;
 }
 ```
 
@@ -432,6 +435,11 @@ on resource updates. Also establishes a total order on "snapshots" of a given re
 - Type: `google.protobuf.Timestamp`.
 - Records when the resource was last modified by a user action (Create, Update, or a custom mutating method).
 - Updated on every mutation. Internal state changes made by the system (e.g., a scheduler assigning a worker) **may** also update this field, but are not required to.
+
+### 6.7 `delete_time`
+
+- Type: `google.protobuf.Timestamp`.
+- Records when the resource started its deletion.
 
 ---
 

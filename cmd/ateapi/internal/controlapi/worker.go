@@ -248,6 +248,10 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorke
 	return s.workerWorkflow.DeleteWorker(ctx, req.GetWorker().GetName(), toDeletePreconditions(req.GetOptions()))
 }
 
+func (s *ServiceImpl) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	return s.store.MarkWorkerForDeletion(ctx, name, precondition, mutate)
+}
+
 func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
 	return s.store.DeleteWorker(ctx, name, precondition)
 }

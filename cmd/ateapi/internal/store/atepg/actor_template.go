@@ -83,6 +83,14 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
+	return p.updateActorTemplate(ctx, templateRef, store.DeletePreconditions(precondition), mutate, false)
+}
+
+func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	return p.updateActorTemplate(ctx, templateRef, precondition, mutate, true)
+}
+
+func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapipb.ActorTemplate) error, markForDeletion bool) (*ateapipb.ActorTemplate, error) {
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
@@ -106,8 +114,10 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 		return nil, err
 	}
 	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapipb.ActorTemplate)
-	if err := mutate(dbTemplate); err != nil {
-		return nil, err
+	if mutate != nil {
+		if err := mutate(dbTemplate); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
 		return nil, err
@@ -116,6 +126,9 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
 	}
 	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
+	if markForDeletion && dbTemplate.Metadata.DeleteTime == nil {
+		dbTemplate.Metadata.DeleteTime = proto.CloneOf(dbTemplate.Metadata.UpdateTime)
+	}
 	updatedBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)

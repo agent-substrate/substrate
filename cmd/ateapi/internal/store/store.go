@@ -100,6 +100,13 @@ type Interface interface {
 	// validation before the write.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
+	// MarkActorForDeletion initiates the deletion of an actor. It sets
+	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
+	// update the actor's status. Returns ErrNotFound if missing,
+	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
+	// write wins, or mutate's error.
+	MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, or ErrUIDConflict/ErrVersionConflict if precondition does not
 	// describe the actor the caller observed.
@@ -154,6 +161,13 @@ type Interface interface {
 	// status.snapshot is immutable once set
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 
+	// MarkTagForDeletion initiates the deletion of a tag. It sets
+	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
+	// update the tag's status. Returns ErrNotFound if missing,
+	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
+	// write wins, or mutate's error.
+	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
+
 	// Deletes and returns a tag. Returns ErrNotFound if missing, or
 	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
 	// tag the caller observed.
@@ -197,6 +211,13 @@ type Interface interface {
 	// version guards are required.
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 
+	// MarkActorTemplateForDeletion initiates the deletion of an actor
+	// template. It sets metadata.delete_time if unset and applies mutate, if
+	// non-nil, so callers can update the template's status. Returns ErrNotFound
+	// if missing, ErrUIDConflict/ErrVersionConflict if precondition fails or a
+	// concurrent write wins, or mutate's error.
+	MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition DeletePreconditions, mutate func(toUpdate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
+
 	// Removes an ActorTemplate and returns the deleted resource. Returns
 	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
 	// precondition does not describe the template the caller observed.
@@ -225,6 +246,13 @@ type Interface interface {
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
 	// exhausted, or the mutate's error verbatim otherwise.
 	UpdateWorker(ctx context.Context, name string, precondition Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
+
+	// MarkWorkerForDeletion initiates the deletion of a worker. It sets
+	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
+	// update the worker's status. Returns ErrNotFound if missing,
+	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
+	// write wins, or mutate's error.
+	MarkWorkerForDeletion(ctx context.Context, name string, precondition DeletePreconditions, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 
 	// Removes a worker by name, along with every assignment it holds, and
 	// returns the deleted resource. Returns ErrNotFound if missing, or

@@ -453,6 +453,10 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	return deleted, nil
 }
 
+func (s *ServiceImpl) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	return s.store.MarkActorForDeletion(ctx, actorRef, precondition, mutate)
+}
+
 func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
 	return s.store.DeleteActor(ctx, actorRef, precondition)
 }

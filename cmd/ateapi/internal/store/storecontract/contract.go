@@ -77,7 +77,7 @@ const (
 var (
 	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
 	ignoreVersion    = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "version")
-	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time")
+	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time", "delete_time")
 )
 
 func newTestAtespace(name string) *ateapipb.Atespace {
@@ -269,8 +269,14 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatalf("UpdateEgressPolicy = %v, %v; want version 2", updated, err)
 		}
 		deleted, err := s.DeleteEgressPolicy(ctx, actorRef, store.DeletePreconditions{})
-		if err != nil || !proto.Equal(deleted, updated) {
-			t.Fatalf("DeleteEgressPolicy = %v, %v; want %v", deleted, err, updated)
+		if err != nil {
+			t.Fatalf("DeleteEgressPolicy failed: %v", err)
+		}
+		if diff := cmp.Diff(updated, deleted, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "delete_time")); diff != "" {
+			t.Fatalf("deleted policy mismatch (-updated +deleted):\n%s", diff)
+		}
+		if deleted.GetMetadata().GetDeleteTime() == nil {
+			t.Error("the deleted policy carries no delete_time")
 		}
 		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("GetEgressPolicy after delete error = %v, want ErrNotFound", err)
@@ -741,8 +747,107 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 	})
 
+	t.Run("MarkActorForDeletion", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+		input := newTestSuspendedActor(testAtespace, actorRef.Name)
+		input.Metadata.DeleteTime = timestamppb.Now()
+		created, err := s.CreateActor(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if created.GetMetadata().GetDeleteTime() != nil {
+			t.Fatalf("a new actor carries delete_time %v", created.GetMetadata().GetDeleteTime())
+		}
+
+		// A plain update cannot set it.
+		smuggled, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error { toUpdate.Metadata.DeleteTime = timestamppb.Now(); return nil })
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if smuggled.GetMetadata().GetDeleteTime() != nil {
+			t.Errorf("a plain update set delete_time to %v, want it ignored", smuggled.GetMetadata().GetDeleteTime())
+		}
+
+		if _, err := s.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{UID: "other-uid"}, nil); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("mark with a foreign uid = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{Version: created.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// mutate's refusal writes nothing, so nothing is stamped.
+		refused := errors.New("refused")
+		if _, err := s.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, func(*ateapipb.Actor) error { return refused }); !errors.Is(err, refused) {
+			t.Errorf("mark with a refusing mutate = %v, want it verbatim", err)
+		}
+		unmarked, err := s.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if unmarked.GetMetadata().GetDeleteTime() != nil || unmarked.GetMetadata().GetVersion() != smuggled.GetMetadata().GetVersion() {
+			t.Errorf("a refused mark wrote: delete_time %v, version %d, want unset and %d", unmarked.GetMetadata().GetDeleteTime(), unmarked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion())
+		}
+
+		// Unguarded, so the version having moved since created was read is fine.
+		marked, err := s.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, func(toUpdate *ateapipb.Actor) error {
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("mark failed: %v", err)
+		}
+		if got := marked.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+			t.Errorf("state = %v, want DELETING from mutate, in the same write", got)
+		}
+		if marked.GetMetadata().GetDeleteTime() == nil {
+			t.Fatal("mark left delete_time unset")
+		}
+		if !marked.GetMetadata().GetDeleteTime().AsTime().Equal(marked.GetMetadata().GetUpdateTime().AsTime()) {
+			t.Errorf("delete_time = %v, want the write's update_time %v", marked.GetMetadata().GetDeleteTime().AsTime(), marked.GetMetadata().GetUpdateTime().AsTime())
+		}
+		if got, want := marked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version = %d, want %d", got, want)
+		}
+		stored, err := s.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if diff := cmp.Diff(marked, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("stored actor mismatch (-marked +stored):\n%s", diff)
+		}
+
+		// A plain update cannot clear it.
+		cleared, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(marked), func(toUpdate *ateapipb.Actor) error { toUpdate.Metadata.DeleteTime = nil; return nil })
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if !proto.Equal(cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a plain update changed delete_time to %v, want %v kept", cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+
+		// The guards still bite after admission: a version from before it is stale.
+		if _, err := s.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{Version: smuggled.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark after admission with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// A second mark writes but keeps the first stamp.
+		again, err := s.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{UID: cleared.GetMetadata().GetUid()}, nil)
+		if err != nil {
+			t.Fatalf("second mark failed: %v", err)
+		}
+		if !proto.Equal(again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a second mark changed delete_time to %v, want %v kept", again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+		if got, want := again.GetMetadata().GetVersion(), cleared.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version after the second mark = %d, want %d", got, want)
+		}
+	})
+
 	// The store does not gate the delete on state; the workflow does, and pins
-	// the row delete to the uid and version it last saw.
+	// the row delete to the uid it admitted.
 	t.Run("DeleteActor", func(t *testing.T) {
 		for _, state := range []ateapipb.ActorState{
 			ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
@@ -1124,6 +1229,102 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 		}
 	})
 
+	t.Run("MarkActorTemplateForDeletion", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		ref := resources.ActorTemplateRef{Atespace: testAtespace, Name: "tmpl-a"}
+		input := newTestActorTemplate(testAtespace, ref.Name)
+		input.Metadata.DeleteTime = timestamppb.Now()
+		created, err := s.CreateActorTemplate(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateActorTemplate failed: %v", err)
+		}
+		if created.GetMetadata().GetDeleteTime() != nil {
+			t.Fatalf("a new template carries delete_time %v", created.GetMetadata().GetDeleteTime())
+		}
+
+		// A plain update cannot set it.
+		smuggled, err := s.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(toUpdate *ateapipb.ActorTemplate) error {
+			toUpdate.Metadata.DeleteTime = timestamppb.Now()
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if smuggled.GetMetadata().GetDeleteTime() != nil {
+			t.Errorf("a plain update set delete_time to %v, want it ignored", smuggled.GetMetadata().GetDeleteTime())
+		}
+
+		if _, err := s.MarkActorTemplateForDeletion(ctx, ref, store.DeletePreconditions{UID: "other-uid"}, nil); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("mark with a foreign uid = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.MarkActorTemplateForDeletion(ctx, ref, store.DeletePreconditions{Version: created.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// mutate's refusal writes nothing, so nothing is stamped.
+		refused := errors.New("refused")
+		if _, err := s.MarkActorTemplateForDeletion(ctx, ref, store.DeletePreconditions{}, func(*ateapipb.ActorTemplate) error { return refused }); !errors.Is(err, refused) {
+			t.Errorf("mark with a refusing mutate = %v, want it verbatim", err)
+		}
+		unmarked, err := s.GetActorTemplate(ctx, ref)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if unmarked.GetMetadata().GetDeleteTime() != nil || unmarked.GetMetadata().GetVersion() != smuggled.GetMetadata().GetVersion() {
+			t.Errorf("a refused mark wrote: delete_time %v, version %d, want unset and %d", unmarked.GetMetadata().GetDeleteTime(), unmarked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion())
+		}
+
+		// Unguarded, so the version having moved since created was read is fine.
+		marked, err := s.MarkActorTemplateForDeletion(ctx, ref, store.DeletePreconditions{}, nil)
+		if err != nil {
+			t.Fatalf("mark failed: %v", err)
+		}
+		if marked.GetMetadata().GetDeleteTime() == nil {
+			t.Fatal("mark left delete_time unset")
+		}
+		if !marked.GetMetadata().GetDeleteTime().AsTime().Equal(marked.GetMetadata().GetUpdateTime().AsTime()) {
+			t.Errorf("delete_time = %v, want the write's update_time %v", marked.GetMetadata().GetDeleteTime().AsTime(), marked.GetMetadata().GetUpdateTime().AsTime())
+		}
+		if got, want := marked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version = %d, want %d", got, want)
+		}
+		stored, err := s.GetActorTemplate(ctx, ref)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if diff := cmp.Diff(marked, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("stored template mismatch (-marked +stored):\n%s", diff)
+		}
+
+		// A plain update cannot clear it.
+		cleared, err := s.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(marked), func(toUpdate *ateapipb.ActorTemplate) error { toUpdate.Metadata.DeleteTime = nil; return nil })
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if !proto.Equal(cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a plain update changed delete_time to %v, want %v kept", cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+
+		// The guards still bite after admission: a version from before it is stale.
+		if _, err := s.MarkActorTemplateForDeletion(ctx, ref, store.DeletePreconditions{Version: smuggled.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark after admission with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// A second mark writes but keeps the first stamp.
+		again, err := s.MarkActorTemplateForDeletion(ctx, ref, store.DeletePreconditions{UID: cleared.GetMetadata().GetUid()}, nil)
+		if err != nil {
+			t.Fatalf("second mark failed: %v", err)
+		}
+		if !proto.Equal(again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a second mark changed delete_time to %v, want %v kept", again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+		if got, want := again.GetMetadata().GetVersion(), cleared.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version after the second mark = %d, want %d", got, want)
+		}
+	})
+
 	t.Run("ActorTemplateResources_BlockAtespaceDeletion", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -1449,6 +1650,103 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}
 	})
 
+	t.Run("MarkTagForDeletion", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actor, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, "actor-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		tagRef := resources.TagRef{Atespace: testAtespace, Name: "production"}
+		input := newTestInProgressTag(tagRef.Name, actor)
+		input.Metadata.DeleteTime = timestamppb.Now()
+		created, err := s.CreateTag(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateTag failed: %v", err)
+		}
+		if created.GetMetadata().GetDeleteTime() != nil {
+			t.Fatalf("a new tag carries delete_time %v", created.GetMetadata().GetDeleteTime())
+		}
+
+		// A plain update cannot set it.
+		smuggled, err := s.UpdateTag(ctx, tagRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Tag) error { toUpdate.Metadata.DeleteTime = timestamppb.Now(); return nil })
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if smuggled.GetMetadata().GetDeleteTime() != nil {
+			t.Errorf("a plain update set delete_time to %v, want it ignored", smuggled.GetMetadata().GetDeleteTime())
+		}
+
+		if _, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{UID: "other-uid"}, nil); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("mark with a foreign uid = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{Version: created.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// mutate's refusal writes nothing, so nothing is stamped.
+		refused := errors.New("refused")
+		if _, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{}, func(*ateapipb.Tag) error { return refused }); !errors.Is(err, refused) {
+			t.Errorf("mark with a refusing mutate = %v, want it verbatim", err)
+		}
+		unmarked, err := s.GetTag(ctx, tagRef)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if unmarked.GetMetadata().GetDeleteTime() != nil || unmarked.GetMetadata().GetVersion() != smuggled.GetMetadata().GetVersion() {
+			t.Errorf("a refused mark wrote: delete_time %v, version %d, want unset and %d", unmarked.GetMetadata().GetDeleteTime(), unmarked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion())
+		}
+
+		// Unguarded, so the version having moved since created was read is fine.
+		marked, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{}, nil)
+		if err != nil {
+			t.Fatalf("mark failed: %v", err)
+		}
+		if marked.GetMetadata().GetDeleteTime() == nil {
+			t.Fatal("mark left delete_time unset")
+		}
+		if !marked.GetMetadata().GetDeleteTime().AsTime().Equal(marked.GetMetadata().GetUpdateTime().AsTime()) {
+			t.Errorf("delete_time = %v, want the write's update_time %v", marked.GetMetadata().GetDeleteTime().AsTime(), marked.GetMetadata().GetUpdateTime().AsTime())
+		}
+		if got, want := marked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version = %d, want %d", got, want)
+		}
+		stored, err := s.GetTag(ctx, tagRef)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if diff := cmp.Diff(marked, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("stored tag mismatch (-marked +stored):\n%s", diff)
+		}
+
+		// A plain update cannot clear it.
+		cleared, err := s.UpdateTag(ctx, tagRef, store.PreconditionFrom(marked), func(toUpdate *ateapipb.Tag) error { toUpdate.Metadata.DeleteTime = nil; return nil })
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if !proto.Equal(cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a plain update changed delete_time to %v, want %v kept", cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+
+		// The guards still bite after admission: a version from before it is stale.
+		if _, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{Version: smuggled.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark after admission with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// A second mark writes but keeps the first stamp.
+		again, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{UID: cleared.GetMetadata().GetUid()}, nil)
+		if err != nil {
+			t.Fatalf("second mark failed: %v", err)
+		}
+		if !proto.Equal(again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a second mark changed delete_time to %v, want %v kept", again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+		if got, want := again.GetMetadata().GetVersion(), cleared.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version after the second mark = %d, want %d", got, want)
+		}
+	})
+
 	t.Run("ListTags_PaginationAndScope", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -1689,6 +1987,117 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 					t.Errorf("UpdateWorker error = %v, want one matching store.ErrPreconditionRequired", err)
 				}
 			})
+		}
+	})
+
+	t.Run("MarkWorkerForDeletion", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		input := newTestWorker(testWorkerName, "pod-1")
+		input.Metadata.DeleteTime = timestamppb.Now()
+		created, err := s.CreateWorker(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		if created.GetMetadata().GetDeleteTime() != nil {
+			t.Fatalf("a new worker carries delete_time %v", created.GetMetadata().GetDeleteTime())
+		}
+
+		// A plain update cannot set it.
+		smuggled, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error { toUpdate.Metadata.DeleteTime = timestamppb.Now(); return nil })
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if smuggled.GetMetadata().GetDeleteTime() != nil {
+			t.Errorf("a plain update set delete_time to %v, want it ignored", smuggled.GetMetadata().GetDeleteTime())
+		}
+
+		if _, err := s.MarkWorkerForDeletion(ctx, testWorkerName, store.DeletePreconditions{UID: "other-uid"}, nil); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("mark with a foreign uid = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.MarkWorkerForDeletion(ctx, testWorkerName, store.DeletePreconditions{Version: created.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// mutate's refusal writes nothing, so nothing is stamped.
+		refused := errors.New("refused")
+		if _, err := s.MarkWorkerForDeletion(ctx, testWorkerName, store.DeletePreconditions{}, func(*ateapipb.Worker) error { return refused }); !errors.Is(err, refused) {
+			t.Errorf("mark with a refusing mutate = %v, want it verbatim", err)
+		}
+		unmarked, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if unmarked.GetMetadata().GetDeleteTime() != nil || unmarked.GetMetadata().GetVersion() != smuggled.GetMetadata().GetVersion() {
+			t.Errorf("a refused mark wrote: delete_time %v, version %d, want unset and %d", unmarked.GetMetadata().GetDeleteTime(), unmarked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion())
+		}
+
+		// Subscribed here so only the mark's event is on the channel.
+		watch, err := s.WatchWorkers(ctx)
+		if err != nil {
+			t.Fatalf("WatchWorkers failed: %v", err)
+		}
+		defer watch.Close()
+
+		// Unguarded, so the version having moved since created was read is fine.
+		marked, err := s.MarkWorkerForDeletion(ctx, testWorkerName, store.DeletePreconditions{}, func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("mark failed: %v", err)
+		}
+		if got := marked.GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+			t.Errorf("state = %v, want DRAINING from mutate, in the same write", got)
+		}
+		event := receiveEvent(t, watch.Events)
+		if event.Type != store.WorkerEventUpdated {
+			t.Errorf("expected WorkerEventUpdated, got %v", event.Type)
+		}
+		if diff := cmp.Diff(marked, event.Worker, protocmp.Transform()); diff != "" {
+			t.Errorf("mark event worker mismatch (-marked +event):\n%s", diff)
+		}
+		if marked.GetMetadata().GetDeleteTime() == nil {
+			t.Fatal("mark left delete_time unset")
+		}
+		if !marked.GetMetadata().GetDeleteTime().AsTime().Equal(marked.GetMetadata().GetUpdateTime().AsTime()) {
+			t.Errorf("delete_time = %v, want the write's update_time %v", marked.GetMetadata().GetDeleteTime().AsTime(), marked.GetMetadata().GetUpdateTime().AsTime())
+		}
+		if got, want := marked.GetMetadata().GetVersion(), smuggled.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version = %d, want %d", got, want)
+		}
+		stored, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+		if diff := cmp.Diff(marked, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("stored worker mismatch (-marked +stored):\n%s", diff)
+		}
+
+		// A plain update cannot clear it.
+		cleared, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(marked), func(toUpdate *ateapipb.Worker) error { toUpdate.Metadata.DeleteTime = nil; return nil })
+		if err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+		if !proto.Equal(cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a plain update changed delete_time to %v, want %v kept", cleared.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+
+		// The guards still bite after admission: a version from before it is stale.
+		if _, err := s.MarkWorkerForDeletion(ctx, testWorkerName, store.DeletePreconditions{Version: smuggled.GetMetadata().GetVersion()}, nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("mark after admission with a stale version = %v, want ErrVersionConflict", err)
+		}
+
+		// A second mark writes but keeps the first stamp.
+		again, err := s.MarkWorkerForDeletion(ctx, testWorkerName, store.DeletePreconditions{UID: cleared.GetMetadata().GetUid()}, nil)
+		if err != nil {
+			t.Fatalf("second mark failed: %v", err)
+		}
+		if !proto.Equal(again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime()) {
+			t.Errorf("a second mark changed delete_time to %v, want %v kept", again.GetMetadata().GetDeleteTime(), marked.GetMetadata().GetDeleteTime())
+		}
+		if got, want := again.GetMetadata().GetVersion(), cleared.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version after the second mark = %d, want %d", got, want)
 		}
 	})
 
@@ -2878,6 +3287,9 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		}
 		if got := deleted.GetMetadata().GetName(); got != "team-a" {
 			t.Errorf("deleted atespace name = %q, want team-a", got)
+		}
+		if deleted.GetMetadata().GetDeleteTime() == nil {
+			t.Error("the deleted atespace carries no delete_time")
 		}
 		if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("after delete, GetAtespace = %v, want ErrNotFound", err)

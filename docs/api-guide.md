@@ -503,7 +503,7 @@ Every external snapshot has exactly one owner, and the control plane deletes it 
 
 An actor created from a tag borrows the tag's copy instead of taking one of its own. The borrowed URI sits under the tag's prefix, which the actor's own prefix does not cover, so neither suspending nor deleting the actor can reach it; its first own suspend writes a snapshot under the actor's prefix, and it owns its snapshots from then on.
 
-Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry with the same arguments: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
+Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
 
 > **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (its `status.externalSnapshot.snapshotUri` still names the tag's prefix while it is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
 

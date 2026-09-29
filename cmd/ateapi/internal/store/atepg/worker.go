@@ -103,6 +103,14 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
+	return p.updateWorker(ctx, name, store.DeletePreconditions(precondition), mutate, false)
+}
+
+func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	return p.updateWorker(ctx, name, precondition, mutate, true)
+}
+
+func (p *Persistence) updateWorker(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapipb.Worker) error, markForDeletion bool) (*ateapipb.Worker, error) {
 	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		dbWorker, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
@@ -116,12 +124,17 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 		// mutate is free to edit anything it is given; immutable fields are
 		// the service layer's to enforce, via declarative validation.
 		oldMeta := proto.CloneOf(dbWorker.GetMetadata())
-		if err := mutate(dbWorker); err != nil {
-			return nil, err
+		if mutate != nil {
+			if err := mutate(dbWorker); err != nil {
+				return nil, err
+			}
 		}
 		// Stored metadata is authoritative; discard any metadata edits made by
 		// the closure and derive the next revision from the row we locked.
 		setUpdateMetadata(dbWorker.Metadata, oldMeta)
+		if markForDeletion && dbWorker.Metadata.DeleteTime == nil {
+			dbWorker.Metadata.DeleteTime = proto.CloneOf(dbWorker.Metadata.UpdateTime)
+		}
 
 		protoBytes, err := proto.Marshal(dbWorker)
 		if err != nil {

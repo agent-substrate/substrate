@@ -148,6 +148,7 @@ func NewActorWorkflow(
 type actorWorkflowStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
@@ -161,8 +162,10 @@ type actorWorkflowStore interface {
 	CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error)
 	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
+	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error)
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
+	MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(toUpdate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
@@ -186,6 +189,7 @@ func NewWorkerWorkflow(store workerWorkflowStore) *WorkerWorkflow {
 type workerWorkflowStore interface {
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
+	MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error)
 	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
 	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
