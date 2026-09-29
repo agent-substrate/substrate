@@ -70,23 +70,16 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 // reseedGuestCRNG mixes fresh, per-restore entropy into the restored guest's kernel
 // CRNG through the kata-agent (see the call site in restoreFullScope for why a restore
 // needs this). The nonce is a throwaway; its only job is to differ between restores so
-// that clones of one snapshot diverge instead of producing identical randomness.
-func reseedGuestCRNG(ctx context.Context, actorUID string) error {
+// that clones of one snapshot diverge instead of producing identical randomness. The
+// caller owns ac: it stays open for log forwarding and guest stats.
+func reseedGuestCRNG(ctx context.Context, ac *kata.AgentClient) error {
 	nonce, err := newReseedNonce()
 	if err != nil {
 		return err
 	}
-	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	ac, err := dialAgentRetry(dctx, kata.VsockSocketPath(actorUID), 5*time.Second)
-	if err != nil {
-		return fmt.Errorf("dialing kata-agent for reseed: %w", err)
-	}
-	defer ac.Close()
-	if err := ac.ReseedRandomDev(dctx, nonce); err != nil {
-		return fmt.Errorf("reseeding guest CRNG: %w", err)
-	}
-	return nil
+	return ac.ReseedRandomDev(rctx, nonce)
 }
 
 // newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.
@@ -394,28 +387,38 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	tResume := time.Now()
 
+	// One kata-agent connection serves this whole activation: the CRNG reseed below,
+	// then log forwarding and guest stats. As on cold boot, not reaching the agent
+	// fails the restore. A failing restore closes the connection on its way out.
+	guestAC, err := dialAgentRetry(ctx, kata.VsockSocketPath(actorUID), 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("while dialing kata-agent after resume: %w", err)
+	}
+	defer func() {
+		if retErr != nil {
+			_ = guestAC.Close()
+		}
+	}()
+
 	// Reseed the guest CRNG before the workload gets far. A restored guest resumes with
 	// the entropy pool frozen in the snapshot, so every actor restored from one snapshot
 	// (golden cold-start, tag clones) would share an identical CRNG state and emit the
 	// same "random" values. Cloud Hypervisor has no VmGenID device to signal the guest,
 	// so we feed fresh per-restore entropy through the kata-agent's ReseedRandomDev, which
-	// mixes it into /dev/random and reseeds. Best-effort: a failure leaves the actor
-	// running rather than failing the restore, but it is logged because the result is
-	// silently non-unique randomness.
-	// ponytail: this runs just after Resume, so a workload that reads randomness in the
-	// first instants after resume can outrun the reseed. Fully closing that needs a
-	// freeze/thaw around the reseed, or a VMM VmGenID that acts before the vCPUs resume.
+	// mixes it into /dev/random and reseeds. A failed reseed fails the restore, since the
+	// actor would otherwise run with randomness it shares with its clones.
+	//
+	// The reseed runs just after Resume, so a workload that reads randomness in its first
+	// instants after resume can still see the frozen state. Fully closing that needs the
+	// workload frozen across the reseed, or a VMM VmGenID that acts before the vCPUs resume.
 	//
 	// TODO: switch to a Cloud Hypervisor VmGenID device once it exists. clh has no such
 	// device today; Firecracker and QEMU do. With one, the VMM changes the generation id
 	// and notifies the guest before unpausing the vCPUs, so a >=5.18 kernel reseeds its
 	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
 	// race. At that point this agent-driven reseed can be dropped.
-	if err := reseedGuestCRNG(ctx, actorUID); err != nil {
-		slog.WarnContext(ctx, "guest CRNG reseed on restore failed; actor may share entropy with clones of the same snapshot",
-			slog.String("id", actorUID), slog.Any("err", err))
-	} else {
-		slog.InfoContext(ctx, "reseeded guest CRNG on restore", slog.String("id", actorUID))
+	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
+		return fmt.Errorf("while reseeding guest CRNG: %w", err)
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
@@ -462,23 +465,15 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		// Signaling an id the agent does not know fails the whole graceful
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
 		workloadIDs: workloadIDs(ctrs),
+		guestAgent:  guestAC,
 	}
 
-	// Re-attach stdout/stderr forwarding for each container: the restored guest's
-	// containers + kata-agent are alive, so a fresh dial over this actor's vsock
-	// resumes ReadStdout/ReadStderr. Best-effort — a failed dial must not fail the
-	// restore (the actor is already running); forwarding is just skipped.
-	vsockPath := kata.VsockSocketPath(actorUID)
-	guestAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
-	if dialErr != nil {
-		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding and guest stats disabled for this restore",
-			slog.String("id", actorUID), slog.Any("err", dialErr))
-	} else {
-		ra.guestAgent = guestAC
-		attribution := p.actorAttribution()
-		for _, c := range containers {
-			s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
-		}
+	// Re-attach stdout/stderr forwarding for each container over the agent
+	// connection dialed after resume: the restored guest's containers are alive, so
+	// ReadStdout/ReadStderr pick up where they left off.
+	attribution := p.actorAttribution()
+	for _, c := range containers {
+		s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
 	}
 
 	if err := s.activateActorNetworking(p.attribution(), egress); err != nil {
@@ -487,14 +482,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	s.setRunningVM(actorUID, ra)
 
 	// Publish the guest to GetWorkloadStats, past the last error return above
-	// for the same reason as in coldBootActor. Skipped when the dial failed:
-	// telemetry rides on the forwarding connection, so that activation answers
-	// FAILED_PRECONDITION until its next checkpoint. Not worth a second dial of
-	// its own — whatever kept the agent from answering a 15s retry loop would
-	// keep it from answering that one too.
-	if ra.guestAgent != nil {
-		s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: ra.workloadIDs})
-	}
+	// for the same reason as in coldBootActor. Same client the forwarding above
+	// reads over.
+	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: guestAC, workloadIDs: ra.workloadIDs})
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

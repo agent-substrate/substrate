@@ -89,9 +89,9 @@ type runningActor struct {
 	// stats target, which points at this same client). It is NOT closed when
 	// RunWorkload / RestoreWorkload return — teardownActor closes it, which
 	// makes the in-flight ReadStdout/ReadStderr calls fail and the forwarding
-	// goroutines exit (io.EOF). nil if the post-boot dial failed (e.g. a
-	// best-effort post-restore dial), which loses both log forwarding and guest
-	// stats for this activation.
+	// goroutines exit (io.EOF). Both boot and restore fail if they cannot dial
+	// the agent, so a running actor always has one; nil only once teardown has
+	// closed it.
 	guestAgent *kata.AgentClient
 
 	// workloadIDs are the guest container ids of this actor's workloads, for the
