@@ -32,7 +32,8 @@ a commitment to backwards-compatibility and discoverability.
 **`internal/`** is for Go packages that are shared across multiple binaries
 within this module but are not part of any external API. The Go toolchain
 enforces that nothing outside `github.com/agent-substrate/substrate` can import
-these.
+these. The exception is `internal/plugins/`: self-contained plugins, each a Go
+module of its own; nothing in the repo depends on them.
 
 > **Use `pkg/` sparingly.** Once the project reaches GA, any exported type,
 > function, or field in `pkg/` becomes subject to a compatibility guarantee —

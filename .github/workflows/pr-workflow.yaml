@@ -67,6 +67,19 @@ jobs:
       run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml"
         --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose
         -- -race -v ./...
+    # Kept apart from the root module so it can move to its own repository.
+    - name: gcp-secret-manager credential provider tests
+      working-directory: internal/plugins/gcp-secret-manager
+      run: ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcp-secret-manager.xml"
+        --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" --format standard-verbose
+        -- -race -v ./...
+    # The root verifiers stop at the module's go.mod, so it gets its own run:
+    # gofmt, go vet and the tidy check, then golangci-lint with the root config.
+    - name: gcp-secret-manager credential provider verify
+      working-directory: internal/plugins/gcp-secret-manager
+      run: |
+        make verify
+        ../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
     - name: Cache cargo
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
