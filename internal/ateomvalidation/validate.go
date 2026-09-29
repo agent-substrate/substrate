@@ -20,6 +20,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // Each wrapper validates its request at the RPC edge. A non-nil return is the
@@ -69,6 +70,21 @@ func ValidateGetWorkloadStatsRequest(ctx context.Context, req *ateompb.GetWorklo
 
 // GetActiveWorkloadStatsRequest has no fields, so validation-gen emits
 // nothing for it and there is no wrapper.
+
+// ValidateCustom_RestoreWorkloadRequest_SnapshotUri holds snapshot_uri to
+// the shape the storage layer appends object names to: a scheme, a bucket,
+// and a path. The rule is the control plane's, shared through
+// internal/resources.
+func ValidateCustom_RestoreWorkloadRequest_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSnapshotURI(fldPath, *value)
+}
+
+func validateSnapshotURI(fldPath *field.Path, uri string) field.ErrorList {
+	if err := resources.ValidateSnapshotLocation(uri); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, uri, err.Error())}
+	}
+	return nil
+}
 
 func createOp() operation.Operation {
 	return operation.Operation{Type: operation.Create}

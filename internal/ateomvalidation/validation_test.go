@@ -16,6 +16,7 @@ package ateomvalidation
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,10 +26,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// Run, Checkpoint, and Restore are still gated optional with their
-// message-typed fields opaque, so nothing on them is rejected yet. Their tests
-// hold that line: an empty request and a fully populated one both pass. Rules
-// land message by message in follow-ups, each with its own negative cases.
+// Checkpoint is still gated optional with its message-typed fields opaque,
+// so nothing on it is rejected yet. Its test holds that line: an empty request
+// and a fully populated one both pass. The message-typed fields the other
+// requests require stay opaque too; their contents get rules in follow-ups.
 
 func fullSpec() *ateompb.WorkloadSpec {
 	return &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{
@@ -53,29 +54,130 @@ func fullActorDirs() *ateompb.ActorDirs {
 	}
 }
 
+func validRunWorkloadRequest(mutate ...func(*ateompb.RunWorkloadRequest)) *ateompb.RunWorkloadRequest {
+	r := &ateompb.RunWorkloadRequest{
+		Atespace:              "team-a",
+		ActorName:             "actor-1",
+		ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+		ActorTemplateAtespace: "team-a",
+		ActorTemplateName:     "template-1",
+		RunscPath:             "/opt/runsc",
+		Spec:                  fullSpec(),
+		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel", "virtiofsd": "/opt/virtiofsd"},
+		EgressGateway:         &ateompb.EgressGateway{Address: "gateway:443"},
+		CpuMilli:              1500,
+		MemoryBytes:           1 << 30,
+		ActorDirs:             fullActorDirs(),
+	}
+	for _, m := range mutate {
+		m(r)
+	}
+	return r
+}
+
 func TestValidateRunWorkloadRequest(t *testing.T) {
-	for name, req := range map[string]*ateompb.RunWorkloadRequest{
-		"empty": {},
-		"full": {
-			Atespace:              "team-a",
-			ActorName:             "actor-1",
-			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
-			ActorTemplateAtespace: "team-a",
-			ActorTemplateName:     "template-1",
-			RunscPath:             "/opt/runsc",
-			Spec:                  fullSpec(),
-			RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
-			EgressGateway:         &ateompb.EgressGateway{Address: "gateway:443"},
-			CpuMilli:              1500,
-			MemoryBytes:           1 << 30,
-			ActorDirs:             fullActorDirs(),
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := ValidateRunWorkloadRequest(context.Background(), req); err != nil {
-				t.Fatalf("ValidateRunWorkloadRequest() = %v, want nil", err)
+	valid := validRunWorkloadRequest
+	assets := field.NewPath("runtime_asset_paths")
+
+	tests := []struct {
+		name string
+		obj  *ateompb.RunWorkloadRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "valid: gVisor shape, no assets, no egress, unset size",
+		obj: valid(func(r *ateompb.RunWorkloadRequest) {
+			r.RuntimeAssetPaths, r.EgressGateway, r.CpuMilli, r.MemoryBytes = nil, nil, 0, 0
+		}),
+	}, {
+		name: "missing atespace",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Atespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name: "invalid atespace: uppercase",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Atespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_name",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.ActorName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		name: "missing actor_uid",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid: not a uuid",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.ActorUid = "uid-a" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid actor_template_name: underscore",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.ActorTemplateName = "template_1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "runsc_path too long",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.RunscPath = "/" + strings.Repeat("x", 4096) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("runsc_path"), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "missing spec",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
+	}, {
+		name: "too many runtime_asset_paths",
+		obj: valid(func(r *ateompb.RunWorkloadRequest) {
+			r.RuntimeAssetPaths = map[string]string{}
+			for i := range 9 {
+				r.RuntimeAssetPaths[fmt.Sprintf("asset-%d", i)] = "/opt/asset"
 			}
+		}),
+		want: field.ErrorList{field.TooMany(assets, 9, 8).WithOrigin("maxProperties")},
+	}, {
+		name: "runtime asset name too long",
+		obj: valid(func(r *ateompb.RunWorkloadRequest) {
+			r.RuntimeAssetPaths = map[string]string{strings.Repeat("k", 65): "/opt/asset"}
+		}),
+		want: field.ErrorList{field.TooLong(assets, nil, 64).WithOrigin("maxLength")}, // keys are reported at the map
+	}, {
+		name: "runtime asset path too long",
+		obj: valid(func(r *ateompb.RunWorkloadRequest) {
+			r.RuntimeAssetPaths = map[string]string{"kata-kernel": "/" + strings.Repeat("x", 4096)}
+		}),
+		want: field.ErrorList{field.TooLong(assets.Key("kata-kernel"), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "negative cpu_milli",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.CpuMilli = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "cpu_milli past atelet's bound",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.CpuMilli = 1000000 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "negative memory_bytes",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.MemoryBytes = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "missing actor_dirs",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.ActorDirs = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_dirs"), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_RunWorkloadRequest(context.Background(), createOp(), nil, tt.obj, nil))
 		})
+	}
+}
+
+// TestValidateRunWorkloadRequestEdge covers the handler-facing wrapper: valid
+// passes, invalid comes back as InvalidArgument.
+func TestValidateRunWorkloadRequestEdge(t *testing.T) {
+	if err := ValidateRunWorkloadRequest(context.Background(), validRunWorkloadRequest()); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	err := ValidateRunWorkloadRequest(context.Background(), &ateompb.RunWorkloadRequest{})
+	if apierror.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty request error = %v, want InvalidArgument", err)
 	}
 }
 
@@ -104,31 +206,126 @@ func TestValidateCheckpointWorkloadRequest(t *testing.T) {
 	}
 }
 
+func validRestoreWorkloadRequest(mutate ...func(*ateompb.RestoreWorkloadRequest)) *ateompb.RestoreWorkloadRequest {
+	r := &ateompb.RestoreWorkloadRequest{
+		Atespace:              "team-a",
+		ActorName:             "actor-1",
+		ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+		ActorTemplateAtespace: "team-a",
+		ActorTemplateName:     "template-1",
+		RunscPath:             "/opt/runsc",
+		Spec:                  fullSpec(),
+		SnapshotUri:           "gs://bucket/root/atespaces/team-a/actors/uid/snapshots/1",
+		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
+		Fidelity:              ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		EgressGateway:         &ateompb.EgressGateway{Address: "gateway:443"},
+		CpuMilli:              1500,
+		MemoryBytes:           1 << 30,
+		ActorDirs:             fullActorDirs(),
+	}
+	for _, m := range mutate {
+		m(r)
+	}
+	return r
+}
+
+// Restore shares its identity, size, and asset fields with Run, which the
+// Run table covers; this table holds the shared gates at one case each and
+// covers what only Restore has.
 func TestValidateRestoreWorkloadRequest(t *testing.T) {
-	for name, req := range map[string]*ateompb.RestoreWorkloadRequest{
-		"empty": {},
-		"full": {
-			Atespace:              "team-a",
-			ActorName:             "actor-1",
-			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
-			ActorTemplateAtespace: "team-a",
-			ActorTemplateName:     "template-1",
-			RunscPath:             "/opt/runsc",
-			Spec:                  fullSpec(),
-			SnapshotUri:           "gs://bucket/root/atespaces/team-a/actors/uid/snapshots/1",
-			RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
-			Fidelity:              ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
-			EgressGateway:         &ateompb.EgressGateway{Address: "gateway:443"},
-			CpuMilli:              1500,
-			MemoryBytes:           1 << 30,
-			ActorDirs:             fullActorDirs(),
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := ValidateRestoreWorkloadRequest(context.Background(), req); err != nil {
-				t.Fatalf("ValidateRestoreWorkloadRequest() = %v, want nil", err)
-			}
+	valid := validRestoreWorkloadRequest
+
+	tests := []struct {
+		name string
+		obj  *ateompb.RestoreWorkloadRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "valid: memory fidelity",
+		obj: valid(func(r *ateompb.RestoreWorkloadRequest) {
+			r.Fidelity = ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+		}),
+	}, {
+		name: "valid: rootfs fidelity, which runtimes judge for themselves",
+		obj: valid(func(r *ateompb.RestoreWorkloadRequest) {
+			r.Fidelity = ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		}),
+	}, {
+		name: "missing actor_uid",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid atespace: uppercase",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.Atespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing spec",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.Spec = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
+	}, {
+		name: "missing actor_dirs",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.ActorDirs = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_dirs"), "")},
+	}, {
+		name: "negative cpu_milli",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.CpuMilli = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "cpu_milli past atelet's bound",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.CpuMilli = 1000000 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "runtime asset path too long",
+		obj: valid(func(r *ateompb.RestoreWorkloadRequest) {
+			r.RuntimeAssetPaths = map[string]string{"kata-kernel": "/" + strings.Repeat("x", 4096)}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("runtime_asset_paths").Key("kata-kernel"), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "missing snapshot_uri",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot_uri"), "")},
+	}, {
+		name: "snapshot_uri too long",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "gs://bucket/" + strings.Repeat("x", 2048) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("snapshot_uri"), nil, 2048).WithOrigin("maxLength")},
+	}, {
+		name: "invalid snapshot_uri: no bucket",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "snapshots/1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_uri"), nil, "")},
+	}, {
+		name: "invalid snapshot_uri: query string",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "gs://bucket/snapshots/1?x=1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_uri"), nil, "")},
+	}, {
+		name: "missing fidelity",
+		obj: valid(func(r *ateompb.RestoreWorkloadRequest) {
+			r.Fidelity = ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("fidelity"), "")},
+	}, {
+		name: "fidelity past the enum",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.Fidelity = ateompb.SnapshotFidelity(4) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("fidelity"), nil, "").WithOrigin("maximum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_RestoreWorkloadRequest(context.Background(), createOp(), nil, tt.obj, nil))
 		})
+	}
+}
+
+// TestValidateRestoreWorkloadRequestEdge covers the handler-facing wrapper:
+// valid passes, invalid comes back as InvalidArgument.
+func TestValidateRestoreWorkloadRequestEdge(t *testing.T) {
+	if err := ValidateRestoreWorkloadRequest(context.Background(), validRestoreWorkloadRequest()); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	err := ValidateRestoreWorkloadRequest(context.Background(), &ateompb.RestoreWorkloadRequest{})
+	if apierror.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty request error = %v, want InvalidArgument", err)
 	}
 }
 

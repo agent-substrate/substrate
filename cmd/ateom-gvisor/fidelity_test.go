@@ -65,22 +65,17 @@ func TestValidateFidelity(t *testing.T) {
 // system work, so a misrouted request cannot leave the actor half-handled.
 func TestRPCsRejectRootfsBeforeTouchingTheSandbox(t *testing.T) {
 	s := &AteomService{}
-	dirs := &ateompb.ActorDirs{
-		RootDir:                   "/node/actors/actor-a",
-		OciBundleDir:              "/node/actors/actor-a/bundle",
-		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-		RestoreDir:                "/node/actors/actor-a/restore-state",
-		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		VolumesDir:                "/node/actors/actor-a/volumes",
-	}
 	rootfs := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 
-	_, err := s.CheckpointWorkload(context.Background(), &ateompb.CheckpointWorkloadRequest{ActorUid: "actor-a", ActorDirs: dirs, Fidelity: rootfs})
+	ckpt := validCheckpointRequest()
+	ckpt.Fidelity = rootfs
+	_, err := s.CheckpointWorkload(context.Background(), ckpt)
 	if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
 		t.Errorf("CheckpointWorkload(ROOTFS) = %v, want InvalidArgument naming the fidelity", err)
 	}
-	_, err = s.RestoreWorkload(context.Background(), &ateompb.RestoreWorkloadRequest{ActorUid: "actor-a", ActorDirs: dirs, Fidelity: rootfs})
+	restore := validRestoreRequest()
+	restore.Fidelity = rootfs
+	_, err = s.RestoreWorkload(context.Background(), restore)
 	if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
 		t.Errorf("RestoreWorkload(ROOTFS) = %v, want InvalidArgument naming the fidelity", err)
 	}

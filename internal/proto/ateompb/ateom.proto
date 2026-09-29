@@ -161,30 +161,42 @@ message TerminateWorkloadResponse {
 }
 
 message RunWorkloadRequest {
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
+  // Empty for runtimes that do not use runsc.
+  //
   // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
 
-  // +k8s:optional
+  // +k8s:required
   // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
-  // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
-  // "virtiofsd", "kata-kernel", "kata-image")
-  // to the local on-disk path atelet fetched it to (content-addressed, like
-  // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+  // runtime_asset_paths maps a runtime asset name to the local on-disk path
+  // atelet fetched it to (content-addressed, like runsc_path). The names are
+  // the runtime's own: "gvisor" and "runsc" for gVisor, "cloud-hypervisor",
+  // "virtiofsd", "kata-kernel", and "kata-image" for the micro-VM. Empty for
+  // the gVisor runtime, which uses runsc_path.
   //
   // +k8s:optional
+  // +k8s:maxProperties=8 # six names exist across the two runtimes
+  // +k8s:eachKey=+k8s:maxLength=64
+  // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
@@ -199,10 +211,13 @@ message RunWorkloadRequest {
   // runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
   //
   // +k8s:optional
-  int64 cpu_milli = 11;    // CPU limit in millicores (1000 = one core).
+  // +k8s:minimum=1
+  // +k8s:maximum=999999 # matches atelet's bound: the control plane caps cpu limits strictly below 1000 cores
+  int64 cpu_milli = 11; // CPU limit in millicores (1000 = one core).
   // +k8s:optional
+  // +k8s:minimum=1
   int64 memory_bytes = 12; // Memory limit in bytes.
-  // +k8s:optional
+  // +k8s:required
   // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 13;
 }
@@ -338,6 +353,7 @@ enum SnapshotFidelity {
   // Capture process memory plus the full filesystem delta on top of the OCI
   // image (including any attached DurableDir volumes).
   SNAPSHOT_FIDELITY_MEMORY = 3;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 message CheckpointWorkloadRequest {
@@ -400,39 +416,54 @@ message CheckpointWorkloadResponse {
 }
 
 message RestoreWorkloadRequest {
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
   // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
+  // Empty for runtimes that do not use runsc.
+  //
   // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
 
-  // +k8s:optional
+  // +k8s:required
   // +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
   WorkloadSpec spec = 7;
 
   // The object storage URI of the snapshot to restore. Object names are
   // appended to it; it addresses the snapshot, not any one object.
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # a scheme, a bucket, and a path, nothing else
   string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   //
   // +k8s:optional
+  // +k8s:maxProperties=8 # six names exist across the two runtimes
+  // +k8s:eachKey=+k8s:maxLength=64
+  // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 9;
 
   // Fidelity to restore from the snapshot.
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 10;
 
   // When absent the actor has no egress: its TCP is captured and refused.
@@ -447,10 +478,13 @@ message RestoreWorkloadRequest {
   // these are ignored. Zero means "unset": keep the runtime default.
   //
   // +k8s:optional
-  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  // +k8s:minimum=1
+  // +k8s:maximum=999999 # matches atelet's bound: the control plane caps cpu limits strictly below 1000 cores
+  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
   // +k8s:optional
+  // +k8s:minimum=1
   int64 memory_bytes = 15; // Memory limit in bytes.
-  // +k8s:optional
+  // +k8s:required
   // +k8s:opaqueType # tagged in a follow-up
   ActorDirs actor_dirs = 16;
 

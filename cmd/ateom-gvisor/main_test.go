@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -57,35 +58,71 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 	s := &AteomService{}
 	ctx := context.Background()
-	dirs := &ateompb.ActorDirs{
+	for name, call := range map[string]func() error{
+		"RunWorkload": func() error {
+			req := validRunRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.RunWorkload(ctx, req)
+			return err
+		},
+		"RestoreWorkload": func() error {
+			req := validRestoreRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.RestoreWorkload(ctx, req)
+			return err
+		},
+		"CheckpointWorkload": func() error {
+			req := validCheckpointRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.CheckpointWorkload(ctx, req)
+			return err
+		},
+		"TerminateWorkload": func() error {
+			req := validTerminateRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.TerminateWorkload(ctx, req)
+			return err
+		},
+	} {
+		err := call()
+		if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "runsc_path") {
+			t.Errorf("%s() = %v, want InvalidArgument naming runsc_path", name, err)
+		}
+	}
+}
+
+// The requests below describe testActor and pass the generated validators, so
+// a test aimed at one of the hand checks that run after them (the runsc path,
+// the fidelity) sees that check's error rather than an unrelated rejection.
+
+func testDirs() *ateompb.ActorDirs {
+	return &ateompb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",
 		OciBundleDir:              "/node/actors/actor-a/bundle",
 		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-		RestoreDir:                "/node/actors/actor-a/restore",
+		RestoreDir:                "/node/actors/actor-a/restore-state",
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
 		VolumesDir:                "/node/actors/actor-a/volumes",
 	}
-	for name, call := range map[string]func() error{
-		"RunWorkload": func() error {
-			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
-			return err
-		},
-		"RestoreWorkload": func() error {
-			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
-			return err
-		},
-		"CheckpointWorkload": func() error {
-			_, err := s.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
-			return err
-		},
-		"TerminateWorkload": func() error {
-			_, err := s.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
-			return err
-		},
-	} {
-		if got := apierror.Code(call()); got != codes.InvalidArgument {
-			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
-		}
-	}
+}
+
+func testSpec() *ateompb.WorkloadSpec {
+	return &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{Name: "app"}}}
+}
+
+func validRunRequest() *ateompb.RunWorkloadRequest {
+	return &ateompb.RunWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs()}
+}
+
+func validCheckpointRequest() *ateompb.CheckpointWorkloadRequest {
+	return &ateompb.CheckpointWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs(), Fidelity: ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
+}
+
+func validRestoreRequest() *ateompb.RestoreWorkloadRequest {
+	return &ateompb.RestoreWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs(), Fidelity: ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
+}
+
+func validTerminateRequest() *ateompb.TerminateWorkloadRequest {
+	return &ateompb.TerminateWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs()}
 }

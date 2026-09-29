@@ -51,7 +51,7 @@ const (
 	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
 	// Capture process memory plus the full filesystem delta on top of the OCI
 	// image (including any attached DurableDir volumes).
-	SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY SnapshotFidelity = 3
+	SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY SnapshotFidelity = 3 // Keep this in sync with the maximums on fields of this type.
 )
 
 // Enum value maps for SnapshotFidelity.
@@ -472,27 +472,39 @@ func (*TerminateWorkloadResponse) Descriptor() ([]byte, []int) {
 
 type RunWorkloadRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// +k8s:optional
-	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	// +k8s:optional
-	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
-	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
-	// "virtiofsd", "kata-kernel", "kata-image")
-	// to the local on-disk path atelet fetched it to (content-addressed, like
-	// runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+	// Empty for runtimes that do not use runsc.
 	//
 	// +k8s:optional
+	// +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
+	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	// +k8s:required
+	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// runtime_asset_paths maps a runtime asset name to the local on-disk path
+	// atelet fetched it to (content-addressed, like runsc_path). The names are
+	// the runtime's own: "gvisor" and "runsc" for gVisor, "cloud-hypervisor",
+	// "virtiofsd", "kata-kernel", and "kata-image" for the micro-VM. Empty for
+	// the gVisor runtime, which uses runsc_path.
+	//
+	// +k8s:optional
+	// +k8s:maxProperties=8 # six names exist across the two runtimes
+	// +k8s:eachKey=+k8s:maxLength=64
+	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
@@ -505,10 +517,13 @@ type RunWorkloadRequest struct {
 	// runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
 	//
 	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=999999 # matches atelet's bound: the control plane caps cpu limits strictly below 1000 cores
 	CpuMilli int64 `protobuf:"varint,11,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
 	// +k8s:optional
+	// +k8s:minimum=1
 	MemoryBytes int64 `protobuf:"varint,12,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:opaqueType # tagged in a follow-up
 	ActorDirs     *ActorDirs `protobuf:"bytes,13,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1534,34 +1549,49 @@ func (x *CheckpointWorkloadResponse) GetDataSnapshotFiles() []string {
 
 type RestoreWorkloadRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// Empty for runtimes that do not use runsc.
+	//
 	// +k8s:optional
+	// +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:opaqueType # the WorkloadSpec tree gets its tags in a follow-up
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI of the snapshot to restore. Object names are
 	// appended to it; it addresses the snapshot, not any one object.
 	//
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:maxLength=2048
+	// +k8s:customValidation # a scheme, a bucket, and a path, nothing else
 	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	//
 	// +k8s:optional
+	// +k8s:maxProperties=8 # six names exist across the two runtimes
+	// +k8s:eachKey=+k8s:maxLength=64
+	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Fidelity to restore from the snapshot.
 	//
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
 	Fidelity SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateom.SnapshotFidelity" json:"fidelity,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
@@ -1574,10 +1604,13 @@ type RestoreWorkloadRequest struct {
 	// these are ignored. Zero means "unset": keep the runtime default.
 	//
 	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=999999 # matches atelet's bound: the control plane caps cpu limits strictly below 1000 cores
 	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
 	// +k8s:optional
+	// +k8s:minimum=1
 	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:opaqueType # tagged in a follow-up
 	ActorDirs *ActorDirs `protobuf:"bytes,16,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	// actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:

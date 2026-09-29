@@ -73,9 +73,6 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution, resume
 // is as for admitActor.
 func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
 	uid := attribution.UID
-	if uid == "" {
-		return nil, fmt.Errorf("actor UID is required")
-	}
 
 	hosted, stale, err := s.admitActor(attribution, resumesGuest)
 	if err != nil {
