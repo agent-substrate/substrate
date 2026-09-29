@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -74,6 +75,55 @@ func (f *fakeWorkerPlugin) UnmountVolume(ctx context.Context, volumeID string, t
 
 var _ volume.VolumePluginWorkerPlane = (*fakeWorkerPlugin)(nil)
 
+// TestExternalVolumesPreviewGate checks that external volumes are mounted and
+// unmounted only when the Preview gate is enabled.
+func TestExternalVolumesPreviewGate(t *testing.T) {
+	ctx := context.Background()
+	actorUID := "test-actor-123"
+	extVol := &ateletpb.Volume{
+		Name: "vol-1",
+		Source: &ateletpb.Volume_External{
+			External: &ateletpb.ExternalVolumeSource{StorageVolumeId: "mock-vol-1", VolumeType: "mock-driver"},
+		},
+	}
+	for _, tc := range []struct {
+		name    string
+		values  []string
+		enabled bool
+	}{
+		{"preview disabled", nil, false},
+		{"preview wildcard", []string{"*"}, true},
+		{"preview enabled", []string{"ExternalVolumes"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preview.InitForTest(t, tc.values...)
+			withTempActorsDir(t)
+			fake := &fakeWorkerPlugin{}
+			s := &AteomHerder{
+				volumePlugins: map[string]volume.VolumePluginWorkerPlane{"mock-driver": fake},
+			}
+
+			if err := s.mountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{extVol}); err != nil {
+				t.Fatalf("mountExternalVolumes: %v", err)
+			}
+			if got, want := len(fake.mountCalls), map[bool]int{false: 0, true: 1}[tc.enabled]; got != want {
+				t.Errorf("mount calls = %d, want %d", got, want)
+			}
+			_, err := os.Stat(ateletpath.VolumeHostPath(actorUID, "vol-1"))
+			if exists := err == nil; exists != tc.enabled {
+				t.Errorf("mount directory exists = %v, want %v (stat: %v)", exists, tc.enabled, err)
+			}
+
+			if err := s.unmountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{extVol}); err != nil {
+				t.Fatalf("unmountExternalVolumes: %v", err)
+			}
+			if got, want := len(fake.unmounted), map[bool]int{false: 0, true: 1}[tc.enabled]; got != want {
+				t.Errorf("unmount calls = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
 // withTempActorsDir redirects nodepath.ActorsDir at a temp dir for the
 // duration of the test. Every path derived from ActorsDir moves with it,
 // including the ones resetActorDirs and the bundle preparation compute
@@ -86,6 +136,7 @@ func withTempActorsDir(t *testing.T) {
 }
 
 func TestUnmountExternalVolumes(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
 	ctx := context.Background()
 	actorUID := "test-actor-123"
 
@@ -172,6 +223,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 }
 
 func TestMountExternalVolumes(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
 	ctx := context.Background()
 	actorUID := "test-actor-456"
 
@@ -389,6 +441,7 @@ func TestMountExternalVolumes(t *testing.T) {
 }
 
 func TestVolumeHostDirectoryCleanup(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
 	ctx := context.Background()
 	actorUID := "test-actor-cleanup"
 

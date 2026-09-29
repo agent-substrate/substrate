@@ -182,7 +182,11 @@ func TestValidateActorUpdate(t *testing.T) {
 		name   string
 		oldVal *ateapipb.Actor
 		newVal *ateapipb.Actor
-		want   field.ErrorList
+		// want is the result with no preview gates enabled.
+		want field.ErrorList
+		// wantWithPreview maps a --preview value to the result with those
+		// gates enabled.
+		wantWithPreview map[string]field.ErrorList
 	}{{
 		name:   "valid",
 		oldVal: validInput(),
@@ -621,40 +625,53 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		want: field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
-		name:   "too many external_volumes",
-		oldVal: validInput(),
-		newVal: validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			vols := make([]*ateapipb.ExternalVolume, 33)
-			for i := range vols {
-				vols[i] = &ateapipb.ExternalVolume{Name: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
-			}
-			s.ExternalVolumes = vols
+		name:            "no volumes",
+		oldVal:          validActor(withActorStatus()),
+		newVal:          validActor(withActorStatus()),
+		want:            nil,
+		wantWithPreview: map[string]field.ErrorList{"*": nil},
+	}, {
+		name: "unchanged volumes",
+		oldVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
 		})),
-		want: field.ErrorList{field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
+		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+		})),
+		want:            nil,
+		wantWithPreview: map[string]field.ErrorList{"*": nil},
+	}, {
+		name: "removing volumes",
+		oldVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+		})),
+		newVal:          validActor(withActorStatus()),
+		want:            nil,
+		wantWithPreview: map[string]field.ErrorList{"*": nil},
 	}, {
 		// Set-once fields permit the nil->set transition, so a volume added
 		// in an update validates like one added at creation.
-		name:   "adding a volume on update is allowed",
-		oldVal: validInput(withStatus()),
-		newVal: validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+		name:   "adding a volume",
+		oldVal: validActor(withActorStatus()),
+		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
+		want:            field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		wantWithPreview: map[string]field.ErrorList{"*": nil},
 	}, {
-		name:   "duplicate external_volumes name",
-		oldVal: validInput(withStatus()),
-		newVal: validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalVolumes = []*ateapipb.ExternalVolume{
-				{Name: "vol-a", VolumeType: "substrate.io/mock"},
-				{Name: "vol-a", VolumeType: "substrate.io/mock"},
-			}
+		name:   "adding a volume to an actor with no status",
+		oldVal: validActor(),
+		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
-		want: field.ErrorList{field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		wantWithPreview: map[string]field.ErrorList{"*": nil},
 	}, {
-		name: "provisioning transition on an existing volume is valid",
-		oldVal: validInput(withStatus(func(s *ateapipb.ActorStatus) {
+		name: "provisioning transition on an existing volume",
+		oldVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
 		})),
-		newVal: validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{
 				Name:            "vol-a",
 				VolumeType:      "substrate.io/mock",
@@ -663,10 +680,44 @@ func TestValidateActorUpdate(t *testing.T) {
 				VolumeContext:   map[string]string{"attachment": "iqn.2026-08.io.ate:vol-a"},
 			}}
 		})),
+		want:            field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		wantWithPreview: map[string]field.ErrorList{"*": nil},
+	}, {
+		name:   "duplicate external_volumes volume_name",
+		oldVal: validActor(withActorStatus()),
+		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{
+				{Name: "vol-a", VolumeType: "substrate.io/mock"},
+				{Name: "vol-a", VolumeType: "substrate.io/mock"},
+			}
+		})),
+		want: field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		wantWithPreview: map[string]field.ErrorList{
+			"*": {field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
+		},
+	}, {
+		name:   "too many external_volumes",
+		oldVal: validActor(withActorStatus()),
+		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
+			vols := make([]*ateapipb.ExternalVolume, 33)
+			for i := range vols {
+				vols[i] = &ateapipb.ExternalVolume{Name: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
+			}
+			s.ExternalVolumes = vols
+		})),
+		want: field.ErrorList{
+			field.Forbidden(field.NewPath("status", "external_volumes"), ""),
+			field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems"),
+		},
+		wantWithPreview: map[string]field.ErrorList{
+			"*": {field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
+		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)
+			assertValidate(t, func() field.ErrorList {
+				return ValidateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true)
+			}, tt.want, tt.wantWithPreview)
 		})
 	}
 }

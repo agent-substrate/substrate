@@ -1081,10 +1081,11 @@ func TestBuildDeploymentPreview(t *testing.T) {
 		want  []string
 	}{
 		{name: "disabled", want: []string{"--preview="}},
-		{name: "enabled", gates: []string{"*"}, want: []string{"--preview=*"}},
+		{name: "named", gates: []string{"Fake"}, want: []string{"--preview=Fake"}},
+		{name: "wildcard", gates: []string{"*"}, want: []string{"--preview=Fake,Phony"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			preview.InitForTest(t, tc.gates...)
+			preview.InitForTestFake(t, []preview.Gate{"Fake", "Phony"}, tc.gates...)
 			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{},
 				installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
 				Spec.Template.Spec.Containers[0]

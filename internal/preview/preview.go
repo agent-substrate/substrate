@@ -35,14 +35,14 @@ import (
 type Gate string
 
 const (
-	// GatePreview is a stand-in until we have real gates.
-	GatePreview Gate = "Preview"
+	// GateExternalVolumes controls whether external volumes are supported.
+	GateExternalVolumes Gate = "ExternalVolumes"
 )
 
 // realKnownGates lists all declared preview gates. Preview gates are disabled by
 // default and enabled via the --preview flag.
 var realKnownGates = []Gate{
-	GatePreview,
+	GateExternalVolumes,
 }
 
 var globalKnownGates []Gate        // all known gates

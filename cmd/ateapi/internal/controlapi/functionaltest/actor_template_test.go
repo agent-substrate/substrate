@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -281,4 +282,38 @@ func TestDeleteActorTemplate_Preconditions(t *testing.T) {
 	}
 	_, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+templateRef.String()+" not found")
+}
+
+// TestCreateActorTemplate_ExternalVolumesPreviewDisabled checks that a server
+// without the Preview gate rejects external volumes.
+func TestCreateActorTemplate_ExternalVolumesPreviewDisabled(t *testing.T) {
+	ns := namespaceForTest("ns-template-ext-vol-disabled")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	preview.InitForTest(t)
+	ctx := context.Background()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+
+	_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-ext"},
+			Containers: []*ateapipb.Container{{
+				Name:         "main",
+				Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
+			}},
+			Volumes: []*ateapipb.Volume{{
+				Name:                   "data",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"},
+			}},
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			SandboxConfig: &ateapipb.SandboxConfig{
+				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				ConfigName:   "gvisor-default",
+			},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateActorTemplate error = %v, want InvalidArgument", err)
+	}
 }
