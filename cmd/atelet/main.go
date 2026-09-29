@@ -35,6 +35,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -60,6 +61,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -197,9 +199,19 @@ func main() {
 
 	ateomDialer := newAteomDialer(256)
 
-	imageCredsKeychain, err := newImagePullCredentials()
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to configure image pull credentials", err)
+	// Without a credential provider config, pulls are anonymous: all an
+	// unconfigured node (kind, say) can do and all a public registry needs.
+	var imageCredsKeychain authn.Keychain
+	if *imageCredentialProviderConfig != "" {
+		if *imageCredentialProviderBinDir == "" {
+			serverboot.Fatal(ctx, "Failed to configure image pull credentials",
+				errors.New("--image-credential-provider-bin-dir is required when --image-credential-provider-config is set"))
+		}
+		kc, err := credentialprovider.New(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to configure image pull credentials", err)
+		}
+		imageCredsKeychain = kc
 	}
 
 	if err := validateImageCacheGCFlags(); err != nil {

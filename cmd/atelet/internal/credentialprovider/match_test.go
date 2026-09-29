@@ -36,6 +36,8 @@ func TestMatchesImage(t *testing.T) {
 		{name: "multiple globs", glob: "*.*.registry.io", image: "a.b.registry.io/img", want: true},
 		{name: "path prefix matches", glob: "registry.io/path", image: "registry.io/path/deeper/img", want: true},
 		{name: "path prefix must match exactly", glob: "registry.io/path", image: "registry.io/other/img"},
+		{name: "trailing slash in pattern", glob: "registry.io/team/", image: "registry.io/team/img", want: true},
+		{name: "path is a string prefix, as in the kubelet", glob: "registry.io/team", image: "registry.io/teammate/img", want: true},
 		{name: "image shallower than pattern", glob: "registry.io/a/b/c", image: "registry.io/a"},
 		{name: "matching port", glob: "registry.io:8080/path", image: "registry.io:8080/path/img", want: true},
 		{name: "mismatched port", glob: "registry.io:8080/path", image: "registry.io:9090/path/img"},

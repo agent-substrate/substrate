@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -380,41 +382,136 @@ func TestKeychainCaching(t *testing.T) {
 
 func TestKeychainCacheExpires(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	requests := fakePlugin(t, dir, "fake-provider", `{
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		requests := fakePlugin(t, dir, "fake-provider", `{
   "kind": "CredentialProviderResponse",
   "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
   "cacheKeyType": "Registry",
   "auth": {"gcr.io": {"username": "u", "password": "p"}}
 }`)
 
-	kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
-	if err != nil {
-		t.Fatalf("New returned unexpected error: %v", err)
-	}
-	clock := time.Now()
-	kc.plugins[0].now = func() time.Time { return clock }
+		kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
+		if err != nil {
+			t.Fatalf("New returned unexpected error: %v", err)
+		}
 
-	ref := repo(t, "gcr.io/proj/img:latest")
-	if _, err := kc.Resolve(ref); err != nil {
-		t.Fatalf("Resolve returned unexpected error: %v", err)
-	}
-	// The config's defaultCacheDuration is 1m; just short of it still hits.
-	clock = clock.Add(59 * time.Second)
-	if _, err := kc.Resolve(ref); err != nil {
-		t.Fatalf("Resolve returned unexpected error: %v", err)
-	}
-	if got := countRequests(t, requests); got != 1 {
-		t.Fatalf("Plugin ran %d times before the cache expired, want 1", got)
-	}
+		ref := repo(t, "gcr.io/proj/img:latest")
+		if _, err := kc.Resolve(ref); err != nil {
+			t.Fatalf("Resolve returned unexpected error: %v", err)
+		}
+		// The config's defaultCacheDuration is 1m; just short of it still hits.
+		time.Sleep(59 * time.Second)
+		if _, err := kc.Resolve(ref); err != nil {
+			t.Fatalf("Resolve returned unexpected error: %v", err)
+		}
+		if got := countRequests(t, requests); got != 1 {
+			t.Fatalf("Plugin ran %d times before the cache expired, want 1", got)
+		}
 
-	clock = clock.Add(2 * time.Second)
-	if _, err := kc.Resolve(ref); err != nil {
-		t.Fatalf("Resolve returned unexpected error: %v", err)
+		time.Sleep(2 * time.Second)
+		if _, err := kc.Resolve(ref); err != nil {
+			t.Fatalf("Resolve returned unexpected error: %v", err)
+		}
+		if got := countRequests(t, requests); got != 2 {
+			t.Errorf("Plugin ran %d times after the cache expired, want 2", got)
+		}
+	})
+}
+
+// A Registry or Global entry serves images other than the one that filled
+// it, so each lookup must pick its own key from the cached auth map rather
+// than reuse the first image's credentials.
+func TestKeychainCachedEntrySelectsPerImage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		cacheKeyType string
+		auth         string
+		refs         map[string]string // image -> wanted username
+	}{
+		{
+			name:         "global key across registries",
+			cacheKeyType: "Global",
+			auth:         `{"gcr.io": {"username": "gcr", "password": "p"}, "us.gcr.io": {"username": "us", "password": "p"}}`,
+			refs:         map[string]string{"gcr.io/proj/img": "gcr", "us.gcr.io/proj/img": "us"},
+		},
+		{
+			name:         "registry key across repositories",
+			cacheKeyType: "Registry",
+			auth:         `{"gcr.io/a": {"username": "a", "password": "p"}, "gcr.io/b": {"username": "b", "password": "p"}}`,
+			refs:         map[string]string{"gcr.io/a/img": "a", "gcr.io/b/img": "b"},
+		},
+		{
+			name:         "global key with no entry for the image",
+			cacheKeyType: "Global",
+			auth:         `{"gcr.io": {"username": "gcr", "password": "p"}}`,
+			refs:         map[string]string{"gcr.io/proj/img": "gcr", "us.gcr.io/proj/img": ""},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			requests := fakePlugin(t, dir, "fake-provider", fmt.Sprintf(`{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": %q,
+  "auth": %s
+}`, tc.cacheKeyType, tc.auth))
+
+			kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
+			if err != nil {
+				t.Fatalf("New returned unexpected error: %v", err)
+			}
+			// The first image fills the entry; the second must pick its own key.
+			refs := make([]string, 0, len(tc.refs))
+			for ref := range tc.refs {
+				refs = append(refs, ref)
+			}
+			sort.Strings(refs)
+			for _, ref := range refs {
+				if got, want := resolvedAuth(t, kc, ref).Username, tc.refs[ref]; got != want {
+					t.Errorf("Resolve(%q) username = %q, want %q", ref, got, want)
+				}
+			}
+			if got := countRequests(t, requests); got != 1 {
+				t.Errorf("Plugin ran %d times, want 1", got)
+			}
+		})
 	}
-	if got := countRequests(t, requests); got != 2 {
-		t.Errorf("Plugin ran %d times after the cache expired, want 2", got)
-	}
+}
+
+// Expired entries must not accumulate when every pull names a new repository,
+// which Image caching never looks up again.
+func TestKeychainSweepsExpiredEntries(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		fakePlugin(t, dir, "fake-provider", `{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": "Image",
+  "cacheDuration": "1m",
+  "auth": {"gcr.io": {"username": "u", "password": "p"}}
+}`)
+
+		kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
+		if err != nil {
+			t.Fatalf("New returned unexpected error: %v", err)
+		}
+		for i := range 5 {
+			if _, err := kc.Resolve(repo(t, fmt.Sprintf("gcr.io/proj/img%d", i))); err != nil {
+				t.Fatalf("Resolve returned unexpected error: %v", err)
+			}
+			time.Sleep(time.Hour)
+		}
+		p := kc.plugins[0]
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if got := len(p.cache); got != 1 {
+			t.Errorf("cache holds %d entries, want 1", got)
+		}
+	})
 }
 
 // Not parallel: t.Setenv mutates the process environment the plugin inherits.
@@ -554,8 +651,9 @@ providers:
 // as given rather than stretched.
 func TestKeychainHonorsShortCacheDuration(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	requests := fakePlugin(t, dir, "fake-provider", `{
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		requests := fakePlugin(t, dir, "fake-provider", `{
   "kind": "CredentialProviderResponse",
   "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
   "cacheKeyType": "Registry",
@@ -563,24 +661,23 @@ func TestKeychainHonorsShortCacheDuration(t *testing.T) {
   "auth": {"gcr.io": {"username": "u", "password": "p"}}
 }`)
 
-	kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
-	if err != nil {
-		t.Fatalf("New returned unexpected error: %v", err)
-	}
-	clock := time.Now()
-	kc.plugins[0].now = func() time.Time { return clock }
+		kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
+		if err != nil {
+			t.Fatalf("New returned unexpected error: %v", err)
+		}
 
-	ref := repo(t, "gcr.io/proj/img:latest")
-	if _, err := kc.Resolve(ref); err != nil {
-		t.Fatalf("Resolve returned unexpected error: %v", err)
-	}
-	// Past the plugin's 30s but inside minCacheDuration: honoring the plugin
-	// means re-execing here, stretching it to a minute would not.
-	clock = clock.Add(45 * time.Second)
-	if _, err := kc.Resolve(ref); err != nil {
-		t.Fatalf("Resolve returned unexpected error: %v", err)
-	}
-	if got := countRequests(t, requests); got != 2 {
-		t.Errorf("Plugin ran %d times after its 30s cacheDuration expired, want 2", got)
-	}
+		ref := repo(t, "gcr.io/proj/img:latest")
+		if _, err := kc.Resolve(ref); err != nil {
+			t.Fatalf("Resolve returned unexpected error: %v", err)
+		}
+		// Past the plugin's 30s but inside minCacheDuration: honoring the plugin
+		// means re-execing here, stretching it to a minute would not.
+		time.Sleep(45 * time.Second)
+		if _, err := kc.Resolve(ref); err != nil {
+			t.Fatalf("Resolve returned unexpected error: %v", err)
+		}
+		if got := countRequests(t, requests); got != 2 {
+			t.Errorf("Plugin ran %d times after its 30s cacheDuration expired, want 2", got)
+		}
+	})
 }

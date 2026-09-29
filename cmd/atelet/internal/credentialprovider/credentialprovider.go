@@ -110,10 +110,12 @@ func (k *Keychain) ResolveContext(ctx context.Context, target authn.Resource) (a
 	return authn.Anonymous, nil
 }
 
-// cacheEntry is one plugin response held until expiry. A nil auth is cached
-// too, so "no credentials for you" costs no further subprocess.
+// cacheEntry is one plugin response's auth map, held until expiry. The whole
+// map is kept because a Registry or Global entry serves other images, which
+// may match a different key. An empty map is cached too, so "no credentials
+// for you" costs no further subprocess.
 type cacheEntry struct {
-	auth      *credentialproviderv1.AuthConfig
+	auth      map[string]credentialproviderv1.AuthConfig
 	expiresAt time.Time
 }
 
@@ -128,8 +130,6 @@ type plugin struct {
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry
-	// now is time.Now, overridden in tests.
-	now func() time.Time
 }
 
 // claims reports whether this plugin is configured to handle image.
@@ -171,39 +171,36 @@ const minCacheDuration = time.Minute
 // what it returns; cached reports which. A nil AuthConfig with a nil error
 // means the plugin has no credentials for this image.
 func (p *plugin) provide(ctx context.Context, image string) (auth *credentialproviderv1.AuthConfig, cached bool, err error) {
-	if entry, ok := p.lookup(image); ok {
-		return entry, true, nil
+	authMap, cached := p.lookup(image)
+	if !cached {
+		resp, err := p.exec(ctx, image)
+		if err != nil {
+			return nil, false, err
+		}
+		authMap = resp.Auth
+		p.store(image, resp)
 	}
 
-	resp, err := p.exec(ctx, image)
-	if err != nil {
-		return nil, false, err
+	key, err := bestAuthKey(authMap, image)
+	if err != nil || key == "" {
+		return nil, cached, err
 	}
-
-	key, err := bestAuthKey(resp.Auth, image)
-	if err != nil {
-		return nil, false, err
-	}
-	if key != "" {
-		matched := resp.Auth[key]
-		auth = &matched
-	}
-
-	p.store(image, resp, auth)
-	return auth, false, nil
+	matched := authMap[key]
+	return &matched, cached, nil
 }
 
 // lookup tries every key type the plugin might have stored under, most
 // specific first: a plugin's cacheKeyType is not known until it answers once.
-func (p *plugin) lookup(image string) (*credentialproviderv1.AuthConfig, bool) {
+func (p *plugin) lookup(image string) (map[string]credentialproviderv1.AuthConfig, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	now := time.Now()
 	for _, key := range []string{image, registryOf(image), globalCacheKey} {
 		entry, ok := p.cache[key]
 		if !ok {
 			continue
 		}
-		if !p.timeNow().Before(entry.expiresAt) {
+		if !now.Before(entry.expiresAt) {
 			delete(p.cache, key)
 			continue
 		}
@@ -212,10 +209,9 @@ func (p *plugin) lookup(image string) (*credentialproviderv1.AuthConfig, bool) {
 	return nil, false
 }
 
-// store caches auth under the key type the plugin asked for. A response
-// carrying an unrecognized cacheKeyType, or an explicit zero duration, is not
-// cached at all.
-func (p *plugin) store(image string, resp *credentialproviderv1.CredentialProviderResponse, auth *credentialproviderv1.AuthConfig) {
+// store caches resp's auth map under the key type the plugin asked for. A
+// response carrying an unrecognized cacheKeyType is not cached at all.
+func (p *plugin) store(image string, resp *credentialproviderv1.CredentialProviderResponse) {
 	var key string
 	switch resp.CacheKeyType {
 	case credentialproviderv1.ImagePluginCacheKeyType:
@@ -240,12 +236,13 @@ func (p *plugin) store(image string, resp *credentialproviderv1.CredentialProvid
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.cache[key] = cacheEntry{auth: auth, expiresAt: p.timeNow().Add(duration)}
-}
-
-func (p *plugin) timeNow() time.Time {
-	if p.now != nil {
-		return p.now()
+	now := time.Now()
+	// Sweep on every store: lookup only evicts the keys it is asked for, so
+	// an Image-keyed plugin would otherwise keep every repository it has seen.
+	for k, entry := range p.cache {
+		if !now.Before(entry.expiresAt) {
+			delete(p.cache, k)
+		}
 	}
-	return time.Now()
+	p.cache[key] = cacheEntry{auth: resp.Auth, expiresAt: now.Add(duration)}
 }

@@ -24,10 +24,10 @@ import (
 )
 
 // matchesImage reports whether glob matches image, following the kubelet's
-// urlsMatch (k8s.io/kubernetes/pkg/credentialprovider): domain split on ".",
-// path on "/", each segment matched with filepath.Match so a glob never spans
-// one ("*.io" does not match "k8s.gcr.io"), the glob's segments a prefix of the
-// image's, and ports equal.
+// URLsMatch (k8s.io/kubernetes/pkg/credentialprovider): the hosts must have
+// the same number of "."-separated segments, each matched with filepath.Match
+// so a glob never spans one ("*.io" does not match "k8s.gcr.io"), the ports
+// must be equal, and the glob's path must be a string prefix of the image's.
 //
 // Both arguments are scheme-less: "*.pkg.dev", "registry.io:8080/path".
 func matchesImage(glob, image string) (bool, error) {
@@ -40,18 +40,13 @@ func matchesImage(glob, image string) (bool, error) {
 		return false, fmt.Errorf("while parsing image %q: %w", image, err)
 	}
 
-	globParts, globPort := splitURL(globURL)
-	imageParts, imagePort := splitURL(imageURL)
-	if globPort != imagePort {
+	globHost, globPort := splitHost(globURL)
+	imageHost, imagePort := splitHost(imageURL)
+	if globPort != imagePort || len(globHost) != len(imageHost) {
 		return false, nil
 	}
-	// The pattern may be less specific than the image (a bare registry matches
-	// every repository under it), but never more.
-	if len(globParts) > len(imageParts) {
-		return false, nil
-	}
-	for i, globPart := range globParts {
-		matched, err := filepath.Match(globPart, imageParts[i])
+	for i, globPart := range globHost {
+		matched, err := filepath.Match(globPart, imageHost[i])
 		if err != nil {
 			return false, fmt.Errorf("while matching pattern %q against image %q: %w", glob, image, err)
 		}
@@ -59,7 +54,7 @@ func matchesImage(glob, image string) (bool, error) {
 			return false, nil
 		}
 	}
-	return true, nil
+	return strings.HasPrefix(imageURL.Path, globURL.Path), nil
 }
 
 // parseSchemelessURL parses a registry/repository string that carries no
@@ -73,15 +68,14 @@ func parseSchemelessURL(schemeless string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// splitURL flattens a URL into the segment list matchesImage compares: the
-// host split on "." followed by the path split on "/", with the port returned
+// splitHost returns u's host split on "." and its port, which is compared
 // separately (globs are not allowed in ports).
-func splitURL(u *url.URL) (parts []string, port string) {
+func splitHost(u *url.URL) (parts []string, port string) {
 	host, port, err := net.SplitHostPort(u.Host)
 	if err != nil {
 		host, port = u.Host, ""
 	}
-	return append(strings.Split(host, "."), strings.Split(u.Path, "/")...), port
+	return strings.Split(host, "."), port
 }
 
 // bestAuthKey picks the key of auth that best matches image, or "" when none
