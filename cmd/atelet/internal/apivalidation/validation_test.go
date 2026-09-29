@@ -20,32 +20,12 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-var createOp = operation.Operation{Type: operation.Create}
-
-func expectErrors(t *testing.T, want, got field.ErrorList) {
+func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
-}
-
-// expectEdge checks the handler-facing wrapper: a valid request passes and an
-// invalid one comes back as InvalidArgument.
-func expectEdge(t *testing.T, err error, wantInvalid bool) {
-	t.Helper()
-	if !wantInvalid {
-		if err != nil {
-			t.Errorf("valid request rejected: %v", err)
-		}
-		return
-	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("error = %v, want InvalidArgument", err)
-	}
 }
 
 func TestValidateRequestActorSuspendRequest(t *testing.T) {
@@ -95,8 +75,7 @@ func TestValidateRequestActorSuspendRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expectErrors(t, tt.want, Validate_RequestActorSuspendRequest(context.Background(), createOp, nil, tt.obj, nil))
-			expectEdge(t, ValidateRequestActorSuspendRequest(context.Background(), tt.obj), len(tt.want) > 0)
+			assertValidateErr(t, ValidateRequestActorSuspendRequest(context.Background(), tt.obj), tt.want)
 		})
 	}
 }
@@ -164,8 +143,7 @@ func TestValidateMintActorCertificateRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expectErrors(t, tt.want, Validate_MintActorCertificateRequest(context.Background(), createOp, nil, tt.obj, nil))
-			expectEdge(t, ValidateMintActorCertificateRequest(context.Background(), tt.obj), len(tt.want) > 0)
+			assertValidateErr(t, ValidateMintActorCertificateRequest(context.Background(), tt.obj), tt.want)
 		})
 	}
 }
@@ -264,8 +242,7 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expectErrors(t, tt.want, Validate_SetWorkerCapacityRequest(context.Background(), createOp, nil, tt.obj, nil))
-			expectEdge(t, ValidateSetWorkerCapacityRequest(context.Background(), tt.obj), len(tt.want) > 0)
+			assertValidateErr(t, ValidateSetWorkerCapacityRequest(context.Background(), tt.obj), tt.want)
 		})
 	}
 }

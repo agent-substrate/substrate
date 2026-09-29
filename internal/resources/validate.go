@@ -25,11 +25,19 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// ToGRPCStatusError turns validation errors into the InvalidArgument error an
+// RPC handler responds with. Callers check len(errs) > 0 first.
+func ToGRPCStatusError(errs field.ErrorList) error {
+	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
 
 // DeepEqual compares two values of any type, using proto.Equal if both are
 // proto messages, and reflect.DeepEqual otherwise. Declarative validation's

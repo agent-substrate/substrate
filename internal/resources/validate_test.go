@@ -21,8 +21,20 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func TestToGRPCStatusError(t *testing.T) {
+	err := ToGRPCStatusError(field.ErrorList{field.Required(field.NewPath("actor_name"), "")})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+	if !strings.Contains(status.Convert(err).Message(), "actor_name") {
+		t.Errorf("message %q does not name the field", status.Convert(err).Message())
+	}
+}
 
 func TestDeepEqual(t *testing.T) {
 	// Proto messages carry internal state that reflect.DeepEqual would

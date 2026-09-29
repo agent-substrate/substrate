@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -44,8 +45,8 @@ func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *atel
 	// Reject malformed requests here rather than forwarding them for the
 	// control plane to reject after a round trip. After authentication, so an
 	// unauthenticated caller learns nothing but Unauthenticated.
-	if err := apivalidation.ValidateMintActorCertificateRequest(ctx, req); err != nil {
-		return nil, err
+	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// TODO(identity): Check that we believe that this ateom is running the
@@ -116,8 +117,8 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 	// Reject malformed requests here rather than forwarding them for the
 	// control plane to reject after a round trip. After authentication, so an
 	// unauthenticated caller learns nothing but Unauthenticated.
-	if err := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); err != nil {
-		return nil, err
+	if errs := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	if _, err := s.workers.SetWorkerCapacity(ctx, &ateapipb.SetWorkerCapacityRequest{
 		// Workers are global-scoped and named by their pod UID.
@@ -167,8 +168,8 @@ func (s *ateomSupportServer) RequestActorSuspend(ctx context.Context, req *atele
 	// Reject malformed requests here rather than forwarding them for the
 	// control plane to reject after a round trip. After authentication, so an
 	// unauthenticated caller learns nothing but Unauthenticated.
-	if err := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); err != nil {
-		return nil, err
+	if errs := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	if _, err := s.workers.RequestActorSuspend(ctx, &ateapipb.RequestActorSuspendRequest{
 		// Workers are global-scoped and named by their pod UID.

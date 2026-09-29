@@ -55,7 +55,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 
 	// Validate the request, including the object within it.
 	if errs := validateCreateActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	start := time.Now()
@@ -206,7 +206,7 @@ func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRe
 
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
 	if errs := validateGetActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	actor, err := s.impl.GetActor(ctx, actorRef)
@@ -230,7 +230,7 @@ func validateGetActorRequest(ctx context.Context, req *ateapipb.GetActorRequest)
 
 func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	if errs := validateListActorsRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -263,7 +263,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 
 	// Validate the request.
 	if errs := validateUpdateActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	actorRef := resources.ActorRefFromActor(inActor)
@@ -303,7 +303,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 
 		// Validate the user's input before doing any further work.
 		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, false); len(errs) > 0 {
-			return toGRPCStatusError(errs)
+			return resources.ToGRPCStatusError(errs)
 		}
 
 		// Do any further work on the resource.
@@ -416,7 +416,7 @@ func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 
 func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
 	if errs := validateDeleteActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
@@ -455,7 +455,7 @@ func validateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRe
 
 func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
 	if errs := validatePauseActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -483,7 +483,7 @@ func validatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequ
 
 func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
 	if errs := validateResumeActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -511,7 +511,7 @@ func validateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRe
 
 func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
 	if errs := validateSuspendActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -538,7 +538,7 @@ func validateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActor
 
 func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {
 	if errs := validateRevertActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)

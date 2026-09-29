@@ -43,7 +43,7 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		defaults.Apply(policy)
 	}
 	if errs := validateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.CreateEgressPolicy(ctx, actorRef, policy)
@@ -60,7 +60,7 @@ func validateCreateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.C
 
 func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	if errs := validateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
@@ -87,7 +87,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := validateUpdateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapipb.EgressPolicy) error {
@@ -107,7 +107,7 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 			return err
 		}
 		if errs := validateEgressPolicyUpdate(ctx, field.NewPath("egress_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return toGRPCStatusError(errs)
+			return resources.ToGRPCStatusError(errs)
 		}
 		// EgressPolicy has no status or other server-derived fields to verify.
 		return nil
@@ -125,7 +125,7 @@ func validateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldV
 
 func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	if errs := validateDeleteActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))

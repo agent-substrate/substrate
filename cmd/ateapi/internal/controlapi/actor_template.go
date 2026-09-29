@@ -49,7 +49,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 
 	// Validate the request, including the object within it.
 	if errs := validateCreateActorTemplateRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// config_name is required; the declarative validation has already
@@ -101,7 +101,7 @@ func validateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 
 func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := validateGetActorTemplateRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
@@ -128,7 +128,7 @@ func validateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActor
 
 func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
 	if errs := validateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -154,7 +154,7 @@ func validateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListAc
 
 func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := validateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
 }

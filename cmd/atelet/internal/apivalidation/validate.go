@@ -19,35 +19,23 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// ValidateRequestActorSuspendRequest validates req at the RPC edge. A non-nil
-// return is the InvalidArgument error the handler responds with.
-func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) error {
-	return toInvalidArgument(Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
+// ValidateRequestActorSuspendRequest runs the generated validation for req.
+func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) field.ErrorList {
+	return Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
-// ValidateMintActorCertificateRequest validates req at the RPC edge. A
-// non-nil return is the InvalidArgument error the handler responds with.
-func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.MintActorCertificateRequest) error {
-	return toInvalidArgument(Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
+// ValidateMintActorCertificateRequest runs the generated validation for req.
+func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.MintActorCertificateRequest) field.ErrorList {
+	return Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
-// ValidateSetWorkerCapacityRequest validates req at the RPC edge. A non-nil
-// return is the InvalidArgument error the handler responds with.
-func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) error {
-	return toInvalidArgument(Validate_SetWorkerCapacityRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil))
-}
-
-func toInvalidArgument(errs field.ErrorList) error {
-	if len(errs) == 0 {
-		return nil
-	}
-	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+// ValidateSetWorkerCapacityRequest runs the generated validation for req.
+func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) field.ErrorList {
+	return Validate_SetWorkerCapacityRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateCustom_Limits validates one limit with resources.ValidateLimit, the

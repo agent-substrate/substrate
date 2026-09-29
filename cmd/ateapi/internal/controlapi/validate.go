@@ -27,10 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func toGRPCStatusError(errs field.ErrorList) error {
-	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-}
-
 func toGRPCInternalError(errs field.ErrorList) error {
 	return status.Error(codes.Internal, errs.ToAggregate().Error())
 }
