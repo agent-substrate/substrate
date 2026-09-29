@@ -22,6 +22,9 @@ $substrate-blue: #66b8dd;
 $substrate-yellow: #f0f175;
 $substrate-pink: #e87cb3;
 
+// Brand typeface for the site name, loaded in _partials/hooks/head-end.html.
+$substrate-brand-font: "Ubuntu", system-ui, -apple-system, "Segoe UI", sans-serif;
+
 $primary: $substrate-green-dark;
 $secondary: #fff;
 $dark: #0b1f10;
