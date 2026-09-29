@@ -89,9 +89,11 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 			worker.Status = &ateapipb.WorkerStatus{}
 		}
 
-		// Read under the row lock, so an epoch raised concurrently is either
-		// seen here or raised after this bind commits.
+		// Read under the row lock, so an epoch raised or ips changed
+		// concurrently is either seen here or written after this bind commits.
 		assignment.WorkerEpoch = worker.GetEpoch()
+		assignment.WorkerPodIps = worker.GetIps()
+		assignment.WorkerIpsGeneration = worker.GetStatus().GetIpsGeneration()
 		assignmentBytes, err := proto.Marshal(assignment)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling assignment: %w", err)
@@ -229,6 +231,51 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 		return nil, err
 	}
 	return released, nil
+}
+
+func (p *Persistence) SetAssignmentWorkerPodIPs(ctx context.Context, workerName, actorUID string, ips []string, ipsGeneration int64) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	var protoBytes []byte
+	err = tx.QueryRow(ctx, `
+		SELECT proto FROM worker_assignments
+		WHERE actor_uid = $1 AND worker_name = $2
+		FOR UPDATE`, actorUID, workerName).Scan(&protoBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("locking assignment of actor %s on worker %s: %w", actorUID, workerName, err)
+	}
+	assignment := &ateapipb.ActorAssignment{}
+	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+		return fmt.Errorf("unmarshaling assignment: %w", err)
+	}
+	if assignment.GetWorkerIpsGeneration() >= ipsGeneration {
+		return nil
+	}
+
+	updated := proto.CloneOf(assignment)
+	updated.WorkerPodIps = ips
+	updated.WorkerIpsGeneration = ipsGeneration
+	setUpdateMetadata(updated.Metadata, assignment.GetMetadata())
+	if protoBytes, err = proto.Marshal(updated); err != nil {
+		return fmt.Errorf("marshaling assignment: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE worker_assignments SET proto = $3
+		WHERE actor_uid = $1 AND worker_name = $2`,
+		actorUID, workerName, protoBytes); err != nil {
+		return fmt.Errorf("updating assignment of actor %s on worker %s: %w", actorUID, workerName, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing transaction: %w", err)
+	}
+	return nil
 }
 
 // getAssignmentRow reads the assignment for actorUID and names the worker
