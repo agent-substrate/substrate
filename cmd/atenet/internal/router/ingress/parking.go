@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -146,8 +147,7 @@ type parkingLot struct {
 	cfg     ParkedRequestConfig
 	metrics *ParkingMetrics
 
-	mu     sync.Mutex
-	active int // current number of occupied slots; guarded by mu
+	active atomic.Int64 // current number of occupied slots
 }
 
 func newParkingLot(cfg ParkedRequestConfig, m *ParkingMetrics) *parkingLot {
@@ -165,14 +165,12 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 		return func(parkOutcome) {}, true
 	}
 
-	l.mu.Lock()
-	if l.active >= l.cfg.Max {
-		l.mu.Unlock()
+	v := l.active.Add(1)
+	if v > int64(l.cfg.Max) {
+		l.active.Add(-1)
 		l.metrics.recordRejected(ctx)
 		return nil, false
 	}
-	l.active++
-	l.mu.Unlock()
 
 	start := time.Now()
 	l.metrics.addActive(ctx, 1)
@@ -180,16 +178,14 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 	var once sync.Once
 	return func(outcome parkOutcome) {
 		once.Do(func() {
-			l.mu.Lock()
 			// The counter cannot go negative today (a release only exists after a
 			// successful enter, and it is Once-guarded), so a violation means an
 			// accounting bug elsewhere: clamp, but say so loudly.
-			if l.active > 0 {
-				l.active--
-			} else {
+			curr := l.active.Add(-1)
+			if curr < 0 {
+				l.active.Add(1)
 				slog.Error("parking lot slot released more times than acquired")
 			}
-			l.mu.Unlock()
 			l.metrics.addActive(ctx, -1)
 			l.metrics.recordWait(ctx, time.Since(start), outcome)
 		})
@@ -198,9 +194,7 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 
 // activeCount returns the number of requests currently parked.
 func (l *parkingLot) activeCount() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.active
+	return int(l.active.Load())
 }
 
 // status returns a snapshot of the lot for the /statusz page.
