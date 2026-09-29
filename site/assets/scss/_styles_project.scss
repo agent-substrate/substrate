@@ -98,7 +98,8 @@ footer {
     }
 
     .navbar-brand__name {
-      font-weight: 600;
+      font-family: $substrate-brand-font;
+      font-weight: 500;
     }
   }
 
@@ -211,6 +212,11 @@ nav.foldable-nav .ul-1 .with-child > input:checked ~ label:hover:before {
   padding-top: 6rem;
 }
 
+.td-cover-block .cover-title {
+  font-family: $substrate-brand-font;
+  font-weight: 500;
+}
+
 .cover-logo {
   max-width: 60vw;
   height: auto;
@@ -319,6 +325,8 @@ nav.foldable-nav .ul-1 .with-child > input:checked ~ label:hover:before {
 .td-content__eyebrow {
   margin-bottom: 0;
   color: $substrate-green;
+  font-family: $substrate-brand-font;
+  font-weight: 500;
 }
 
 .td-content a {
