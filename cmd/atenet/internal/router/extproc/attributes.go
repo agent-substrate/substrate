@@ -29,7 +29,11 @@ package extproc
 const (
 	// TargetActorFilterStateKey carries the ingress actor routing target across
 	// Envoy's CONNECT internal-listener hop.
-	TargetActorFilterStateKey      = "dev.ate.target.actor"
+	TargetActorFilterStateKey = "dev.ate.target.actor"
+	// ConnectAuthorityFilterStateKey carries the outer CONNECT authority across
+	// the same hop. Ingress selects the target port from it; the egress request
+	// legs read the IP:port the actor dialed from it, since the port a rule
+	// names is that one and not any port in the request's Host.
 	ConnectAuthorityFilterStateKey = "dev.ate.connect.authority"
 
 	// TargetActorFilterStateAttribute is the CEL expression ext_proc evaluates
@@ -55,6 +59,12 @@ const (
 	// allowed it. The outer chain copies it into the ORIGINAL_DST filter state;
 	// absent, a TLS or opaque connection has no upstream and is closed.
 	EgressPassthroughDestinationKey = "passthrough_destination"
+	// EgressPolicyMetadataNamespace is the dynamic-metadata namespace carrying
+	// the actor's egress policy on the CONNECT leg.
+	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
+	// EgressAllowedSNIsKey, under EgressPolicyMetadataNamespace, is the list
+	// of allowed SNI patterns from the actor's egress policy.
+	EgressAllowedSNIsKey = "allowed_snis"
 	// EgressDialKey, under EgressMetadataNamespace, is a request leg's answer
 	// for an allowed request: where it goes. The manifests' routes match on
 	// it, one route per value and none without, so a request with no answer

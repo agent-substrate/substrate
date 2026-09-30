@@ -21,6 +21,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -36,7 +37,7 @@ import (
 // them and neither GetWorker nor ListWorkers grows with occupancy.
 func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapipb.ListWorkerActorAssignmentsRequest) (*ateapipb.ListWorkerActorAssignmentsResponse, error) {
 	if errs := validateListWorkerActorAssignmentsRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	name := req.GetWorker().GetName()
 
@@ -68,7 +69,7 @@ func validateListWorkerActorAssignmentsRequest(ctx context.Context, req *ateapip
 
 func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
 	if errs := validateListWorkersRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	page, err := s.impl.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -93,7 +94,7 @@ func validateListWorkersRequest(ctx context.Context, req *ateapipb.ListWorkersRe
 
 func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := validateGetWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	name := req.GetWorker().GetName()
 
@@ -134,7 +135,7 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 
 	// Validate the request, including the object within it.
 	if errs := validateCreateWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// Handle the creation, including validation of the final stored object.
@@ -189,7 +190,7 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorke
 
 	// Validate the request.
 	if errs := validateUpdateWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.mutateWorker(ctx, inWorker.GetMetadata().GetName(), store.PreconditionFrom(inWorker), func(toUpdate *ateapipb.Worker) error {
@@ -221,7 +222,7 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 		// what enforces the immutable fields, since only the stored worker
 		// gives declarative validation an old value to compare against.
 		if errs := validateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, false); len(errs) > 0 {
-			return toGRPCStatusError(errs)
+			return resources.ToGRPCStatusError(errs)
 		}
 
 		// Do any further work on the resource.
@@ -270,7 +271,7 @@ func (s *ServiceImpl) FindWorkerHostingActor(ctx context.Context, actorUID strin
 
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := validateDeleteWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	// The delete releases the Actor bound to this Worker before removing the
 	// record, so it is a workflow rather than a single store call.
@@ -291,7 +292,7 @@ func validateDeleteWorkerRequest(ctx context.Context, req *ateapipb.DeleteWorker
 
 func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := validateDrainWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	name := req.GetWorker().GetName()
 

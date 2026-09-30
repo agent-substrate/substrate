@@ -129,13 +129,11 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("fetch with system roots failed, but not with a certificate-verification error: %s", neg.Error)
 	}
 
-	// The policy names example.com only, so another host is refused. Here that
-	// is an HTTP 403 on the decrypted request, after a successful handshake.
+	// The policy names example.com only, so another host is refused. Encapsulated
+	// TLS connection is closed since SNI does not match the policy.
 	denied := probeFetch(t, ctx, rc, id, "https://example.org/", "bundle")
-	if denied.Error != "" {
-		t.Errorf("fetch of a host outside the policy failed at the transport (%s), want an HTTP 403 from the gateway", denied.Error)
-	} else if denied.Status != "403" {
-		t.Errorf("fetch of a host outside the policy returned status %s, want 403", denied.Status)
+	if denied.Error != "Get \"https://example.org/\": EOF" {
+		t.Errorf("fetch of a host outside the policy did not fail at the transport. Error: %s. Status: %s", denied.Error, denied.Status)
 	}
 }
 
@@ -198,7 +196,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	}
 	// The gateway refuses every tunnel for an actor without a policy. Naming
 	// only the origin also lets the same actor show a denial.
-	e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHostnames(egressOriginHost))
+	e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHTTPS(egressOriginHost))
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {

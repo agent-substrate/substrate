@@ -402,7 +402,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 
 ### The ateom OTLP relay
 
-ateom is the one component that does not talk to the collector directly. It exports logs, traces, and metrics over a unix socket at `/var/lib/ateom-gvisor/atelet-otlp.sock`, which `atelet` serves and forwards to the collector on the node's network ([`internal/otlprelay`](../internal/otlprelay)):
+ateom is the one component that does not talk to the collector directly. It exports logs, traces, and metrics over a unix socket at `/var/lib/ate/atelet-otlp.sock`, which `atelet` serves and forwards to the collector on the node's network ([`internal/otlprelay`](../internal/otlprelay)):
 
 ```
 ateom ──OTLP/gRPC over unix socket──► atelet relay ──OTLP/gRPC──► collector

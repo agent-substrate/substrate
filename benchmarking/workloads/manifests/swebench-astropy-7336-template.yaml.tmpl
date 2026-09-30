@@ -20,17 +20,29 @@ workerSelector:
     workload: benchmark-ateom
 containers:
 - name: astropy
-  # Fill this in before deploying. The task image is built from the SWE-Perf
-  # repo https://github.com/gke-labs/sweperf, which supplies both the server
+  # The task image is built from the SWE-Perf repo
+  # https://github.com/gke-labs/sweperf, which supplies both the server
   # entrypoint and the trajectory under test; the command below runs that
   # entrypoint against that trace, so the image has to be the one built for
-  # this task. A shared public registry of these images is planned; build the
-  # image from that repo and set it here.
-  image: ""
+  # this task.
+  #
+  # Supplied via the SWEPERF_IMAGE environment variable, substituted by
+  # benchmarking/workloads/deploy.sh. Pin by digest rather than tag: these
+  # images are commonly rebuilt in place under the same tag.
+  #
+  # Build the image from sweperf c30c0d6 (2026-09-21) or later. The
+  # asynchronous HTTP execution API this benchmark drives was added on
+  # 2026-08-31; images older than that ship a replay.py with no HTTP server at
+  # all and fail on the client's first GET /status. c30c0d6 adds
+  # execution_duration_ms to the job status, the in-sandbox time of each cycle.
+  image: "${SWEPERF_IMAGE}"
+  # generate.py writes the replay server to /replay.py and the trajectory to
+  # /trace.json at the image root; these are also the image's own ENTRYPOINT.
+  # Nothing in that repo produces /opt/swebench/.
   command:
   - "python3"
-  - "/opt/swebench/replay.py"
-  - "/opt/swebench/astropy_trace.json"
+  - "/replay.py"
+  - "/trace.json"
   env:
   - name: SWEPERF_DISABLE_INTERNAL_SLEEP
     value: "1"

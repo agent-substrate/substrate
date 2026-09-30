@@ -48,12 +48,12 @@ spec:
       - name: nfs
         volumeMounts:
         - name: ateom-dir
-          mountPath: /var/lib/ateom-gvisor
+          mountPath: /var/lib/ate
           mountPropagation: Bidirectional
       volumes:
       - name: ateom-dir
         hostPath:
-          path: /var/lib/ateom-gvisor
+          path: /var/lib/ate
           type: DirectoryOrCreate
 '
 

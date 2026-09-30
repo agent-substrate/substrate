@@ -22,7 +22,6 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
@@ -37,10 +36,9 @@ func hasCsiVolumes(containers []*ateompb.Container) bool {
 	return false
 }
 
-// stageCsiVolumes bind-mounts the actor's host CSI volumes directory
+// stageCsiVolumes bind-mounts src, the actor's host CSI volumes directory,
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/csi.
-func (s *AteomService) stageCsiVolumes(ctx context.Context, actorUID string) error {
-	src := ateompath.VolumesDir(actorUID)
+func (s *AteomService) stageCsiVolumes(ctx context.Context, actorUID, src string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking CSI volumes dir %q: %w", src, err)
 	}

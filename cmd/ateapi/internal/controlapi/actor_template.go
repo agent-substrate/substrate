@@ -49,7 +49,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 
 	// Validate the request, including the object within it.
 	if errs := validateCreateActorTemplateRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// config_name is required; the declarative validation has already
@@ -101,7 +101,7 @@ func validateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 
 func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := validateGetActorTemplateRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
@@ -128,7 +128,7 @@ func validateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActor
 
 func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
 	if errs := validateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -154,7 +154,7 @@ func validateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListAc
 
 func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := validateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
 }
@@ -295,39 +295,10 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 	return nil
 }
 
-// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
-var cpuLimitMax = resource.MustParse("1k")
-
-// ValidateCustom_Resources_Limits validates the resource limits: only cpu
-// and memory limits are supported, each quantity must be greater than zero,
-// and the cpu limit must be less than 1000 cores. Presence and uniqueness
-// of names are enforced by tags.
-func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.Limits) field.ErrorList {
-	var errs field.ErrorList
-	for i, limit := range value {
-		if limit == nil {
-			continue
-		}
-		if limit.Name != "cpu" && limit.Name != "memory" {
-			errs = append(errs, field.NotSupported(fldPath.Index(i).Child("name"), limit.Name, []string{"cpu", "memory"}))
-			continue
-		}
-		if limit.Quantity == "" {
-			continue // required is enforced by tags
-		}
-		q, err := resource.ParseQuantity(limit.Quantity)
-		if err != nil {
-			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err)))
-			continue
-		}
-		if q.Sign() <= 0 {
-			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, "must be greater than zero"))
-		}
-		if limit.Name == "cpu" && q.Cmp(cpuLimitMax) >= 0 {
-			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, "cpu limit must be less than 1000 cores"))
-		}
-	}
-	return errs
+// ValidateCustom_Limits validates one limit with resources.ValidateLimit.
+// Presence and uniqueness of names are enforced by tags.
+func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Limits) field.ErrorList {
+	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
 }
 
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an

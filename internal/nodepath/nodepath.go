@@ -22,7 +22,7 @@ import "path/filepath"
 
 // BasePath is the root shared folder on the host filesystem, mounted at the
 // same path into the atelet and ateom containers.
-const BasePath = "/var/lib/ateom-gvisor"
+const BasePath = "/var/lib/ate"
 
 // ActorsDir is the parent of the per-actor directories atelet prepares.
 var ActorsDir = filepath.Join(BasePath, "actors")

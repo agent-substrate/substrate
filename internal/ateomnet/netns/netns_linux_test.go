@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateomnet
+package netns
 
 import (
 	"context"
@@ -30,32 +30,32 @@ import (
 func TestNamedNetNSRejectsInvalidNames(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "/absolute", "../outside", "nested/name", "ateom-actor:uid/../../outside", "nul\x00name"} {
 		t.Run(name, func(t *testing.T) {
-			if err := removeNamedNetNS(name); !errors.Is(err, os.ErrInvalid) {
-				t.Fatalf("removeNamedNetNS(%q): got %v, want invalid name", name, err)
+			if err := RemoveNamed(name); !errors.Is(err, os.ErrInvalid) {
+				t.Fatalf("RemoveNamed(%q): got %v, want invalid name", name, err)
 			}
-			handle, err := CreateNetNSWithoutSwitching(name)
+			handle, err := CreateNamed(name)
 			if err == nil {
 				handle.Close()
 			}
 			if !errors.Is(err, os.ErrInvalid) {
-				t.Fatalf("CreateNetNSWithoutSwitching(%q): got %v, want invalid name", name, err)
+				t.Fatalf("CreateNamed(%q): got %v, want invalid name", name, err)
 			}
 		})
 	}
 }
 
-func TestRemoveNamedNetNSDoesNotFollowSymlinks(t *testing.T) {
+func TestRemoveNamedDoesNotFollowSymlinks(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	const targetName = "ateomnet-symlink-target-test"
 	const linkName = "ateomnet-symlink-test"
 	targetPath := "/run/netns/" + targetName
 	linkPath := "/run/netns/" + linkName
-	target, err := CreateNetNSWithoutSwitching(targetName)
+	target, err := CreateNamed(targetName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer target.Close()
-	t.Cleanup(func() { _ = removeNamedNetNS(targetName) })
+	t.Cleanup(func() { _ = RemoveNamed(targetName) })
 	before, err := os.Stat(targetPath)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestRemoveNamedNetNSDoesNotFollowSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(linkPath) })
-	if err := removeNamedNetNS(linkName); err != nil {
+	if err := RemoveNamed(linkName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(linkPath); !errors.Is(err, os.ErrNotExist) {
@@ -79,19 +79,19 @@ func TestRemoveNamedNetNSDoesNotFollowSymlinks(t *testing.T) {
 	}
 }
 
-func TestCreateNetNSWithoutSwitchingReplacesALeftover(t *testing.T) {
+func TestCreateNamedReplacesALeftover(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	for _, state := range []string{"mounted", "unmounted"} {
 		t.Run(state, func(t *testing.T) {
 			name := "ateomnet-leftover-test-" + state
 			path := "/run/netns/" + name
-			t.Cleanup(func() { _ = removeNamedNetNS(name) })
+			t.Cleanup(func() { _ = RemoveNamed(name) })
 
 			// Held open across the replacement below: unlinking the name
 			// must not invalidate a handle the caller still has.
-			first, err := CreateNetNSWithoutSwitching(name)
+			first, err := CreateNamed(name)
 			if err != nil {
-				t.Fatalf("first CreateNetNSWithoutSwitching: %v", err)
+				t.Fatalf("first CreateNamed: %v", err)
 			}
 			defer first.Close()
 			if state == "unmounted" {
@@ -103,7 +103,7 @@ func TestCreateNetNSWithoutSwitchingReplacesALeftover(t *testing.T) {
 				t.Fatalf("expected the leftover netns to remain: %v", err)
 			}
 
-			second, err := CreateNetNSWithoutSwitching(name)
+			second, err := CreateNamed(name)
 			if err != nil {
 				t.Fatalf("the name is wedged by its own leftover: %v", err)
 			}
@@ -119,14 +119,14 @@ func TestCreateNetNSWithoutSwitchingReplacesALeftover(t *testing.T) {
 			if !first.IsOpen() {
 				t.Error("the retained handle closed when its name was replaced")
 			}
-			if err := NetNSDo(context.Background(), first, func(context.Context) error {
+			if err := Do(context.Background(), first, func(context.Context) error {
 				_, err := netlink.LinkList()
 				return err
 			}); err != nil {
 				t.Errorf("the retained handle is no longer usable: %v", err)
 			}
 			for range 2 {
-				if err := removeNamedNetNS(name); err != nil {
+				if err := RemoveNamed(name); err != nil {
 					t.Fatalf("removing namespace: %v", err)
 				}
 				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -134,22 +134,5 @@ func TestCreateNetNSWithoutSwitchingReplacesALeftover(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Only EROFS takes the remount path: any other error is reported as it is,
-// and /proc/sys is left as it was found. Remounting it read-only on the way
-// out would break every later write.
-func TestSetNetSysctlReportsAnUnrelatedError(t *testing.T) {
-	err := setNetSysctl("net/ipv4/ateomnet_no_such_sysctl", "0")
-	if !errors.Is(err, unix.ENOENT) {
-		t.Fatalf("setNetSysctl() on a missing key: got %v, want ENOENT", err)
-	}
-	var st unix.Statfs_t
-	if err := unix.Statfs("/proc/sys", &st); err != nil {
-		t.Fatalf("statfs /proc/sys: %v", err)
-	}
-	if st.Flags&unix.ST_RDONLY != 0 {
-		t.Error("/proc/sys was left read-only")
 	}
 }

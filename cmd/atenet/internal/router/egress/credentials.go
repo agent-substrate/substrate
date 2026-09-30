@@ -59,8 +59,8 @@ func mapCredentialProviderError(err error) error {
 //
 // Once injection is actually attempted (TLS leg, provider present), any failure
 // to produce the credential the policy required fails closed.
-func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, leg string, effects *ateapipb.EgressRuleEffects) ([]*corev3.HeaderValueOption, error) {
-	injections := effects.GetInjectStaticHeaders()
+func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, leg string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
+	injections := effects.GetReplaceHeaders()
 	if len(injections) == 0 {
 		return nil, nil
 	}

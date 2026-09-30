@@ -85,7 +85,7 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 		maxActors: 1,
 		draining:  1,
 	}
-	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}); err == nil {
+	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil); err == nil {
 		t.Error("admitted an actor while a draining one still held the only place")
 	}
 }

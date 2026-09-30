@@ -85,6 +85,7 @@ var (
 	postgresBootstrap                 = pflag.Bool("postgres-bootstrap", false, "Create missing fixed PostgreSQL identities before migrations.")
 	postgresAdminUsernameFile         = pflag.String("postgres-admin-username-file", "", "File that contains the PostgreSQL administrator username.")
 	postgresAdminPasswordFile         = pflag.String("postgres-admin-password-file", "", "File that contains the PostgreSQL administrator password.")
+	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
@@ -186,14 +187,20 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
 	defer persistence.Close()
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
-	}
-	defer fgaServer.Close()
+	var authorizer *authz.Authorizer
+	if *experimentalEnableAuthz {
+		fgaServer, err := authz.NewOpenFGAServer(pool)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+		}
+		defer fgaServer.Close()
 
-	if _, _, err := authz.EnsureStoreAndModel(shutdownCtx, pool, fgaServer); err != nil {
-		serverboot.Fatal(ctx, "Failed to initialize OpenFGA store and model", err)
+		var policyManager *authz.PolicyManager
+		authorizer, policyManager, err = authz.New(shutdownCtx, pool, fgaServer)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
+		}
+		persistence.SetPolicyManager(policyManager)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -302,6 +309,18 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
+	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		apiauthn.UnaryServerInterceptor(authCfg),
+		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
+		ateinterceptors.ServerUnaryInterceptor,
+	}
+	if *experimentalEnableAuthz {
+		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
+	}
+	unaryInterceptors = append(unaryInterceptors,
+		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+	)
+
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -312,12 +331,7 @@ func main() {
 			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
-		grpc.ChainUnaryInterceptor(
-			apiauthn.UnaryServerInterceptor(authCfg),
-			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-			ateinterceptors.ServerUnaryInterceptor,
-			ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		),
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
 		),
@@ -405,6 +419,9 @@ func loadFlagsFromEnv() error {
 			*postgresPoolMaxConns = int32(value)
 		}
 	}
+	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
+		*experimentalEnableAuthz = (v == "true" || v == "1")
+	}
 	return nil
 }
 
@@ -456,6 +473,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Duration("postgres-max-conn-lifetime", *postgresMaxConnLifetime),
 		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
+		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),

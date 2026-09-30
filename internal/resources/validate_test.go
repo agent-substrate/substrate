@@ -19,9 +19,49 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func TestToGRPCStatusError(t *testing.T) {
+	err := ToGRPCStatusError(field.ErrorList{field.Required(field.NewPath("actor_name"), "")})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+	if !strings.Contains(status.Convert(err).Message(), "actor_name") {
+		t.Errorf("message %q does not name the field", status.Convert(err).Message())
+	}
+}
+
+func TestDeepEqual(t *testing.T) {
+	// Proto messages carry internal state that reflect.DeepEqual would
+	// compare; proto.Equal compares only field values.
+	a := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	b := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	_ = a.String() // populates a's internal state, not b's
+
+	tests := []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{name: "equal protos", got: DeepEqual(a, b), want: true},
+		{name: "different protos", got: DeepEqual(a, &ateapipb.ObjectRef{Atespace: "a", Name: "y"}), want: false},
+		{name: "nil protos", got: DeepEqual[*ateapipb.ObjectRef](nil, nil), want: true},
+		{name: "equal non-protos", got: DeepEqual([]string{"a"}, []string{"a"}), want: true},
+		{name: "different non-protos", got: DeepEqual(1, 2), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("DeepEqual() = %v, want %v", tt.got, tt.want)
+			}
+		})
+	}
+}
 
 func TestIsValidResourceName(t *testing.T) {
 	tests := []struct {
@@ -268,6 +308,82 @@ func TestValidateUUID(t *testing.T) {
 				} else if !matched {
 					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
 				}
+			}
+		})
+	}
+}
+
+func TestValidateLimit(t *testing.T) {
+	path := field.NewPath("limits").Index(0)
+	quantityPath := path.Child("quantity")
+	tests := []struct {
+		name     string
+		limit    string
+		quantity string
+		want     field.ErrorList
+	}{
+		{name: "cpu below the bound", limit: "cpu", quantity: "999"},
+		{name: "memory", limit: "memory", quantity: "1Gi"},
+		{name: "memory has no upper bound", limit: "memory", quantity: "1000"},
+		{name: "missing quantity left to tags", limit: "cpu"},
+		{name: "unsupported name", limit: "gpu", quantity: "1", want: field.ErrorList{field.NotSupported[string](path.Child("name"), nil, nil)}},
+		{name: "malformed quantity", limit: "cpu", quantity: "x", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "zero quantity", limit: "memory", quantity: "0", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "negative quantity", limit: "memory", quantity: "-1", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu at the bound", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateLimit(path, tt.limit, tt.quantity))
+		})
+	}
+}
+
+func testActorDirs() *ateompb.ActorDirs {
+	return &ateompb.ActorDirs{
+		RootDir:                   "/node/actors/a",
+		OciBundleDir:              "/node/actors/a/bundles",
+		CheckpointDir:             "/node/actors/a/checkpoint-state",
+		RestoreDir:                "/node/actors/a/restore-state",
+		DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
+		SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
+		VolumesDir:                "/node/actors/a/volumes",
+	}
+}
+
+func TestValidateActorDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ateompb.ActorDirs) *ateompb.ActorDirs
+		// wantField is the field the one expected error names; empty means valid.
+		wantField string
+	}{
+		{"valid", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { return actorDirs }, ""},
+		{"nil", func(*ateompb.ActorDirs) *ateompb.ActorDirs { return nil }, "actor_dirs"},
+		{"missing dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { actorDirs.RestoreDir = ""; return actorDirs }, "actor_dirs.restore_dir"},
+		{"relative dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+			actorDirs.OciBundleDir = "bundles"
+			return actorDirs
+		}, "actor_dirs.oci_bundle_dir"},
+		{"unclean dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+			actorDirs.CheckpointDir = "/node/actors/a/../b/checkpoint-state"
+			return actorDirs
+		}, "actor_dirs.checkpoint_dir"},
+		{"relative root", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+			actorDirs.RootDir = "node/actors/a"
+			return actorDirs
+		}, "actor_dirs.root_dir"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateActorDirs(tc.mutate(testActorDirs()), field.NewPath("actor_dirs"))
+			if tc.wantField == "" {
+				if len(errs) != 0 {
+					t.Fatalf("ValidateActorDirs() = %v, want no errors", errs)
+				}
+				return
+			}
+			if len(errs) != 1 || errs[0].Field != tc.wantField {
+				t.Fatalf("ValidateActorDirs() = %v, want one error on %s", errs, tc.wantField)
 			}
 		})
 	}
