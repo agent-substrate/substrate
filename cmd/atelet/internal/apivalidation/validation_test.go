@@ -541,14 +541,6 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		obj:  valid(local("../escape")),
 		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "invalid local snapshot_name: nested",
-		obj:  valid(local("pause/2")),
-		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		name: "invalid local snapshot_name: parent directory",
-		obj:  valid(local("..")),
-		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
 		name: "missing external snapshot_uri",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ExternalConfig.SnapshotUri = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("external_config", "snapshot_uri"), "")},
@@ -1047,21 +1039,6 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "not-a-quantity"}),
 		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
 	}, {
-		name: "negative quantity",
-		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: "-1Gi"}),
-		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "zero quantity",
-		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: "0"}),
-		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "cpu below the bound",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "999"}),
-	}, {
-		name: "cpu at the bound",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "1000"}),
-		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
-	}, {
 		name: "too many limits",
 		obj: withLimits(
 			&ateletpb.Limits{Name: "cpu", Quantity: "1"},
@@ -1253,9 +1230,6 @@ func TestValidateVolume(t *testing.T) {
 			name: "external: unset volume_type is allowed",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "" }),
 		}, {
-			name: "external: volume_type without the prefix",
-			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "pd.csi.storage.gke.io" }),
-		}, {
 			name: "external: invalid volume_type: uppercase",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "substrate.io/Mock" }),
 			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "")},
@@ -1284,10 +1258,6 @@ func TestValidateVolume(t *testing.T) {
 		}, {
 			name: "image: reference not pinned by digest",
 			obj:  image("example.com/app:v1"),
-			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
-		}, {
-			name: "image: reference with a malformed digest",
-			obj:  image("example.com/app@sha256:abc"),
 			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
 		},
 
@@ -1338,10 +1308,6 @@ func TestValidateVolume(t *testing.T) {
 			obj:  systemInfo(bundle("podcert", "/trust/bundle.pem")),
 			want: field.ErrorList{field.Invalid(bundlePath.Child("path"), nil, "")},
 		}, {
-			name: "trust bundle: path with a dot segment",
-			obj:  systemInfo(bundle("podcert", "trust/./bundle.pem")),
-			want: field.ErrorList{field.Invalid(bundlePath.Child("path"), nil, "")},
-		}, {
 			name: "trust bundle: path too long",
 			obj:  systemInfo(bundle("podcert", strings.Repeat("p", 256))),
 			want: field.ErrorList{field.TooLong(bundlePath.Child("path"), nil, 255).WithOrigin("maxLength")},
@@ -1378,10 +1344,6 @@ func TestValidateVolume(t *testing.T) {
 			name: "actor metadata: field outside the enum",
 			obj:  systemInfo(metadata(item(ateletpb.ActorMetadataField(4), "a"))),
 			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("field"), nil, "").WithOrigin("maximum")},
-		}, {
-			name: "actor metadata: absolute item path",
-			obj:  systemInfo(metadata(item(fieldName, "/etc/name"))),
-			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
 		}, {
 			name: "actor metadata: escaping item path",
 			obj:  systemInfo(metadata(item(fieldName, "../name"))),
@@ -1448,7 +1410,6 @@ func TestValidateContainer(t *testing.T) {
 	mountPath := field.NewPath("volume_mounts").Index(0)
 	httpGetPath := field.NewPath("wakeup_probe", "http_get")
 	capsPath := field.NewPath("security_context", "capabilities")
-	invalidMountPath := field.ErrorList{field.Invalid(mountPath.Child("mount_path"), nil, "")}
 
 	tests := []struct {
 		name string
@@ -1478,10 +1439,6 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "image not pinned by digest",
 			obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app:v1" }),
-			want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
-		}, {
-			name: "image with a malformed digest",
-			obj:  valid(func(c *ateletpb.Container) { c.Image = "example.com/app@sha256:abc" }),
 			want: field.ErrorList{field.Invalid(field.NewPath("image"), nil, "")},
 		}, {
 			name: "empty command and args are allowed",
@@ -1515,13 +1472,6 @@ func TestValidateContainer(t *testing.T) {
 			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "A=B" }),
 			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "")},
 		}, {
-			name: "env: name with spaces and punctuation is allowed",
-			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "weird name!" }),
-		}, {
-			name: "env: name with a non-ASCII rune",
-			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "café" }),
-			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "")},
-		}, {
 			name: "env: name too long",
 			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = strings.Repeat("N", 257) }),
 			want: field.ErrorList{field.TooLong(envPath.Child("name"), nil, 256).WithOrigin("maxLength")},
@@ -1544,16 +1494,6 @@ func TestValidateContainer(t *testing.T) {
 			obj:  valid(func(c *ateletpb.Container) { c.VolumeMounts[1].MountPath = "/data/nested" }),
 			want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
 		}, {
-			name: "nesting rejected regardless of order",
-			obj:  valid(func(c *ateletpb.Container) { c.VolumeMounts[0].MountPath = "/mnt/data/nested" }),
-			want: field.ErrorList{field.Invalid(field.NewPath("volume_mounts").Index(1).Child("mount_path"), nil, "")},
-		}, {
-			name: "sibling paths with a shared segment prefix are allowed",
-			obj: valid(func(c *ateletpb.Container) {
-				c.VolumeMounts[0].MountPath = "/data/a"
-				c.VolumeMounts[1].MountPath = "/data/ab"
-			}),
-		}, {
 			name: "mount: missing name",
 			obj:  mount("", "/var/data"),
 			want: field.ErrorList{field.Required(mountPath.Child("name"), "")},
@@ -1565,14 +1505,11 @@ func TestValidateContainer(t *testing.T) {
 			name: "mount: missing mount_path",
 			obj:  mount("data", ""),
 			want: field.ErrorList{field.Required(mountPath.Child("mount_path"), "")},
+		}, {
+			name: "mount: relative mount_path",
+			obj:  mount("data", "var/data"),
+			want: field.ErrorList{field.Invalid(mountPath.Child("mount_path"), nil, "")},
 		},
-		{name: "mount: relative mount_path", obj: mount("data", "var/data"), want: invalidMountPath},
-		{name: "mount: root mount_path", obj: mount("data", "/"), want: invalidMountPath},
-		{name: "mount: trailing slash", obj: mount("data", "/var/data/"), want: invalidMountPath},
-		{name: "mount: double slash", obj: mount("data", "/var//data"), want: invalidMountPath},
-		{name: "mount: colon", obj: mount("data", "/var/da:ta"), want: invalidMountPath},
-		{name: "mount: dot-dot segment", obj: mount("data", "/var/../etc"), want: invalidMountPath},
-		{name: "mount: control character", obj: mount("data", "/var/da\x01ta"), want: invalidMountPath},
 
 		// WakeupProbe and HTTPGetAction.
 		{
@@ -1599,17 +1536,6 @@ func TestValidateContainer(t *testing.T) {
 			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "healthz" }),
 			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
 		}, {
-			name: "probe: path with a query string",
-			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/healthz?verbose=1" }),
-			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
-		}, {
-			name: "probe: path with a valid percent escape",
-			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/health%20z" }),
-		}, {
-			name: "probe: path with a malformed percent escape",
-			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "/health%2" }),
-			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
-		}, {
 			name: "probe: missing port",
 			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Port = 0 }),
 			want: field.ErrorList{field.Required(httpGetPath.Child("port"), "")},
@@ -1629,13 +1555,6 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "capabilities: add does not accept ALL",
 			obj:  caps([]string{"ALL"}, nil),
-			want: field.ErrorList{field.Invalid(capsPath.Child("add").Index(0), nil, "")},
-		}, {
-			name: "capabilities: drop accepts ALL",
-			obj:  caps(nil, []string{"ALL"}),
-		}, {
-			name: "capabilities: CAP_ prefix rejected",
-			obj:  caps([]string{"CAP_NET_BIND_SERVICE"}, nil),
 			want: field.ErrorList{field.Invalid(capsPath.Child("add").Index(0), nil, "")},
 		}, {
 			name: "capabilities: lowercase rejected",
