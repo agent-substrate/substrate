@@ -129,7 +129,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("fetch with system roots failed, but not with a certificate-verification error: %s", neg.Error)
 	}
 
-	// The passthough origin has to be validated with the system CAs, since egress gateway
+	// The passthrough origin has to be validated with the system CAs, since egress gateway
 	// does not terminate TLS.
 	const passthrughOrigin = "https://" + egressOriginPassthroughHost + "/"
 	pos = probeFetch(t, ctx, rc, id, passthrughOrigin, "system")
