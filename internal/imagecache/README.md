@@ -46,7 +46,7 @@ privileged** and own all mounts on the node. The module is split accordingly:
 | Consumer: finalize, mount, unmount | ateom-gvisor / ateom-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
-directory (on the `/var/lib/ateom-gvisor` hostPath, so the same absolute
+directory (on the `/var/lib/ate` hostPath, so the same absolute
 paths resolve in every pod) and a small per-bundle spec file.
 
 Because the consumer mounts the overlay **in its own mount namespace** —
@@ -57,7 +57,7 @@ anywhere.
 ## On-disk layout
 
 ```
-<cache-root>/                        default: /var/lib/ateom-gvisor/image-cache
+<cache-root>/                        default: /var/lib/ate/image-cache
   version                            layout version marker ("1")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (an overlay lowerdir)

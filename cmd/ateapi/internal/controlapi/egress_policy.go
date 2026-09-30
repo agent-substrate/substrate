@@ -43,7 +43,7 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		defaults.Apply(policy)
 	}
 	if errs := validateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.CreateEgressPolicy(ctx, actorRef, policy)
@@ -60,7 +60,7 @@ func validateCreateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.C
 
 func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	if errs := validateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
@@ -87,7 +87,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := validateUpdateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapipb.EgressPolicy) error {
@@ -107,7 +107,7 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 			return err
 		}
 		if errs := validateEgressPolicyUpdate(ctx, field.NewPath("egress_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return toGRPCStatusError(errs)
+			return resources.ToGRPCStatusError(errs)
 		}
 		// EgressPolicy has no status or other server-derived fields to verify.
 		return nil
@@ -125,7 +125,7 @@ func validateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldV
 
 func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	if errs := validateDeleteActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
@@ -175,23 +175,103 @@ func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operati
 	return nil
 }
 
-func ValidateCustom_HostnameRule_Patterns(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
+// ValidateCustom_EgressPolicy_Rules rejects two rules that tie on a pattern
+// and a port, whatever their protocols: the gateway would have no way to pick
+// one. Defaults are applied before validation, so an http rule left on 80
+// and an https rule left on 443 never tie.
+func ValidateCustom_EgressPolicy_Rules(_ context.Context, _ operation.Operation, p *field.Path, rules, _ []*ateapipb.EgressRule) field.ErrorList {
+	type key struct {
+		pattern string
+		port    portKey
+	}
+	type match struct {
+		rule int
+		path *field.Path
+	}
 	var errs field.ErrorList
-	for i, raw := range patterns {
-		errs = append(errs, validateHostnamePattern(raw, p.Index(i))...)
+	seen := map[key]match{}
+	for i, rule := range rules {
+		member, patterns, ports := ruleMatchFields(rule)
+		if member == "" {
+			continue // handled by the union check
+		}
+		for j, pattern := range patterns {
+			path := p.Index(i).Child(member, "hostnames").Index(j)
+			for _, port := range portKeysOf(ports) {
+				k := key{pattern, port}
+				prior, ok := seen[k]
+				switch {
+				case !ok:
+					seen[k] = match{rule: i, path: path}
+				case prior.rule != i: // a repeat within one rule is reported by the set check
+					errs = append(errs, field.Invalid(path, pattern, fmt.Sprintf("ties with %s on %s", prior.path, port)))
+				}
+			}
+		}
 	}
 	return errs
 }
 
-func ValidateCustom_EgressRuleEffects(_ context.Context, _ operation.Operation, p *field.Path, effects, _ *ateapipb.EgressRuleEffects) field.ErrorList {
+// ruleMatchFields is what a rule matches on: the union member, its hostnames,
+// and its ports. Everything is empty for a rule that sets no member.
+func ruleMatchFields(rule *ateapipb.EgressRule) (member string, hostnames []string, ports *ateapipb.Ports) {
+	switch {
+	case rule.GetHttp() != nil:
+		return "http", rule.GetHttp().GetHostnames(), rule.GetHttp().GetPorts()
+	case rule.GetHttps() != nil:
+		return "https", rule.GetHttps().GetHostnames(), rule.GetHttps().GetPorts()
+	case rule.GetTlsPassthrough() != nil:
+		return "tls_passthrough", rule.GetTlsPassthrough().GetHostnames(), rule.GetTlsPassthrough().GetPorts()
+	}
+	return "", nil, nil
+}
+
+// portKey is one thing a Ports matches: a port number, or every port. Its
+// String reads as "port 443" or "every port" in messages.
+type portKey struct {
+	number int32
+	all    bool
+}
+
+func portKeysOf(ports *ateapipb.Ports) []portKey {
+	if ports.GetAll() != nil {
+		return []portKey{{all: true}}
+	}
+	keys := make([]portKey, 0, len(ports.GetNumbers()))
+	for _, n := range ports.GetNumbers() {
+		keys = append(keys, portKey{number: n})
+	}
+	return keys
+}
+
+func (k portKey) String() string {
+	if k.all {
+		return "every port"
+	}
+	return fmt.Sprintf("port %d", k.number)
+}
+
+func ValidateCustom_HTTPRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
+	return validateHostnamePatterns(patterns, p)
+}
+
+func ValidateCustom_HTTPSRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
+	return validateHostnamePatterns(patterns, p)
+}
+
+func ValidateCustom_TLSPassthroughRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
+	return validateHostnamePatterns(patterns, p)
+}
+
+func ValidateCustom_HttpRuleEffects(_ context.Context, _ operation.Operation, p *field.Path, effects, _ *ateapipb.HttpRuleEffects) field.ErrorList {
 	var errs field.ErrorList
-	if len(effects.GetInjectStaticHeaders()) == 0 {
+	if len(effects.GetReplaceHeaders()) == 0 {
 		errs = append(errs, field.Required(p, "at least one effect must be specified"))
 	}
 	return errs
 }
 
-func ValidateCustom_EgressRuleEffects_InjectStaticHeaders(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeaderInjection) field.ErrorList {
+func ValidateCustom_HttpRuleEffects_ReplaceHeaders(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeader) field.ErrorList {
 	var errs field.ErrorList
 	seenHeaders := map[string]bool{}
 	for i, inj := range injections {
@@ -209,12 +289,10 @@ func ValidateCustom_EgressRuleEffects_InjectStaticHeaders(_ context.Context, _ o
 
 // Validation uses the parsers the egress gateway matches with, so what the
 // API accepts and what the gateway can evaluate cannot drift apart.
-func ValidateCustom_CIDRRule_Cidrs(_ context.Context, _ operation.Operation, p *field.Path, cidrs, _ []string) field.ErrorList {
+func validateHostnamePatterns(patterns []string, p *field.Path) field.ErrorList {
 	var errs field.ErrorList
-	for i, cidr := range cidrs {
-		if _, err := egresspolicy.ParseCIDR(cidr); err != nil {
-			errs = append(errs, field.Invalid(p.Index(i), cidr, "must be a canonical IPv4 or IPv6 prefix"))
-		}
+	for i, raw := range patterns {
+		errs = append(errs, validateHostnamePattern(raw, p.Index(i))...)
 	}
 	return errs
 }
@@ -225,13 +303,13 @@ func validateHostnamePattern(raw string, p *field.Path) field.ErrorList {
 	}
 	if _, err := egresspolicy.ParseHostnamePattern(raw); err != nil {
 		return field.ErrorList{
-			field.Invalid(p, raw, "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
+			field.Invalid(p, raw, `must be a DNS hostname, optionally with a complete leftmost-label wildcard, or "*"`),
 		}
 	}
 	return nil
 }
 
-func ValidateCustom_CredentialHeaderInjection_Header(_ context.Context, _ operation.Operation, p *field.Path, header, _ *string) field.ErrorList {
+func ValidateCustom_CredentialHeader_Header(_ context.Context, _ operation.Operation, p *field.Path, header, _ *string) field.ErrorList {
 	if !validHeaderName(*header) {
 		return field.ErrorList{
 			field.Invalid(p, *header, "must be an HTTP header name"),
@@ -240,7 +318,7 @@ func ValidateCustom_CredentialHeaderInjection_Header(_ context.Context, _ operat
 	return nil
 }
 
-func ValidateCustom_CredentialHeaderInjection_Prefix(_ context.Context, _ operation.Operation, p *field.Path, prefix, _ *string) field.ErrorList {
+func ValidateCustom_CredentialHeader_Prefix(_ context.Context, _ operation.Operation, p *field.Path, prefix, _ *string) field.ErrorList {
 	if !validHeaderValue(*prefix) {
 		return field.ErrorList{
 			field.Invalid(p, *prefix, "must be a valid HTTP field value prefix"),
@@ -249,7 +327,7 @@ func ValidateCustom_CredentialHeaderInjection_Prefix(_ context.Context, _ operat
 	return nil
 }
 
-func ValidateCustom_CredentialHeaderInjection_CredentialUri(_ context.Context, _ operation.Operation, p *field.Path, uri, _ *string) field.ErrorList {
+func ValidateCustom_CredentialHeader_CredentialUri(_ context.Context, _ operation.Operation, p *field.Path, uri, _ *string) field.ErrorList {
 	if !validCredentialURI(*uri) {
 		return field.ErrorList{
 			field.Invalid(p, *uri, "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),

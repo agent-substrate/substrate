@@ -31,10 +31,9 @@ import (
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
 
@@ -66,7 +65,7 @@ func TestTCPOriginalDestinationPreservesErrno(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ns := newTestNetNS(t)
-			if err := ateomnet.NetNSDo(context.Background(), ns, func(context.Context) error {
+			if err := netns.Do(context.Background(), ns, func(context.Context) error {
 				loopback, err := netlink.LinkByName("lo")
 				if err != nil {
 					return err
@@ -140,7 +139,7 @@ func TestTCPOriginalDestination(t *testing.T) {
 			// From the actor's perspective this is an ordinary connection to
 			// hostIP:targetPort. The worker's PREROUTING rule redirects it before
 			// it reaches the host network stack's local delivery path.
-			clientDone <- ateomnet.NetNSDo(context.Background(), actorNS, func(context.Context) error {
+			clientDone <- netns.Do(context.Background(), actorNS, func(context.Context) error {
 				conn, err := net.DialTimeout("tcp4", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), 10*time.Second)
 				if err == nil {
 					_ = conn.Close()
@@ -192,7 +191,7 @@ func TestTCPOriginalDestinationIPv6(t *testing.T) {
 
 		clientDone := make(chan error, 1)
 		go func() {
-			clientDone <- ateomnet.NetNSDo(context.Background(), actorNS, func(context.Context) error {
+			clientDone <- netns.Do(context.Background(), actorNS, func(context.Context) error {
 				conn, err := net.DialTimeout("tcp6", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), 10*time.Second)
 				if err == nil {
 					_ = conn.Close()
@@ -231,7 +230,7 @@ func TestTCPOriginalDestinationIPv6(t *testing.T) {
 func withTestWorkerNS(t *testing.T, fn func()) {
 	t.Helper()
 	workerNS := newTestNetNS(t)
-	if err := ateomnet.NetNSDo(context.Background(), workerNS, func(context.Context) error {
+	if err := netns.Do(context.Background(), workerNS, func(context.Context) error {
 		fn()
 		return nil
 	}); err != nil {
@@ -239,10 +238,10 @@ func withTestWorkerNS(t *testing.T, fn func()) {
 	}
 }
 
-func newTestNetNS(t *testing.T) netns.NsHandle {
+func newTestNetNS(t *testing.T) netns.Handle {
 	t.Helper()
 	name := fmt.Sprintf("atunnel-original-dst-%d-%d", os.Getpid(), atomic.AddUint64(&testNetNSSequence, 1))
-	ns, err := ateomnet.CreateNetNSWithoutSwitching(name)
+	ns, err := netns.CreateNamed(name)
 	if err != nil {
 		if errors.Is(err, unix.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
 			t.Skipf("needs CAP_SYS_ADMIN to create network namespace: %v", err)
@@ -251,14 +250,14 @@ func newTestNetNS(t *testing.T) netns.NsHandle {
 	}
 	t.Cleanup(func() {
 		_ = ns.Close()
-		if err := netns.DeleteNamed(name); err != nil {
+		if err := netns.RemoveNamed(name); err != nil {
 			t.Errorf("deleting test network namespace: %v", err)
 		}
 	})
 	return ns
 }
 
-func setupTestVeth(t *testing.T, actorNS netns.NsHandle) (actorIP, hostIP net.IP) {
+func setupTestVeth(t *testing.T, actorNS netns.Handle) (actorIP, hostIP net.IP) {
 	t.Helper()
 	hostName := fmt.Sprintf("atod%d", os.Getpid())
 	peerName := fmt.Sprintf("atop%d", os.Getpid())
@@ -300,7 +299,7 @@ func setupTestVeth(t *testing.T, actorNS netns.NsHandle) (actorIP, hostIP net.IP
 		t.Fatal(err)
 	}
 	// Complete the actor end of the point-to-point link inside its own netns.
-	if err := ateomnet.NetNSDo(context.Background(), actorNS, func(context.Context) error {
+	if err := netns.Do(context.Background(), actorNS, func(context.Context) error {
 		lo, err := netlink.LinkByName("lo")
 		if err != nil {
 			return err
@@ -331,7 +330,7 @@ func listenTCP(t *testing.T, hostIP net.IP) net.Listener {
 	return listener
 }
 
-func setupTestIPv6Veth(t *testing.T, actorNS netns.NsHandle) (actorIP, hostIP net.IP) {
+func setupTestIPv6Veth(t *testing.T, actorNS netns.Handle) (actorIP, hostIP net.IP) {
 	t.Helper()
 	hostName := fmt.Sprintf("atod6%d", os.Getpid())
 	peerName := fmt.Sprintf("atop6%d", os.Getpid())
@@ -371,7 +370,7 @@ func setupTestIPv6Veth(t *testing.T, actorNS netns.NsHandle) (actorIP, hostIP ne
 	if err := netlink.LinkSetNsFd(peer, int(actorNS)); err != nil {
 		t.Fatal(err)
 	}
-	if err := ateomnet.NetNSDo(context.Background(), actorNS, func(context.Context) error {
+	if err := netns.Do(context.Background(), actorNS, func(context.Context) error {
 		lo, err := netlink.LinkByName("lo")
 		if err != nil {
 			return err

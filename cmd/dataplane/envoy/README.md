@@ -18,9 +18,17 @@ cmd/dataplane/envoy/
 
 ## Building and Deployment
 
-During cluster setup (`ate-setup`), the image is built from this directory via `docker buildx`, pushed to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the egress manifests (`manifests/ate-install/atenet-egress*.yaml`).
+During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the egress manifests (`manifests/ate-install/atenet-egress*.yaml`).
 
-To build the image manually from the repository root:
+A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so a release publishes it with the other images:
+
+```bash
+make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG
+```
+
+`make build-envoy-dataplane` builds just this image. It targets `KO_DEFAULTPLATFORMS`, or `linux/amd64` when unset; set `DOCKERFILE_PLATFORMS` to override. Building another architecture compiles Rust under QEMU, which must be registered with binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install arm64`).
+
+To build the image locally without pushing it:
 
 ```bash
 docker buildx build -t envoy-dataplane cmd/dataplane/envoy

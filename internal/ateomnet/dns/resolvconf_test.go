@@ -1,5 +1,3 @@
-//go:build linux
-
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateomnet
+package dns
 
 import (
 	"os"
@@ -31,7 +29,7 @@ func TestSandboxResolvConf(t *testing.T) {
 		"search ate-demo.svc.cluster.local svc.cluster.local cluster.local\n" +
 		"options ndots:5\n"
 
-	got := string(SandboxResolvConf([]byte(pod)))
+	got := string(SandboxResolvConf("169.254.17.1", []byte(pod)))
 
 	want := "nameserver 169.254.17.1\n" +
 		"search ate-demo.svc.cluster.local svc.cluster.local cluster.local\n" +
@@ -45,7 +43,7 @@ func TestSandboxResolvConf(t *testing.T) {
 // only a nameserver line resolves public names but not cluster ones.
 func TestSandboxResolvConfKeepsSearchAndOptions(t *testing.T) {
 	pod := "search svc.cluster.local\nnameserver 10.96.0.10\nnameserver 10.96.0.11\noptions ndots:5 timeout:1\n"
-	got := string(SandboxResolvConf([]byte(pod)))
+	got := string(SandboxResolvConf("169.254.17.1", []byte(pod)))
 
 	if strings.Contains(got, "10.96.0.10") || strings.Contains(got, "10.96.0.11") {
 		t.Errorf("a pod resolver survived into the actor's file, so its DNS would bypass atunnel:\n%s", got)

@@ -21,6 +21,7 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
 
@@ -30,7 +31,7 @@ func writeActorResolvConf(rootfs string) error {
 	if err != nil {
 		return fmt.Errorf("reading the worker pod resolv.conf: %w", err)
 	}
-	return ateomnet.WriteRootfsResolvConf(rootfs, ateomnet.SandboxResolvConf(pod))
+	return dns.WriteRootfsResolvConf(rootfs, dns.SandboxResolvConf(ateomnet.ActorVethGateway, pod))
 }
 
 // attachAtunnel completes setup after atunnel receives the service's dialer.

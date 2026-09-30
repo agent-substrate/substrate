@@ -21,6 +21,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -40,7 +41,7 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 
 	// Validate the request, including the object within it.
 	if errs := validateCreateAtespaceRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// Handle the creation, including validation of the final stored object.
@@ -70,7 +71,7 @@ func validateCreateAtespaceRequest(ctx context.Context, req *ateapipb.CreateAtes
 
 func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest) (*ateapipb.Atespace, error) {
 	if errs := validateGetAtespaceRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.GetAtespace(ctx, req.Atespace.Name)
@@ -95,7 +96,7 @@ func validateGetAtespaceRequest(ctx context.Context, req *ateapipb.GetAtespaceRe
 
 func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespacesRequest) (*ateapipb.ListAtespacesResponse, error) {
 	if errs := validateListAtespacesRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: req.PageSize, PageToken: req.PageToken})
@@ -125,7 +126,7 @@ func validateListAtespacesRequest(ctx context.Context, req *ateapipb.ListAtespac
 
 func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) (*ateapipb.Atespace, error) {
 	if errs := validateDeleteAtespaceRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.DeleteAtespace(ctx, req.Atespace.Name, toDeletePreconditions(req.GetOptions()))

@@ -29,7 +29,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
@@ -63,16 +63,30 @@ func FromFiles(actors int) *ateletpb.SetWorkerCapacityRequest {
 
 func fromDir(dir string, actors int) *ateletpb.SetWorkerCapacityRequest {
 	return &ateletpb.SetWorkerCapacityRequest{
-		Capacity: &ateapipb.WorkerResources{
+		Capacity: &ateletpb.WorkerResources{
 			Actors: int32(actors),
-			// A limit read as zero is left out, which the control plane reads
-			// as none of that dimension.
-			Resources: resources.CPUMemory(
+			Resources: cpuMemory(
 				readLimit(filepath.Join(dir, CPULimitFile)),
 				readLimit(filepath.Join(dir, MemoryLimitFile)),
 			),
 		},
 	}
+}
+
+// cpuMemory is the Resources for those two dimensions. A zero dimension is
+// left out, which the control plane reads as none of it; nil when both are.
+func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
+	var limits []*ateletpb.Limits
+	if cpuMilli != 0 {
+		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceCPU, Quantity: resource.NewMilliQuantity(cpuMilli, resource.DecimalSI).String()})
+	}
+	if memoryBytes != 0 {
+		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceMemory, Quantity: resource.NewQuantity(memoryBytes, resource.BinarySI).String()})
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	return &ateletpb.Resources{Limits: limits}
 }
 
 func readLimit(path string) int64 {

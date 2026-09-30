@@ -46,7 +46,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 	}
 
 	if errs := validateCreateTagRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetTag().GetSourceActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -88,7 +88,7 @@ func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p
 
 func (s *RPCService) GetTag(ctx context.Context, req *ateapipb.GetTagRequest) (*ateapipb.Tag, error) {
 	if errs := validateGetTagRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	tagRef := resources.TagRefFromObjectRef(req.GetTag())
 	tag, err := s.impl.GetTag(ctx, tagRef)
@@ -113,7 +113,7 @@ func validateGetTagRequest(ctx context.Context, req *ateapipb.GetTagRequest) fie
 
 func (s *RPCService) ListTags(ctx context.Context, req *ateapipb.ListTagsRequest) (*ateapipb.ListTagsResponse, error) {
 	if errs := validateListTagsRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	page, err := s.impl.ListTags(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
@@ -146,7 +146,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 	}
 
 	if errs := validateUpdateTagRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	in := req.GetTag()
 	tagRef := resources.TagRefFromTag(in)
@@ -210,7 +210,7 @@ func (s *ServiceImpl) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 		// the rules the request could not be checked against land: scope, and
 		// the immutability of metadata and source_actor.
 		if errs := validateTagUpdate(ctx, field.NewPath("tag"), toUpdate, oldVal); len(errs) > 0 {
-			return toGRPCStatusError(errs)
+			return resources.ToGRPCStatusError(errs)
 		}
 		return nil
 	})
@@ -249,7 +249,7 @@ func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Opera
 // DeleteTag removes the tag and collects the external snapshot it owns.
 func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagRequest) (*ateapipb.Tag, error) {
 	if errs := validateDeleteTagRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()), toDeletePreconditions(req.GetOptions()))
 }
