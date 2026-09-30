@@ -138,7 +138,7 @@ prints the installed version, off the atelet DaemonSet the install created.
    gcloud auth application-default login --project=${PROJECT_ID}
    ```
 
-3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings):
+3. Provision the required GCP resources (Artifact Registry repository, GKE cluster, GCS, and IAM bindings):
    ```bash
    go run ./tools/setup-gcp bootstrap
    ```
@@ -150,8 +150,9 @@ prints the installed version, off the atelet DaemonSet the install created.
    note the required Kubernetes beta APIs can only be enabled **at cluster
    creation** — see the [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
 
-4. Deploy the Agent Substrate system to your cluster:
+4. Configure Docker authentication for the regional image registry, then deploy:
    ```bash
+   gcloud auth configure-docker "${GCE_REGION}-docker.pkg.dev"
    ./hack/install-ate.sh --deploy-ate-system
    ```
 
@@ -171,6 +172,7 @@ You can run individual setup steps to create GCP resources as needed. See `go ru
 ```bash
 go run ./tools/setup-gcp create cluster
 go run ./tools/setup-gcp create bucket
+go run ./tools/setup-gcp create repository
 ```
 
 To run the PostgreSQL store backend on Cloud SQL — with IAM database

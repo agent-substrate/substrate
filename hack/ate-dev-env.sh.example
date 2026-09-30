@@ -46,7 +46,8 @@ export KUBECTL_CONTEXT=
 
 export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
 
-export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
+export ARTIFACT_REGISTRY_REPOSITORY=ate-images
+export KO_DOCKER_REPO="${GCE_REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}"
 
 # Set this if you want to override the default build platforms
 export KO_DEFAULTPLATFORMS=linux/amd64

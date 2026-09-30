@@ -29,7 +29,7 @@
 # registry / bucket settings unless NO_DEV_ENV is set.
 #
 # Env (most come from .ate-dev-env.sh):
-#   KO_DOCKER_REPO   (required) image registry, e.g. gcr.io/PROJECT/ate-images for
+#   KO_DOCKER_REPO   (required) image registry, e.g. us-west1-docker.pkg.dev/PROJECT/ate-images for
 #                    GKE or localhost:5001 for kind.
 #   BUCKET_NAME      object store bucket for assets/snapshots (default: ate-snapshots).
 #   KUBECTL_CONTEXT  (optional) kube context; threaded into install + ko apply + kubectl.

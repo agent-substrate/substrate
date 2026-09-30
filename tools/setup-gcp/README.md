@@ -12,6 +12,7 @@ It uses a hierarchical command structure:
     *   `create` - Parent command for resource creation.
         *   `cluster` - Create GKE cluster.
         *   `bucket` - Create GCS bucket.
+        *   `repository` - Create an Artifact Registry Docker repository.
         *   `iam` - Create IAM policy bindings and grant permissions.
         *   `dashboards` - Create Cloud Monitoring dashboards.
         *   `cloudsql` - Create a Cloud SQL PostgreSQL instance for the ateapi store, with IAM database authentication (see [cloud-sql.md](cloud-sql.md)).
@@ -38,6 +39,29 @@ cp hack/ate-dev-env.sh.example .ate-dev-env.sh
 # Edit .ate-dev-env.sh to match your project and preferences
 source .ate-dev-env.sh
 ```
+
+### Image repository
+
+`bootstrap` creates the `ate-images` Docker repository in `${GCE_REGION}`
+(`us-west1` by default). Images are pushed to
+`${GCE_REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}`.
+
+To provision only the repository in an existing project:
+
+```bash
+go run ./tools/setup-gcp enable apis
+go run ./tools/setup-gcp create repository
+gcloud auth configure-docker "${GCE_REGION}-docker.pkg.dev"
+```
+
+To use another name, set `ARTIFACT_REGISTRY_REPOSITORY` or pass `--name` to
+`create repository` (`--repository-name` for `bootstrap`). Update `KO_DOCKER_REPO`
+to match. Pushing images requires `roles/artifactregistry.writer` or equivalent
+permissions.
+
+Custom `KO_DOCKER_REPO` values are preserved; they do not change which repository
+`bootstrap` creates. Existing `.ate-dev-env.sh` files must be updated manually
+to use the new defaults, then images must be rebuilt and redeployed.
 
 ## Global Flags
 
@@ -272,6 +296,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
+| `--repository-name` | Name of the Artifact Registry Docker repository. | `ARTIFACT_REGISTRY_REPOSITORY` | `ate-images` |
 | `--dashboard-dir` | Directory containing dashboard JSON files. | `DASHBOARD_DIR` | `tools/setup-gcp/dashboards` |
 
 *\*Note: Required unless the `BUCKET_NAME` environment variable is set.*
