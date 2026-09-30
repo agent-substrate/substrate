@@ -21,6 +21,10 @@ artifacts runner.py uploads:
                  for compatibility with the locust pipeline.
   capacity.json  capacity_summary() — one-record verdict.
 
+In fixed-rate mode each stage is a separate nighthawk_client run:
+parse_client_output_json() -> fixed_stage_row() feeds the same stats.jsonl
+records, and capacity.json holds fixed_rate_summary() instead.
+
 Measurement keys come in three tiers: metric_nighthawk.builtin_* (verbatim
 builtin metrics), plain counters / *_ms conversions, and derived verdicts
 (slo_max_rps, failed_thresholds, binding_threshold — the last two use
@@ -82,6 +86,21 @@ def parse_output_textproto(text: str, desc_path: str) -> dict:
     pool = spec_mod.load_pool(desc_path)
     msg = spec_mod.message_class(pool, spec_mod.OUTPUT_MESSAGE)()
     text_format.Parse(text, msg, descriptor_pool=pool)
+    return json_format.MessageToDict(
+        msg, preserving_proto_field_name=True, descriptor_pool=pool
+    )
+
+
+def parse_client_output_json(text: str, desc_path: str) -> dict:
+    """nighthawk_client --output-format json -> the same dict shape as the
+    nighthawk_service_output field of an adaptive stage."""
+    from google.protobuf import json_format
+
+    import spec as spec_mod
+
+    pool = spec_mod.load_pool(desc_path)
+    msg = spec_mod.message_class(pool, spec_mod.CLIENT_OUTPUT_MESSAGE)()
+    json_format.Parse(text, msg, descriptor_pool=pool)
     return json_format.MessageToDict(
         msg, preserving_proto_field_name=True, descriptor_pool=pool
     )
@@ -189,6 +208,28 @@ def stage_rows(output_dict: dict) -> list[dict]:
     return rows
 
 
+def fixed_stage_row(
+    index: int,
+    target_rps: int,
+    nighthawk_output: dict,
+    start_time: str,
+    end_time: str,
+) -> dict:
+    """One fixed-rate stage; no thresholds, so the rates and success-rate
+    come from the counter fallbacks in _stage_row. target_rps is the
+    requested total, which attempted-rps can miss by rounding per worker."""
+    row = _stage_row(
+        f"fixed_{index:03d}",
+        {
+            "nighthawk_service_output": nighthawk_output,
+            "start_time": start_time,
+            "end_time": end_time,
+        },
+    )
+    row["target_rps"] = target_rps
+    return row
+
+
 def stats_records(rows: list[dict], tag: str, test_name: str) -> list[dict]:
     """Locust-runner-compatible stats.jsonl records (one per stage)."""
     records = []
@@ -254,6 +295,45 @@ def capacity_summary(
         for name in ("p50_ms", "p95_ms", "p99_ms"):
             summary[name] = testing.get(name)
     return summary
+
+
+def stage_digest(row: dict) -> dict:
+    """The headline figures of one stage row, under short names."""
+    digest = {"stage": row["stage"], "target_rps": row.get("target_rps")}
+    for name in ("attempted-rps", "achieved-rps", "send-rate", "success-rate"):
+        digest[name.replace("-", "_")] = row.get(_builtin_key(name))
+    for key in (
+        "start_time",
+        "end_time",
+        "duration_s",
+        "p50_ms",
+        "p95_ms",
+        "p99_ms",
+        "http_5xx",
+        "pool_overflow",
+    ):
+        digest[key] = row.get(key)
+    return digest
+
+
+def fixed_rate_summary(
+    rows: list[dict],
+    *,
+    envoy_cpu: int,
+    actors: int,
+    client_concurrency: int,
+    stage_duration_s: int,
+) -> dict:
+    """One digest per fixed-rate stage; start_time/end_time let a stage be
+    joined with router CPU samples."""
+    return {
+        "mode": "fixed",
+        "envoy_cpu": envoy_cpu,
+        "actors": actors,
+        "client_concurrency": client_concurrency,
+        "stage_duration_s": stage_duration_s,
+        "stages": [stage_digest(r) for r in rows],
+    }
 
 
 def write_jsonl(records: list[dict], path) -> None:

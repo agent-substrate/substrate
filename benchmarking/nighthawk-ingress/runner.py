@@ -22,8 +22,13 @@ benchmarking/automation/orchestrator.py):
   4. Convert the output (output.py) and upload to <dest>/runs/<name>/...
      (same Hive-partitioned layout as the locust runner).
 
+With --fixed-rps, step 3 instead runs nighthawk_client once per listed
+total rate for --fixed-stage-duration each, to measure router cost at
+known loads rather than search for capacity.
+
 Exit 0 iff the session converged (client exit 0 AND a testing-stage result
-parsed) and all artifacts uploaded.
+parsed), or every fixed-rate stage produced output, and all artifacts
+uploaded.
 """
 
 import argparse
@@ -46,6 +51,7 @@ import spec as spec_mod
 
 NIGHTHAWK_SERVICE = "nighthawk_service"
 ADAPTIVE_CLIENT = "nighthawk_adaptive_load_client"
+CLIENT = "nighthawk_client"
 SERVICE_ADDRESS = "127.0.0.1:8443"
 
 DEFAULT_ROUTER_URL = "http://atenet-router.ate-system.svc.cluster.local:80"
@@ -107,6 +113,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--router-url", default=DEFAULT_ROUTER_URL, dest="router_url")
     p.add_argument("--warm-deadline", default="600s", dest="warm_deadline")
     p.add_argument("--atespace", default=actors.ATESPACE)
+    # Total rates, comma-separated; empty runs the adaptive search.
+    p.add_argument(
+        "--fixed-rps", type=spec_mod.parse_rps_list, default=[], dest="fixed_rps"
+    )
+    p.add_argument(
+        "--fixed-stage-duration", default="90s", dest="fixed_stage_duration"
+    )
     args, extra = p.parse_known_args()
     args.extra = extra
     return args
@@ -179,6 +192,85 @@ def run_adaptive_client(
     return proc.wait()
 
 
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def run_fixed_rate(
+    args: argparse.Namespace,
+    actor_names: list[str],
+    work_dir: Path,
+    logs: TextIO,
+    cooldown_s: int = 5,
+) -> tuple[list[dict], list[dict]]:
+    """One nighthawk_client run per rate in args.fixed_rps.
+
+    Returns the stage rows and the raw per-stage results. A stage that
+    fails is logged and skipped, so the caller can tell a partial run by
+    len(rows) < len(args.fixed_rps).
+    """
+    duration_s = parse_duration_seconds(args.fixed_stage_duration)
+    options_path = work_dir / "request_options.json"
+    options_path.write_text(
+        spec_mod.request_options_list_json(actor_names, args.atespace)
+    )
+    options_size = options_path.stat().st_size
+    rows: list[dict] = []
+    results: list[dict] = []
+    for i, total_rps in enumerate(args.fixed_rps):
+        if i:
+            time.sleep(cooldown_s)
+        cmd = [CLIENT] + spec_mod.fixed_rate_client_args(
+            uri=f"{args.router_url.rstrip('/')}/ping",
+            options_path=str(options_path),
+            options_size=options_size,
+            client_concurrency=args.client_concurrency,
+            connections=args.connections,
+            max_pending_requests=args.max_pending,
+            total_rps=total_rps,
+            duration_s=duration_s,
+        )
+        out_path = work_dir / f"fixed_{i:03d}.json"
+        tee(logs, f"Stage fixed_{i:03d}: {total_rps} rps for {duration_s}s")
+        start_time = utc_now_iso()
+        with open(out_path, "w") as out:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=out,
+                stderr=subprocess.PIPE,
+                bufsize=1,
+                text=True,
+            )
+            pump_stream("client", proc.stderr, logs)
+            exit_code = proc.wait()
+        end_time = utc_now_iso()
+        tee(logs, f"{CLIENT} exited with code {exit_code}")
+        if exit_code != 0:
+            continue
+        try:
+            nh_output = output_mod.parse_client_output_json(
+                out_path.read_text(), DESC_PATH
+            )
+        except Exception as e:
+            tee(logs, f"Stage fixed_{i:03d}: unparseable output: {e}")
+            continue
+        row = output_mod.fixed_stage_row(
+            i, total_rps, nh_output, start_time, end_time
+        )
+        rows.append(row)
+        results.append(
+            {
+                "stage": row["stage"],
+                "target_rps": total_rps,
+                "start_time": start_time,
+                "end_time": end_time,
+                "output": nh_output,
+            }
+        )
+        tee(logs, f"Stage result: {json.dumps(output_mod.stage_digest(row))}")
+    return rows, results
+
+
 def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
     # Imported here so non-GCS use doesn't require google-cloud-storage.
     from google.cloud import storage
@@ -217,6 +309,8 @@ def log_run_config(args: argparse.Namespace, prefix: str, logs: TextIO) -> None:
         f"  send_rate_threshold:    {args.send_rate}",
         f"  tail_latency_slo_ms:    {args.tail_latency_slo_ms or '(disabled)'}",
         f"  atespace:               {args.atespace}",
+        f"  fixed_rps:              {','.join(map(str, args.fixed_rps)) or '(adaptive)'}",
+        f"  fixed_stage_duration:   {args.fixed_stage_duration}",
         f"  router_url:             {args.router_url}",
         f"  dest_prefix:            {prefix}",
         f"  extra flags (ignored):  {' '.join(args.extra) or '(none)'}",
@@ -248,6 +342,7 @@ def main() -> None:
 
     adaptive_exit: int | None = None
     testing_stage_parsed = False
+    fixed_stages_completed = 0
     actor_names: list[str] = []
     service_proc = None
 
@@ -268,67 +363,89 @@ def main() -> None:
                 log=lambda m: tee(logs, m),
             )
 
-            spec_dict = spec_mod.build_spec_dict(
-                uri=f"{args.router_url.rstrip('/')}/ping",
-                actor_names=actor_names,
-                atespace=args.atespace,
-                client_concurrency=args.client_concurrency,
-                connections=args.connections,
-                max_pending_requests=args.max_pending,
-                initial_total_rps=args.initial_rps,
-                exponential_factor=args.exp_factor,
-                measuring_period_s=parse_duration_seconds(args.measuring_period),
-                convergence_deadline_s=parse_duration_seconds(
-                    args.convergence_deadline
-                ),
-                testing_stage_duration_s=parse_duration_seconds(
-                    args.testing_stage_duration
-                ),
-                success_rate_threshold=args.success_rate,
-                send_rate_threshold=args.send_rate,
-                tail_latency_slo_ms=(
-                    args.tail_latency_slo_ms
-                    if args.tail_latency_slo_ms > 0
-                    else None
-                ),
-            )
-            spec_path.write_text(
-                spec_mod.spec_dict_to_textproto(spec_dict, DESC_PATH)
-            )
-            tee(logs, f"Wrote spec to {spec_path}")
-
-            service_proc = start_service(logs)
-            adaptive_exit = run_adaptive_client(spec_path, output_path, logs)
-            tee(logs, f"{ADAPTIVE_CLIENT} exited with code {adaptive_exit}")
-
-            if output_path.exists():
-                output_dict = output_mod.parse_output_textproto(
-                    output_path.read_text(), DESC_PATH
-                )
-                results_path.write_text(json.dumps(output_dict, indent=2))
-                rows = output_mod.stage_rows(output_dict)
+            if args.fixed_rps:
+                rows, results = run_fixed_rate(args, actor_names, work_dir, logs)
+                fixed_stages_completed = len(rows)
+                results_path.write_text(json.dumps(results, indent=2))
                 output_mod.write_jsonl(
                     output_mod.stats_records(rows, args.tag, args.name),
                     stats_path,
                 )
-                summary = output_mod.capacity_summary(
-                    output_dict,
+                summary = output_mod.fixed_rate_summary(
+                    rows,
                     envoy_cpu=args.envoy_cpu,
                     actors=args.actors,
                     client_concurrency=args.client_concurrency,
+                    stage_duration_s=parse_duration_seconds(
+                        args.fixed_stage_duration
+                    ),
+                )
+                capacity_path.write_text(json.dumps(summary, indent=2))
+                tee(logs, f"Fixed-rate summary: {json.dumps(summary)}")
+            else:
+                spec_dict = spec_mod.build_spec_dict(
+                    uri=f"{args.router_url.rstrip('/')}/ping",
+                    actor_names=actor_names,
+                    atespace=args.atespace,
+                    client_concurrency=args.client_concurrency,
+                    connections=args.connections,
+                    max_pending_requests=args.max_pending,
+                    initial_total_rps=args.initial_rps,
+                    exponential_factor=args.exp_factor,
+                    measuring_period_s=parse_duration_seconds(
+                        args.measuring_period
+                    ),
+                    convergence_deadline_s=parse_duration_seconds(
+                        args.convergence_deadline
+                    ),
+                    testing_stage_duration_s=parse_duration_seconds(
+                        args.testing_stage_duration
+                    ),
+                    success_rate_threshold=args.success_rate,
+                    send_rate_threshold=args.send_rate,
                     tail_latency_slo_ms=(
                         args.tail_latency_slo_ms
                         if args.tail_latency_slo_ms > 0
                         else None
                     ),
                 )
-                capacity_path.write_text(json.dumps(summary, indent=2))
-                testing_stage_parsed = any(
-                    r["stage"] == "testing" for r in rows
+                spec_path.write_text(
+                    spec_mod.spec_dict_to_textproto(spec_dict, DESC_PATH)
                 )
-                tee(logs, f"Capacity summary: {json.dumps(summary)}")
-            else:
-                tee(logs, f"No output file at {output_path}")
+                tee(logs, f"Wrote spec to {spec_path}")
+
+                service_proc = start_service(logs)
+                adaptive_exit = run_adaptive_client(spec_path, output_path, logs)
+                tee(logs, f"{ADAPTIVE_CLIENT} exited with code {adaptive_exit}")
+
+                if output_path.exists():
+                    output_dict = output_mod.parse_output_textproto(
+                        output_path.read_text(), DESC_PATH
+                    )
+                    results_path.write_text(json.dumps(output_dict, indent=2))
+                    rows = output_mod.stage_rows(output_dict)
+                    output_mod.write_jsonl(
+                        output_mod.stats_records(rows, args.tag, args.name),
+                        stats_path,
+                    )
+                    summary = output_mod.capacity_summary(
+                        output_dict,
+                        envoy_cpu=args.envoy_cpu,
+                        actors=args.actors,
+                        client_concurrency=args.client_concurrency,
+                        tail_latency_slo_ms=(
+                            args.tail_latency_slo_ms
+                            if args.tail_latency_slo_ms > 0
+                            else None
+                        ),
+                    )
+                    capacity_path.write_text(json.dumps(summary, indent=2))
+                    testing_stage_parsed = any(
+                        r["stage"] == "testing" for r in rows
+                    )
+                    tee(logs, f"Capacity summary: {json.dumps(summary)}")
+                else:
+                    tee(logs, f"No output file at {output_path}")
         except Exception as e:
             tee(logs, f"Run failed: {e}")
         finally:
@@ -347,16 +464,21 @@ def main() -> None:
                     log=lambda m: tee(logs, m),
                 )
 
-    converged = adaptive_exit == 0 and testing_stage_parsed
-    status_path.write_text(
-        json.dumps(
-            {
-                "adaptive_client_exit_code": adaptive_exit,
-                "converged": converged,
-                "actors_created": len(actor_names),
-            }
-        )
-    )
+    if args.fixed_rps:
+        succeeded = fixed_stages_completed == len(args.fixed_rps)
+        status = {
+            "mode": "fixed",
+            "stages_planned": len(args.fixed_rps),
+            "stages_completed": fixed_stages_completed,
+        }
+    else:
+        succeeded = adaptive_exit == 0 and testing_stage_parsed
+        status = {
+            "adaptive_client_exit_code": adaptive_exit,
+            "converged": succeeded,
+        }
+    status["actors_created"] = len(actor_names)
+    status_path.write_text(json.dumps(status))
 
     upload_ok = True
     files = [
@@ -368,6 +490,8 @@ def main() -> None:
         (stats_path, "stats.jsonl"),
         (capacity_path, "capacity.json"),
     ]
+    # Raw client output of every fixed-rate stage, including failed ones.
+    files += [(p, p.name) for p in sorted(work_dir.glob("fixed_*.json"))]
     for src, basename in files:
         if not src.exists():
             print(f"Skipping {src}: not produced", flush=True)
@@ -380,7 +504,7 @@ def main() -> None:
             print(f"Upload of {src} failed: {e}", flush=True)
             upload_ok = False
 
-    sys.exit(0 if (converged and upload_ok) else 1)
+    sys.exit(0 if (succeeded and upload_ok) else 1)
 
 
 if __name__ == "__main__":
