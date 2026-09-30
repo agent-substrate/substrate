@@ -30,7 +30,7 @@ To run the cold resume tests from your workstation instead, see
    runner's calls pass [authorization](../../docs/guides/authorization.md), and sets
    `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` for the
    Envoy ingress router. For a `microvm` test the orchestrator also
-   runs `hack/install-microvm-deps.sh --install` between the two, which
+   runs `go run ./cmd/ate-setup deploy microvm-deps` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
