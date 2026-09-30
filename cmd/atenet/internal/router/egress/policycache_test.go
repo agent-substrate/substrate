@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -147,33 +148,83 @@ func TestPolicyCacheCollapsesConcurrentFetches(t *testing.T) {
 // The leader's cancellation must not fail the callers that joined its fetch,
 // and the fetch it started still lands in the cache.
 func TestPolicyCacheFetchOutlivesCanceledCaller(t *testing.T) {
-	client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
-	c, _ := newTestCache(client, 10*time.Second)
+	client := &egressMockClient{policy: allowAllPolicy()}
+	c, now := newTestCache(client, 10*time.Second)
+	if _, err := c.get(context.Background(), testActorRef); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+	client.policyGate = make(chan struct{})
+	*now = now.Add(10*time.Second + time.Millisecond)
+	expiredAt := *now
+
+	// Pause the second caller after it has read the expired entry but before
+	// it registers with singleflight. Letting the refresh finish in this gap
+	// exercises the cache-miss/singleflight race deterministically.
+	var pauseNextLookup atomic.Bool
+	secondLookup := make(chan struct{})
+	continueLookup := make(chan struct{})
+	c.now = func() time.Time {
+		if pauseNextLookup.CompareAndSwap(true, false) {
+			close(secondLookup)
+			<-continueLookup
+		}
+		return expiredAt
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
+	leaderDone := make(chan error, 1)
 	go func() {
 		_, err := c.get(ctx, testActorRef)
-		done <- err
+		leaderDone <- err
 	}()
 	deadline := time.Now().Add(5 * time.Second)
-	for client.policyCalls.Load() == 0 {
+	for client.policyCalls.Load() < 2 {
 		if time.Now().After(deadline) {
-			t.Fatal("no fetch started")
+			t.Fatalf("GetActorEgressPolicy calls = %d, want at least 2", client.policyCalls.Load())
 		}
 		time.Sleep(time.Millisecond)
 	}
 	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled caller got %v, want context.Canceled", err)
 	}
 
+	pauseNextLookup.Store(true)
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := c.get(context.Background(), testActorRef)
+		secondDone <- err
+	}()
+	select {
+	case <-secondLookup:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second caller did not reach the expired cache entry")
+	}
+
 	close(client.policyGate)
-	if _, err := c.get(context.Background(), testActorRef); err != nil {
+	refreshedExpiry := expiredAt.Add(10 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		entry := c.entries[testActorRef]
+		c.mu.Unlock()
+		if entry.expires.Equal(refreshedExpiry) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("detached fetch did not refresh the cache")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Wait for singleflight to remove the refresh after it stores the cache
+	// entry. The second caller is still paused before it registers its flight.
+	_, _, _ = c.flight.Do(testActorRef.String(), func() (any, error) { return nil, nil })
+	close(continueLookup)
+	if err := <-secondDone; err != nil {
 		t.Fatalf("get after the detached fetch completed: %v", err)
 	}
-	if calls := client.policyCalls.Load(); calls != 1 {
-		t.Errorf("GetActorEgressPolicy calls = %d, want 1: the canceled caller's fetch should have been reused", calls)
+	if calls := client.policyCalls.Load(); calls != 2 {
+		t.Errorf("GetActorEgressPolicy calls = %d, want 2 including initial cache prime and refresh", calls)
 	}
 }
 
