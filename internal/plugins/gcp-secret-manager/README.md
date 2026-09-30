@@ -117,15 +117,36 @@ Prerequisites:
 - A registry for `KO_DOCKER_REPO`. The Makefile runs [ko](https://ko.build)
   with `go run`.
 
-**1. Grant Secret Manager access** to the provider's Kubernetes ServiceAccount
-for each secret it serves. `<cluster-project>` is the project that holds the
-GKE cluster, which need not be the secret's `<project>`:
+**1. Grant Secret Manager access.** The provider reads secrets through Workload
+Identity Federation for GKE, as its Kubernetes ServiceAccount
+`gsm-credential-provider` in `ate-system`. Grant it access to each secret it
+serves in one of two ways. `<cluster-project>` is the project that holds the GKE
+cluster, which need not be the secret's `<project>`.
+
+*Grant the Kubernetes ServiceAccount directly.* Nothing else needs configuring:
 
 ```bash
 gcloud secrets add-iam-policy-binding <secret> --project <project> \
   --role roles/secretmanager.secretAccessor \
   --member "principal://iam.googleapis.com/projects/<cluster-project-number>/locations/global/workloadIdentityPools/<cluster-project>.svc.id.goog/subject/ns/ate-system/sa/gsm-credential-provider"
 ```
+
+*Or act as a Google service account*, for example one that already holds the
+access. Grant the Google service account access to the secret, and let the
+Kubernetes ServiceAccount impersonate it:
+
+```bash
+GSA=gsm-credential-provider@<cluster-project>.iam.gserviceaccount.com
+gcloud iam service-accounts create gsm-credential-provider --project <cluster-project>
+gcloud secrets add-iam-policy-binding <secret> --project <project> \
+  --role roles/secretmanager.secretAccessor --member "serviceAccount:$GSA"
+gcloud iam service-accounts add-iam-policy-binding "$GSA" --project <cluster-project> \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:<cluster-project>.svc.id.goog[ate-system/gsm-credential-provider]"
+```
+
+Then uncomment the `iam.gke.io/gcp-service-account` annotation in
+`config/serviceaccount.yaml`, set to that email, before deploying the provider.
 
 For a regional secret, see step 5.
 
