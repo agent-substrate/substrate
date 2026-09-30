@@ -3044,6 +3044,89 @@ func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
 	}
 }
 
+// TestSuspendActor_ReplacedSnapshotReleaseFailure verifies that object storage
+// failing to delete the snapshot a suspend replaces does not fail the suspend.
+// By then the new snapshot is written and the worker released, so the actor
+// must still reach SUSPENDED and stay resumable; the replaced snapshot is left
+// behind rather than the actor wedged in SUSPENDING.
+func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-release-failure")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// A first suspend gives the actor an external snapshot of its own for the
+	// second one to replace.
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor (first) failed: %v", err)
+	}
+	first, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor (first) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	replacedURI := first.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	assertSnapshotOwnedByActor(t, first.GetActor(), replacedURI)
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor (second) failed: %v", err)
+	}
+	tc.objectStore.OnDelete = func(string, string) error {
+		return status.Error(codes.Unavailable, "object storage is unavailable")
+	}
+	second, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	tc.objectStore.OnDelete = nil
+	if err != nil {
+		t.Fatalf("SuspendActor (second) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	if got := second.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state after the second suspend = %v, want SUSPENDED", got)
+	}
+	freshURI := second.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if freshURI == "" || freshURI == replacedURI {
+		t.Errorf("external snapshot after the second suspend = %q, want a new one replacing %q", freshURI, replacedURI)
+	}
+	assertSnapshotPresent(t, tc, freshURI)
+	assertSnapshotPresent(t, tc, replacedURI)
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor after the release failure failed: %v", err)
+	}
+	if got := tc.fakeAtelet.lastRestoreRequest().GetExternalConfig().GetSnapshotUri(); got != freshURI {
+		t.Errorf("restore snapshot uri = %q, want the second suspend's %q", got, freshURI)
+	}
+
+	// A later suspend releases only the snapshot it replaces; the one the
+	// failed release left behind stays until the actor is deleted, which
+	// collects everything under the actor's prefix.
+	third, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor (third) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	lastURI := third.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	assertSnapshotCollected(t, tc, freshURI)
+	assertSnapshotPresent(t, tc, replacedURI)
+
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	assertSnapshotCollected(t, tc, replacedURI)
+	assertSnapshotCollected(t, tc, lastURI)
+}
+
 // TestResumeActor_NoWorkers tests that resuming an actor fails when no free workers are available.
 // Workflow:
 // 1. Creates a mock ActorTemplate.

@@ -144,12 +144,12 @@ func TestActorEgress(t *testing.T) {
 }
 
 // TestActorEgressHTTPS covers the same path as TestActorEgress with a TLS
-// origin, where the gateway cannot see inside the request. atenet-egress
-// authorizes the CONNECT against the Actor's actor-identity certificate and
-// then relays raw TCP: it never decrypts, so the TLS session runs end to end
-// between the Actor and the origin.
+// origin, through the sdsmint gateway's MITM. The plain gateway closes all TLS,
+// so this runs only against sdsmint.
 func TestActorEgressHTTPS(t *testing.T) {
-	t.Skip("TODO: the gateway does not forward TLS unread yet; it intercepts every connection, so end-to-end TLS with the origin cannot hold")
+	if !egressMITM() {
+		t.Skip("covers the sdsmint gateway; set E2E_EGRESS_MITM")
+	}
 	ctx := context.Background()
 	fixture := egressFixture()
 	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", fixture, e2e.EgressAllowAll()...)

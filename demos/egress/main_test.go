@@ -80,7 +80,9 @@ func TestFetchHTTPAndHTTPS(t *testing.T) {
 	}))
 	defer httpsSrv.Close()
 
-	handler := newHandler(&http.Client{Timeout: requestTimeout})
+	// The demo verifies origins with the roots its client is given: in the
+	// cluster the projected trust bundle, here the test server's own.
+	handler := newHandler(httpsSrv.Client())
 
 	for _, tc := range []struct {
 		name string

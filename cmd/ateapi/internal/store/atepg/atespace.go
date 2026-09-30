@@ -30,7 +30,7 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	name := atespace.GetMetadata().GetName()
 
 	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
-	dbAtespace.Metadata = newCreateMetadata("", name)
+	setCreateMetadata(dbAtespace.Metadata)
 
 	protoBytes, err := proto.Marshal(dbAtespace)
 	if err != nil {

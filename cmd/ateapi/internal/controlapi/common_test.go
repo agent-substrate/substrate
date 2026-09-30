@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -35,14 +34,6 @@ var (
 	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
 	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time")
 )
-
-func selectorLabelsOfSize(n int) map[string]string {
-	labels := make(map[string]string, n)
-	for i := 0; i < n; i++ {
-		labels[fmt.Sprintf("k%d", i)] = "v"
-	}
-	return labels
-}
 
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()

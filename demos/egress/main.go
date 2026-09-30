@@ -19,7 +19,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,13 +104,6 @@ func main() {
 }
 
 func newHandler(client *http.Client) http.Handler {
-	httpsTransport := http.DefaultTransport.(*http.Transport).Clone()
-	httpsTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	httpsClient := *client
-	if httpsClient.Transport == nil {
-		httpsClient.Transport = httpsTransport
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -143,11 +135,7 @@ func newHandler(client *http.Client) http.Handler {
 		if traceparent := r.Header.Get("traceparent"); traceparent != "" {
 			outbound.Header.Set("traceparent", traceparent)
 		}
-		doClient := client
-		if outbound.URL.Scheme == "https" {
-			doClient = &httpsClient
-		}
-		response, err := doClient.Do(outbound)
+		response, err := client.Do(outbound)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
 			return

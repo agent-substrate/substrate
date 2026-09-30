@@ -596,12 +596,25 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		kind:              checkpointSnapshotKind(req),
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
 	}
+	attribution := resources.ActorAttribution{
+		Ref:              actorRef,
+		UID:              actorUID,
+		TemplateAtespace: req.GetActorTemplateAtespace(),
+		TemplateName:     req.GetActorTemplateName(),
+	}
 	defer func() {
-		s.instruments.recordCheckpoint(ctx, op,
-			phase{ateattr.SnapshotPhaseSandboxAssets, dAssets},
-			phase{ateattr.SnapshotPhaseAteomCheckpoint, dAteom},
-			phase{ateattr.SnapshotPhasePersist, dPersist},
-			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
+		// Use the same phase values for metrics and logs so their durations stay
+		// consistent. The log also includes actor identity, which is intentionally
+		// excluded from metric labels because of cardinality.
+		phases := []phase{
+			{ateattr.SnapshotPhaseSandboxAssets, dAssets},
+			{ateattr.SnapshotPhaseAteomCheckpoint, dAteom},
+			{ateattr.SnapshotPhasePersist, dPersist},
+			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
+		}
+		s.instruments.recordCheckpoint(ctx, op, phases...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Checkpoint timing breakdown",
+			snapshotLogAttrs(attribution, op, checkpointDurationMetric, err, phases)...)
 	}()
 
 	// Checkpoint requests no longer carry the sandbox config; recover the
@@ -1058,7 +1071,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 		s.instruments.recordRestore(ctx, op, phases...)
 		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown",
-			snapshotLogAttrs(attribution, op, restoreDurationMetric, phases)...)
+			snapshotLogAttrs(attribution, op, restoreDurationMetric, err, phases)...)
 	}()
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,

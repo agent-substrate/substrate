@@ -144,6 +144,11 @@ build-release-images: build-images build-demos build-envoy-dataplane
 test:
 	$(GO) test -race ./...
 
+# The Envoy dynamic modules are Rust. CI runs this target.
+.PHONY: test-dynamic-modules
+test-dynamic-modules:
+	hack/test-dynamic-modules.sh
+
 .PHONY: e2e
 e2e: build build-demos
 	hack/run-e2e.sh
