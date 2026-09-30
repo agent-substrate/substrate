@@ -165,12 +165,13 @@ jobs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         # Assembling the assets (download kata-static + cloud-hypervisor + the
-        # prebuilt virtiofsd — all downloads on amd64) is fully pinned by assemble.sh,
-        # so key the cache on its hash. The push-to-main run populates the
-        # default-branch cache PRs inherit; the weekly schedule refreshes it.
+        # prebuilt virtiofsd — all downloads on amd64) is fully pinned by
+        # cmd/ate-setup/internal/steps/microvm.go, so key the cache on its hash.
+        # The push-to-main run populates the default-branch cache PRs inherit;
+        # the weekly schedule refreshes it.
         # run-microvm-demo-kind.sh skips assembling when these are present.
         path: bin/microvm-assets/amd64
-        key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
+        key: microvm-assets-amd64-${{ hashFiles('cmd/ate-setup/internal/steps/microvm.go') }}
     - name: Enable KVM
       # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
       # the node and labels it for the micro-VM sandbox class.

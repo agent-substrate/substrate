@@ -15,147 +15,403 @@
 package steps
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// fakeMicrovmScript installs a stand-in for hack/install-microvm-deps.sh in a
-// throwaway repository root and returns an Env pointing at it, plus a function
-// reading back the lines it recorded.
-//
-// The script is the whole contract these steps have with the shell -- the
-// exact flag and the directory it runs in -- so the test drives the real
-// exec path rather than a seam around it. Only shell builtins are used: the
-// script inherits Config.ScriptEnv(), which carries no PATH.
-func fakeMicrovmScript(t *testing.T, exitCode string) (*Env, func() []string) {
+func silenceStepLog(t *testing.T) {
 	t.Helper()
-
-	root := t.TempDir()
-	record := filepath.Join(root, "record.txt")
-	script := filepath.Join(root, installMicrovmDepScript)
-	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
-		t.Fatalf("creating the script directory: %v", err)
-	}
-	body := "#!/bin/sh\n{ pwd; printf '%s\\n' \"$@\"; } > " + record + "\nexit " + exitCode + "\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatalf("writing the fake script: %v", err)
-	}
-
-	// The steps announce themselves on the installer's log; tests have no use
-	// for it.
 	log.SetOutput(io.Discard)
 	t.Cleanup(func() { log.SetOutput(os.Stdout) })
+}
 
-	return &Env{Cfg: &config.Config{Root: root}}, func() []string {
+func TestMicroVMConfigResolution(t *testing.T) {
+	t.Run("ARCH env beats KO_DEFAULTPLATFORMS and GOARCH", func(t *testing.T) {
+		t.Setenv("ARCH", "arm64")
+		e := &Env{Cfg: &config.Config{KODefaultPlatforms: "linux/amd64"}}
+		if got := e.microvmArch(); got != "arm64" {
+			t.Errorf("microvmArch() = %q, want arm64", got)
+		}
+	})
+
+	t.Run("KO_DEFAULTPLATFORMS suffix beats GOARCH", func(t *testing.T) {
+		t.Setenv("ARCH", "")
+		e := &Env{Cfg: &config.Config{KODefaultPlatforms: "linux/arm64"}}
+		if got := e.microvmArch(); got != "arm64" {
+			t.Errorf("microvmArch() = %q, want arm64", got)
+		}
+	})
+
+	t.Run("falls back to runtime.GOARCH", func(t *testing.T) {
+		t.Setenv("ARCH", "")
+		e := &Env{Cfg: &config.Config{}}
+		if got := e.microvmArch(); got != runtime.GOARCH {
+			t.Errorf("microvmArch() = %q, want %q", got, runtime.GOARCH)
+		}
+	})
+}
+
+func TestMicroVMAssetsNeedAssemble(t *testing.T) {
+	stamp := microvmAssetStamp("amd64", defaultKataVersion, defaultCloudHypervisorVersion)
+	const wantStamp = "arch=amd64\nkata=4.1.0\ncloud-hypervisor=v53.0\nvirtiofsd=1.14.0\n"
+	if stamp != wantStamp {
+		t.Fatalf("microvmAssetStamp() =\n%q\nwant\n%q", stamp, wantStamp)
+	}
+
+	writeAllAssets := func(t *testing.T, dir string) {
 		t.Helper()
-		got, err := os.ReadFile(record)
+		for _, f := range microvmAssets {
+			if err := os.WriteFile(filepath.Join(dir, f), []byte(f), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("missing file triggers assemble without stale warning", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, f := range microvmAssets[:3] {
+			if err := os.WriteFile(filepath.Join(dir, f), []byte(f), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		if !need || stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, false)", need, stale)
+		}
+	})
+
+	t.Run("missing stamp with all files present reports stale", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAllAssets(t, dir)
+		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		if !need || !stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
+		}
+	})
+
+	t.Run("mismatched stamp reports stale", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAllAssets(t, dir)
+		oldStamp := microvmAssetStamp("amd64", "4.0.0", defaultCloudHypervisorVersion)
+		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(oldStamp), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		if !need || !stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
+		}
+	})
+
+	t.Run("matching stamp skips assemble", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAllAssets(t, dir)
+		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(stamp), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		if need || stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (false, false)", need, stale)
+		}
+	})
+}
+
+type tarTestEntry struct {
+	name     string
+	typeflag byte
+	linkname string
+	body     string
+	mode     int64
+}
+
+func buildKataTarZst(t *testing.T, entries []tarTestEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(zw)
+	for _, e := range entries {
+		mode := e.mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		hdr := &tar.Header{
+			Name:     e.name,
+			Typeflag: e.typeflag,
+			Linkname: e.linkname,
+			Size:     int64(len(e.body)),
+			Mode:     mode,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if e.typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte(e.body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func validKataArchive(t *testing.T, virtiofsdScript string) []byte {
+	t.Helper()
+	// Place the vmlinux.container symlink BEFORE its target file to verify
+	// extraction does not depend on entry order in the tar stream.
+	return buildKataTarZst(t, []tarTestEntry{
+		{
+			name:     "opt/kata/share/kata-containers/vmlinux.container",
+			typeflag: tar.TypeSymlink,
+			linkname: "vmlinux-6.12.47-173",
+		},
+		{
+			name:     "opt/kata/share/kata-containers/vmlinux-6.12.47-173",
+			typeflag: tar.TypeReg,
+			body:     "fake-kernel-bytes",
+		},
+		{
+			name:     "opt/kata/share/kata-containers/kata-containers-ubuntu.img",
+			typeflag: tar.TypeReg,
+			body:     "fake-rootfs-bytes",
+		},
+		{
+			name:     "opt/kata/share/kata-containers/kata-containers.img",
+			typeflag: tar.TypeSymlink,
+			linkname: "kata-containers-ubuntu.img",
+		},
+		{
+			name:     "opt/kata/libexec/virtiofsd",
+			typeflag: tar.TypeReg,
+			body:     virtiofsdScript,
+			mode:     0o755,
+		},
+		{
+			name:     "opt/kata/bin/qemu-system-x86_64",
+			typeflag: tar.TypeReg,
+			body:     "ignored-qemu-binary",
+		},
+	})
+}
+
+func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/kata-containers/kata-containers/releases/download/4.1.0/kata-static-4.1.0-amd64.tar.zst":
+			_, _ = w.Write(archive)
+		case "/cloud-hypervisor/cloud-hypervisor/releases/download/v53.0/cloud-hypervisor-static":
+			if failCH {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(chBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	origURL := microvmReleaseBaseURL
+	microvmReleaseBaseURL = srv.URL
+	t.Cleanup(func() { microvmReleaseBaseURL = origURL })
+}
+
+func TestAssembleMicroVMAssets(t *testing.T) {
+	silenceStepLog(t)
+
+	virtiofsdBody := "#!/bin/sh\necho 'virtiofsd " + virtiofsdVersion + "'\n"
+	const chBody = "fake-cloud-hypervisor-binary"
+	serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
+
+	outDir := t.TempDir()
+	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.1.0", "v53.0"); err != nil {
+		t.Fatalf("assembleMicroVMAssets() = %v", err)
+	}
+
+	for name, wantBody := range map[string]string{
+		"vmlinux":          "fake-kernel-bytes",
+		"rootfs.img":       "fake-rootfs-bytes",
+		"virtiofsd":        virtiofsdBody,
+		"cloud-hypervisor": chBody,
+	} {
+		got, err := os.ReadFile(filepath.Join(outDir, name))
 		if err != nil {
-			t.Fatalf("the script did not run: %v", err)
+			t.Fatalf("reading %s: %v", name, err)
 		}
-		lines := strings.Split(strings.TrimSuffix(string(got), "\n"), "\n")
-		// macOS resolves TempDir through /private; compare what the shell saw
-		// against the same resolution.
-		if resolved, err := filepath.EvalSymlinks(root); err == nil {
-			lines[0] = strings.Replace(lines[0], resolved, root, 1)
+		if string(got) != wantBody {
+			t.Errorf("%s content = %q, want %q", name, got, wantBody)
 		}
-		return lines
+	}
+
+	for _, execName := range []string{"virtiofsd", "cloud-hypervisor"} {
+		fi, err := os.Stat(filepath.Join(outDir, execName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm()&0o111 == 0 {
+			t.Errorf("%s mode = %v, want executable bit set", execName, fi.Mode())
+		}
+	}
+
+	stamp, err := os.ReadFile(filepath.Join(outDir, assetStampFile))
+	if err != nil {
+		t.Fatalf("reading %s: %v", assetStampFile, err)
+	}
+	if want := microvmAssetStamp("amd64", "4.1.0", "v53.0"); string(stamp) != want {
+		t.Errorf("stamp = %q, want %q", stamp, want)
 	}
 }
 
-// Getting the flag wrong is the whole failure mode here: --install and
-// --delete are opposites, and the script takes nothing else.
-func TestMicroVMDepsStepsPassTheRightFlag(t *testing.T) {
+func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
+	silenceStepLog(t)
+
+	serveFakeReleases(t, validKataArchive(t, "#!/bin/sh\necho 'virtiofsd "+virtiofsdVersion+"'\n"), "", true)
+
+	outDir := t.TempDir()
+	stampPath := filepath.Join(outDir, assetStampFile)
+	if err := os.WriteFile(stampPath, []byte("pre-existing-stamp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.1.0", "v53.0"); err == nil {
+		t.Fatal("assembleMicroVMAssets() succeeded when cloud-hypervisor download returned 500")
+	}
+	if _, err := os.Stat(stampPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stamp file after failed assemble: err = %v, want ErrNotExist", err)
+	}
+}
+
+func TestAssembleMicroVMAssetsRejectsVirtiofsdVersionMismatch(t *testing.T) {
+	silenceStepLog(t)
+
+	serveFakeReleases(t, validKataArchive(t, "#!/bin/sh\necho 'virtiofsd 1.13.3'\n"), "ch", false)
+
+	outDir := t.TempDir()
+	err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.1.0", "v53.0")
+	if err == nil || !strings.Contains(err.Error(), "1.13.3") {
+		t.Fatalf("assembleMicroVMAssets() = %v, want virtiofsd 1.13.3 mismatch error", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outDir, assetStampFile)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("stamp written despite virtiofsd mismatch: %v", statErr)
+	}
+}
+
+func TestExtractKataTarZstRejectsTraversal(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		run  func(*Env) error
-		want string
+		name  string
+		entry tarTestEntry
 	}{
-		{"deploy", func(e *Env) error { return e.DeployMicroVMDeps(t.Context()) }, "--install"},
-		{"delete", func(e *Env) error { return e.DeleteMicroVMDeps(t.Context()) }, "--delete"},
+		{
+			name: "dotdot path",
+			entry: tarTestEntry{
+				name:     "opt/kata/share/kata-containers/../../../../../etc/passwd",
+				typeflag: tar.TypeReg,
+				body:     "bad",
+			},
+		},
+		{
+			name: "symlink escaping workDir",
+			entry: tarTestEntry{
+				name:     "opt/kata/share/kata-containers/vmlinux.container",
+				typeflag: tar.TypeSymlink,
+				linkname: "../../../../../../etc/passwd",
+			},
+		},
+		{
+			name: "absolute symlink target",
+			entry: tarTestEntry{
+				name:     "opt/kata/share/kata-containers/vmlinux.container",
+				typeflag: tar.TypeSymlink,
+				linkname: "/etc/passwd",
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env, recorded := fakeMicrovmScript(t, "0")
-
-			if err := tc.run(env); err != nil {
-				t.Fatalf("running the step: %v", err)
-			}
-
-			got := recorded()
-			// The script resolves manifests/ and hack/ relative to the
-			// directory it starts in, so running it from anywhere but the
-			// repository root would stage the wrong thing.
-			if got[0] != env.Cfg.Root {
-				t.Errorf("the script ran in %q, want the repository root %q", got[0], env.Cfg.Root)
-			}
-			if args := got[1:]; !slices.Equal(args, []string{tc.want}) {
-				t.Errorf("the script got %v, want [%s]", args, tc.want)
+			data := buildKataTarZst(t, []tarTestEntry{tc.entry})
+			_, err := extractKataTarZst(t.Context(), bytes.NewReader(data), t.TempDir())
+			if err == nil {
+				t.Fatal("extractKataTarZst() succeeded on escaping entry, want error")
 			}
 		})
 	}
 }
 
-// A failed staging run has to stop the caller rather than leave it deploying
-// workloads onto a cluster with no micro-VM assets.
-func TestMicroVMDepsStepsReportAFailedScript(t *testing.T) {
-	env, _ := fakeMicrovmScript(t, "1")
-
-	err := env.DeployMicroVMDeps(t.Context())
-	if err == nil {
-		t.Fatal("DeployMicroVMDeps() = nil, want the script's failure")
-	}
-	if !strings.Contains(err.Error(), installMicrovmDepScript) {
-		t.Errorf("error = %v, want it to name %s", err, installMicrovmDepScript)
-	}
-}
-
 // Deploying benchmarks onto micro-VM has to bring the SandboxConfig with it:
-// the workloads reference it by name. Only the micro-VM half is exercised here
-// -- deploy_locust.sh is not stubbed, so the step fails right after.
+// the workloads reference it by name.
 func TestDeployBenchmarksInstallsMicroVMDeps(t *testing.T) {
-	env, recorded := fakeMicrovmScript(t, "0")
+	silenceStepLog(t)
 
-	// The error is deploy_locust.sh missing, which is the next thing to run.
-	_ = env.DeployBenchmarks(t.Context(), BenchmarkOptions{
+	// Passing an unsupported ARCH makes DeployMicroVMDeps return an error
+	// immediately, proving DeployBenchmarks invoked it before deploy_locust.sh.
+	t.Setenv("ARCH", "unsupported-arch")
+	env := &Env{Cfg: &config.Config{Root: t.TempDir()}}
+
+	err := env.DeployBenchmarks(t.Context(), BenchmarkOptions{
 		WorkerCount:  1,
 		SandboxClass: config.SandboxClassMicrovm,
 	})
-
-	if args := recorded()[1:]; !slices.Equal(args, []string{"--install"}) {
-		t.Errorf("the script got %v, want [--install]", args)
+	if err == nil || !strings.Contains(err.Error(), "unsupported ARCH=unsupported-arch") {
+		t.Fatalf("DeployBenchmarks() = %v, want error from DeployMicroVMDeps", err)
 	}
 }
 
 // Confirm the opposite: a gvisor benchmark run must not touch the cluster-wide
 // micro-VM SandboxConfig.
 func TestDeleteBenchmarksLeavesMicroVMDepsAloneForGvisor(t *testing.T) {
-	env, _ := fakeMicrovmScript(t, "0")
+	silenceStepLog(t)
 
-	_ = env.DeleteBenchmarks(t.Context(), BenchmarkOptions{
+	root := t.TempDir()
+	locust := filepath.Join(root, deployLocustScript)
+	if err := os.MkdirAll(filepath.Dir(locust), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(locust, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Kube is nil: if DeleteBenchmarks called DeleteMicroVMDeps for gvisor, it
+	// would dereference e.Kube and panic.
+	env := &Env{Cfg: &config.Config{Root: root}}
+	if err := env.DeleteBenchmarks(t.Context(), BenchmarkOptions{
 		WorkerCount:  1,
 		SandboxClass: config.SandboxClassGvisor,
-	})
-
-	if _, err := os.Stat(filepath.Join(env.Cfg.Root, "record.txt")); !os.IsNotExist(err) {
-		t.Error("the micro-VM script ran for a gvisor teardown")
+	}); err != nil {
+		t.Fatalf("DeleteBenchmarks(gvisor) = %v, want nil", err)
 	}
 }
 
 func TestMicroVMDepsStepsAreSeparableFromContext(t *testing.T) {
-	// A cancelled context must stop the script rather than run it and discard
-	// the result; the caller uses cancellation to abort a long staging run.
-	env, _ := fakeMicrovmScript(t, "0")
+	silenceStepLog(t)
+
+	env := &Env{Cfg: &config.Config{Root: t.TempDir()}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	if err := env.DeployMicroVMDeps(ctx); err == nil {
 		t.Error("DeployMicroVMDeps() with a cancelled context = nil, want an error")
+	}
+	if err := env.DeleteMicroVMDeps(ctx); err == nil {
+		t.Error("DeleteMicroVMDeps() with a cancelled context = nil, want an error")
 	}
 }
