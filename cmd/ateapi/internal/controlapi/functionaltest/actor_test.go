@@ -1885,7 +1885,12 @@ func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, req volume.At
 		return volume.AttachVolumeResponse{}, fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
 	}
 	a.attachedNodes = append(a.attachedNodes, req.Node)
-	return volume.AttachVolumeResponse{}, nil
+	return volume.AttachVolumeResponse{
+		PublishContext: map[string]string{
+			"mock.substrate.io/attached-node": req.Node,
+			"mock.substrate.io/device-path":   "/dev/mock-" + req.VolumeID,
+		},
+	}, nil
 }
 
 func (a *attachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2754,6 +2759,172 @@ func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
+}
+
+// TestExternalVolume_PublishContextLifecycle verifies the complete round-trip
+// of volume attachment and detachment across actor lifecycle operations
+// (resume, pause, suspend, delete) and cross-node migration, ensuring
+// publishContext metadata is delivered to atelet on each restore.
+func TestExternalVolume_PublishContextLifecycle(t *testing.T) {
+	ns := namespaceForTest("ns-vol-publish-lifecycle")
+	plugin := &attachFailVolumePlugin{}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	// 1. Create template with external volume and worker-1 on node1.
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "shared-data",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "shared-data", MountPath: "/data"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	worker1 := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 2. Create actor and resume to RUNNING on worker-1 (node1)
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "lifecycle-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "lifecycle-actor"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	// Verify plugin recorded attach to node1
+	plugin.mu.Lock()
+	if diff := cmp.Diff([]string{"node1"}, plugin.attachedNodes); diff != "" {
+		t.Errorf("attached nodes mismatch after resume (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
+
+	// Verify fakeAtelet received the restore request carrying the publishContext
+	tc.fakeAtelet.Lock.Lock()
+	if !tc.fakeAtelet.RestoreCalled || tc.fakeAtelet.RestoreRequest == nil {
+		t.Errorf("expected Restore to be called on fakeAtelet")
+	} else {
+		specVols := tc.fakeAtelet.RestoreRequest.GetSpec().GetVolumes()
+		var foundPublishCtx map[string]string
+		for _, v := range specVols {
+			if v.GetName() == "shared-data" && v.GetExternal() != nil {
+				foundPublishCtx = v.GetExternal().GetPublishContext()
+				break
+			}
+		}
+		if foundPublishCtx == nil || foundPublishCtx["mock.substrate.io/attached-node"] != "node1" {
+			t.Errorf("atelet restore publishContext on node1 mismatch: %v", foundPublishCtx)
+		}
+	}
+	tc.fakeAtelet.Lock.Unlock()
+
+	// 3. Pause actor -> volume detached from node1
+	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "lifecycle-actor"},
+	})
+	if err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, worker1)
+
+	// Verify plugin recorded detach from node1
+	plugin.mu.Lock()
+	if diff := cmp.Diff([]string{"node1"}, plugin.detachedNodes); diff != "" {
+		t.Errorf("detached nodes mismatch after pause (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
+
+	// 4. Suspend actor -> clears local snapshot info so it can migrate
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "lifecycle-actor"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+
+	// 5. Prepare node2: set up atelet on node2 and create worker-2 on node2
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
+	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	deleteWorkerPod(t, tc, ns, "worker-1")
+
+	// Reset fakeAtelet to observe restore on node2
+	tc.fakeAtelet.Reset()
+
+	// Resume actor -> re-scheduled to node2
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "lifecycle-actor"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor on migration failed: %v", err)
+	}
+
+	// Verify plugin recorded attach to node2
+	plugin.mu.Lock()
+	if diff := cmp.Diff([]string{"node1", "node2"}, plugin.attachedNodes); diff != "" {
+		t.Errorf("attached nodes mismatch after migration (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
+
+	// Verify fakeAtelet received the restore request carrying node2 publishContext
+	tc.fakeAtelet.Lock.Lock()
+	if !tc.fakeAtelet.RestoreCalled || tc.fakeAtelet.RestoreRequest == nil {
+		t.Errorf("expected Restore to be called on fakeAtelet on node2")
+	} else {
+		specVols := tc.fakeAtelet.RestoreRequest.GetSpec().GetVolumes()
+		var foundPublishCtx map[string]string
+		for _, v := range specVols {
+			if v.GetName() == "shared-data" && v.GetExternal() != nil {
+				foundPublishCtx = v.GetExternal().GetPublishContext()
+				break
+			}
+		}
+		if foundPublishCtx == nil || foundPublishCtx["mock.substrate.io/attached-node"] != "node2" {
+			t.Errorf("atelet restore publishContext on node2 mismatch: %v", foundPublishCtx)
+		}
+	}
+	tc.fakeAtelet.Lock.Unlock()
+
+	// 6. Suspend actor -> volume detached from node2. DeleteActor rejects a
+	// RUNNING actor without AnyState, so the actor is suspended first.
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "lifecycle-actor"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor after migration failed: %v", err)
+	}
+	plugin.mu.Lock()
+	if diff := cmp.Diff([]string{"node1", "node2"}, plugin.detachedNodes); diff != "" {
+		t.Errorf("detached nodes mismatch after suspend (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
+
+	// 7. Delete actor -> no worker is assigned, so no further detach is issued.
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "lifecycle-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	plugin.mu.Lock()
+	if diff := cmp.Diff([]string{"node1", "node2"}, plugin.detachedNodes); diff != "" {
+		t.Errorf("detached nodes mismatch after delete (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
 }
 
 // TestResumeActor tests the full workflow of resuming a suspended actor.
