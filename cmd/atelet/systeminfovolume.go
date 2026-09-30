@@ -156,10 +156,10 @@ func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) (payload map[string][]byte, bundleHashes map[string]string, err error) {
 	payload = map[string][]byte{}
 	bundleHashes = map[string]string{}
-	for _, dataSourceAny := range si.GetDataSources() {
-		switch dataSource := dataSourceAny.GetDataSource().(type) {
-		case *ateletpb.SystemInfoDataSource_TrustBundle:
-			tb := dataSource.TrustBundle
+	for _, dataSource := range si.GetDataSources() {
+		switch {
+		case dataSource.GetTrustBundle() != nil:
+			tb := dataSource.GetTrustBundle()
 			objectName, raw, err := rawTrustBundle(r.lister, tb.GetName())
 			if err != nil {
 				return nil, nil, fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
@@ -170,8 +170,8 @@ func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID
 			}
 			payload[tb.GetPath()] = pemBundle
 			bundleHashes[tb.GetName()] = trustBundleHash(raw)
-		case *ateletpb.SystemInfoDataSource_ActorMetadata:
-			for _, item := range dataSource.ActorMetadata.GetItems() {
+		case dataSource.GetActorMetadata() != nil:
+			for _, item := range dataSource.GetActorMetadata().GetItems() {
 				var value string
 				switch item.GetField() {
 				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME:
