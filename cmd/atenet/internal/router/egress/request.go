@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -37,6 +38,11 @@ import (
 // where the connection's SNI must fall under an https rule too. An allowed
 // request is dialed by the name it was decided on.
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
+	if isWebSocketUpgrade(md) {
+		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+	}
+
 	ref, err := actorFromFilterState(md)
 	if err != nil {
 		slog.WarnContext(ctx, "egress denied: request carries no actor identity", slog.String("leg", leg), slog.Any("err", err))
@@ -100,6 +106,19 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	res.Response.Response.HeaderMutation = &extprocv3.HeaderMutation{SetHeaders: injected}
 	res.DynamicMetadata = metadataAnswer(extproc.EgressDialKey, extproc.EgressDialName)
 	return res, nil
+}
+
+func isWebSocketUpgrade(md *extproc.RequestMetadata) bool {
+	return md.Method == "GET" && hasHTTPToken(md.Header("connection"), "upgrade") && hasHTTPToken(md.Header("upgrade"), "websocket")
+}
+
+func hasHTTPToken(value, want string) bool {
+	for _, token := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // connectionDestination is the SNI a decrypted connection presented, on the
