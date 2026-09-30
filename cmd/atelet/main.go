@@ -108,6 +108,8 @@ var (
 
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
+
+	enableMicrovmShmemTHP = pflag.Bool("enable-microvm-shmem-thp", true, "On micro-VM-capable nodes, switch /sys/kernel/mm/transparent_hugepage/shmem_enabled from [never] to advise when the microvm sandbox class is used.")
 )
 
 func main() {
@@ -190,6 +192,7 @@ func main() {
 	}
 
 	startDevicePlugins(ctx)
+	microvmCapable := microvmNodeCapable(hostDevRoot)
 
 	ateomDialer := newAteomDialer(256)
 
@@ -297,6 +300,14 @@ func main() {
 		csiDriverConfigLister,
 		systemInfoVolumes,
 	)
+	if microvmCapable && *enableMicrovmShmemTHP {
+		wmService.onMicrovmSandbox = func(ctx context.Context) {
+			if err := ensureShmemTHP(ctx, hostShmemTHPPath, os.WriteFile); err != nil {
+				slog.WarnContext(ctx, "Could not enable shmem transparent hugepages; micro-VM guest memfd may use 4 KiB EPT pages",
+					slog.Any("err", err))
+			}
+		}
+	}
 	go systemInfoVolumes.run(ctx)
 
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
@@ -309,7 +320,7 @@ func main() {
 	// binary): the reflector retries in the background and prewarm stays cold
 	// until it recovers.
 	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
+	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmCapable); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
 	// The factory only runs informers that exist when Start is called: the
@@ -441,6 +452,8 @@ type AteomHerder struct {
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	systemInfoVolumes     *systemInfoVolumeRefresher
+	microvmSandboxOnce    sync.Once
+	onMicrovmSandbox      func(context.Context)
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
