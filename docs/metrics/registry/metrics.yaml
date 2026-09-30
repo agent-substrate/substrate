@@ -909,11 +909,12 @@ groups:
     instrument: histogram
     unit: By
     stability: development
-    brief: The size in bytes of each gVisor snapshot image that a checkpoint writes, before compression.
+    brief: The uncompressed populated size in bytes of each snapshot image that a checkpoint writes.
     note: >
-      atelet records one measurement for each image file. It does not record one
-      measurement for each checkpoint. Use the file.name key to compare the same
-      type of image.
+      atelet records one measurement for each image file by summing its
+      SEEK_DATA/SEEK_HOLE extents (excluding sparse holes in micro-VM
+      memory-ranges). It does not record one measurement for each checkpoint.
+      Use the file.name key to compare the same type of image.
     annotations:
       substrate:
         emitted_by: [atelet]

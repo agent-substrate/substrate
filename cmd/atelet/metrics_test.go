@@ -17,6 +17,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -372,5 +374,71 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 				t.Errorf("checkpointSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// patternBytes returns a byte slice of length n filled with a repeating
+// non-zero byte pattern so test data is incompressible and not treated as zero
+// blocks.
+func patternBytes(n int64) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(i%251 + 1)
+	}
+	return b
+}
+
+func TestPopulatedBytesSparseImage(t *testing.T) {
+	const (
+		apparent = 2 << 30 // 2 GiB
+		chunk    = 1 << 20 // 1 MiB
+	)
+
+	path := filepath.Join(t.TempDir(), "memory-ranges")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create sparse image: %v", err)
+	}
+	defer f.Close()
+
+	if err := f.Truncate(apparent); err != nil {
+		t.Fatalf("extend sparse image: %v", err)
+	}
+	if got := populatedBytes(f, apparent); got != 0 {
+		t.Fatalf("populatedBytes(all-hole) = %d, want 0", got)
+	}
+
+	// Write two disjoint extents without fsync so dirty delalloc pages in the
+	// page cache are exercised directly.
+	data := patternBytes(chunk)
+	if _, err := f.WriteAt(data, 0); err != nil {
+		t.Fatalf("write first extent: %v", err)
+	}
+	if _, err := f.WriteAt(data, 64<<20); err != nil {
+		t.Fatalf("write second extent: %v", err)
+	}
+
+	const written = 2 * chunk
+	got := populatedBytes(f, apparent)
+	if got < written || got >= apparent/10 {
+		t.Errorf("populatedBytes() = %d, want in [%d, %d)", got, written, apparent/10)
+	}
+}
+
+func TestPopulatedBytesDenseImage(t *testing.T) {
+	const size = 64 << 10
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, patternBytes(size), 0o600); err != nil {
+		t.Fatalf("write dense image: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open dense image: %v", err)
+	}
+	defer f.Close()
+
+	if got := populatedBytes(f, size); got != size {
+		t.Errorf("populatedBytes() = %d, want %d", got, size)
 	}
 }
