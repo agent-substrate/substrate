@@ -331,7 +331,8 @@ def deploy_workloads(
     worker_count: int = 1,
     sandbox_class: str = "gvisor",
     actor_memory: str = "",
-    storage_class_name: str = "csi-nfs-sc",
+    storage_class_name: str = "",
+    volume_pool: str = "",
     wait_timeout_secs: int | str = "",
 ) -> None:
     cmd = [
@@ -341,13 +342,19 @@ def deploy_workloads(
         str(worker_count),
         "--sandbox-class",
         sandbox_class,
-        "--storage-class-name",
-        storage_class_name,
     ]
     # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Storage suites set storageClassName (and optionally volumePool) in
+    # tests.yaml. Either one makes deploy.sh add the glutton-storage template;
+    # without them, the template is not deployed. deploy.sh also reads
+    # VOLUME_POOL from the target cluster's .ate-dev-env.sh.
+    if storage_class_name:
+        cmd += ["--storage-class-name", storage_class_name]
+    if volume_pool:
+        cmd += ["--volume-pool", volume_pool]
     # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout
     # (whole seconds).
     if wait_timeout_secs != "":
@@ -526,8 +533,9 @@ def main() -> None:
                     test.get("workerCount", 1),
                     sandbox_class,
                     test.get("actorMemory", ""),
-                    test.get("storageClassName", "csi-nfs-sc"),
-                    test.get("workerWaitTimeout", ""),
+                    storage_class_name=test.get("storageClassName", ""),
+                    volume_pool=test.get("volumePool", ""),
+                    wait_timeout_secs=test.get("workerWaitTimeout", ""),
                 )
                 try:
                     status = run_test(

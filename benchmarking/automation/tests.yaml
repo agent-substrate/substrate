@@ -36,8 +36,15 @@
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
 #   storageClassName
-#                  Optional (default "csi-nfs-sc"). StorageClass name
-#                  for external volumes in storage benchmarks.
+#                  Optional (default: none). StorageClass for the
+#                  glutton-storage external volume. Setting it deploys the
+#                  glutton-storage template. Storage suites use
+#                  "filestore-volumepool", which workloads/deploy.sh creates
+#                  when VOLUME_POOL is set (from volumePool below or the
+#                  target cluster's env file).
+#   volumePool     Optional. Filestore volume pool resource name,
+#                  projects/P/locations/L/volumePools/ID. Overrides
+#                  VOLUME_POOL from the target cluster's env file.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
@@ -615,7 +622,7 @@ tests:
     duration: 1m
     users: 1
     workerCount: 1
-    storageClassName: csi-nfs-sc
+    storageClassName: filestore-volumepool
     flags:
       - "--min-wait-time"
       - "1.0"
@@ -629,7 +636,7 @@ tests:
     duration: 2m
     users: 10
     workerCount: 10
-    storageClassName: csi-nfs-sc
+    storageClassName: filestore-volumepool
     flags:
       - "--min-wait-time"
       - "1.0"
@@ -643,7 +650,7 @@ tests:
     duration: 2m
     users: 15
     workerCount: 10
-    storageClassName: csi-nfs-sc
+    storageClassName: filestore-volumepool
     flags:
       - "--min-wait-time"
       - "0.5"
