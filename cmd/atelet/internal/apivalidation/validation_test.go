@@ -27,6 +27,23 @@ import (
 
 const testDigestImage = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+const testSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+func validSandboxAssets(mutate ...func(*ateletpb.SandboxAssets)) *ateletpb.SandboxAssets {
+	a := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   testDigestImage,
+		Assets: map[string]*ateletpb.ArchAssets{
+			"amd64": {Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: "gs://bucket/gvisor.tar.zstd", Sha256: testSHA256}}},
+			"arm64": {Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: "gs://bucket/gvisor.tar.zstd", Sha256: testSHA256}}},
+		},
+	}
+	for _, m := range mutate {
+		m(a)
+	}
+	return a
+}
+
 // createOp is for tests of nested messages, which have no request wrapper.
 var createOp = operation.Operation{Type: operation.Create}
 
@@ -165,6 +182,7 @@ func TestValidateRunRequest(t *testing.T) {
 			ActorTemplateAtespace: "team-a",
 			ActorTemplateName:     "tmpl-1",
 			Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker", Image: testDigestImage}}},
+			SandboxAssets:         validSandboxAssets(),
 			CpuMilli:              500,
 			MemoryBytes:           1 << 30,
 		}
@@ -231,6 +249,14 @@ func TestValidateRunRequest(t *testing.T) {
 	}, {
 		name: "unset spec is allowed",
 		obj:  valid(func(r *ateletpb.RunRequest) { r.Spec = nil }),
+	}, {
+		name: "missing sandbox_assets",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets"), "")},
+	}, {
+		name: "sandbox asset errors surface at the sandbox_assets path",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets.PauseImage = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets", "pause_image"), "")},
 	}, {
 		name: "invalid container name: path escape",
 		obj: valid(func(r *ateletpb.RunRequest) {
@@ -305,6 +331,86 @@ func TestValidateRunRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateRunRequest(context.Background(), tt.obj), tt.want)
+		})
+	}
+}
+
+// TestValidateSandboxAssets covers SandboxAssets and the asset files it holds.
+func TestValidateSandboxAssets(t *testing.T) {
+	file := func(url, sha string) *ateletpb.ArchAssets {
+		return &ateletpb.ArchAssets{Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: url, Sha256: sha}}}
+	}
+	amd64 := field.NewPath("assets").Key("amd64")
+	amd64File := amd64.Child("files").Key("gvisor")
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.SandboxAssets
+		want field.ErrorList
+	}{{
+		name: "valid gvisor",
+		obj:  validSandboxAssets(),
+	}, {
+		name: "valid microvm",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "microvm" }),
+	}, {
+		name: "missing sandbox_class",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("sandbox_class"), "")},
+	}, {
+		name: "unknown sandbox_class",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "kvm" }),
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil)},
+	}, {
+		name: "sandbox_class is case-sensitive",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "GVISOR" }),
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil)},
+	}, {
+		name: "missing pause_image",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("pause_image"), "")},
+	}, {
+		name: "pause_image not pinned by digest",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "registry.k8s.io/pause:3.10.2" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("pause_image"), nil, "")},
+	}, {
+		name: "missing assets",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("assets"), "")},
+	}, {
+		name: "too many architectures",
+		obj: validSandboxAssets(func(a *ateletpb.SandboxAssets) {
+			for _, arch := range []string{"386", "arm", "loong64", "mips64", "ppc64le", "riscv64", "s390x"} {
+				a.Assets[arch] = file("gs://bucket/gvisor.tar.zstd", testSHA256)
+			}
+		}),
+		want: field.ErrorList{field.TooMany(field.NewPath("assets"), 9, 8).WithOrigin("maxProperties")},
+	}, {
+		name: "architecture with no files",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = &ateletpb.ArchAssets{} }),
+		want: field.ErrorList{field.Required(amd64.Child("files"), "")},
+	}, {
+		name: "missing url",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = file("", testSHA256) }),
+		want: field.ErrorList{field.Required(amd64File.Child("url"), "")},
+	}, {
+		name: "missing sha256",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", "") }),
+		want: field.ErrorList{field.Required(amd64File.Child("sha256"), "")},
+	}, {
+		name: "sha256 too short",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", "deadbeef") }),
+		want: field.ErrorList{field.Invalid(amd64File.Child("sha256"), nil, "")},
+	}, {
+		name: "sha256 with a path escape",
+		obj: validSandboxAssets(func(a *ateletpb.SandboxAssets) {
+			a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", "../"+testSHA256[3:])
+		}),
+		want: field.ErrorList{field.Invalid(amd64File.Child("sha256"), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, Validate_SandboxAssets(context.Background(), createOp, nil, tt.obj, nil), tt.want)
 		})
 	}
 }

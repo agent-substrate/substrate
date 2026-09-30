@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -57,6 +58,29 @@ func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *fi
 
 func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHostPort(fldPath, *value)
+}
+
+// ValidateCustom_SandboxAssets_SandboxClass allows the sandbox classes of the
+// SandboxConfig CRD.
+func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	switch atev1alpha1.SandboxClass(*value) {
+	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
+		return nil
+	}
+	return field.ErrorList{field.NotSupported(fldPath, *value, []string{
+		string(atev1alpha1.SandboxClassGvisor), string(atev1alpha1.SandboxClassMicroVM),
+	})}
+}
+
+func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidatePinnedImage(fldPath, *value)
+}
+
+func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if err := resources.ValidateRunscHash(*value); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
+	}
+	return nil
 }
 
 // ateDeepEqual is the deep-equal function declarative validation's generated

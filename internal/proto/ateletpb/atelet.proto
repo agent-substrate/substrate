@@ -252,6 +252,8 @@ message RunRequest {
   // The sandbox binaries to use for booting this actor from scratch. atelet
   // fetches the relevant assets and records them with the actor's on-node state
   // so a later Checkpoint can pin the same version into the snapshot manifest.
+  //
+  // +k8s:required
   SandboxAssets sandbox_assets = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
@@ -288,14 +290,24 @@ message EgressGateway {
 // (e.g. the gVisor release tarball).
 message AssetFile {
   // gs:// URL to download the asset from.
+  //
+  // +k8s:required
+  // +k8s:maxLength=2048
   string url = 1;
+
   // Lower-case hex SHA256; names the cached file and verifies its integrity.
+  //
+  // +k8s:required
+  // +k8s:customValidation # 64 hex characters
   string sha256 = 2;
 }
 
 // ArchAssets is the set of assets for a single architecture, keyed by asset
 // name (a wrapper message because proto map values cannot themselves be maps).
 message ArchAssets {
+  // +k8s:required
+  // +k8s:maxProperties=16
+  // +k8s:eachKey=+k8s:maxLength=64
   map<string, AssetFile> files = 1; // asset name -> file
 }
 
@@ -305,13 +317,26 @@ message ArchAssets {
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
 // the release tarball; legacy "runsc", a bare binary, is still accepted).
 message SandboxAssets {
-  string sandbox_class = 1;           // e.g. "gvisor"
+  // TODO: send this as an enum, like ateapi's and ateom's SandboxClass, so
+  // the tags can bound it and the custom validation goes away.
+  //
+  // +k8s:required
+  // +k8s:customValidation # gvisor or microvm
+  string sandbox_class = 1; // e.g. "gvisor"
+
+  // +k8s:required
+  // +k8s:maxProperties=8 # one entry per architecture
+  // +k8s:eachKey=+k8s:maxLength=16
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}
 
   // pause_image is the image for the sandbox's root container. Like the
   // binaries above it is sandbox configuration, not workload configuration,
   // and atelet pins it into the snapshot manifest so a restore rebuilds the
   // sandbox from the same image.
+  //
+  // +k8s:required
+  // +k8s:maxLength=512
+  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string pause_image = 3;
 }
 

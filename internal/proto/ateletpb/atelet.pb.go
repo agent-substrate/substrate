@@ -874,6 +874,8 @@ type RunRequest struct {
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
 	// so a later Checkpoint can pin the same version into the snapshot manifest.
+	//
+	// +k8s:required
 	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
@@ -1057,8 +1059,14 @@ func (x *EgressGateway) GetAddress() string {
 type AssetFile struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// gs:// URL to download the asset from.
+	//
+	// +k8s:required
+	// +k8s:maxLength=2048
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
 	// Lower-case hex SHA256; names the cached file and verifies its integrity.
+	//
+	// +k8s:required
+	// +k8s:customValidation # 64 hex characters
 	Sha256        string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1111,8 +1119,11 @@ func (x *AssetFile) GetSha256() string {
 // ArchAssets is the set of assets for a single architecture, keyed by asset
 // name (a wrapper message because proto map values cannot themselves be maps).
 type ArchAssets struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Files         map[string]*AssetFile  `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // asset name -> file
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:maxProperties=16
+	// +k8s:eachKey=+k8s:maxLength=64
+	Files         map[string]*AssetFile `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // asset name -> file
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1160,13 +1171,25 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
 // the release tarball; legacy "runsc", a bare binary, is still accepted).
 type SandboxAssets struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	SandboxClass string                 `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`                                           // e.g. "gvisor"
-	Assets       map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // arch -> {name -> file}
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// TODO: send this as an enum, like ateapi's and ateom's SandboxClass, so
+	// the tags can bound it and the custom validation goes away.
+	//
+	// +k8s:required
+	// +k8s:customValidation # gvisor or microvm
+	SandboxClass string `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"` // e.g. "gvisor"
+	// +k8s:required
+	// +k8s:maxProperties=8 # one entry per architecture
+	// +k8s:eachKey=+k8s:maxLength=16
+	Assets map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // arch -> {name -> file}
 	// pause_image is the image for the sandbox's root container. Like the
 	// binaries above it is sandbox configuration, not workload configuration,
 	// and atelet pins it into the snapshot manifest so a restore rebuilds the
 	// sandbox from the same image.
+	//
+	// +k8s:required
+	// +k8s:maxLength=512
+	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	PauseImage    string `protobuf:"bytes,3,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

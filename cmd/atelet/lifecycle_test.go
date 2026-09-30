@@ -164,7 +164,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   image,
+		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {
@@ -298,10 +298,8 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
 	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
-	checkpointPause := host + "/pause:v1"
-	pushTestImage(t, checkpointPause, singleFileLayer(t, "pause", "pause-v1"))
-	restorePause := host + "/pause:v2"
-	pushTestImage(t, restorePause, singleFileLayer(t, "pause", "pause-v2"))
+	checkpointPause := pushTestImage(t, host+"/pause:v1", singleFileLayer(t, "pause", "pause-v1"))
+	restorePause := pushTestImage(t, host+"/pause:v2", singleFileLayer(t, "pause", "pause-v2"))
 
 	runsc := []byte("runsc binary")
 	s := &AteomHerder{

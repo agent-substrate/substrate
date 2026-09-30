@@ -171,6 +171,136 @@ func Validate_ActorMetadataItem(
 	return errs
 }
 
+// Validate_ArchAssets validates an instance of ArchAssets according
+// to declarative validation rules in the API schema.
+func Validate_ArchAssets(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.ArchAssets) (errs field.ErrorList) {
+
+	{ // field ateletpb.ArchAssets.Files
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj map[string]*ateletpb.AssetFile,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrMapNoNils[string, ateletpb.AssetFile](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 64)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the map and call the value type's validation function
+			if e := validate.EachPtrMapVal(ctx, op, fldPath, obj, oldObj, ateDeepEqual, Validate_AssetFile); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ArchAssets) map[string]*ateletpb.AssetFile {
+				return oldObj.Files
+			})
+		errs = append(errs, fn(fldPath.Child("files"), obj.Files, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_AssetFile validates an instance of AssetFile according
+// to declarative validation rules in the API schema.
+func Validate_AssetFile(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.AssetFile) (errs field.ErrorList) {
+
+	{ // field ateletpb.AssetFile.Url
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 2048); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.AssetFile) *string {
+				return &oldObj.Url
+			})
+		errs = append(errs, fn(fldPath.Child("url"), &obj.Url, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.AssetFile.Sha256
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_AssetFile_Sha256(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.AssetFile) *string {
+				return &oldObj.Sha256
+			})
+		errs = append(errs, fn(fldPath.Child("sha256"), &obj.Sha256, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_Capabilities validates an instance of Capabilities according
 // to declarative validation rules in the API schema.
 func Validate_Capabilities(
@@ -1648,7 +1778,36 @@ func Validate_RunRequest(
 		errs = append(errs, fn(fldPath.Child("spec"), obj.Spec, oldVal, oldObj != nil)...)
 	}
 
-	// field ateletpb.RunRequest.SandboxAssets has no validation
+	{ // field ateletpb.RunRequest.SandboxAssets
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.SandboxAssets,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_SandboxAssets(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.RunRequest) *ateletpb.SandboxAssets {
+				return oldObj.SandboxAssets
+			})
+		errs = append(errs, fn(fldPath.Child("sandbox_assets"), obj.SandboxAssets, oldVal, oldObj != nil)...)
+	}
 
 	{ // field ateletpb.RunRequest.EgressGateway
 		fn := func(
@@ -1743,6 +1902,131 @@ func Validate_RunRequest(
 				return &oldObj.MemoryBytes
 			})
 		errs = append(errs, fn(fldPath.Child("memory_bytes"), &obj.MemoryBytes, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_SandboxAssets validates an instance of SandboxAssets according
+// to declarative validation rules in the API schema.
+func Validate_SandboxAssets(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.SandboxAssets) (errs field.ErrorList) {
+
+	{ // field ateletpb.SandboxAssets.SandboxClass
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_SandboxAssets_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SandboxAssets) *string {
+				return &oldObj.SandboxClass
+			})
+		errs = append(errs, fn(fldPath.Child("sandbox_class"), &obj.SandboxClass, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.SandboxAssets.Assets
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj map[string]*ateletpb.ArchAssets,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrMapNoNils[string, ateletpb.ArchAssets](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 8).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 16)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the map and call the value type's validation function
+			if e := validate.EachPtrMapVal(ctx, op, fldPath, obj, oldObj, ateDeepEqual, Validate_ArchAssets); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SandboxAssets) map[string]*ateletpb.ArchAssets {
+				return oldObj.Assets
+			})
+		errs = append(errs, fn(fldPath.Child("assets"), obj.Assets, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.SandboxAssets.PauseImage
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_SandboxAssets_PauseImage(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 512); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SandboxAssets) *string {
+				return &oldObj.PauseImage
+			})
+		errs = append(errs, fn(fldPath.Child("pause_image"), &obj.PauseImage, oldVal, oldObj != nil)...)
 	}
 
 	return errs
