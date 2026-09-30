@@ -102,7 +102,11 @@ func (e *Env) renderResolve(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.ResolveManifestBytes(ctx, manifest)
+	resolved, err := e.ResolveManifestBytes(ctx, manifest)
+	if err != nil {
+		return nil, err
+	}
+	return e.installManifest(resolved), nil
 }
 
 // renderResolveApply renders path, resolves its images, and applies the result.
@@ -184,7 +188,28 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.ResolveManifestBytes(ctx, rendered)
+	resolved, err := e.ResolveManifestBytes(ctx, rendered)
+	if err != nil {
+		return nil, err
+	}
+	if address := e.Cfg.CredentialProviderAddress; injection && address != "" {
+		// A caller-supplied endpoint may deliberately point at an existing
+		// service in ate-system; only generated defaults are relocated.
+		serverName := address
+		if i := strings.LastIndex(address, ":"); i >= 0 {
+			serverName = address[:i]
+		}
+		flags := []string{"--credential-provider-address=" + address, "--credential-provider-server-name=" + serverName}
+		for i, flag := range flags {
+			resolved = bytes.ReplaceAll(resolved, []byte(flag), []byte(fmt.Sprintf("ATE_SETUP_PRESERVE_CREDENTIAL_%d", i)))
+		}
+		resolved = e.installManifest(resolved)
+		for i, flag := range flags {
+			resolved = bytes.ReplaceAll(resolved, []byte(fmt.Sprintf("ATE_SETUP_PRESERVE_CREDENTIAL_%d", i)), []byte(flag))
+		}
+		return resolved, nil
+	}
+	return e.installManifest(resolved), nil
 }
 
 // patchEnvoyDataplaneImage replaces the ${ENVOY_DATAPLANE_IMAGE} placeholder in
@@ -208,7 +233,7 @@ func (e *Env) patchAtenetEgressInject(raw []byte) ([]byte, error) {
 	}
 	address := e.Cfg.CredentialProviderAddress
 	if address == "" {
-		address = "k8s-credential-provider.ate-system.svc:50051"
+		address = "k8s-credential-provider." + e.Namespace() + ".svc:50051"
 	}
 	serverName := address
 	if i := strings.LastIndex(address, ":"); i >= 0 {
@@ -426,7 +451,7 @@ func (e *Env) otelConfigPath() string {
 
 // applyOtelConfig applies the environment's ate-otel-config ConfigMap.
 func (e *Env) applyOtelConfig(ctx context.Context) error {
-	return e.Kube.ApplyPath(ctx, e.otelConfigPath())
+	return e.applyInstallPath(ctx, e.otelConfigPath())
 }
 
 // otelConfigMap is the ConfigMap every control plane component reads its

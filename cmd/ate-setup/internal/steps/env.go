@@ -19,11 +19,15 @@ package steps
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
@@ -56,9 +60,7 @@ const (
 // Well-known namespaces.
 const (
 	// NamespaceAteSystem is the canonical control-plane namespace. It is the
-	// default for Config.Namespace and the only value the checked-in manifests
-	// under manifests/ate-install/ carry; steps address the installed control
-	// plane through Env.Namespace rather than this constant.
+	// default for Config.Namespace.
 	NamespaceAteSystem = "ate-system"
 	NamespacePodCert   = "podcertificate-controller-system"
 )
@@ -97,16 +99,51 @@ func (e *Env) Namespace() string {
 	return NamespaceAteSystem
 }
 
-// RequireCanonicalNamespace refuses a relocated install for the steps that
-// apply the checked-in manifests. Those manifests name ate-system literally,
-// so proceeding would put the workloads there while this tool created their
-// secrets and ConfigMaps somewhere else — an install that comes up far enough
-// to look healthy and then fails on a missing envFrom source.
-func (e *Env) RequireCanonicalNamespace(step string) error {
-	if ns := e.Namespace(); ns != NamespaceAteSystem {
-		return fmt.Errorf("%s cannot be used with ATE_NAMESPACE=%s: manifests/ate-install/ names %s literally; install into another namespace with a deployment that renders them, and use ate-setup only for the create steps", step, ns, NamespaceAteSystem)
+func (e *Env) PodcertNamespace() string {
+	if e.Cfg != nil && e.Cfg.PodcertNamespace != "" {
+		return e.Cfg.PodcertNamespace
 	}
-	return nil
+	return NamespacePodCert
+}
+
+func (e *Env) installManifest(manifest []byte) []byte {
+	return e.Cfg.InstallManifest(manifest)
+}
+
+func (e *Env) installPathObjects(path string) ([]*unstructured.Unstructured, error) {
+	objs, err := kube.LoadPath(path)
+	if err != nil {
+		return nil, err
+	}
+	for _, obj := range objs {
+		data, err := json.Marshal(obj)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(e.installManifest(data), obj); err != nil {
+			return nil, err
+		}
+	}
+	return objs, nil
+}
+
+func (e *Env) applyInstallPath(ctx context.Context, path string) error {
+	objs, err := e.installPathObjects(path)
+	if err != nil {
+		return err
+	}
+	return e.Kube.Apply(ctx, objs)
+}
+
+func (e *Env) deleteInstallPath(ctx context.Context, path string) error {
+	objs, err := e.installPathObjects(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return e.Kube.Delete(ctx, objs)
 }
 
 // NewEnv connects to the cluster described by cfg.
@@ -206,7 +243,11 @@ func (e *Env) ResolveManifest(ctx context.Context, path string) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	return resolver.ResolvePath(ctx, path)
+	manifest, err := resolver.ResolvePath(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return e.installManifest(manifest), nil
 }
 
 // ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
@@ -239,16 +280,18 @@ func (e *Env) KustomizeResolve(ctx context.Context, overlay string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	return e.ResolveManifestBytes(ctx, built)
+	resolved, err := e.ResolveManifestBytes(ctx, built)
+	if err != nil {
+		return nil, err
+	}
+	return e.installManifest(resolved), nil
 }
 
 // EnsureAteSystemNamespace creates the control-plane namespace and waits for it
 // to go Active. Every deploy path starts here so that RBAC, ConfigMaps, and
 // workloads have somewhere to land.
 //
-// The canonical namespace comes from the checked-in manifest, which carries
-// labels of its own and stays the source of truth for it. Any other namespace
-// is created plainly, because that manifest names ate-system literally.
+// The checked-in namespace carries labels required by the control plane.
 func (e *Env) EnsureAteSystemNamespace(ctx context.Context) error {
 	ns := e.Namespace()
 	if existing, err := e.Kube.Typed.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err == nil && existing.Status.Phase == corev1.NamespaceTerminating {
@@ -256,11 +299,14 @@ func (e *Env) EnsureAteSystemNamespace(ctx context.Context) error {
 			return err
 		}
 	}
-	if ns == NamespaceAteSystem {
-		if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("ate-system-namespace.yaml")); err != nil {
-			return err
-		}
-	} else if err := e.Kube.EnsureNamespace(ctx, ns); err != nil {
+	objs, err := kube.LoadPath(e.Cfg.Manifest("ate-system-namespace.yaml"))
+	if err != nil {
+		return err
+	}
+	for _, obj := range objs {
+		obj.SetName(ns)
+	}
+	if err := e.Kube.Apply(ctx, objs); err != nil {
 		return err
 	}
 	return e.Kube.WaitNamespaceActive(ctx, ns, NamespaceTimeout)

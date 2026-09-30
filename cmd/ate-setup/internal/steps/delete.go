@@ -38,15 +38,15 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := e.Kube.DeleteBytes(ctx, manifest); err != nil {
+		if err := e.Kube.DeleteBytes(ctx, e.installManifest(manifest)); err != nil {
 			return err
 		}
 		// Not part of the kind bundle (see its kustomization), so it goes by
 		// name. The directory delete below covers it on every other install.
-		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
+		if err := e.deleteInstallPath(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
 			return err
 		}
-	} else if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest()); err != nil {
+	} else if err := e.deleteInstallPath(ctx, e.Cfg.Manifest()); err != nil {
 		return err
 	}
 
@@ -61,7 +61,7 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 		{"postgres", "postgres.yaml"},
 		{"generated"},
 	} {
-		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest(path...)); err != nil {
+		if err := e.deleteInstallPath(ctx, e.Cfg.Manifest(path...)); err != nil {
 			return err
 		}
 	}
@@ -85,7 +85,7 @@ func (e *Env) DeleteAtenet(ctx context.Context) error {
 		{"atenet-egress.yaml"},
 		{"atenet-egress-with-sdsmint.yaml"},
 	} {
-		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest(path...)); err != nil {
+		if err := e.deleteInstallPath(ctx, e.Cfg.Manifest(path...)); err != nil {
 			return err
 		}
 	}

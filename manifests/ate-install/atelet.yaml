@@ -155,6 +155,8 @@ spec:
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+        - --ateapi-address=k8s:///api.ate-system.svc:443
+        - --ateapi-server-name=api.ate-system.svc
         # Graceful shutdown knobs. The sum must fit within
         # terminationGracePeriodSeconds above.
         - --drain-delay=0s

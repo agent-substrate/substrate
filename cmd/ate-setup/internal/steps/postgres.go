@@ -104,7 +104,7 @@ func (e *Env) applyPostgres(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	objs, err := kube.DecodeManifestBytes(manifest)
+	objs, err := kube.DecodeManifestBytes(e.installManifest(manifest))
 	if err != nil {
 		return err
 	}
@@ -142,9 +142,6 @@ func applyPostgresSize10Overrides(objs []*unstructured.Unstructured, confPatch [
 
 	var configMap, statefulSet *unstructured.Unstructured
 	for _, obj := range objs {
-		if obj.GetNamespace() != NamespaceAteSystem {
-			continue
-		}
 		switch {
 		case obj.GetKind() == "ConfigMap" && obj.GetName() == "postgres-config":
 			configMap = obj

@@ -59,11 +59,6 @@ func (o DeployOptions) Validate() error {
 func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	log.Step("deploy_ate_system")
 
-	// This step applies the checked-in manifests, so it refuses a relocated
-	// namespace before creating anything.
-	if err := e.RequireCanonicalNamespace("deploy ate-system"); err != nil {
-		return err
-	}
 	// Fail fast on an unusable build version before touching the cluster.
 	if _, _, err := e.SubstrateVersion(); err != nil {
 		return err
@@ -210,14 +205,14 @@ func (e *Env) DeployPodCertificateController(ctx context.Context) error {
 	}
 	if e.Cfg.PodcertWorkersPerSigner > 0 {
 		log.Infof("Setting WORKERS_PER_SIGNER to %d", e.Cfg.PodcertWorkersPerSigner)
-		if err := setPodcertWorkersPerSigner(objs, e.Cfg.PodcertWorkersPerSigner); err != nil {
+		if err := setPodcertWorkersPerSigner(objs, e.PodcertNamespace(), e.Cfg.PodcertWorkersPerSigner); err != nil {
 			return err
 		}
 	}
 	if err := e.Kube.Apply(ctx, objs); err != nil {
 		return err
 	}
-	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespacePodCert, "podcertificate-controller", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.PodcertNamespace(), "podcertificate-controller", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 		return err
 	}
 	return e.WaitForPodCertificateTrustBundles(ctx)
@@ -226,10 +221,10 @@ func (e *Env) DeployPodCertificateController(ctx context.Context) error {
 // setPodcertWorkersPerSigner sets WORKERS_PER_SIGNER on the
 // podcertificate-controller container in objs, the variable its
 // --workers-per-signer argument expands.
-func setPodcertWorkersPerSigner(objs []*unstructured.Unstructured, workers int) error {
+func setPodcertWorkersPerSigner(objs []*unstructured.Unstructured, namespace string, workers int) error {
 	var dep *unstructured.Unstructured
 	for _, obj := range objs {
-		if obj.GetKind() == "Deployment" && obj.GetNamespace() == NamespacePodCert && obj.GetName() == "podcertificate-controller" {
+		if obj.GetKind() == "Deployment" && obj.GetNamespace() == namespace && obj.GetName() == "podcertificate-controller" {
 			dep = obj
 			break
 		}
@@ -411,7 +406,7 @@ func (e *Env) DeploySandboxConfig(ctx context.Context) error {
 
 	// Enforce per-class SandboxConfig asset requirements. This is applied
 	// before any SandboxConfig so the config below is validated too.
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
+	if err := e.applyInstallPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
 		return err
 	}
 
@@ -419,7 +414,7 @@ func (e *Env) DeploySandboxConfig(ctx context.Context) error {
 	// cluster-scoped SandboxConfigs each ActorTemplate names via
 	// sandboxConfig.configName; gVisor templates name this one unless they
 	// create their own SandboxConfig.
-	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
+	return e.applyInstallPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 
 // EnsureCRDs installs the CRDs only if they are missing. Component redeploys

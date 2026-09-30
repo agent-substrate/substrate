@@ -105,6 +105,8 @@ spec:
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        - --ateapi-conn-spec=k8s:///api.ate-system.svc:443
+        - --ateapi-server-name=api.ate-system.svc
         env:
         - name: POD_NAME
           valueFrom:
