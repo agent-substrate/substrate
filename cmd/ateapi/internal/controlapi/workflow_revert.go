@@ -182,17 +182,28 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 		if hosted {
 			if terr := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); terr != nil {
 				// A failed terminate lands the actor in CRASHED, which the user
-				// can revert again — that retry needs no live worker.
+				// can revert again. The actor keeps its assignment and the worker
+				// stays booked, so that retry terminates again before freeing it.
 				slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 					append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", terr))...)
-				if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationRevert, ateletCrashMessage("Terminate", terr)); cerr != nil {
+				latest, err := w.store.GetActor(ctx, actorRef)
+				if err != nil {
+					return fmt.Errorf("while loading actor to crash: %w", err)
+				}
+				const freeWorkerAssignment = false
+				if cerr := markActorCrashed(ctx, w.store, latest, ateattr.OperationRevert, ateletCrashMessage("Terminate", terr), freeWorkerAssignment); cerr != nil {
 					return cerr
 				}
 				return fmt.Errorf("actor %s crashed: %w", actorRef, terr)
 			}
-			if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
-				return err
-			}
+		}
+		// Also detach volumes when the worker no longer hosts the actor: DeleteWorker
+		// leaves the assignment on an actor whose volumes it could not detach, as the record
+		// of the node they are still attached to.
+		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
+			return err
+		}
+		if hosted {
 			if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
 				return fmt.Errorf("while releasing worker: %w", err)
 			}

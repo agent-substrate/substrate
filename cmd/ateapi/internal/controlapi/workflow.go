@@ -173,12 +173,13 @@ type actorWorkflowStore interface {
 // does from the other side: releasing the Actor bound to a Worker stays
 // in-process because there is no bind/release RPC.
 type WorkerWorkflow struct {
-	store workerWorkflowStore
+	store          workerWorkflowStore
+	pluginRegistry VolumePluginRegistry
 }
 
 // NewWorkerWorkflow creates a new WorkerWorkflow.
-func NewWorkerWorkflow(store workerWorkflowStore) *WorkerWorkflow {
-	return &WorkerWorkflow{store: store}
+func NewWorkerWorkflow(store workerWorkflowStore, pluginRegistry VolumePluginRegistry) *WorkerWorkflow {
+	return &WorkerWorkflow{store: store, pluginRegistry: pluginRegistry}
 }
 
 // workerWorkflowStore enumerates the exact storage methods needed by
@@ -190,6 +191,7 @@ type workerWorkflowStore interface {
 	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 }
 
 // leaseHolder takes the distributed leases that serialize the operations on one

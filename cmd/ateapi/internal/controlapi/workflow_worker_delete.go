@@ -153,8 +153,10 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 // releaseBoundActor resets one Actor bound to the Worker. An Actor that already
 // reached ACTOR_STATE_SUSPENDED saved its state cleanly during graceful
 // termination, so it is left untouched and remains resumable. An Actor that was
-// still running when the pod disappeared is moved to ACTOR_STATE_CRASHED and its
-// pod pointers are cleared.
+// still running when the pod disappeared has its volumes detached, is moved to
+// ACTOR_STATE_CRASHED, and has its pod pointers cleared. A failed detach does
+// not hold up the Worker delete: the Actor keeps its WorkerAssignment, whose
+// node name DeleteActor and RevertActor detach from once the Worker is gone.
 //
 // Nothing to release is the common case and reports success: a superseded
 // assignment and an Actor that has since moved elsewhere both leave no Actor
@@ -192,6 +194,15 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		markSkipped(ctx, "actor suspended cleanly before the pod went away")
 		return nil
 	}
+	detachErr := w.detachBoundActorVolumes(ctx, actor)
+	if detachErr != nil {
+		slog.LogAttrs(ctx, slog.LevelWarn, "Keeping the worker assignment of a crashed actor whose volumes could not be detached",
+			append(ateattr.ActorRefLogAttrs(actorRef), slog.String("worker", name), slog.Any("err", detachErr))...)
+	}
+	// TODO: Also call atelet.Terminate here, before the assignment is cleared,
+	// once Terminate succeeds with the ateom pod gone. Until then the actor's
+	// host mounts, directories, and local snapshots stay on the node.
+
 	opName := ateattr.OperationUnknown
 	switch actor.GetStatus().GetState() {
 	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
@@ -217,7 +228,11 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		if !wasAlreadyCrashed {
 			toUpdate.Status.Crash = newActorCrash(opName, crashMessageWorkerPodGone)
 		}
-		toUpdate.Status.WorkerAssignment = nil
+		// Kept after a failed detach: it records the node the volumes are still
+		// attached to, for DeleteActor or RevertActor to detach from.
+		if detachErr == nil {
+			toUpdate.Status.WorkerAssignment = nil
+		}
 		// Local in-progress checkpoint dies with the worker: it lived on the node
 		// that went away. The external in-progress checkpoint is kept so delete
 		// or revert can delete it.
@@ -240,6 +255,25 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		recordActorCrash(ctx, crashAttrs)
 	}
 	return nil
+}
+
+// detachBoundActorVolumes detaches the Actor's volumes from the node of the
+// Worker it is bound to. A missing template detaches every volume recorded on
+// the Actor, as DeleteActor does.
+func (w *WorkerWorkflow) detachBoundActorVolumes(ctx context.Context, actor *ateapipb.Actor) error {
+	// Skips the reads below for the common Actor with no volumes: a Worker can
+	// hold thousands of them.
+	if len(actor.GetStatus().GetActorVolumes()) == 0 {
+		return nil
+	}
+	template, err := resolveActorTemplate(ctx, w.store, actor)
+	if errors.Is(err, errActorTemplateNotFound) {
+		template, err = nil, nil
+	}
+	if err != nil {
+		return err
+	}
+	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, template, "worker delete")
 }
 
 // finalizeDeleted removes the worker from the store and returns the deleted

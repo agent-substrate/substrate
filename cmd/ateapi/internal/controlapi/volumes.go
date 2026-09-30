@@ -201,18 +201,21 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		return nil
 	}
 
+	// The disks stay attached to the node after its worker record is gone, so
+	// a gone worker falls back to the node the assignment recorded.
+	var node string
 	worker, err := st.GetWorker(ctx, assignment.GetWorker().GetName())
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			slog.WarnContext(ctx, fmt.Sprintf("Worker not found in store during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
-			return nil
-		}
+	switch {
+	case err == nil:
+		node = worker.GetNodeName()
+	case errors.Is(err, store.ErrNotFound):
+		slog.InfoContext(ctx, fmt.Sprintf("Worker not found in store during %s, detaching volumes from the node of the worker assignment", action), slog.String("actor_id", actor.GetMetadata().GetName()))
+		node = assignment.GetNodeName()
+	default:
 		return fmt.Errorf("failed to get worker: %w", err)
 	}
-
-	node := worker.GetNodeName()
 	if node == "" {
-		slog.WarnContext(ctx, fmt.Sprintf("Worker has no assigned node name during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
+		slog.WarnContext(ctx, fmt.Sprintf("No node name recorded for the actor's worker during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
 		return nil
 	}
 

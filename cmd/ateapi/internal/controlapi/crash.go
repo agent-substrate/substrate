@@ -52,36 +52,81 @@ func ateletCrashMessage(rpc string, err error) string {
 	return fmt.Sprintf("atelet %s: %s", rpc, status.Convert(err).Message())
 }
 
-// crashActor moves the actor to CRASHED state and frees the worker it was
-// assigned to, if any, so the worker can host other actors. message is
-// recorded in the actor's status.
-func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
-	actor, err := st.GetActor(ctx, actorRef)
+// crashAndTearDownActor moves the actor to CRASHED state, asks atelet to
+// terminate the actor workload, detaches its volumes, and frees the assigned
+// worker. The crash message is recorded in the actor's status.
+//
+// Call it when a workflow step fails while the actor may still be running on a
+// worker. A caller that already attempted the teardown itself calls
+// markActorCrashed instead.
+//
+// If terminate, detach, or release fails, the actor is still marked CRASHED
+// but keeps its worker assignment and the worker stays booked, so the worker is
+// not overcommitted while the sandbox or a mount may still be live on it.
+//
+// From CRASHED, an actor can only be deleted or reverted. DeleteActor and
+// RevertActor retry terminate and detach before freeing the worker, and
+// DeleteWorker frees it once its pod is gone.
+func (w *ActorWorkflow) crashAndTearDownActor(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, opName, message string) error {
+	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
+	freeWorkerAssignment := true
+	// Terminate workload and detach volumes before freeing the worker assignment. Otherwise
+	// the control plane will no longer know the node where the volumes/actor workload are and
+	// may leak those resources for the lifetime of the node.
+	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Keeping the worker assigned for a crashed actor whose workload could not be terminated",
+			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+		freeWorkerAssignment = false
+	} else if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForCrash", opName); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Keeping the worker assigned for a crashed actor whose volumes could not be detached",
+			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+		freeWorkerAssignment = false
+	}
+	return markActorCrashed(ctx, w.store, actor, opName, message, freeWorkerAssignment)
+}
 
+// markActorCrashed moves actor to CRASHED state and records the crash message to its status.
+// When freeWorkerAssignment is set, it releases the worker the actor is assigned to and clears the
+// worker assignment from the actor. Otherwise, or if the worker release fails, both are left for a later
+// DeleteActor, RevertActor, or DeleteWorker to clean it up.
+//
+// It never terminates the workload or detaches volumes. Call it directly only when the caller has
+// already attempted that teardown, as revert does after a failed terminate. Otherwise call
+// crashAndTearDownActor.
+func markActorCrashed(ctx context.Context, st crashActorStore, actor *ateapipb.Actor, opName, message string, freeWorkerAssignment bool) error {
+	actorRef := resources.ActorRefFromActor(actor)
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 	opName = ateattr.NormalizeOperationName(opName)
 
-	// Release the worker before moving the actor to CRASHED state.
-	// If the release fails we must not clear the actor's worker assignment or
-	// mark it CRASHED: doing so would strand the still-assigned worker with no
-	// actor referencing it, so nothing would ever retry the release and the
-	// worker slot would be consumed until its pod dies. Returning the error
-	// instead leaves the actor (and its assignment) intact so the caller retries
-	// crashActor, which re-attempts the release. releaseWorker is idempotent, so
-	// a retry after a release that already succeeded is a no-op.
-	sandboxClass, _, err := releaseWorker(ctx, st, actor)
-	if err != nil {
-		return fmt.Errorf("while releasing worker to crash actor: %w", err)
+	var sandboxClass string
+	if freeWorkerAssignment {
+		// Release the worker before clearing the assignment that points at it.
+		// A failed release keeps the assignment, as a failed terminate does: the
+		// actor still names the worker, so a later cleanup finds and releases
+		// it. releaseWorker is idempotent, so a release that committed despite
+		// the error is a no-op when retried.
+		class, _, err := releaseWorker(ctx, st, actor)
+		if err != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "Keeping the worker booked for a crashed actor whose worker could not be released",
+				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+			freeWorkerAssignment = false
+		} else {
+			sandboxClass = class
+		}
+	} else if workerName := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); workerName != "" {
+		if worker, err := st.GetWorker(ctx, workerName); err == nil {
+			sandboxClass = worker.GetSandboxClass()
+		}
 	}
 
 	// Snapshot crash attributes before pod and pool pointers are cleared below;
 	// the counter itself is emitted only after the transition commits.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
 
-	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	_, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		// An actor crashed concurrently, e.g. by worker deletion, keeps its first crash.
 		if !wasAlreadyCrashed {
@@ -93,7 +138,9 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		// the only pointer to it, so clearing them here would leak the objects
 		// for good; failed workflow steps must never promote either of them to an
 		// ExternalSnapshot or to LocalSnapshot.
-		toUpdate.Status.WorkerAssignment = nil
+		if freeWorkerAssignment {
+			toUpdate.Status.WorkerAssignment = nil
+		}
 		return nil
 	})
 	if err != nil {

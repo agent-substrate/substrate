@@ -1333,6 +1333,10 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 	assetPaths = paths
 
+	// TODO: Skip ateom when its pod is gone and carry on with the node cleanup
+	// below. The sandbox went with the pod, so failing here only leaks the
+	// mounts, directories, and local snapshots. That needs a definite signal
+	// that the pod is gone, because a restarting ateom also returns Unavailable.
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
@@ -1903,6 +1907,9 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
+	// TODO: Allow an empty target ateom UID when there is no workload to stop,
+	// so the control plane can remove the local snapshot of a PAUSED actor,
+	// which has no worker.
 	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
 		return err
 	}

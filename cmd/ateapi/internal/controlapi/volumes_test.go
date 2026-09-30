@@ -666,7 +666,26 @@ func TestDetachActorVolumes(t *testing.T) {
 			wantErr:         false,
 		},
 		{
-			name: "worker not found in store skips detach",
+			name: "worker not found in store detaches from the node of the assignment",
+			actor: &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
+				Status: &ateapipb.ActorStatus{
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						Worker:   &ateapipb.ObjectRef{Name: "nonexistent-worker"},
+						NodeName: "node-2",
+					},
+					ActorVolumes: []*ateapipb.ExternalVolume{
+						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
+					},
+				},
+			},
+			store: &mockDetachStore{workers: map[string]*ateapipb.Worker{}},
+			wantDetachCalls: []detachCall{
+				{VolumeID: "storage-vol-1", Node: "node-2"},
+			},
+		},
+		{
+			name: "worker not found and assignment without a node skips detach",
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{

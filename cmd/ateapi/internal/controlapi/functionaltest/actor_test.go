@@ -4059,6 +4059,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
 			WorkerPodIp:     "127.0.0.1",
+			NodeName:        "node1",
 		}
 		return nil
 	}); err != nil {
@@ -5218,15 +5219,31 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	}
 }
 
-// TestRevertActor_TerminateFailureCrashes verifies that an atelet error while
-// terminating the discarded execution crashes the actor, and that a later
-// successful revert clears the recorded crash.
-func TestRevertActor_TerminateFailureCrashes(t *testing.T) {
-	ns := namespaceForTest("ns-revert-terminate-crash")
-	tc := setupTest(t, ns)
+// TestRevertActor_FromCrashedBeforeFirstSuspend recovers an actor that crashed
+// on its first run, before any suspend wrote a snapshot of its own:
+//
+//  1. Create the actor, which inherits the template's golden snapshot.
+//  2. Resume it onto worker-1 on node1.
+//  3. Delete worker-1, which crashes the actor.
+//  4. Revert it, which leaves it SUSPENDED
+//  5. Resume it onto worker-2 on node2
+func TestRevertActor_FromCrashedBeforeFirstSuspend(t *testing.T) {
+	ns := namespaceForTest("ns-revert-crashed-first-run")
+	plugin := &detachFailVolumePlugin{}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
 	defer tc.cleanup()
 
-	createTemplate(t, tc, ns)
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapipb.Volume{{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		}},
+		[]*ateapipb.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}})
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	ctx := context.Background()
@@ -5243,23 +5260,888 @@ func TestRevertActor_TerminateFailureCrashes(t *testing.T) {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
 
-	tc.fakeAtelet.Lock.Lock()
-	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure at /var/lib/node-path")
-	tc.fakeAtelet.Lock.Unlock()
-	if _, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef}); err == nil {
-		t.Fatal("RevertActor succeeded despite failing terminate")
+	// TestCrashPathTeardown covers what the crash and the revert tear down.
+	deleteWorkerPod(t, tc, ns, "worker-1")
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
 	}
-	assertActorCrashStatus(t, tc, name, "revert failed: atelet Terminate: workflow failed at step CallAteletTerminate: while terminating actor on atelet: rpc error: code = Internal desc = injected terminate failure at /var/lib/node-path")
+	if crashed.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state = %v, want CRASHED", crashed.GetStatus().GetState())
+	}
+	goldenURI := goldenSnapshotURI(t)
+	if got := crashed.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != goldenURI {
+		t.Fatalf("external snapshot = %q, want the inherited golden %q", got, goldenURI)
+	}
 
 	tc.fakeAtelet.Lock.Lock()
-	tc.fakeAtelet.FailTerminate = nil
+	tc.fakeAtelet.CheckpointCalled = false
 	tc.fakeAtelet.Lock.Unlock()
+
 	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
 	if err != nil {
-		t.Fatalf("second RevertActor failed: %v", err)
+		t.Fatalf("RevertActor from CRASHED failed: %v", err)
 	}
-	if got := reverted.GetActor().GetStatus().GetCrash(); got != nil {
-		t.Errorf("Crash = %v, want cleared by the successful revert", got)
+
+	got := reverted.GetActor().GetStatus()
+	if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state = %v, want SUSPENDED", got.GetState())
+	}
+	if uri := got.GetExternalSnapshot().GetSnapshotUri(); uri != goldenURI {
+		t.Errorf("external snapshot = %q, want the golden %q untouched", uri, goldenURI)
+	}
+	if got.GetLocalSnapshot() != nil {
+		t.Errorf("local snapshot = %v, want nil", got.GetLocalSnapshot())
+	}
+	if tc.fakeAtelet.CheckpointCalled {
+		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
+	}
+	plugin.mu.Lock()
+	plugin.attachedNodes = nil
+	plugin.detachedNodes = nil
+	plugin.mu.Unlock()
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.RunCalled = false
+	tc.fakeAtelet.RestoreCalled = false
+	tc.fakeAtelet.RestoreRequest = nil
+	tc.fakeAtelet.Lock.Unlock()
+
+	worker2 := createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
+	resumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("ResumeActor after revert from CRASHED failed: %v", err)
+	}
+	if resumed.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("resumed state = %v, want RUNNING", resumed.GetActor().GetStatus().GetState())
+	}
+	if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != worker2 {
+		t.Errorf("resumed on worker %q, want %q", got, worker2)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	runCalled := tc.fakeAtelet.RunCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if runCalled {
+		t.Error("unexpected atelet Run, want the golden snapshot restored")
+	}
+	restore := tc.fakeAtelet.lastRestoreRequest()
+	if restore == nil {
+		t.Fatal("expected atelet Restore after revert from CRASHED")
+	}
+	if got := restore.GetExternalConfig().GetSnapshotUri(); got != goldenURI {
+		t.Errorf("Restore snapshot = %q, want the golden %q", got, goldenURI)
+	}
+	if got := restore.GetTargetAteomUid(); got != worker2 {
+		t.Errorf("Restore target ateom = %q, want %q", got, worker2)
+	}
+	plugin.mu.Lock()
+	defer plugin.mu.Unlock()
+	if diff := cmp.Diff([]string{"node2"}, plugin.attachedNodes); diff != "" {
+		t.Errorf("attached nodes after second resume mismatch (-want +got):\n%s", diff)
+	}
+	if len(plugin.detachedNodes) != 0 {
+		t.Errorf("detached nodes after second resume = %v, want none", plugin.detachedNodes)
+	}
+}
+
+// TestCrashDetachFailureKeepsWorkerBooked: when the detach a crash runs fails,
+// the worker stays booked, since the kept assignment is the only record of the
+// node the volume is still attached to. DeleteActor then detaches before
+// freeing it.
+func TestCrashDetachFailureKeepsWorkerBooked(t *testing.T) {
+	ns := namespaceForTest("ns-crash-detach")
+	// Fails the crash's detach. DeleteActor's later detach succeeds.
+	plugin := &detachFailVolumePlugin{failUntil: 1}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapipb.Volume{{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		}},
+		[]*ateapipb.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}})
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	tc.fakeAtelet.Reset()
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailCheckpoint = status.Error(codes.Unavailable, "injected checkpoint failure")
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err == nil {
+		t.Fatal("SuspendActor succeeded despite failing checkpoint")
+	}
+	if plugin.detachAttempts != 1 {
+		t.Errorf("detach attempts after crash = %d, want 1", plugin.detachAttempts)
+	}
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if crashed.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state after failed checkpoint = %v, want CRASHED", crashed.GetStatus().GetState())
+	}
+	if crashed.GetStatus().GetWorkerAssignment() == nil {
+		t.Error("worker assignment cleared, want kept for the later detach")
+	}
+	assertWorkerHoldsActors(t, tc, podUID, 1)
+
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	if diff := cmp.Diff([]string{"node1"}, plugin.detachedNodes); diff != "" {
+		t.Errorf("detached nodes mismatch (-want +got):\n%s", diff)
+	}
+	if len(plugin.deleted) != 1 {
+		t.Errorf("deleted volumes = %v, want 1", plugin.deleted)
+	}
+	assertWorkerHoldsActors(t, tc, podUID, 0)
+}
+
+// TestWorkerDeleteDetachFailureKeepsNodeOnActor: a failed detach does not hold
+// up DeleteWorker. The Worker is deleted and the crashed actor keeps its worker
+// assignment as the record of the node its volumes are still attached to, and
+// DeleteActor or RevertActor detaches from that node later.
+func TestWorkerDeleteDetachFailureKeepsNodeOnActor(t *testing.T) {
+	tests := []struct {
+		name string
+		// action takes the crashed actor out of CRASHED.
+		action func(t *testing.T, tc *testContext, ref *ateapipb.ObjectRef)
+	}{
+		{
+			name: "DeleteActor",
+			action: func(t *testing.T, tc *testContext, ref *ateapipb.ObjectRef) {
+				if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+					t.Fatalf("DeleteActor failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "RevertActor",
+			action: func(t *testing.T, tc *testContext, ref *ateapipb.ObjectRef) {
+				reverted, err := tc.client.RevertActor(context.Background(), &ateapipb.RevertActorRequest{Actor: ref})
+				if err != nil {
+					t.Fatalf("RevertActor failed: %v", err)
+				}
+				if got := reverted.GetActor().GetStatus().GetWorkerAssignment(); got != nil {
+					t.Errorf("worker assignment after revert = %v, want cleared", got)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-worker-delete-detach")
+			// Fails the detach DeleteWorker runs, and no other.
+			plugin := &detachFailVolumePlugin{failUntil: 1}
+			tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+				"substrate.io/mock": plugin,
+			})
+			defer tc.cleanup()
+
+			createTemplateWithVolumes(t, tc, ns,
+				[]*ateapipb.Volume{{
+					Name: "vol1",
+					ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+						StorageClassName: "standard",
+						Capacity:         "10Gi",
+					},
+				}},
+				[]*ateapipb.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}})
+			podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+			ctx := context.Background()
+			const name = "id1"
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+			if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}}); err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+				t.Fatalf("ResumeActor failed: %v", err)
+			}
+
+			deleteWorkerPod(t, tc, ns, "worker-1")
+			if plugin.detachAttempts != 1 {
+				t.Errorf("detach attempts after DeleteWorker = %d, want 1", plugin.detachAttempts)
+			}
+			if _, err := tc.persistence.GetWorker(ctx, podUID); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetWorker(%s) error = %v, want the worker deleted", podUID, err)
+			}
+			crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			if crashed.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Fatalf("state after DeleteWorker = %v, want CRASHED", crashed.GetStatus().GetState())
+			}
+			if got := crashed.GetStatus().GetWorkerAssignment().GetNodeName(); got != "node1" {
+				t.Errorf("worker assignment node after DeleteWorker = %q, want %q kept for the later detach", got, "node1")
+			}
+
+			tt.action(t, tc, ref)
+			if diff := cmp.Diff([]string{"node1"}, plugin.detachedNodes); diff != "" {
+				t.Errorf("detached nodes mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// updateStoredActor rewrites the actor in the store, bypassing the API, to
+// fabricate the state an interrupted workflow or a corrupted record leaves.
+func updateStoredActor(t *testing.T, tc *testContext, actorRef resources.ActorRef, mutate func(*ateapipb.Actor)) {
+	t.Helper()
+	ctx := context.Background()
+	actor, err := tc.persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if _, err := tc.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		mutate(toUpdate)
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+}
+
+// TestCrashPathTeardown drives an actor with an attached volume down every
+// crash path and checks what each one tears down on the node: whether atelet
+// is asked to terminate the workload, and which nodes the volume is detached
+// from. It then takes the actor out of CRASHED and checks the same for the
+// exit. Every case starts from the actor RUNNING on worker-1 on node1.
+func TestCrashPathTeardown(t *testing.T) {
+	// crashPathEnv is what a TestCrashPathTeardown case needs to drive its actor.
+	type crashPathEnv struct {
+		ns       string
+		podUID   string
+		ref      *ateapipb.ObjectRef
+		actorRef resources.ActorRef
+	}
+
+	injected := status.Error(codes.Unavailable, "injected failure")
+
+	resume := func(t *testing.T, tc *testContext, env crashPathEnv) error {
+		_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: env.ref})
+		return err
+	}
+	pause := func(t *testing.T, tc *testContext, env crashPathEnv) error {
+		_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: env.ref})
+		return err
+	}
+	suspend := func(t *testing.T, tc *testContext, env crashPathEnv) error {
+		_, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: env.ref})
+		return err
+	}
+	revert := func(t *testing.T, tc *testContext, env crashPathEnv) error {
+		_, err := tc.client.RevertActor(context.Background(), &ateapipb.RevertActorRequest{Actor: env.ref})
+		return err
+	}
+	// pauseFirst and suspendFirst leave the actor PAUSED or SUSPENDED with
+	// worker-1 free for the next resume.
+	pauseFirst := func(t *testing.T, tc *testContext, env crashPathEnv) {
+		if err := pause(t, tc, env); err != nil {
+			t.Fatalf("PauseActor failed: %v", err)
+		}
+		waitForWorkerAvailable(t, tc, env.podUID)
+	}
+	suspendFirst := func(t *testing.T, tc *testContext, env crashPathEnv) {
+		if err := suspend(t, tc, env); err != nil {
+			t.Fatalf("SuspendActor failed: %v", err)
+		}
+		waitForWorkerAvailable(t, tc, env.podUID)
+	}
+	// markResuming leaves the actor RESUMING on worker-1, as a resume
+	// interrupted after it assigned the worker does.
+	markResuming := func(t *testing.T, tc *testContext, env crashPathEnv) {
+		updateStoredActor(t, tc, env.actorRef, func(a *ateapipb.Actor) {
+			a.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
+		})
+	}
+	deleteWorkerRecord := func(t *testing.T, tc *testContext, env crashPathEnv) {
+		if _, err := tc.persistence.DeleteWorker(context.Background(), env.podUID, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteWorker failed: %v", err)
+		}
+	}
+
+	// revertOut, deleteOut, and deleteWorkerThenDeleteOut take the crashed
+	// actor out of CRASHED and check the state each leaves it in.
+	revertOut := func(t *testing.T, tc *testContext, env crashPathEnv) {
+		reverted, err := tc.client.RevertActor(context.Background(), &ateapipb.RevertActorRequest{Actor: env.ref})
+		if err != nil {
+			t.Fatalf("RevertActor failed: %v", err)
+		}
+		got := reverted.GetActor().GetStatus()
+		if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			t.Errorf("state after revert = %v, want SUSPENDED", got.GetState())
+		}
+		if got.GetCrash() != nil {
+			t.Errorf("crash after revert = %v, want cleared", got.GetCrash())
+		}
+		if got.GetWorkerAssignment() != nil {
+			t.Errorf("worker assignment after revert = %v, want cleared", got.GetWorkerAssignment())
+		}
+	}
+	deleteOut := func(t *testing.T, tc *testContext, env crashPathEnv) {
+		if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: env.ref}); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
+		}
+		if _, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: env.ref}); status.Code(err) != codes.NotFound {
+			t.Errorf("GetActor after DeleteActor = %v, want NotFound", err)
+		}
+	}
+	// DeleteWorker frees the worker a crash left booked but leaves the actor
+	// CRASHED, so a DeleteActor still takes it out.
+	deleteWorkerThenDeleteOut := func(t *testing.T, tc *testContext, env crashPathEnv) {
+		ctx := context.Background()
+		before, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: env.ref})
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		deleteWorkerPod(t, tc, env.ns, "worker-1")
+		after, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: env.ref})
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		if got := after.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			t.Errorf("state after DeleteWorker = %v, want CRASHED", got)
+		}
+		if diff := cmp.Diff(before.GetStatus().GetCrash(), after.GetStatus().GetCrash(), protocmp.Transform()); diff != "" {
+			t.Errorf("DeleteWorker replaced the first crash (-before +after):\n%s", diff)
+		}
+		if got := after.GetStatus().GetWorkerAssignment(); got != nil {
+			t.Errorf("worker assignment after DeleteWorker = %v, want cleared", got)
+		}
+		deleteOut(t, tc, env)
+	}
+
+	tests := []struct {
+		name string
+		// prepare takes the running actor to the state the crash starts from.
+		// The detaches and Terminate calls it causes are not counted.
+		prepare func(t *testing.T, tc *testContext, env crashPathEnv)
+		// injectAteletFailure sets the atelet failures the crash needs, under the fake's lock.
+		injectAteletFailure func(f *FakeAteletServer)
+		// crashOp drives the actor into CRASHED. Its error is not checked: some
+		// paths return the crashOp, others commit it and return the actor.
+		crashOp          func(t *testing.T, tc *testContext, env crashPathEnv) error
+		wantCrashMessage string
+		// wantTerminate is whether atelet is asked to terminate the workload.
+		wantTerminate bool
+		// wantDetachedNodes are the nodes the volume is detached from.
+		wantDetachedNodes []string
+		// wantWorkerAssignmentKeptAfterCrash is whether the crashed actor still names worker-1,
+		// as it does when the teardown fails.
+		wantWorkerAssignmentKeptAfterCrash bool
+		// wantActorsBookedToWorkerAfterCrash is how many actors worker-1 is booked for after the
+		// crash. wantWorkerGone is set instead when its record is gone.
+		wantActorsBookedToWorkerAfterCrash int32
+		wantWorkerGone                     bool
+		// exitOp takes the actor out of CRASHED, with atelet no longer failing.
+		// It defaults to revertOut. Each op checks the actor's own end state,
+		// its worker assignment included, since the delete exits leave no
+		// actor for the shared checks to read.
+		exitOp func(t *testing.T, tc *testContext, env crashPathEnv)
+		// wantExitTerminate and wantExitDetachedNodes are the teardown exitOp does.
+		wantExitTerminate     bool
+		wantExitDetachedNodes []string
+	}{
+		{
+			name:                "resume: atelet Restore from external snapshot fails",
+			prepare:             suspendFirst,
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailRestore = injected },
+			crashOp:             resume,
+			wantCrashMessage:    "resume failed: atelet Restore: injected failure",
+			wantTerminate:       true,
+			wantDetachedNodes:   []string{"node1"},
+		},
+		{
+			name:                "resume: atelet Restore from local snapshot fails",
+			prepare:             pauseFirst,
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailRestore = injected },
+			crashOp:             resume,
+			wantCrashMessage:    "resume failed: atelet Restore: injected failure",
+			wantTerminate:       true,
+			wantDetachedNodes:   []string{"node1"},
+		},
+		{
+			name: "resume: atelet Run fails",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				suspendFirst(t, tc, env)
+				// With no snapshot to restore, the resume cold boots.
+				updateStoredActor(t, tc, env.actorRef, func(a *ateapipb.Actor) {
+					a.Status.ExternalSnapshot = nil
+				})
+			},
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailRun = injected },
+			crashOp:             resume,
+			wantCrashMessage:    "resume failed: atelet Run: injected failure",
+			wantTerminate:       true,
+			wantDetachedNodes:   []string{"node1"},
+		},
+		{
+			name: "resume: assigned worker is draining",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				markResuming(t, tc, env)
+				ctx := context.Background()
+				worker, err := tc.persistence.GetWorker(ctx, env.podUID)
+				if err != nil {
+					t.Fatalf("GetWorker failed: %v", err)
+				}
+				if _, err := tc.persistence.UpdateWorker(ctx, env.podUID, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+					toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+					return nil
+				}); err != nil {
+					t.Fatalf("UpdateWorker failed: %v", err)
+				}
+			},
+			crashOp:           resume,
+			wantCrashMessage:  "resume failed: assigned worker is draining",
+			wantTerminate:     true,
+			wantDetachedNodes: []string{"node1"},
+		},
+		{
+			name: "resume: assigned worker no longer exists",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				markResuming(t, tc, env)
+				deleteWorkerRecord(t, tc, env)
+			},
+			crashOp:          resume,
+			wantCrashMessage: "resume failed: assigned worker no longer exists",
+			// TODO: expect Terminate once it succeeds with the worker gone.
+			wantTerminate:     false,
+			wantDetachedNodes: []string{"node1"},
+			wantWorkerGone:    true,
+		},
+		{
+			name: "resume: assigned worker no longer hosts the actor",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				markResuming(t, tc, env)
+				actor, err := tc.persistence.GetActor(context.Background(), env.actorRef)
+				if err != nil {
+					t.Fatalf("GetActor failed: %v", err)
+				}
+				if _, err := tc.persistence.ReleaseActorFromWorker(context.Background(), env.podUID, actor.GetMetadata().GetUid()); err != nil {
+					t.Fatalf("ReleaseActorFromWorker failed: %v", err)
+				}
+			},
+			crashOp:          resume,
+			wantCrashMessage: "resume failed: assigned worker no longer hosts the actor",
+			// TODO: expect Terminate once it runs for a worker that no longer
+			// hosts the actor.
+			wantTerminate:     false,
+			wantDetachedNodes: []string{"node1"},
+		},
+		{
+			name: "resume: assigned worker no longer satisfies the actor's placement constraints",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				updateStoredActor(t, tc, env.actorRef, func(a *ateapipb.Actor) {
+					a.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
+					a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: "elsewhere"}}
+				})
+			},
+			crashOp:           resume,
+			wantCrashMessage:  "resume failed: assigned worker no longer satisfies the actor's placement constraints",
+			wantTerminate:     true,
+			wantDetachedNodes: []string{"node1"},
+		},
+		{
+			// Nothing names the node, so there is nothing to tear down, and
+			// worker-1 stays booked until the revert sweeps it up.
+			name: "resume: no worker assignment",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				updateStoredActor(t, tc, env.actorRef, func(a *ateapipb.Actor) {
+					a.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
+					a.Status.WorkerAssignment = nil
+				})
+			},
+			crashOp:                            resume,
+			wantCrashMessage:                   "resume failed: actor has no worker assignment in a state that requires one",
+			wantActorsBookedToWorkerAfterCrash: 1,
+		},
+		{
+			name:                "pause: atelet Checkpoint fails",
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailCheckpoint = injected },
+			crashOp:             pause,
+			wantCrashMessage:    "pause failed: atelet Checkpoint: injected failure",
+			wantTerminate:       true,
+			wantDetachedNodes:   []string{"node1"},
+		},
+		{
+			name: "pause: no worker assignment",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				updateStoredActor(t, tc, env.actorRef, func(a *ateapipb.Actor) {
+					a.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
+					a.Status.WorkerAssignment = nil
+				})
+			},
+			crashOp:          pause,
+			wantCrashMessage: "pause failed: actor has no worker assignment in a state that requires one",
+			// prepare clears only the actor's side of the booking. worker-1 still
+			// holds the actor's assignment record and allocation, and the crash
+			// cannot release them with no assignment naming the worker, so they
+			// stay until the revert sweeps them up.
+			wantActorsBookedToWorkerAfterCrash: 1,
+		},
+		{
+			// The pause detaches the volume before it finds the worker gone.
+			name:             "pause: worker record gone before finalize",
+			prepare:          deleteWorkerRecord,
+			crashOp:          pause,
+			wantCrashMessage: "pause failed: node holding the actor's local snapshot is unknown",
+			// TODO: expect Terminate once finalize calls it before clearing the
+			// assignment.
+			wantTerminate:     false,
+			wantDetachedNodes: []string{"node1"},
+			wantWorkerGone:    true,
+		},
+		{
+			name:                "suspend: atelet Checkpoint fails",
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailCheckpoint = injected },
+			crashOp:             suspend,
+			wantCrashMessage:    "suspend failed: atelet Checkpoint: injected failure",
+			wantTerminate:       true,
+			wantDetachedNodes:   []string{"node1"},
+		},
+		{
+			// The failed Terminate skips the detach and keeps the assignment, so the
+			// exit terminates and detaches before freeing the worker.
+			name: "suspend: atelet Checkpoint and Terminate fail, then revert",
+			injectAteletFailure: func(f *FakeAteletServer) {
+				f.FailCheckpoint = injected
+				f.FailTerminate = injected
+			},
+			crashOp:          suspend,
+			wantCrashMessage: "suspend failed: atelet Checkpoint: injected failure",
+			wantTerminate:    true,
+			// atelet.Terminate() failed: we keep the worker assignment so actor operations
+			// can retry the Terminate call
+			wantWorkerAssignmentKeptAfterCrash: true,
+			wantActorsBookedToWorkerAfterCrash: 1,
+			wantExitTerminate:                  true,
+			wantExitDetachedNodes:              []string{"node1"},
+		},
+		{
+			name: "suspend: atelet Checkpoint and Terminate fail, then delete",
+			injectAteletFailure: func(f *FakeAteletServer) {
+				f.FailCheckpoint = injected
+				f.FailTerminate = injected
+			},
+			crashOp:          suspend,
+			wantCrashMessage: "suspend failed: atelet Checkpoint: injected failure",
+			wantTerminate:    true,
+			// atelet.Terminate() failed: we keep the worker assignment so actor operations
+			// can retry the Terminate call
+			wantWorkerAssignmentKeptAfterCrash: true,
+			wantActorsBookedToWorkerAfterCrash: 1,
+			exitOp:                             deleteOut,
+			wantExitTerminate:                  true,
+			wantExitDetachedNodes:              []string{"node1"},
+		},
+		{
+			// DeleteWorker detaches from the node the kept assignment names.
+			name: "suspend: atelet Checkpoint and Terminate fail, then worker delete",
+			injectAteletFailure: func(f *FakeAteletServer) {
+				f.FailCheckpoint = injected
+				f.FailTerminate = injected
+			},
+			crashOp:          suspend,
+			wantCrashMessage: "suspend failed: atelet Checkpoint: injected failure",
+			wantTerminate:    true,
+			// atelet.Terminate() failed: we keep the worker assignment so actor operations
+			// can retry the Terminate call
+			wantWorkerAssignmentKeptAfterCrash: true,
+			wantActorsBookedToWorkerAfterCrash: 1,
+			exitOp:                             deleteWorkerThenDeleteOut,
+			// Worker is gone, we can't run Terminate() for now.
+			// TODO: expect Terminate once it succeeds with the worker pod gone.
+			wantExitTerminate:     false,
+			wantExitDetachedNodes: []string{"node1"},
+		},
+		{
+			name: "suspend: no worker assignment",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				updateStoredActor(t, tc, env.actorRef, func(a *ateapipb.Actor) {
+					a.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+					a.Status.WorkerAssignment = nil
+				})
+			},
+			crashOp:                            suspend,
+			wantCrashMessage:                   "suspend failed: actor has no worker assignment in a state that requires one",
+			wantActorsBookedToWorkerAfterCrash: 1,
+		},
+		{
+			// The pause already detached the volume, and a PAUSED actor has no
+			// worker to terminate on.
+			name:                "suspend from paused: atelet UploadPausedCheckpoint fails",
+			prepare:             pauseFirst,
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailUpload = injected },
+			crashOp:             suspend,
+			wantCrashMessage:    "suspend failed: atelet UploadPausedCheckpoint: injected failure",
+			// TODO: expect Terminate on the snapshot's node once it accepts an
+			// empty target ateom, to remove the local snapshot.
+			wantTerminate: false,
+		},
+		{
+			name: "suspend from paused: no snapshot node recorded",
+			prepare: func(t *testing.T, tc *testContext, env crashPathEnv) {
+				pauseFirst(t, tc, env)
+				updateStoredActor(t, tc, env.actorRef, func(a *ateapipb.Actor) {
+					a.Status.LocalSnapshot.NodeVmsWithLocalSnapshots = nil
+				})
+			},
+			crashOp:          suspend,
+			wantCrashMessage: "suspend failed: node holding the actor's local snapshot is unknown",
+		},
+		{
+			// The failed Terminate keeps the assignment, so the volume stays
+			// attached until the exit terminates and detaches.
+			name:                "revert: atelet Terminate fails, then revert",
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailTerminate = injected },
+			crashOp:             revert,
+			wantCrashMessage:    "revert failed: atelet Terminate: workflow failed at step CallAteletTerminate: while terminating actor on atelet: rpc error: code = Unavailable desc = injected failure",
+			wantTerminate:       true,
+			// atelet.Terminate() failed: we keep the worker assignment so actor operations
+			// can retry the Terminate call
+			wantWorkerAssignmentKeptAfterCrash: true,
+			wantActorsBookedToWorkerAfterCrash: 1,
+			wantExitTerminate:                  true,
+			wantExitDetachedNodes:              []string{"node1"},
+		},
+		{
+			name:                "revert: atelet Terminate fails, then delete",
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailTerminate = injected },
+			crashOp:             revert,
+			wantCrashMessage:    "revert failed: atelet Terminate: workflow failed at step CallAteletTerminate: while terminating actor on atelet: rpc error: code = Unavailable desc = injected failure",
+			wantTerminate:       true,
+			// atelet.Terminate() failed: we keep the worker assignment so actor operations
+			// can retry the Terminate call
+			wantWorkerAssignmentKeptAfterCrash: true,
+			wantActorsBookedToWorkerAfterCrash: 1,
+			exitOp:                             deleteOut,
+			wantExitTerminate:                  true,
+			wantExitDetachedNodes:              []string{"node1"},
+		},
+		{
+			// TODO: expect Terminate once it succeeds with the worker pod gone.
+			name:                "revert: atelet Terminate fails, then worker delete",
+			injectAteletFailure: func(f *FakeAteletServer) { f.FailTerminate = injected },
+			crashOp:             revert,
+			wantCrashMessage:    "revert failed: atelet Terminate: workflow failed at step CallAteletTerminate: while terminating actor on atelet: rpc error: code = Unavailable desc = injected failure",
+			wantTerminate:       true,
+			// atelet.Terminate() failed: we keep the worker assignment so actor operations
+			// can retry the Terminate call
+			wantWorkerAssignmentKeptAfterCrash: true,
+			wantActorsBookedToWorkerAfterCrash: 1,
+			exitOp:                             deleteWorkerThenDeleteOut,
+			wantExitTerminate:                  false,
+			wantExitDetachedNodes:              []string{"node1"},
+		},
+		{
+			name: "worker pod deleted",
+			crashOp: func(t *testing.T, tc *testContext, env crashPathEnv) error {
+				deleteWorkerPod(t, tc, env.ns, "worker-1")
+				return nil
+			},
+			wantCrashMessage: "worker pod went away while hosting the actor",
+			// TODO: expect Terminate once it succeeds with the worker pod gone.
+			wantTerminate:     false,
+			wantDetachedNodes: []string{"node1"},
+			wantWorkerGone:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-crash-teardown")
+			plugin := &detachFailVolumePlugin{}
+			tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+				"substrate.io/mock": plugin,
+			})
+			defer tc.cleanup()
+
+			createTemplateWithVolumes(t, tc, ns,
+				[]*ateapipb.Volume{{
+					Name: "vol1",
+					ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+						StorageClassName: "standard",
+						Capacity:         "10Gi",
+					},
+				}},
+				[]*ateapipb.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}})
+			podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+			ctx := context.Background()
+			const name = "id1"
+			env := crashPathEnv{
+				ns:       ns,
+				podUID:   podUID,
+				ref:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+				actorRef: resources.ActorRef{Atespace: testAtespace, Name: name},
+			}
+			// 1. Create and Resume actor
+			if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}}); err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			if err := resume(t, tc, env); err != nil {
+				t.Fatalf("ResumeActor failed: %v", err)
+			}
+			// 2. Take the actor to the state the crash starts from (e.g., PauseActor(), SuspendActor())
+			if tt.prepare != nil {
+				tt.prepare(t, tc, env)
+			}
+
+			// 3. Inject the atelet failures, and forget the Terminate calls and
+			// detaches made so far
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.TerminateCalled = false
+			tc.fakeAtelet.TerminateRequest = nil
+			if tt.injectAteletFailure != nil {
+				tt.injectAteletFailure(tc.fakeAtelet)
+			}
+			tc.fakeAtelet.Lock.Unlock()
+			plugin.mu.Lock()
+			plugin.detachedNodes = nil
+			plugin.mu.Unlock()
+
+			// 4. Crash actor
+			tt.crashOp(t, tc, env)
+
+			// 5. Check the actor is CRASHED with the expected crash message
+			crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: env.ref})
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			if got := crashed.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Fatalf("state = %v, want CRASHED", got)
+			}
+			assertActorCrashStatus(t, tc, name, tt.wantCrashMessage)
+
+			// 6. Check what the crash tore down: the Terminate on worker-1 and the
+			// nodes the volume is detached from
+			tc.fakeAtelet.Lock.Lock()
+			terminated, terminateReq := tc.fakeAtelet.TerminateCalled, tc.fakeAtelet.TerminateRequest
+			tc.fakeAtelet.Lock.Unlock()
+			if terminated != tt.wantTerminate {
+				t.Errorf("atelet Terminate called = %v, want %v", terminated, tt.wantTerminate)
+			}
+			if terminated && terminateReq.GetTargetAteomUid() != podUID {
+				t.Errorf("Terminate target ateom = %q, want %q", terminateReq.GetTargetAteomUid(), podUID)
+			}
+
+			plugin.mu.Lock()
+			detached := append([]string(nil), plugin.detachedNodes...)
+			plugin.detachedNodes = nil
+			plugin.mu.Unlock()
+			if diff := cmp.Diff(tt.wantDetachedNodes, detached); diff != "" {
+				t.Errorf("detached nodes mismatch (-want +got):\n%s", diff)
+			}
+
+			// 7. Check the actor's worker assignment and what worker-1 is booked
+			// for after the crash
+			assignment := crashed.GetStatus().GetWorkerAssignment()
+			if kept := assignment != nil; kept != tt.wantWorkerAssignmentKeptAfterCrash {
+				t.Errorf("worker assignment kept after crash = %v, want %v (assignment %v)", kept, tt.wantWorkerAssignmentKeptAfterCrash, assignment)
+			}
+			if assignment != nil && assignment.GetWorker().GetName() != podUID {
+				t.Errorf("kept worker assignment names worker %q, want %q", assignment.GetWorker().GetName(), podUID)
+			}
+			if tt.wantWorkerGone {
+				if _, err := tc.persistence.GetWorker(ctx, podUID); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("GetWorker after crash = %v, want ErrNotFound", err)
+				}
+			} else {
+				assertWorkerHoldsActors(t, tc, podUID, tt.wantActorsBookedToWorkerAfterCrash)
+			}
+
+			// 8. Stop atelet failing, so every exit can recover the crash, and
+			// forget the crash's Terminate call
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.FailRun = nil
+			tc.fakeAtelet.FailRestore = nil
+			tc.fakeAtelet.FailCheckpoint = nil
+			tc.fakeAtelet.FailUpload = nil
+			tc.fakeAtelet.FailTerminate = nil
+			tc.fakeAtelet.TerminateCalled = false
+			tc.fakeAtelet.TerminateRequest = nil
+			tc.fakeAtelet.Lock.Unlock()
+
+			// 9. Exit actor out of CRASHED state, with RevertActor() by default.
+			// The exit op also checks the actor's worker assignment is cleared,
+			// if the actor is still alive.
+			exitOp := tt.exitOp
+			if exitOp == nil {
+				exitOp = revertOut
+			}
+			exitOp(t, tc, env)
+
+			// 10. Check the worker, if still alive, doesn't hold the actor anymore
+			if _, err := tc.persistence.GetWorker(ctx, podUID); err == nil {
+				assertWorkerHoldsActors(t, tc, podUID, 0)
+			} else if !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetWorker failed: %v", err)
+			}
+
+			// 11. Check what the exit tore down, as step 6 does for the crash
+			tc.fakeAtelet.Lock.Lock()
+			exitTerminated, exitTerminateReq := tc.fakeAtelet.TerminateCalled, tc.fakeAtelet.TerminateRequest
+			tc.fakeAtelet.Lock.Unlock()
+			if exitTerminated != tt.wantExitTerminate {
+				t.Errorf("atelet Terminate called by exit = %v, want %v", exitTerminated, tt.wantExitTerminate)
+			}
+			if exitTerminated && exitTerminateReq.GetTargetAteomUid() != podUID {
+				t.Errorf("exit Terminate target ateom = %q, want %q", exitTerminateReq.GetTargetAteomUid(), podUID)
+			}
+			plugin.mu.Lock()
+			exitDetached := append([]string(nil), plugin.detachedNodes...)
+			plugin.mu.Unlock()
+			if diff := cmp.Diff(tt.wantExitDetachedNodes, exitDetached); diff != "" {
+				t.Errorf("detached nodes by exit mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// assertWorkerHoldsActors checks how many actors the worker is booked for, in
+// both its allocation total and its assignment records.
+func assertWorkerHoldsActors(t *testing.T, tc *testContext, workerName string, want int32) {
+	t.Helper()
+	worker, err := tc.persistence.GetWorker(context.Background(), workerName)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", workerName, err)
+	}
+	if got := worker.GetStatus().GetAllocated().GetActors(); got != want {
+		t.Errorf("worker allocation counts %d actors, want %d", got, want)
+	}
+	page, err := tc.persistence.ListWorkerAssignments(context.Background(), workerName, store.ListOptions{})
+	if err != nil {
+		t.Fatalf("ListWorkerAssignments(%s) failed: %v", workerName, err)
+	}
+	if got := len(page.Items); got != int(want) {
+		t.Errorf("worker holds %d assignments, want %d", got, want)
 	}
 }
 

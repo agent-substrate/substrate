@@ -160,7 +160,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing); err != nil {
+		if err := w.crashAndTearDownActor(ctx, actorRef, actorTemplate, ateattr.OperationPause, crashMessageWorkerAssignmentMissing); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", status.Errorf(codes.FailedPrecondition, "CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
@@ -201,7 +201,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	if _, err = client.Checkpoint(ctx, req); err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
 			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateletCrashMessage("Checkpoint", err)); cerr != nil {
+		if cerr := w.crashAndTearDownActor(ctx, actorRef, actorTemplate, ateattr.OperationPause, ateletCrashMessage("Checkpoint", err)); cerr != nil {
 			return wireSnapshotScope, cerr
 		}
 		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
@@ -264,6 +264,10 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 				ateattr.ActorRefLogAttrs(actorRef)...)
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 			crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
+			// TODO: Call atelet Terminate on assignment.GetNodeName() before the
+			// assignment is cleared, once Terminate succeeds with the ateom pod
+			// gone. We need this to clear the local snapshot and the actor
+			// directories on the node.
 		}
 		contentScope := actorTemplate.GetSnapshotConfig().GetOnPause()
 		sandboxClass := ""
