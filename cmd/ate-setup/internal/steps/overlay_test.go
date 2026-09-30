@@ -15,6 +15,8 @@
 package steps
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -26,6 +28,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
 // Splicing credential injection into the real sdsmint manifest replaces the
@@ -605,6 +608,65 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 			t.Error("the atelet DaemonSet was not restarted")
 		}
 	})
+}
+
+// A pre-built install renders the envoy egress manifest without building
+// anything: envoy-dataplane is pinned from the release like every ko image, so
+// neither docker nor KO_DOCKER_REPO is needed.
+func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
+	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	var looked []string
+	e := &Env{
+		Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Images: src},
+		resolver: images.NewPrebuilt(src, func(_ context.Context, ref string) (string, error) {
+			looked = append(looked, ref)
+			return digest, nil
+		}),
+	}
+
+	out, err := e.renderAtenetEgressManifest(t.Context())
+	if err != nil {
+		t.Fatalf("renderAtenetEgressManifest() error = %v", err)
+	}
+	want := "example.com/substrate/envoy-dataplane:v1.2.3@" + digest
+	if !strings.Contains(string(out), "image: "+want) {
+		t.Errorf("rendered manifest does not install %s:\n%s", want, out)
+	}
+	for _, leftover := range []string{"${ENVOY_DATAPLANE_IMAGE}", "ko://"} {
+		if strings.Contains(string(out), leftover) {
+			t.Errorf("rendered manifest still contains %q", leftover)
+		}
+	}
+	if !slices.Contains(looked, "example.com/substrate/envoy-dataplane:v1.2.3") {
+		t.Errorf("registry lookups = %v, want one for envoy-dataplane", looked)
+	}
+}
+
+// A release that did not publish envoy-dataplane fails the install with a
+// message naming the image and the target that publishes it, rather than a bare
+// registry error.
+func TestDockerfileImagePrebuiltNotPublished(t *testing.T) {
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	e := &Env{
+		Cfg: &config.Config{Images: src},
+		resolver: images.NewPrebuilt(src, func(_ context.Context, ref string) (string, error) {
+			return "", fmt.Errorf("resolving %s to a digest: MANIFEST_UNKNOWN", ref)
+		}),
+	}
+
+	_, err := e.dockerfileImage(t.Context(), envoyDataplaneImage, envoyDataplaneDockefile)
+	if err == nil {
+		t.Fatal("dockerfileImage() error = nil, want one")
+	}
+	for _, want := range []string{
+		"make build-envoy-dataplane",
+		"resolving example.com/substrate/envoy-dataplane:v1.2.3 to a digest: MANIFEST_UNKNOWN",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
+	}
 }
 
 func TestPatchEnvoyDataplaneImage(t *testing.T) {
