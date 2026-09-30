@@ -151,8 +151,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
 		}
 	}
-	// Publish attribution before restore so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution); err != nil {
+	// Publish attribution before restore so stats can include startup usage. A
+	// Data scope cold-boots, so only the other scopes resume the guest's
+	// counters.
+	resumesGuest := req.GetScope() != ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -511,6 +514,11 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// for the same reason as in coldBootActor. Same client the forwarding above
 	// reads over.
 	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: guestAC, workloadIDs: ra.workloadIDs})
+	// Looked up while the caller holds the actor's lock, so it is this
+	// activation.
+	if hosted := s.lookupActor(actorUID); hosted != nil {
+		go s.recordInitial(context.WithoutCancel(ctx), hosted)
+	}
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))
