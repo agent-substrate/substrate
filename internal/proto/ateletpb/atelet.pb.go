@@ -848,24 +848,47 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 }
 
 type RunRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-uuid
+	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The template identity is carried for metrics attribution.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:optional
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
 	// so a later Checkpoint can pin the same version into the snapshot manifest.
 	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
+	//
+	// +k8s:optional
 	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. atelet
 	// passes these through to the sandbox so it is sized to the actor (not the
 	// whole host or worker pod). Zero means "unset": keep the runtime default.
-	CpuMilli      int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	// +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
+	CpuMilli int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	// +k8s:optional
+	// +k8s:minimum=0
 	MemoryBytes   int64 `protobuf:"varint,11,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -983,6 +1006,10 @@ type EgressGateway struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// address is required and identifies the remote gateway as an IP address or
 	// DNS name followed by its port.
+	//
+	// +k8s:required
+	// +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
+	// +k8s:customValidation # host:port shape
 	Address       string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

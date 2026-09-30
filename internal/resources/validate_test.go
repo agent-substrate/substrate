@@ -539,3 +539,20 @@ func TestValidateNestedMountPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateHostPort(t *testing.T) {
+	runStringRule(t, ValidateHostPort, []stringRuleCase{
+		{name: "empty is left to presence tags", value: ""},
+		{name: "dns name", value: "atenet-egress.ate-system.svc:443"},
+		{name: "ipv4", value: "10.0.0.1:8080"},
+		{name: "ipv6", value: "[fd00::1]:443"},
+		{name: "missing port", value: "atenet-egress.ate-system.svc", wantErr: true},
+		{name: "empty host", value: ":443", wantErr: true},
+		{name: "uppercase host", value: "Egress.Example:443", wantErr: true},
+		{name: "host with a path", value: "egress/../x:443", wantErr: true},
+		{name: "port zero", value: "egress.example:0", wantErr: true},
+		{name: "port too large", value: "egress.example:65536", wantErr: true},
+		{name: "named port", value: "egress.example:https", wantErr: true},
+		{name: "unbracketed ipv6", value: "fd00::1:443", wantErr: true},
+	})
+}

@@ -220,15 +220,33 @@ message TerminateResponse {
 }
 
 message RunRequest {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string target_ateom_uid = 1;
 
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 3;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 4;
 
+  // The template identity is carried for metrics attribution.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 5;
+
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 6;
 
+  // +k8s:optional
   WorkloadSpec spec = 7;
 
   // The sandbox binaries to use for booting this actor from scratch. atelet
@@ -237,12 +255,21 @@ message RunRequest {
   SandboxAssets sandbox_assets = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
   optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. atelet
   // passes these through to the sandbox so it is sized to the actor (not the
   // whole host or worker pod). Zero means "unset": keep the runtime default.
-  int64 cpu_milli = 10;    // CPU limit in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
+  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
+
+  // +k8s:optional
+  // +k8s:minimum=0
   int64 memory_bytes = 11; // Memory limit in bytes.
 }
 
@@ -250,6 +277,10 @@ message RunRequest {
 message EgressGateway {
   // address is required and identifies the remote gateway as an IP address or
   // DNS name followed by its port.
+  //
+  // +k8s:required
+  // +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
+  // +k8s:customValidation # host:port shape
   string address = 1;
 }
 

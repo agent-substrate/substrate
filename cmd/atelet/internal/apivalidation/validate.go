@@ -33,6 +33,11 @@ func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.Mint
 	return Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateRunRequest runs the generated validation for req.
+func ValidateRunRequest(ctx context.Context, req *ateletpb.RunRequest) field.ErrorList {
+	return Validate_RunRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateTerminateRequest runs the generated validation for req.
 func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateRequest) field.ErrorList {
 	return Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -48,6 +53,10 @@ func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWork
 // of names are enforced by tags.
 func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.Limits) field.ErrorList {
 	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
+}
+
+func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateHostPort(fldPath, *value)
 }
 
 // ateDeepEqual is the deep-equal function declarative validation's generated

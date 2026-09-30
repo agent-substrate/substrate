@@ -155,6 +155,160 @@ func TestValidateMintActorCertificateRequest(t *testing.T) {
 	}
 }
 
+func TestValidateRunRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.RunRequest)) *ateletpb.RunRequest {
+		r := &ateletpb.RunRequest{
+			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			Atespace:              "team-a",
+			ActorName:             "actor-1",
+			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+			ActorTemplateAtespace: "team-a",
+			ActorTemplateName:     "tmpl-1",
+			Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker", Image: testDigestImage}}},
+			CpuMilli:              500,
+			MemoryBytes:           1 << 30,
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+	containerName := field.NewPath("spec", "containers").Index(0).Child("name")
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.RunRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing target_ateom_uid",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.TargetAteomUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("target_ateom_uid"), "")},
+	}, {
+		name: "invalid target_ateom_uid: path escape",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.TargetAteomUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing atespace",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.Atespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name: "invalid atespace: path escape",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.Atespace = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_name",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ActorName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		name: "invalid actor_name: path escape",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ActorName = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_uid",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid: path escape",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ActorUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid actor_template_atespace: uppercase",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ActorTemplateAtespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid actor_template_name: trailing dash",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ActorTemplateName = "tmpl-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "unset template identity is allowed",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.ActorTemplateAtespace = ""
+			r.ActorTemplateName = ""
+		}),
+	}, {
+		name: "unset spec is allowed",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.Spec = nil }),
+	}, {
+		name: "invalid container name: path escape",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.Spec.Containers[0].Name = "../escape"
+		}),
+		want: field.ErrorList{field.Invalid(containerName, nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "reserved container name",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.Spec.Containers[0].Name = "pause"
+		}),
+		want: field.ErrorList{field.Invalid(containerName, nil, "")},
+	}, {
+		name: "duplicate container name",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.Spec.Containers = append(r.Spec.Containers, &ateletpb.Container{Name: "worker", Image: testDigestImage})
+		}),
+		want: field.ErrorList{field.Duplicate(field.NewPath("spec", "containers").Index(1), nil)},
+	}, {
+		name: "egress gateway with a DNS name",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.EgressGateway = &ateletpb.EgressGateway{Address: "atenet-egress.ate-system.svc:443"}
+		}),
+	}, {
+		name: "egress gateway with an IPv6 address",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.EgressGateway = &ateletpb.EgressGateway{Address: "[fd00::1]:443"}
+		}),
+	}, {
+		name: "egress gateway missing address",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.EgressGateway = &ateletpb.EgressGateway{}
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("egress_gateway", "address"), "")},
+	}, {
+		name: "egress gateway address without a port",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.EgressGateway = &ateletpb.EgressGateway{Address: "atenet-egress.ate-system.svc"}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("egress_gateway", "address"), nil, "")},
+	}, {
+		name: "egress gateway address too long",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.EgressGateway = &ateletpb.EgressGateway{Address: strings.Repeat("a", 258) + ":443"}
+		}),
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("egress_gateway", "address"), nil, 261).WithOrigin("maxLength"),
+			field.Invalid(field.NewPath("egress_gateway", "address"), nil, ""),
+		},
+	}, {
+		name: "negative cpu_milli",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.CpuMilli = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "cpu_milli at the bound",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.CpuMilli = 999999 }),
+	}, {
+		name: "cpu_milli over the bound",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.CpuMilli = 1000000 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "negative memory_bytes",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.MemoryBytes = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "unset sizes are allowed",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.CpuMilli = 0
+			r.MemoryBytes = 0
+		}),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateRunRequest(context.Background(), tt.obj), tt.want)
+		})
+	}
+}
+
 func TestValidateTerminateRequest(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.TerminateRequest)) *ateletpb.TerminateRequest {
 		r := &ateletpb.TerminateRequest{

@@ -17,11 +17,13 @@ package resources
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -464,6 +466,28 @@ func ValidateVolumeType(fldPath *field.Path, volumeType string) field.ErrorList 
 	var errs field.ErrorList
 	for _, msg := range validation.IsDNS1123Subdomain(strings.TrimPrefix(volumeType, "substrate.io/")) {
 		errs = append(errs, field.Invalid(fldPath, volumeType, msg))
+	}
+	return errs
+}
+
+// ValidateHostPort requires "host:port", where host is an IP address or a DNS
+// subdomain name and port is a number in 1..65535.
+func ValidateHostPort(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, value, "must be host:port")}
+	}
+	var errs field.ErrorList
+	if _, err := netip.ParseAddr(host); err != nil {
+		for _, msg := range content.IsDNS1123Subdomain(host) {
+			errs = append(errs, field.Invalid(fldPath, value, "host: "+msg))
+		}
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		errs = append(errs, field.Invalid(fldPath, value, "port must be a number between 1 and 65535"))
 	}
 	return errs
 }

@@ -287,7 +287,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	const (
 		atespace     = "ate-demo"
 		actorName    = "counter"
-		actorUID     = "actor-uid-1"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
 		ateomUID     = "ateom-uid-1"
 		snapshotName = "pause-snap-1"
 	)
@@ -297,7 +297,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
-	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
 	checkpointPause := host + "/pause:v1"
 	pushTestImage(t, checkpointPause, singleFileLayer(t, "pause", "pause-v1"))
 	restorePause := host + "/pause:v2"
@@ -325,7 +325,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		}
 	}
 	spec := &ateletpb.WorkloadSpec{
-		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{

@@ -472,10 +472,8 @@ func NewService(
 }
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *ateletpb.RunResponse, err error) {
-	if err := validateRunRequest(req); err != nil {
-		// status.Error so the interceptor surfaces InvalidArgument and the
-		// message instead of masking both as Internal.
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+	if errs := apivalidation.ValidateRunRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -1755,33 +1753,14 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	return conn, nil
 }
 
-// validateRunRequest, validateCheckpointRequest, and validateRestoreRequest
-// validate everything in their request that atelet turns into host filesystem
-// paths, plus the request-specific fields. atelet listens on an insecure
+// validateCheckpointRequest and validateRestoreRequest validate everything in
+// their request that atelet turns into host filesystem paths, plus the
+// request-specific fields. atelet listens on an insecure
 // hostPort, so any reachable caller could otherwise smuggle a path separator
 // or ".." through these fields and make atelet read/RemoveAll/write outside
 // the intended directory tree, or collide bundles. Each RPC validates at its
 // boundary, before any path is built. The field rules live in
 // internal/resources so other components can apply them at their boundaries.
-func validateRunRequest(req *ateletpb.RunRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	if len(errs) > 0 {
-		return errs.ToAggregate()
-	}
-	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(req.GetSpec().GetContainers()))
-	for _, ctr := range req.GetSpec().GetContainers() {
-		names = append(names, ctr.GetName())
-	}
-	return resources.ValidateContainerNames(names)
-}
-
 func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	var errs field.ErrorList
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)

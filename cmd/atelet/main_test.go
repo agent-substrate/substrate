@@ -401,21 +401,9 @@ func TestWriteFileAtomic(t *testing.T) {
 	})
 }
 
-// validRunRequest, validCheckpointRequest, and validRestoreRequest build
+// validCheckpointRequest and validRestoreRequest build
 // requests whose every field passes validation; the per-request tests below
 // break one field per case.
-func validRunRequest() *ateletpb.RunRequest {
-	return &ateletpb.RunRequest{
-		Atespace:              "ate-demo",
-		ActorName:             "counter-1",
-		ActorTemplateAtespace: "ate-demo",
-		ActorTemplateName:     "counter",
-		TargetAteomUid:        "422938ba-8860-4983-a25d-d6bcb0a69d4e",
-		ActorUid:              "123e4567-e89b-12d3-a456-426614174000",
-		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
-	}
-}
-
 func validCheckpointRequest() *ateletpb.CheckpointRequest {
 	return &ateletpb.CheckpointRequest{
 		Atespace:              "ate-demo",
@@ -455,34 +443,6 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 			SandboxClass: "gvisor",
 			PauseImage:   testPauseImage,
 		},
-	}
-}
-
-func TestValidateRunRequest(t *testing.T) {
-	tests := []struct {
-		name    string
-		mutate  func(*ateletpb.RunRequest)
-		wantErr bool
-	}{
-		{"valid", func(*ateletpb.RunRequest) {}, false},
-		{"invalid ateom uid", func(r *ateletpb.RunRequest) { r.TargetAteomUid = "../escape" }, true},
-		{"invalid atespace", func(r *ateletpb.RunRequest) { r.Atespace = "../escape" }, true},
-		{"invalid actor name", func(r *ateletpb.RunRequest) { r.ActorName = "../escape" }, true},
-		{"invalid actor uid", func(r *ateletpb.RunRequest) { r.ActorUid = "../escape" }, true},
-		{"any actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateAtespace, r.ActorTemplateName = "Not_Valid", "Not_Valid" }, false},
-		{"empty actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateAtespace, r.ActorTemplateName = "", "" }, false},
-		{"invalid container name", func(r *ateletpb.RunRequest) {
-			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
-		}, true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			req := validRunRequest()
-			tc.mutate(req)
-			if err := validateRunRequest(req); (err != nil) != tc.wantErr {
-				t.Errorf("validateRunRequest err = %v, wantErr %v", err, tc.wantErr)
-			}
-		})
 	}
 }
 
@@ -797,7 +757,10 @@ func TestRPCBoundariesReject(t *testing.T) {
 	ctx := context.Background()
 	badUID := "../escape" // valid actor ref, invalid ateom UID
 	const okAtespace, okID, okActorUID = "ate-demo", "counter-1", "123e4567-e89b-12d3-a456-426614174000"
-	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}}
+	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
+		Name:  "worker",
+		Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}}}
 
 	wantInvalidArgument := func(t *testing.T, rpc string, err error) {
 		t.Helper()
