@@ -1967,3 +1967,71 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		t.Errorf("attach wrote to the stored actor (-before +after):\n%s", diff)
 	}
 }
+
+// nodeTrackingPlugin records AttachVolume calls and returns a publish context
+// reflecting the node argument.
+type nodeTrackingPlugin struct {
+	volume.VolumePluginControlPlane
+	attachCalls []volume.AttachVolumeRequest
+}
+
+func (p *nodeTrackingPlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	p.attachCalls = append(p.attachCalls, req)
+	return volume.AttachVolumeResponse{
+		PublishContext: map[string]string{
+			"attached-node": req.Node,
+			"devicePath":    "/dev/xvdba",
+		},
+	}, nil
+}
+
+// TestEnsureVolumesAttached_NodeMigration verifies that when an actor is
+// scheduled onto a new node during migration, AttachVolume is called with
+// the new NodeName and the returned publish context reflects the new node.
+func TestEnsureVolumesAttached_NodeMigration(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				{VolumeName: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			},
+		},
+	})
+	actor, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+
+	plugin := &nodeTrackingPlugin{}
+	w := &ActorWorkflow{
+		store: persistence,
+		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
+			"mock": plugin,
+		}},
+	}
+	worker := &ateapipb.Worker{NodeName: "node-2"}
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{Name: "mounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+		},
+		Containers: []*ateapipb.Container{
+			{Name: "main", Image: "img", VolumeMounts: []*ateapipb.VolumeMount{{Name: "mounted", MountPath: "/data"}}},
+		},
+	}
+
+	got, err := w.ensureVolumesAttached(ctx, actor, worker, tmpl)
+	if err != nil {
+		t.Fatalf("ensureVolumesAttached: %v", err)
+	}
+	want := map[string]map[string]string{"mounted": {"attached-node": "node-2", "devicePath": "/dev/xvdba"}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("publish contexts mismatch (-want +got):\n%s", diff)
+	}
+	if len(plugin.attachCalls) != 1 || plugin.attachCalls[0].Node != "node-2" {
+		t.Errorf("attachCalls on migration = %v, want attach to node-2", plugin.attachCalls)
+	}
+}
