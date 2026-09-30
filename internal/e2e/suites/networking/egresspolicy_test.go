@@ -134,13 +134,11 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 	t.Logf("denied on the decrypted request: %s", body)
 }
 
-// TestActorEgressHTTPSByHostnamePassthrough: the plain gateway cannot read
-// TLS, and no passthrough rule allows either connection, so both are closed
-// before a byte reaches an origin, the allowed name included. The demo app
-// reports each as a 502.
+// TestActorEgressHTTPSByHostnamePassthrough: the gateway acts as TCP proxy fetching
+// allowed SNI.
 func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
-	if egressMITM() {
-		t.Skip("covers the plain gateway; sdsmint is TestActorEgressHTTPSByHostnameMITM")
+	if !egressMITM() {
+		t.Skip("requires the same configuration as sdsmint")
 	}
 	if !e2e.CurrentAtenetDataplane().SupportsTLSPassthroughEgressPolicy() {
 		t.Skip("TODO: AgentGateway must enforce substrateEgress for TLS passthrough")

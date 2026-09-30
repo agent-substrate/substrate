@@ -134,10 +134,10 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	const passthrughOrigin = "https://" + egressOriginPassthroughHost + "/"
 	pos = probeFetch(t, ctx, rc, id, passthrughOrigin, "system")
 	if pos.Error != "" {
-		t.Fatalf("TLS passthrough with the projected trust bundle failed: %s — the projected anchors did not validate the gateway's minted leaf (or interception/minting is broken)", pos.Error)
+		t.Fatalf("TLS passthrough with the system trust bundle failed: %s", pos.Error)
 	}
 	if pos.Status != "200" {
-		t.Fatalf("passthorugh fetch %s via projected bundle: status %s, want 200", passthrughOrigin, pos.Status)
+		t.Fatalf("passthorugh fetch %s, status %s, want 200", passthrughOrigin, pos.Status)
 	}
 
 	// A host outside the policy is closed at the ClientHello: expect a
