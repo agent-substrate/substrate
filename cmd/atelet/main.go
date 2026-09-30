@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -204,13 +206,25 @@ func main() {
 	if err := validateImageCacheGCFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
 	}
-	imageCache, err := imagecache.New(*imageCacheDir,
+	imageCacheOpts := []imagecache.Option{
 		imagecache.WithAuthenticator(gcpRegistryAuthn),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
 		imagecache.WithActorsDir(nodepath.ActorsDir),
 		imagecache.WithMinAge(*imageCacheMinAge),
 		imagecache.WithMeter(otel.Meter("atelet")),
-	)
+	}
+	// ATE_IMAGECACHE_DOCKERCONFIG: path to a docker-style config.json
+	// (usually a mounted Secret). When set, actor-image pulls consult it for
+	// per-registry credentials — the same credential model kubelet uses for
+	// imagePullSecrets.
+	if dockerCfgPath := os.Getenv("ATE_IMAGECACHE_DOCKERCONFIG"); dockerCfgPath != "" {
+		kc, kcErr := newDockerconfigKeychain(dockerCfgPath)
+		if kcErr != nil {
+			serverboot.Fatal(ctx, "Failed to read ATE_IMAGECACHE_DOCKERCONFIG", kcErr)
+		}
+		imageCacheOpts = append(imageCacheOpts, imagecache.WithKeychain(kc))
+	}
+	imageCache, err := imagecache.New(*imageCacheDir, imageCacheOpts...)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open image cache", err)
 	}
@@ -2099,4 +2113,48 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 		return nil, nil, fmt.Errorf("create ate clientset: %w", err)
 	}
 	return clientset, ateClient, nil
+}
+
+// dockerAuthEntry and dockerconfigKeychain resolve per-registry credentials
+// from a docker-style config.json ({"auths": {host: {"auth": base64(u:p)}}}).
+type dockerAuthEntry struct {
+	Auth     string `json:"auth"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type dockerconfigKeychain struct {
+	auths map[string]dockerAuthEntry
+}
+
+func newDockerconfigKeychain(path string) (authn.Keychain, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		Auths map[string]dockerAuthEntry `json:"auths"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return nil, err
+	}
+	return &dockerconfigKeychain{auths: cfg.Auths}, nil
+}
+
+func (k *dockerconfigKeychain) Resolve(res authn.Resource) (authn.Authenticator, error) {
+	entry, ok := k.auths[res.RegistryStr()]
+	if !ok {
+		return authn.Anonymous, nil
+	}
+	if entry.Auth != "" {
+		if raw, err := base64.StdEncoding.DecodeString(entry.Auth); err == nil {
+			if u, pw, ok := strings.Cut(string(raw), ":"); ok {
+				return &authn.Basic{Username: u, Password: pw}, nil
+			}
+		}
+	}
+	if entry.Username != "" {
+		return &authn.Basic{Username: entry.Username, Password: entry.Password}, nil
+	}
+	return authn.Anonymous, nil
 }
