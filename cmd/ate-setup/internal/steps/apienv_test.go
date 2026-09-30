@@ -54,9 +54,9 @@ func TestRedactDSN(t *testing.T) {
 			want: "user=ate@p.iam host=127.0.0.1 port=5432 dbname=atepg sslmode=disable",
 		},
 		{
-			name: "bundled password is redacted",
-			dsn:  bundledPostgresDSN("substrate_readwrite_user", "substrate-readwrite"),
-			want: strings.Replace(bundledPostgresDSN("substrate_readwrite_user", "substrate-readwrite"), ":substrate-readwrite@", ":***@", 1),
+			name: "the default in-cluster DSN is unchanged",
+			dsn:  config.DefaultPostgresConnectionString,
+			want: config.DefaultPostgresConnectionString,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,16 +92,57 @@ func TestEnvHash(t *testing.T) {
 
 func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		cfg       config.Config
-		bootstrap string
-		user      string
+		name          string
+		cfg           config.Config
+		readWriteDSN  string
+		ownerDSN      string
+		readWriteRole string
+		ownerRole     string
 	}{
 		{
-			name:      "bundled identities",
-			cfg:       config.Config{PostgresReadWriteRole: "substrate_readwrite", PostgresOwnerRole: "substrate_owner"},
-			bootstrap: "true",
-			user:      "substrate_readwrite_user",
+			name:          "bundled account",
+			cfg:           config.Config{PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole},
+			readWriteDSN:  config.DefaultPostgresConnectionString,
+			ownerDSN:      config.DefaultPostgresConnectionString,
+			readWriteRole: "postgres", ownerRole: "postgres",
+		},
+		{
+			name:          "size10 bundled account",
+			cfg:           config.Config{ClusterSize: config.ClusterSizeSize10},
+			readWriteDSN:  config.DefaultPostgresConnectionString + config.Size10PostgresPoolParams,
+			ownerDSN:      config.DefaultPostgresConnectionString,
+			readWriteRole: "postgres", ownerRole: "postgres",
+		},
+		{
+			name: "explicit bundled roles",
+			cfg: config.Config{
+				PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
+				PostgresReadWriteRoleSet: true, PostgresOwnerRoleSet: true,
+			},
+			readWriteDSN:  config.DefaultPostgresConnectionString,
+			ownerDSN:      config.DefaultPostgresConnectionString,
+			readWriteRole: "tenant_readwrite", ownerRole: "tenant_owner",
+		},
+		{
+			name: "external one login",
+			cfg: config.Config{
+				PostgresReadWriteConnectionString: "postgres://operator@database/atepg",
+				PostgresReadWriteRole:             "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
+			},
+			readWriteDSN:  "postgres://operator@database/atepg",
+			ownerDSN:      "postgres://operator@database/atepg",
+			readWriteRole: "tenant_readwrite", ownerRole: "tenant_owner",
+		},
+		{
+			name: "external separate logins",
+			cfg: config.Config{
+				PostgresReadWriteConnectionString: "postgres://runtime@database/atepg",
+				PostgresOwnerConnectionString:     "postgres://owner@database/atepg",
+				PostgresReadWriteRole:             "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
+			},
+			readWriteDSN:  "postgres://runtime@database/atepg",
+			ownerDSN:      "postgres://owner@database/atepg",
+			readWriteRole: "tenant_readwrite", ownerRole: "tenant_owner",
 		},
 		{
 			name: "Cloud SQL one login",
@@ -109,8 +150,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 				PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
 				CloudSQL: config.CloudSQLConfig{Instance: "p:r:i", InstanceSet: true, GSA: "svc@p.iam.gserviceaccount.com"},
 			},
-			bootstrap: "false",
-			user:      "svc@p.iam",
+			readWriteRole: "tenant_readwrite", ownerRole: "tenant_owner",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,7 +158,6 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
 				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
-				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem}, Data: map[string][]byte{"POSTGRES_USER": []byte("postgres"), "POSTGRES_PASSWORD": []byte("postgres")}},
 			)}
 			if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
 				t.Fatal(err)
@@ -129,17 +168,18 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 			}
 			readWrite := secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"]
 			owner := secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"]
-			if !strings.Contains(readWrite, tc.user) || owner == "" {
+			if tc.cfg.CloudSQL.Instance != "" {
+				if !strings.Contains(readWrite, "svc@p.iam") || readWrite != owner {
+					t.Fatalf("Cloud SQL one-login connections: %q, %q", readWrite, owner)
+				}
+			} else if readWrite != tc.readWriteDSN || owner != tc.ownerDSN {
 				t.Fatalf("unexpected connections: %q, %q", readWrite, owner)
-			}
-			if tc.bootstrap == "false" && readWrite != owner {
-				t.Fatalf("Cloud SQL one-login connections differ: %q, %q", readWrite, owner)
 			}
 			cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cm.Data["ATE_API_POSTGRES_BOOTSTRAP"] != tc.bootstrap || cm.Data["ATE_API_POSTGRES_OWNER_ROLE"] != tc.cfg.PostgresOwnerRole {
+			if cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"] != tc.readWriteRole || cm.Data["ATE_API_POSTGRES_OWNER_ROLE"] != tc.ownerRole {
 				t.Fatalf("unexpected PostgreSQL config: %v", cm.Data)
 			}
 		})
