@@ -180,9 +180,8 @@ type SNIRule struct {
 	Mode    SNIMode
 }
 
-// SNIRules returns the https and tls_passthrough rules for port, most specific
-// first: exact names before wildcards, then named ports before all ports. Ties
-// keep policy order.
+// SNIRules returns the https and tls_passthrough rules for a dialed port,
+// sorted according to the API tie-breaking rules
 func (p *Policy) SNIRules(port uint16) []SNIRule {
 	type ranked struct {
 		rule SNIRule
