@@ -61,7 +61,7 @@ demo_usage() {
       echo "                                                (STORAGE_CLASS names the class; it otherwise follows --setup-csi)"
       ;;
     demo-counter-microvm|demo-egress-microvm)
-      echo "  Needs hack/install-microvm-deps.sh --install to have run (cluster-wide microvm SandboxConfig)."
+      echo "  Needs 'go run ./cmd/ate-setup deploy microvm-deps' to have run (cluster-wide microvm SandboxConfig)."
       ;;
     demo-claude-code-multiplex)
       echo "  Required env: ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO"
@@ -161,7 +161,7 @@ usage() {
   echo "  --delete-benchmarks                    Delete the locust stack and workloads"
   echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
   echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)."
-  echo "                                         microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "                                         microvm also runs 'ate-setup deploy microvm-deps'."
   echo "  --benchmark-actor-memory SIZE          Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                                         the smallest size microvm admits)"
   echo ""

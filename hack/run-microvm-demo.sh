@@ -19,9 +19,9 @@
 # and calls this script), mirroring install-ate.sh / install-ate-kind.sh.
 #
 # Composes:
-#   1. hack/install-ate.sh --deploy-ate-system  (control plane)
-#   2. hack/install-microvm-deps.sh --install   (asset build/stage + cluster-wide
-#                                                microvm SandboxConfig)
+#   1. hack/install-ate.sh --deploy-ate-system    (control plane)
+#   2. go run ./cmd/ate-setup deploy microvm-deps (asset build/stage + cluster-wide
+#                                                  microvm SandboxConfig)
 #   3. Deploy the counter-microvm demo (worker pool manifest, atespace, and
 #      ActorTemplate through the ate API).
 #
@@ -89,10 +89,10 @@ else
 fi
 
 # --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
-# install-microvm-deps.sh handles the assemble/stage/apply flow. Ordering
+# `ate-setup deploy microvm-deps` handles the assemble/stage/apply flow. Ordering
 # matters: the control plane must be up so the SandboxConfig CRD exists.
 log "Installing micro-VM dependencies..."
-KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install
+KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" go run ./cmd/ate-setup deploy microvm-deps
 
 # --- 3. apply the demo ------------------------------------------------------
 KCTX_FLAG=""
