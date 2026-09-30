@@ -40,6 +40,15 @@ var substrateFixtures = []struct {
 		Pool:     "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
 	}, 1},
+	// Only the pool-bearing half of the cross-tenant security fixture: its
+	// second tenant deploys a namespace with no WorkerPool (both tenants share
+	// one worker, see fixtures/security/tenant-pool.yaml.tmpl), and the
+	// rendering checks below require a pool. The template half is the same file
+	// for both tenants, so it is covered here for both.
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/security/tenant-pool.yaml.tmpl",
+		Template: "internal/e2e/fixtures/security/tenant-template.yaml.tmpl",
+	}, 1},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
