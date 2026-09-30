@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, TextIO
 
+from actor_sampler import ActorSampler
 from cluster_facts import (
     EMPTY_FACTS,
     append_trial_summary,
@@ -58,6 +59,11 @@ BOOMER_BINARY = "/app/boomer-worker"
 # gives boomer the values that change while a run continues. Locust already
 # holds 5557 (master) and 8089 (web UI) in this container.
 BOOMER_CONFIG_PORT = 5560
+
+# Port boomer serves its Prometheus /metrics on. The runner samples the
+# locust_actors gauge there into actors_history.csv.
+BOOMER_METRICS_PORT = 8001
+ACTOR_SAMPLE_INTERVAL_SECONDS = 5
 
 # Tab-separated columns written to traces.txt. Order matters — readers split
 # on \t and index positionally.
@@ -273,12 +279,14 @@ def pump_stream(prefix: str, stream: IO[str], logs: TextIO, traces: TextIO) -> N
             traces.flush()
 
 
-def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: TextIO) -> int:
+def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: TextIO,
+             actors_csv: Path) -> int:
     """Run locust (and boomer, when needed). Returns locust's exit code.
 
     Stdout from each subprocess is forwarded to logs.txt with a `[locust]` /
     `[boomer]` prefix so they're distinguishable; trace_id matches are
-    siphoned into traces.txt as a deduped one-per-line list.
+    siphoned into traces.txt as a deduped one-per-line list. With boomer,
+    its locust_actors gauge is sampled into actors_csv while locust runs.
     """
     with_boomer = needs_boomer(args.file)
 
@@ -329,6 +337,7 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
         # shape, reaches boomer at the change. boomer's --master-host default
         # is the loopback address, where the server above listens.
         boomer_cmd += ["--master-web-port", str(BOOMER_CONFIG_PORT)]
+        boomer_cmd += ["--prometheus-addr", f":{BOOMER_METRICS_PORT}"]
         tee(logs, f"Running: {' '.join(boomer_cmd)}")
         boomer_proc = subprocess.Popen(
             boomer_cmd,
@@ -346,8 +355,22 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
     for t in pumps:
         t.start()
 
+    sampler = None
+    if boomer_proc is not None:
+        sampler = ActorSampler(
+            f"http://localhost:{BOOMER_METRICS_PORT}/metrics",
+            actors_csv,
+            ACTOR_SAMPLE_INTERVAL_SECONDS,
+            lambda msg: tee(logs, msg),
+        )
+        sampler.start()
+
     locust_exit = locust_proc.wait()
     tee(logs, f"Locust exited with code {locust_exit}")
+    # Stop before boomer's teardown, which deletes every actor: the history
+    # covers the test window only.
+    if sampler is not None:
+        sampler.stop()
 
     if boomer_proc is not None:
         # Locust finishing means the test window is over; let boomer drain
@@ -450,6 +473,7 @@ def main() -> None:
     logs_path = work_dir / f"{args.name}_logs.txt"
     traces_path = work_dir / f"{args.name}_traces.txt"
     status_path = work_dir / f"{args.name}_status.json"
+    actors_history_csv = work_dir / f"{args.name}_actors_history.csv"
 
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
@@ -460,7 +484,7 @@ def main() -> None:
         traces.write("\t".join(TRACE_COLUMNS) + "\n")
         traces.flush()
         log_run_config(args, prefix, work_dir, logs)
-        exit_code = run_test(args, csv_prefix, logs, traces)
+        exit_code = run_test(args, csv_prefix, logs, traces, actors_history_csv)
 
         stats_generated = False
         if stats_csv.exists():
@@ -508,6 +532,7 @@ def main() -> None:
                     data_ts,
                     facts,
                     logs,
+                    actors_history_csv=actors_history_csv,
                 )
             except Exception as e:
                 tee(logs, f"Warning: Failed to record cluster facts: {e}")
@@ -527,6 +552,7 @@ def main() -> None:
         (work_dir / f"{args.name}_exceptions.csv", "exceptions.csv"),
         (work_dir / f"{args.name}_failures.csv", "failures.csv"),
         (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
+        (actors_history_csv, "actors_history.csv"),
         # TODO: remove after data migration
         (jsonl_path, f"{args.name}.jsonl"),
     ]

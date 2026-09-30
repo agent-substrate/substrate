@@ -15,7 +15,8 @@
 // Package metrics mirrors the Prometheus surface emitted by
 // benchmarking/locust/common/metrics.py — same metric names and labels so
 // dashboards built against the Python locust workers keep working when the
-// load source is a boomer-Go worker.
+// load source is a boomer-Go worker. locust_actors is the exception: only
+// boomer workers drive actors, so the Python surface has no counterpart.
 package metrics
 
 import (
@@ -54,11 +55,38 @@ var (
 		},
 		[]string{"user_class"},
 	)
+
+	actors = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "locust_actors",
+			Help: "Actors this worker created and has not deleted, by user_class and the lifecycle state the worker last observed.",
+		},
+		[]string{"user_class", "state"},
+	)
 )
 
 func init() {
-	prometheus.MustRegister(requestsTotal, requestDuration, activeUsers)
+	prometheus.MustRegister(requestsTotal, requestDuration, activeUsers, actors)
 }
+
+// ActorState is the lifecycle state a worker last observed for an actor it
+// drives. It is the client's view: an RPC that failed on the client but
+// committed on the server leaves the two disagreeing.
+type ActorState string
+
+const (
+	// ActorStateNone means the worker does not count the actor: it was never
+	// created, or the worker has issued its DeleteActor.
+	ActorStateNone ActorState = ""
+	// ActorStateHibernated covers created-but-never-resumed actors as well as
+	// paused and suspended ones: none of them hold a running workload.
+	ActorStateHibernated ActorState = "hibernated"
+	ActorStateRunning    ActorState = "running"
+	// ActorStateHibernatePending is an actor whose last Pause/Suspend failed,
+	// leaving it RUNNING or mid-hibernate on the server.
+	ActorStateHibernatePending ActorState = "hibernate_pending"
+	ActorStateCrashed          ActorState = "crashed"
+)
 
 // Serve starts a /metrics HTTP server on addr. Returns when the server stops
 // (or when ctx is cancelled, after which the server is gracefully shut down).
@@ -104,4 +132,19 @@ func RecordFailure(method, name, userClass string, latency time.Duration, errMsg
 // user start, negative on stop).
 func UpdateUsers(userClass string, delta float64) {
 	activeUsers.WithLabelValues(userClass).Add(delta)
+}
+
+// MoveActor moves one actor of userClass between states on the actors gauge.
+// Moving from ActorStateNone starts counting the actor and moving to it stops,
+// so the sum across states is the number of live actors.
+func MoveActor(userClass string, from, to ActorState) {
+	if from == to {
+		return
+	}
+	if from != ActorStateNone {
+		actors.WithLabelValues(userClass, string(from)).Dec()
+	}
+	if to != ActorStateNone {
+		actors.WithLabelValues(userClass, string(to)).Inc()
+	}
 }

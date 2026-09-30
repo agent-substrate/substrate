@@ -35,6 +35,7 @@ from kubernetes.client.rest import ApiException
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import actor_sampler
 import cluster_facts
 import runner
 
@@ -86,7 +87,8 @@ def discover(api):
 
 
 def summarize(facts, directory, stats=STATS_HEADER + ",Aggregated,100,25\n",
-              users=10, user_counts=None, actors_per_user=None):
+              users=10, user_counts=None, actors_per_user=None,
+              actors_history=None):
     """Writes CSV inputs and returns the emitted trial_summary row."""
     d = Path(directory)
     if stats is not None:
@@ -97,13 +99,19 @@ def summarize(facts, directory, stats=STATS_HEADER + ",Aggregated,100,25\n",
         "Timestamp,User Count,Type,Name,Requests/s,Failures/s\n"
         + "".join(f"{1788914584 + i},{u},,Aggregated,1.0,0.0\n"
                   for i, u in enumerate(user_counts)))
+    actors_csv = None
+    if actors_history is not None:
+        actors_csv = d / "actors_history.csv"
+        actors_csv.write_text("Timestamp,User Class,State,Count\n" + "".join(
+            f"{ts},GluttonUser,{state},{count}\n"
+            for ts, state, count in actors_history))
     out = d / "out.jsonl"
     with contextlib.redirect_stdout(io.StringIO()):
         cluster_facts.append_trial_summary(
             out, d / "stats.csv", d / "stats_history.csv",
             argparse.Namespace(users=users, tag="unit", name="unit-run",
                                actors_per_user=actors_per_user),
-            "2026-01-01", facts)
+            "2026-01-01", facts, actors_history_csv=actors_csv)
     return json.loads(out.read_text().splitlines()[0])
 
 
@@ -222,8 +230,32 @@ class ClusterFactsTest(unittest.TestCase):
                              set(row["measurements"]))
         for key in ("actors_per_node", "actors_per_vcpu", "actors_per_gb_ram",
                     "actors_per_pod_p50", "actors_per_pod_p90",
-                    "actors_per_pod_p99"):
+                    "actors_per_pod_p99", "running_actors_per_node",
+                    *actor_sampler.EMPTY_ACTOR_SUMMARY):
             self.assertIsNone(row["measurements"][key])
+
+    def test_sampled_actor_counts(self):
+        history = [(100, "running", 4), (100, "hibernated", 6),
+                   (105, "running", 9), (105, "hibernated", 1)]
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(FACTS, td, actors_history=history)["measurements"]
+        self.assertEqual(m["running_actors_peak"], "9")
+        self.assertEqual(m["live_actors_peak"], "10")
+        self.assertEqual(m["running_actors_per_node"], "9.0")  # 9 / 1 node
+
+        # Nothing sampled: the keys stay, as None.
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(FACTS, td)["measurements"]
+        for key in ("running_actors_per_node", *actor_sampler.EMPTY_ACTOR_SUMMARY):
+            self.assertIn(key, m)
+            self.assertIsNone(m[key])
+
+        # Sampled but no node count: the ratio is unknown, the counts are not.
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(dict(cluster_facts.EMPTY_FACTS), td,
+                          actors_history=history)["measurements"]
+        self.assertEqual(m["running_actors_peak"], "9")
+        self.assertIsNone(m["running_actors_per_node"])
 
     def test_actors_per_user_scales_every_key(self):
         # One VU drives N actors, so the numerator is users * N everywhere.

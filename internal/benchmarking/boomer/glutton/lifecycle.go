@@ -359,6 +359,15 @@ type gluttonActor struct {
 	// consecutiveFailures counts replaceIfPersistent failures since the last
 	// success. See noteFailure.
 	consecutiveFailures int
+	// state is where this actor sits on the locust_actors gauge. Change it
+	// only through setState so the gauge stays balanced.
+	state bmetrics.ActorState
+}
+
+// setState moves the actor to s on the locust_actors gauge.
+func (u *gluttonActor) setState(s bmetrics.ActorState) {
+	bmetrics.MoveActor(userClass, u.state, s)
+	u.state = s
 }
 
 // failureAction is what iterate() does about a failed lifecycle RPC: is this
@@ -465,7 +474,7 @@ func (u *gluttonActor) ensureAtespace(ctx context.Context) error {
 }
 
 func (u *gluttonActor) create(ctx context.Context) error {
-	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
@@ -474,6 +483,10 @@ func (u *gluttonActor) create(ctx context.Context) error {
 		}, grpc.Trailer(tr))
 		return err
 	})
+	if err == nil {
+		u.setState(bmetrics.ActorStateHibernated)
+	}
+	return err
 }
 
 func (u *gluttonActor) resume(ctx context.Context) error {
@@ -518,6 +531,7 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 		// see the crash total in the locust stats table.
 		if s, ok := status.FromError(err); ok && s.Code() == codes.Aborted && strings.Contains(s.Message(), "crashed") {
 			u.crashed = true
+			u.setState(bmetrics.ActorStateCrashed)
 			bmetrics.RecordFailure("actor", "CrashCount", userClass, 0, "actor entered ACTOR_STATE_CRASHED")
 			slog.Warn("glutton actor crashed; will stop sending requests",
 				slog.String("actor", u.actorName),
@@ -527,6 +541,7 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 	}
 	u.firstResume = false
 	u.actorRunning = true
+	u.setState(bmetrics.ActorStateRunning)
 	u.noteSuccess()
 	return nil
 }
@@ -557,11 +572,7 @@ func (u *gluttonActor) pause(ctx context.Context) error {
 		}, grpc.Trailer(tr))
 		return err
 	})
-	u.actorRunning = false
-	u.hibernatePending = err != nil
-	if err == nil {
-		u.noteSuccess()
-	}
+	u.noteHibernate(err)
 	return err
 }
 
@@ -572,14 +583,25 @@ func (u *gluttonActor) suspend(ctx context.Context) error {
 		}, grpc.Trailer(tr))
 		return err
 	})
-	u.actorRunning = false
-	u.hibernatePending = err != nil
-	if err == nil {
-		u.noteSuccess()
-	}
+	u.noteHibernate(err)
 	return err
 }
 
+// noteHibernate records the outcome of a Pause/Suspend. A failure strands
+// the actor RUNNING or mid-hibernate, which iterate() re-drives.
+func (u *gluttonActor) noteHibernate(err error) {
+	u.actorRunning = false
+	u.hibernatePending = err != nil
+	if err != nil {
+		u.setState(bmetrics.ActorStateHibernatePending)
+		return
+	}
+	u.setState(bmetrics.ActorStateHibernated)
+	u.noteSuccess()
+}
+
+// delete drops the actor from the locust_actors gauge even if DeleteActor
+// fails: the worker never touches the actor again either way.
 func (u *gluttonActor) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
@@ -588,6 +610,7 @@ func (u *gluttonActor) delete(ctx context.Context) {
 		}, grpc.Trailer(tr))
 		return err
 	})
+	u.setState(bmetrics.ActorStateNone)
 }
 
 // tracedCall wraps a unary gRPC call with a span and Prometheus/locust

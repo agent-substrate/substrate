@@ -30,6 +30,8 @@ from typing import Any, TextIO
 from kubernetes import client, config
 from kubernetes.utils import parse_quantity
 
+from actor_sampler import summarize_actor_history
+
 API_TIMEOUT_SECONDS = 5
 WORKER_POOL_NAMESPACE = "benchmark-workloads"
 WORKER_POOL_LABEL = "ate.dev/worker-pool"
@@ -172,6 +174,7 @@ def append_trial_summary(
     data_ts: str,
     facts: dict[str, Any],
     logs: TextIO | None = None,
+    actors_history_csv: Path | None = None,
 ) -> None:
     # Locust's own User Count samples. The -u flag is a request; under a custom
     # load shape what actually ran is whatever the shape asked for.
@@ -249,6 +252,14 @@ def append_trial_summary(
     else:
         _log(logs, f"Notice: {stats_csv} not found; failure ratios unknown")
 
+    # Measured, unlike the actors_per_* keys above: boomer's own count of the
+    # actors it drives, sampled by the runner. None when nothing was sampled.
+    actor_summary = summarize_actor_history(actors_history_csv)
+    running_peak = actor_summary["running_actors_peak"]
+    running_actors_per_node = (
+        round(running_peak / node_count, 2)
+        if node_count and running_peak is not None else None)
+
     measurements = {
         **{k: facts.get(k) for k in EMPTY_FACTS},
         "actors_per_node": actors_per_node,
@@ -257,6 +268,8 @@ def append_trial_summary(
         "actors_per_pod_p50": actors_per_pod_p50,
         "actors_per_pod_p90": actors_per_pod_p90,
         "actors_per_pod_p99": actors_per_pod_p99,
+        **actor_summary,
+        "running_actors_per_node": running_actors_per_node,
         **failure_ratios,
     }
 
