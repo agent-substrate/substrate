@@ -42,6 +42,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
@@ -137,6 +138,15 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 // Assets are cached, so re-fetching at Checkpoint/Restore is a no-op once
 // present.
 func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+	// Configure node-level shmem THP lazily on first micro-VM asset preparation
+	// (prewarm or Run/Restore) rather than at atelet startup, so nodes that
+	// expose /dev/kvm (e.g. local kind clusters or gVisor-only pools) never
+	// mutate host shmem_enabled unless the microvm class is actually used.
+	if atev1alpha1.SandboxClass(rec.SandboxClass) == atev1alpha1.SandboxClassMicroVM && s.onMicrovmSandbox != nil {
+		s.microvmSandboxOnce.Do(func() {
+			s.onMicrovmSandbox(ctx)
+		})
+	}
 	if err := os.MkdirAll(nodepath.StaticFilesDir, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}

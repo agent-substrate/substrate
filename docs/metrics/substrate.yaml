@@ -248,3 +248,9 @@ blind_spots:
   - area: router shutdown outcome
     code: cmd/atenet/internal/router/drain.go
     brief: The code has two TODOs. Nothing counts a drain that ends with an error.
+  - area: micro-VM shmem THP configuration
+    code: cmd/atelet/deviceplugin.go
+    brief: >
+      When atelet cannot switch /sys/kernel/mm/transparent_hugepage/shmem_enabled
+      from [never] to advise on a micro-VM node, it logs a warning once and
+      emits no metric. Micro-VM guest RAM then falls back to 4 KiB EPT pages.

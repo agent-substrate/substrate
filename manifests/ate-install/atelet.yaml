@@ -161,10 +161,12 @@ spec:
         - --drain-timeout=5m
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
-        # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
-        # emptying a directory a non-root actor created in its 0777 durable dir.
-        # It is owned by the actor's uid, typically 0755, so root has no write
-        # access to it and resetActorDirs fails after every checkpoint.
+        # /var/lib/ate hostPath and (when micro-VM sandboxes are used)
+        # /sys/kernel/mm/transparent_hugepage/shmem_enabled as root.
+        # CAP_DAC_OVERRIDE is for one thing: emptying a directory a non-root
+        # actor created in its 0777 durable dir. It is owned by the actor's uid,
+        # typically 0755, so root has no write access to it and resetActorDirs
+        # fails after every checkpoint.
         # runAsUser is pinned explicitly rather than relying on the base image's
         # default user.
         securityContext:
@@ -245,8 +247,8 @@ spec:
         - name: host-dev
           mountPath: /host/dev
           readOnly: true
-        - name: host-thp
-          mountPath: /host/sys/kernel/mm/transparent_hugepage
+        - name: host-shmem-thp
+          mountPath: /host/sys/kernel/mm/transparent_hugepage/shmem_enabled
       volumes:
       - name: run-ateom
         hostPath:
@@ -273,12 +275,15 @@ spec:
         hostPath:
           path: /dev
           type: Directory
-      # Node-wide transparent hugepage sysfs directory, used on micro-VM-capable
-      # nodes to switch shmem_enabled from [never] to advise once per node so
-      # cloud-hypervisor's MADV_HUGEPAGE guest RAM memfd gets 2 MiB EPT pages.
-      - name: host-thp
+      # Node-wide shmem transparent hugepage policy knob, used when micro-VM
+      # sandboxes run on a capable node to switch shmem_enabled from [never] to
+      # advise once per node so cloud-hypervisor's MADV_HUGEPAGE guest RAM memfd
+      # gets 2 MiB EPT pages. Mounting just this file (rather than the parent
+      # transparent_hugepage directory) scopes write access to the single knob.
+      - name: host-shmem-thp
         hostPath:
-          path: /sys/kernel/mm/transparent_hugepage
+          path: /sys/kernel/mm/transparent_hugepage/shmem_enabled
+          type: File
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
       # serving cert (which requires DNS SANs it would not have); the

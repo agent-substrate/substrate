@@ -108,6 +108,8 @@ var (
 
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
+
+	enableMicrovmShmemTHP = pflag.Bool("enable-microvm-shmem-thp", true, "On micro-VM-capable nodes, switch /sys/kernel/mm/transparent_hugepage/shmem_enabled from [never] to advise when the microvm sandbox class is used.")
 )
 
 func main() {
@@ -191,12 +193,6 @@ func main() {
 
 	startDevicePlugins(ctx)
 	microvmCapable := microvmNodeCapable(hostDevRoot)
-	if microvmCapable {
-		if err := ensureShmemTHP(ctx, hostShmemTHPPath); err != nil {
-			slog.WarnContext(ctx, "Could not enable shmem transparent hugepages; micro-VM guest memfd may use 4 KiB EPT pages",
-				slog.Any("err", err))
-		}
-	}
 
 	ateomDialer := newAteomDialer(256)
 
@@ -304,6 +300,14 @@ func main() {
 		csiDriverConfigLister,
 		systemInfoVolumes,
 	)
+	if microvmCapable && *enableMicrovmShmemTHP {
+		wmService.onMicrovmSandbox = func(ctx context.Context) {
+			if err := ensureShmemTHP(ctx, hostShmemTHPPath, os.WriteFile); err != nil {
+				slog.WarnContext(ctx, "Could not enable shmem transparent hugepages; micro-VM guest memfd may use 4 KiB EPT pages",
+					slog.Any("err", err))
+			}
+		}
+	}
 	go systemInfoVolumes.run(ctx)
 
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
@@ -448,6 +452,8 @@ type AteomHerder struct {
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	systemInfoVolumes     *systemInfoVolumeRefresher
+	microvmSandboxOnce    sync.Once
+	onMicrovmSandbox      func(context.Context)
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)

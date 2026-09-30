@@ -36,10 +36,6 @@ const hostDevRoot = "/host/dev"
 // atelet (see manifests/ate-install/atelet.yaml).
 const hostShmemTHPPath = "/host/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 
-// writeShmemTHPFile is a test seam for os.WriteFile so unit tests can exercise
-// write-error handling even when running as root.
-var writeShmemTHPFile = os.WriteFile
-
 // ensureShmemTHP configures /sys/kernel/mm/transparent_hugepage/shmem_enabled
 // to "advise" when the node is currently set to the kernel default ("[never]").
 //
@@ -50,7 +46,7 @@ var writeShmemTHPFile = os.WriteFile
 // node. Any non-"[never]" setting ("[advise]", "[within_size]", "[always]",
 // "[deny]", "[force]") is left untouched so a deliberate node-level choice is
 // respected.
-func ensureShmemTHP(ctx context.Context, path string) error {
+func ensureShmemTHP(ctx context.Context, path string, writeFile func(string, []byte, os.FileMode) error) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", path, err)
@@ -63,7 +59,7 @@ func ensureShmemTHP(ctx context.Context, path string) error {
 	}
 
 	const mode = "advise"
-	if err := writeShmemTHPFile(path, []byte(mode+"\n"), 0o644); err != nil {
+	if err := writeFile(path, []byte(mode+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	slog.InfoContext(ctx, "Enabled shmem transparent hugepages",
