@@ -1306,10 +1306,6 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	if errs := apivalidation.ValidateTerminateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
-	// TODO: drop once the WorkloadSpec tree is validated declaratively.
-	if err := validateContainerNames(req.GetSpec()); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
@@ -1885,16 +1881,6 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		return fmt.Errorf("base_config is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
 	}
 	return nil
-}
-
-// validateContainerNames checks every container name in spec is safe to use
-// as an OCI bundle path component.
-func validateContainerNames(spec *ateletpb.WorkloadSpec) error {
-	names := make([]string, 0, len(spec.GetContainers()))
-	for _, ctr := range spec.GetContainers() {
-		names = append(names, ctr.GetName())
-	}
-	return resources.ValidateContainerNames(names)
 }
 
 func validateSnapshotScope(scope ateletpb.SnapshotScope) error {

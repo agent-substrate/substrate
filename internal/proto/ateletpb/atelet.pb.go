@@ -727,7 +727,6 @@ type TerminateRequest struct {
 	// actors with a fallback spec.
 	//
 	// +k8s:optional
-	// +k8s:opaqueType # the WorkloadSpec tree is tagged in a follow-up
 	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1199,9 +1198,13 @@ func (x *SandboxAssets) GetPauseImage() string {
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 type WorkloadSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Containers    []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
-	Volumes       []*Volume              `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	// +k8s:maxItems=10 # matches the template's containers bound
+	// +k8s:listType=map
+	// +k8s:listMapKey=name
+	Containers    []*Container `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	Volumes       []*Volume    `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1800,9 +1803,18 @@ func (*Volume_SystemInfo) isVolume_Source() {}
 func (*Volume_Image) isVolume_Source() {}
 
 type VolumeMount struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	MountPath     string                 `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name must match the name of a Volume.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// mount_path within the container. Must be a clean absolute Unix path.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096
+	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
+	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1852,17 +1864,47 @@ func (x *VolumeMount) GetMountPath() string {
 }
 
 type Container struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Image           string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
-	Command         []string               `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
-	Args            []string               `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
-	Env             []*EnvEntry            `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
-	WakeupProbe     *WakeupProbe           `protobuf:"bytes,5,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
-	VolumeMounts    []*VolumeMount         `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
-	SecurityContext *SecurityContext       `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:customValidation # "pause" is reserved for sandbox infrastructure
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:required
+	// +k8s:maxLength=512 # matches the template Container.image's bound
+	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
+	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=64
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
+	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=64
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
+	Args []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=32 # matches the template's env bound
+	// +k8s:listType=map # each variable is set at most once
+	// +k8s:listMapKey=name
+	Env []*EnvEntry `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
+	// +k8s:optional
+	WakeupProbe *WakeupProbe `protobuf:"bytes,5,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
+	// Keyed by mount_path: each path hosts exactly one mount, while a volume
+	// may be mounted at multiple paths.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=32 # matches the template's volume_mounts bound
+	// +k8s:listType=map
+	// +k8s:listMapKey=mount_path
+	// +k8s:customValidation # mounts must not nest
+	VolumeMounts []*VolumeMount `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
+	// +k8s:optional
+	SecurityContext *SecurityContext `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources are the cgroup limits for this container, resolved by
 	// ate-api-server from the ActorTemplate. Unset means no limits.
+	//
+	// +k8s:optional
 	Resources     *ResourceLimits `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1963,8 +2005,9 @@ func (x *Container) GetResources() *ResourceLimits {
 
 // SecurityContext holds security settings for a container's process.
 type SecurityContext struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Capabilities  *Capabilities          `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	Capabilities  *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2009,9 +2052,17 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 // Capabilities adjusts a container's Linux capabilities relative to the default
 // set. Names carry no "CAP_" prefix; drop applies before add.
 type Capabilities struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Add           []string               `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
-	Drop          []string               `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	// +k8s:maxItems=64
+	// +k8s:listType=set
+	// +k8s:customValidation # capability grammar; "ALL" not accepted
+	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=64
+	// +k8s:listType=set
+	// +k8s:customValidation # capability grammar
+	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2065,8 +2116,15 @@ func (x *Capabilities) GetDrop() []string {
 type ResourceLimits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// memory_bytes is the memory limit in bytes. 0 means unset.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
 	MemoryBytes int64 `protobuf:"varint,1,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	// cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	// +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
 	CpuMillis     int64 `protobuf:"varint,2,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2117,9 +2175,16 @@ func (x *ResourceLimits) GetCpuMillis() int64 {
 }
 
 type EnvEntry struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name may be any printable ASCII character except '='.
+	//
+	// +k8s:required
+	// +k8s:maxLength=256 # guardrail
+	// +k8s:customValidation # printable ASCII except '='
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:optional
+	// +k8s:maxLength=32768 # guardrail
+	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2171,9 +2236,14 @@ func (x *EnvEntry) GetValue() string {
 // WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 type WakeupProbe struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// How long to keep polling before giving up and failing the actor start.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3600 # matches the template wakeup probe's bound
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -2227,8 +2297,16 @@ func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 type HTTPGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Path to access on the HTTP server.
+	//
+	// +k8s:required
+	// +k8s:maxLength=1024 # matches the template probe path's bound
+	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// TCP port to connect to (1..65535).
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=65535
 	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

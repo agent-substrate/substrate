@@ -151,7 +151,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
-	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
 
 	// A single "runsc" asset served from a fake bucket: enough to exercise the
 	// content-addressed asset fetch without a gVisor release tarball.
@@ -175,7 +175,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		},
 	}
 	spec := &ateletpb.WorkloadSpec{
-		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
