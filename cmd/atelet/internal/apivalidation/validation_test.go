@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -411,6 +412,115 @@ func TestValidateSandboxAssets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, Validate_SandboxAssets(context.Background(), createOp, nil, tt.obj, nil), tt.want)
+		})
+	}
+}
+
+func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.UploadPausedCheckpointRequest)) *ateletpb.UploadPausedCheckpointRequest {
+		r := &ateletpb.UploadPausedCheckpointRequest{
+			Atespace:               "team-a",
+			ActorName:              "actor-1",
+			ActorUid:               "01234567-89ab-cdef-0123-456789abcdef",
+			ActorTemplateAtespace:  "team-a",
+			ActorTemplateName:      "tmpl-1",
+			LocalSnapshotName:      "pause-snap-1",
+			DestinationSnapshotUri: "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1",
+			DesiredScope:           ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.UploadPausedCheckpointRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "valid data scope",
+		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		}),
+	}, {
+		name: "missing atespace",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name: "invalid atespace: path escape",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "golden atespace",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = resources.GoldenActorAtespace }),
+		want: field.ErrorList{field.Forbidden(field.NewPath("atespace"), "")},
+	}, {
+		name: "invalid actor_name: uppercase",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorName = "UPPER" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_uid",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid: not a UUID",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "actor-uid-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid actor_template_atespace: slash",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateAtespace = "no/slashes" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "unset template identity is allowed",
+		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.ActorTemplateAtespace = ""
+			r.ActorTemplateName = ""
+		}),
+	}, {
+		name: "missing local_snapshot_name",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("local_snapshot_name"), "")},
+	}, {
+		name: "invalid local_snapshot_name: path escape",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("local_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing destination_snapshot_uri",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("destination_snapshot_uri"), "")},
+	}, {
+		name: "invalid destination_snapshot_uri",
+		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("destination_snapshot_uri"), nil, "")},
+	}, {
+		name: "destination_snapshot_uri too long",
+		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DestinationSnapshotUri = "gs://bucket/" + strings.Repeat("p", 2048)
+		}),
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("destination_snapshot_uri"), nil, 2048).WithOrigin("maxLength"),
+			field.Invalid(field.NewPath("destination_snapshot_uri"), nil, ""),
+		},
+	}, {
+		name: "unspecified desired_scope",
+		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("desired_scope"), "")},
+	}, {
+		name: "data-on-golden desired_scope is restore-only",
+		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("desired_scope"), nil, "").WithOrigin("maximum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateUploadPausedCheckpointRequest(context.Background(), tt.obj), tt.want)
 		})
 	}
 }

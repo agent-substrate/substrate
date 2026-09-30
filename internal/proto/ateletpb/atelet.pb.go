@@ -158,7 +158,7 @@ const (
 	// DATA; whether a snapshot restores from its own content or on the golden
 	// is decided by the control plane from the template's onResume
 	// configuration.
-	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3
+	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3 // Keep this in sync with the maximums on fields of this type.
 )
 
 // Enum value maps for SnapshotScope.
@@ -2783,23 +2783,48 @@ func (*CheckpointResponse) Descriptor() ([]byte, []int) {
 }
 
 type UploadPausedCheckpointRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Atespace  string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid  string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Golden actors are never paused, so the golden atespace is rejected.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:customValidation # not the golden atespace
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-uuid
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// For metrics attribution, like on CheckpointRequest.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
 	// at pause time.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	LocalSnapshotName string `protobuf:"bytes,6,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
+	//
+	// +k8s:required
+	// +k8s:maxLength=2048
+	// +k8s:customValidation # a parseable snapshot URI
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
 	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
 	// The scope the pause checkpoint captured is not sent: atelet reads it from
 	// the local snapshot's own manifest, which is authoritative. When they
 	// differ, atelet converts where possible (micro-VM FULL capture to a DATA
 	// upload by selecting the durable-dir tar) and rejects otherwise.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only
 	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

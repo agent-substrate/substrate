@@ -1635,44 +1635,6 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 }
 
-func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
-	tests := []struct {
-		name    string
-		mutate  func(*ateletpb.UploadPausedCheckpointRequest)
-		wantErr bool
-	}{
-		{"valid", func(*ateletpb.UploadPausedCheckpointRequest) {}, false},
-		{"valid data scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-		}, false},
-		{"invalid atespace", func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = "../escape" }, true},
-		{"golden atespace rejected", func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = resources.GoldenActorAtespace }, true},
-		{"invalid actor name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorName = "UPPER" }, true},
-		{"invalid actor uid", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "" }, true},
-		{"any actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateAtespace = "no/slashes" }, false},
-		{"empty actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.ActorTemplateAtespace, r.ActorTemplateName = "", ""
-		}, false},
-		{"invalid snapshot name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "../escape" }, true},
-		{"invalid snapshot uri", func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }, true},
-		{"unspecified scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
-		}, true},
-		{"data-on-golden scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-		}, true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			req := validUploadPausedCheckpointRequest()
-			tc.mutate(req)
-			if err := validateUploadPausedCheckpointRequest(req); (err != nil) != tc.wantErr {
-				t.Errorf("validateUploadPausedCheckpointRequest err = %v, wantErr %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
 func TestShouldHaveSnapshots(t *testing.T) {
 	tests := []struct {
 		name string

@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -42,6 +43,11 @@ func ValidateRunRequest(ctx context.Context, req *ateletpb.RunRequest) field.Err
 // ValidateTerminateRequest runs the generated validation for req.
 func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateRequest) field.ErrorList {
 	return Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateUploadPausedCheckpointRequest runs the generated validation for req.
+func ValidateUploadPausedCheckpointRequest(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) field.ErrorList {
+	return Validate_UploadPausedCheckpointRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateSetWorkerCapacityRequest runs the generated validation for req.
@@ -79,6 +85,29 @@ func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Oper
 func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateRunscHash(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
+	}
+	return nil
+}
+
+// ValidateCustom_UploadPausedCheckpointRequest_Atespace rejects the golden
+// atespace: golden actors are never paused, so a paused checkpoint is never
+// promoted to a golden snapshot.
+func ValidateCustom_UploadPausedCheckpointRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == resources.GoldenActorAtespace {
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
+	}
+	return nil
+}
+
+func ValidateCustom_UploadPausedCheckpointRequest_DestinationSnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSnapshotURI(fldPath, *value)
+}
+
+// validateSnapshotURI requires a snapshot URI that resources.ParseSnapshotURI
+// accepts.
+func validateSnapshotURI(fldPath *field.Path, uri string) field.ErrorList {
+	if _, err := resources.ParseSnapshotURI(uri); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, uri, err.Error())}
 	}
 	return nil
 }

@@ -877,8 +877,8 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 // files and their self-describing manifest already sit under the actor's
 // local-checkpoints directory, written by an earlier local Checkpoint (pause).
 func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
-	if err := validateUploadPausedCheckpointRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+	if errs := apivalidation.ValidateUploadPausedCheckpointRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	tStart := time.Now()
@@ -1872,31 +1872,6 @@ func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
 	default:
 		return fmt.Errorf("invalid snapshot scope: %v", scope)
 	}
-}
-
-func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetLocalSnapshotName(), field.NewPath("local_snapshot_name"))...)
-	// Golden actors are never paused (the golden flow commits a running
-	// actor), so never promote a paused checkpoint to a golden snapshot.
-	if req.GetAtespace() == resources.GoldenActorAtespace {
-		errs = append(errs, field.Forbidden(field.NewPath("atespace"), fmt.Sprintf("atespace %q holds golden actors, which are never paused", req.GetAtespace())))
-	}
-	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
-		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
-	}
-	// Uploads only ever produce FULL or DATA snapshots; DATA_ON_GOLDEN is a
-	// restore-time combination.
-	switch req.GetDesiredScope() {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-	default:
-		errs = append(errs, field.NotSupported(field.NewPath("desired_scope"), req.GetDesiredScope(),
-			[]string{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL.String(), ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA.String()}))
-	}
-	return errs.ToAggregate()
 }
 
 // writeFileAtomic writes data to path by writing a temp file in the same

@@ -695,6 +695,7 @@ enum SnapshotScope {
   // is decided by the control plane from the template's onResume
   // configuration.
   SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 // ExternalRestoreConfiguration is an external snapshot a restore reads.
@@ -738,19 +739,43 @@ message CheckpointResponse {
 }
 
 message UploadPausedCheckpointRequest {
+  // Golden actors are never paused, so the golden atespace is rejected.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # not the golden atespace
   string atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
 
   // For metrics attribution, like on CheckpointRequest.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
+
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
   // The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
   // at pause time.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string local_snapshot_name = 6;
 
   // Destination object-storage URI (the actor's in-progress snapshot URI).
+  //
+  // +k8s:required
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # a parseable snapshot URI
   string destination_snapshot_uri = 7;
 
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
@@ -758,6 +783,10 @@ message UploadPausedCheckpointRequest {
   // the local snapshot's own manifest, which is authoritative. When they
   // differ, atelet converts where possible (micro-VM FULL capture to a DATA
   // upload by selecting the durable-dir tar) and rejects otherwise.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only
   SnapshotScope desired_scope = 8;
 }
 
