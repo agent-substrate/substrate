@@ -2324,6 +2324,7 @@ message RequestActorSuspendRequest {
   // it was made about and suspend the recreation that took its name.
   //
   // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
 }
 

@@ -323,6 +323,141 @@ func TestValidateWorkerUpdate_RequireStatus(t *testing.T) {
 	assertValidateErr(t, ValidateWorkerUpdate(context.Background(), field.NewPath("worker"), newVal, oldVal, false), nil)
 }
 
+func TestValidateSetWorkerCapacityRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateapipb.SetWorkerCapacityRequest)) *ateapipb.SetWorkerCapacityRequest {
+		r := &ateapipb.SetWorkerCapacityRequest{
+			Worker: workerRef(apiWorkerName),
+			Capacity: &ateapipb.WorkerResources{
+				Actors: 10,
+				Resources: &ateapipb.Resources{
+					Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
+				},
+			},
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+	tests := []struct {
+		name string
+		req  *ateapipb.SetWorkerCapacityRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		req:  valid(),
+	}, {
+		name: "valid empty capacity",
+		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Capacity = &ateapipb.WorkerResources{} }),
+	}, {
+		name: "missing worker",
+		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		name: "worker.atespace must be empty",
+		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker.Atespace = "team-a" }),
+		want: field.ErrorList{field.Forbidden(field.NewPath("worker", "atespace"), "")},
+	}, {
+		name: "missing worker.name",
+		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("worker", "name"), "")},
+	}, {
+		name: "invalid worker.name",
+		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker.Name = "UPPER" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing capacity",
+		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Capacity = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("capacity"), "")},
+	}, {
+		name: "negative capacity.actors",
+		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Capacity.Actors = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "invalid limit quantity",
+		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
+			r.Capacity.Resources.Limits = []*ateapipb.Limits{{Name: "cpu", Quantity: "lots"}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateSetWorkerCapacityRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateRequestActorSuspendRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateapipb.RequestActorSuspendRequest)) *ateapipb.RequestActorSuspendRequest {
+		r := &ateapipb.RequestActorSuspendRequest{
+			Worker:   workerRef(apiWorkerName),
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+			ActorUid: apiOtherWorkerName,
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+	tests := []struct {
+		name string
+		req  *ateapipb.RequestActorSuspendRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		req:  valid(),
+	}, {
+		name: "missing worker",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Worker = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		name: "worker.atespace must be empty",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Worker.Atespace = "team-a" }),
+		want: field.ErrorList{field.Forbidden(field.NewPath("worker", "atespace"), "")},
+	}, {
+		name: "missing worker.name",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Worker.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("worker", "name"), "")},
+	}, {
+		name: "invalid worker.name",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Worker.Name = "UPPER" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Actor = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("actor"), "")},
+	}, {
+		name: "missing actor.atespace",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Actor.Atespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor", "atespace"), "")},
+	}, {
+		name: "invalid actor.atespace",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Actor.Atespace = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor.name",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Actor.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor", "name"), "")},
+	}, {
+		name: "invalid actor.name",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.Actor.Name = "UPPER" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_uid",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid",
+		req:  valid(func(r *ateapipb.RequestActorSuspendRequest) { r.ActorUid = "not-a-uuid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateRequestActorSuspendRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
 // validWorker returns a Worker in the shape CreateWorker accepts: named, with
 // its pod coordinates filled in and no status — status is output-only.
 func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {

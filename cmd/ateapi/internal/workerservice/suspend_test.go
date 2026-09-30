@@ -118,7 +118,7 @@ func TestRequestActorSuspend_OnlyForHostedActors(t *testing.T) {
 		{name: "worker on another node", callerNode: "some-other-node", assignedWorker: testWorkerName},
 		{name: "actor hosted by another worker", callerNode: testNode, assignedWorker: otherWorker},
 		{name: "actor has no worker", callerNode: testNode, assignedWorker: ""},
-		{name: "stale actor incarnation", callerNode: testNode, assignedWorker: testWorkerName, requestedUID: "not-the-uid"},
+		{name: "stale actor incarnation", callerNode: testNode, assignedWorker: testWorkerName, requestedUID: otherWorker},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

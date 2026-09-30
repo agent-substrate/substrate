@@ -7486,6 +7486,7 @@ type RequestActorSuspendRequest struct {
 	// it was made about and suspend the recreation that took its name.
 	//
 	// +k8s:required
+	// +k8s:format=k8s-uuid
 	ActorUid      string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
