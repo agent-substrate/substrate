@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -340,15 +341,17 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	}
 }
 
-// TestValidateWorkloadSpec covers the rules WorkloadSpec owns: the containers
-// list. One nested case proves the element validator runs; its own rules are
-// covered by TestValidateContainer.
+// TestValidateWorkloadSpec covers the rules WorkloadSpec owns: the volumes and
+// containers lists. One nested case per list proves the element validators
+// run; their own rules are covered by TestValidateVolume and
+// TestValidateContainer.
 func TestValidateWorkloadSpec(t *testing.T) {
 	ctr := func(name string) *ateletpb.Container {
 		return &ateletpb.Container{Name: name, Image: testDigestImage}
 	}
 	valid := func(mutate ...func(*ateletpb.WorkloadSpec)) *ateletpb.WorkloadSpec {
 		s := &ateletpb.WorkloadSpec{
+			Volumes:    []*ateletpb.Volume{{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}},
 			Containers: []*ateletpb.Container{ctr("main"), ctr("sidecar")},
 		}
 		for _, m := range mutate {
@@ -367,6 +370,28 @@ func TestValidateWorkloadSpec(t *testing.T) {
 	}, {
 		name: "empty spec",
 		obj:  &ateletpb.WorkloadSpec{},
+	}, {
+		name: "no volumes: the delete flow may send containers only",
+		obj:  valid(func(s *ateletpb.WorkloadSpec) { s.Volumes = nil }),
+	}, {
+		name: "duplicate volume names",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Volumes = append(s.Volumes, &ateletpb.Volume{Name: "data", Image: &ateletpb.ImageVolumeSource{Reference: testDigestImage}})
+		}),
+		want: field.ErrorList{field.Duplicate(field.NewPath("volumes").Index(1), nil)},
+	}, {
+		name: "too many volumes",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Volumes = nil
+			for i := range 33 {
+				s.Volumes = append(s.Volumes, &ateletpb.Volume{Name: fmt.Sprintf("v%d", i), DurableDir: &ateletpb.DurableDirVolume{}})
+			}
+		}),
+		want: field.ErrorList{field.TooMany(field.NewPath("volumes"), 33, 32).WithOrigin("maxItems")},
+	}, {
+		name: "volume errors surface at the volume's path",
+		obj:  valid(func(s *ateletpb.WorkloadSpec) { s.Volumes[0].DurableDir = nil }),
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "").WithOrigin("union")},
 	}, {
 		name: "duplicate container names",
 		obj: valid(func(s *ateletpb.WorkloadSpec) {
@@ -392,6 +417,127 @@ func TestValidateWorkloadSpec(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, Validate_WorkloadSpec(context.Background(), createOp, nil, tt.obj, nil), tt.want)
+		})
+	}
+}
+
+// TestValidateVolume covers Volume and its sources, with errors
+// asserted at their paths under the volume.
+func TestValidateVolume(t *testing.T) {
+	durable := func(mutate ...func(*ateletpb.Volume)) *ateletpb.Volume {
+		v := &ateletpb.Volume{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}
+		for _, m := range mutate {
+			m(v)
+		}
+		return v
+	}
+	external := func(mutate ...func(*ateletpb.ExternalVolumeSource)) *ateletpb.Volume {
+		e := &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "projects/p/zones/z/disks/vol-1",
+			VolumeType:      "substrate.io/mock",
+			VolumeContext:   map[string]string{"fsType": "ext4"},
+		}
+		for _, m := range mutate {
+			m(e)
+		}
+		return &ateletpb.Volume{Name: "data", External: e}
+	}
+	image := func(ref string) *ateletpb.Volume {
+		return &ateletpb.Volume{Name: "data", Image: &ateletpb.ImageVolumeSource{Reference: ref}}
+	}
+
+	extPath := field.NewPath("external")
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.Volume
+		want field.ErrorList
+	}{
+		// Volume.
+		{
+			name: "valid durable dir",
+			obj:  durable(),
+		}, {
+			name: "missing name",
+			obj:  durable(func(v *ateletpb.Volume) { v.Name = "" }),
+			want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+		}, {
+			name: "invalid name: uppercase",
+			obj:  durable(func(v *ateletpb.Volume) { v.Name = "Data" }),
+			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+		}, {
+			name: "no source set",
+			obj:  durable(func(v *ateletpb.Volume) { v.DurableDir = nil }),
+			want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+		}, {
+			name: "two sources set",
+			obj: durable(func(v *ateletpb.Volume) {
+				v.External = &ateletpb.ExternalVolumeSource{StorageVolumeId: "vol-1"}
+			}),
+			want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+		},
+
+		// ExternalVolumeSource.
+		{
+			name: "valid external",
+			obj:  external(),
+		}, {
+			name: "external: missing storage_volume_id",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "" }),
+			want: field.ErrorList{field.Required(extPath.Child("storage_volume_id"), "")},
+		}, {
+			name: "external: storage_volume_id with a control character",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "vol\x01" }),
+			want: field.ErrorList{field.Invalid(extPath.Child("storage_volume_id"), nil, "")},
+		}, {
+			name: "external: storage_volume_id too long",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = strings.Repeat("x", 257) }),
+			want: field.ErrorList{field.TooLong(extPath.Child("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
+		}, {
+			name: "external: unset volume_type is allowed",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "" }),
+		}, {
+			name: "external: volume_type without the prefix",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "pd.csi.storage.gke.io" }),
+		}, {
+			name: "external: invalid volume_type: uppercase",
+			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "substrate.io/Mock" }),
+			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "")},
+		}, {
+			name: "external: volume_context key too long",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.VolumeContext = map[string]string{strings.Repeat("k", 129): "v"}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("volume_context"), nil, 128).WithOrigin("maxLength")},
+		}, {
+			name: "external: volume_context value too long",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 257)}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("volume_context").Key("k"), nil, 256).WithOrigin("maxLength")},
+		},
+
+		// ImageVolumeSource.
+		{
+			name: "valid image",
+			obj:  image(testDigestImage),
+		}, {
+			name: "image: missing reference",
+			obj:  image(""),
+			want: field.ErrorList{field.Required(field.NewPath("image", "reference"), "")},
+		}, {
+			name: "image: reference not pinned by digest",
+			obj:  image("example.com/app:v1"),
+			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
+		}, {
+			name: "image: reference with a malformed digest",
+			obj:  image("example.com/app@sha256:abc"),
+			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, Validate_Volume(context.Background(), createOp, nil, tt.obj, nil), tt.want)
 		})
 	}
 }

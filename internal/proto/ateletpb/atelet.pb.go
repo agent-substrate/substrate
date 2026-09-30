@@ -1203,8 +1203,12 @@ type WorkloadSpec struct {
 	// +k8s:maxItems=10 # matches the template's containers bound
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
-	Containers    []*Container `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
-	Volumes       []*Volume    `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	Containers []*Container `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	// +k8s:optional
+	// +k8s:maxItems=32 # matches the template's volumes bound
+	// +k8s:listType=map
+	// +k8s:listMapKey=name
+	Volumes       []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1290,12 +1294,25 @@ func (*DurableDirVolume) Descriptor() ([]byte, []int) {
 }
 
 type ExternalVolumeSource struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	StorageVolumeId string                 `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
-	VolumeType      string                 `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
-	VolumeContext   map[string]string      `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required, unlike the actor status counterpart: the control plane only
+	// sends volumes that finished provisioning.
+	//
+	// +k8s:required
+	// +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+	// +k8s:customValidation # no control characters
+	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
+	// +k8s:optional
+	// +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
+	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
+	// +k8s:optional
+	// +k8s:maxProperties=32
+	// +k8s:eachKey=+k8s:maxLength=128
+	// +k8s:eachVal=+k8s:maxLength=256
+	VolumeContext map[string]string `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExternalVolumeSource) Reset() {
@@ -1350,8 +1367,13 @@ func (x *ExternalVolumeSource) GetVolumeContext() map[string]string {
 }
 
 type ImageVolumeSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reference     string                 `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// reference is the OCI image reference, pinned by digest.
+	//
+	// +k8s:required
+	// +k8s:maxLength=512 # matches the template ImageVolumeSource.reference's bound
+	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
+	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1651,14 +1673,27 @@ func (x *SystemInfoVolume) GetDataSources() []*SystemInfoDataSource {
 	return nil
 }
 
+// Volume names one volume and selects exactly one source for it.
+// +k8s:validation-gen=true
 type Volume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Exactly one source is set.
-	DurableDir    *DurableDirVolume     `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
-	External      *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
-	SystemInfo    *SystemInfoVolume     `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
-	Image         *ImageVolumeSource    `protobuf:"bytes,5,opt,name=image,proto3" json:"image,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Exactly one of durable_dir / external / system_info / image must be set.
+	//
+	// +k8s:optional
+	// +k8s:unionMember
+	DurableDir *DurableDirVolume `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	External *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	SystemInfo *SystemInfoVolume `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	Image         *ImageVolumeSource `protobuf:"bytes,5,opt,name=image,proto3" json:"image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

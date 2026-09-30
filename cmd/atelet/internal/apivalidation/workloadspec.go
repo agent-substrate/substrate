@@ -71,3 +71,15 @@ func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, 
 func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHTTPGetPath(fldPath, *value)
 }
+
+func ValidateCustom_ExternalVolumeSource_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}
+
+func ValidateCustom_ExternalVolumeSource_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateVolumeType(fldPath, *value)
+}
+
+func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidatePinnedImage(fldPath, *value)
+}
