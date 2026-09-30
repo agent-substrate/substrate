@@ -66,6 +66,7 @@ _FLAGS = {
     "--sweperf-template": str,
     "--sweperf-total-steps": int,
     "--sweperf-num-cycles": int,
+    "--sweperf-poll-interval-ms": int,
 }
 
 
