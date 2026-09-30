@@ -332,8 +332,7 @@ func TestEgressManifestsConnectLegDecidesThePassthroughDestination(t *testing.T)
 // Every inner chain without an HCM is a passthrough chain: a plain tcp_proxy
 // to the ORIGINAL_DST cluster, dialing the filter state the CONNECT leg's
 // answer produced and nothing else. The plain gateway needs one per transport
-// protocol; on sdsmint egress_tls_mitm claims tls, so only raw_buffer is left.
-// See TestEgressManifestsClaimEveryTransportProtocol.
+// protocol; sdsmint needs one, selected by the egress-policy module.
 var wantPassthroughChains = map[string][]string{
 	egressManifests[0]: {"egress_passthrough", "egress_tls_passthrough"},
 	egressManifests[1]: {"egress_passthrough"},
@@ -421,49 +420,6 @@ func TestEgressManifestsOriginalDstClustersDialTheFilterStateAlone(t *testing.T)
 			}
 			if found < 2 {
 				t.Errorf("found %d ORIGINAL_DST clusters, want at least the passthrough and the by-address ones", found)
-			}
-		})
-	}
-}
-
-func TestEgressManifestsClaimEveryTransportProtocol(t *testing.T) {
-	for _, path := range egressManifests {
-		t.Run(path, func(t *testing.T) {
-			for _, l := range listeners(bootstrapTree(t, path)) {
-				if str(l, "name") == "egress" {
-					continue
-				}
-				catchAll := map[string][]string{}
-				for _, c := range list(l, "filter_chains") {
-					name := str(c, "name")
-					match := child(c, "filter_chain_match")
-					transport := str(match, "transport_protocol")
-					if transport == "" {
-						t.Errorf("chain %q matches no transport protocol, so it is only reachable when no chain claims the connection's own; give it one", name)
-						continue
-					}
-					if _, seen := catchAll[transport]; !seen {
-						catchAll[transport] = nil
-					}
-					if len(strs(match, "application_protocols")) == 0 {
-						catchAll[transport] = append(catchAll[transport], name)
-					}
-				}
-				for _, transport := range []string{"tls", "raw_buffer"} {
-					names, claimed := catchAll[transport]
-					if !claimed {
-						t.Errorf("listener %q has no chain matching transport protocol %q; a connection the listener filters classify that way is closed as no_filter_chain_match", str(l, "name"), transport)
-						continue
-					}
-					if len(names) != 1 {
-						t.Errorf("listener %q has %d chains matching %q with no application_protocols (%v), want exactly one to catch what the inspectors could not name", str(l, "name"), len(names), transport, names)
-					}
-				}
-				for transport := range catchAll {
-					if transport != "tls" && transport != "raw_buffer" {
-						t.Errorf("listener %q has a chain matching transport protocol %q, which its listener filters never set", str(l, "name"), transport)
-					}
-				}
 			}
 		})
 	}
@@ -670,4 +626,150 @@ func mustJSON(t *testing.T, n node) string {
 		t.Fatalf("to json: %v", err)
 	}
 	return string(j)
+}
+
+// sdsmintManifest is the gateway that runs the egress-policy module.
+var sdsmintManifest = egressManifests[1]
+
+// mitmListener returns the sdsmint manifest's inner listener.
+func mitmListener(t *testing.T, tree node) node {
+	t.Helper()
+	l := byName(listeners(tree), "mitm_listener")
+	if l == nil {
+		t.Fatal("no mitm_listener in the sdsmint manifest")
+	}
+	return l
+}
+
+// The matcher must select on the module's verdict and map every verdict, with
+// "denied" mapping to no chain. The module runs after both inspectors, and no
+// chain keeps a filter_chain_match, which Envoy ignores once a matcher is set.
+func TestEgressManifestsInnerListenerSelectsOnTheModuleVerdict(t *testing.T) {
+	tree := bootstrapTree(t, sdsmintManifest)
+	l := mitmListener(t, tree)
+
+	filters := list(l, "listener_filters")
+	module := filterIndex(filters, "envoy.filters.listener.dynamic_modules")
+	if module < 0 {
+		t.Fatal("mitm_listener has no dynamic_modules listener filter; nothing would write the verdict")
+	}
+	for _, inspector := range []string{"envoy.filters.listener.tls_inspector", "envoy.filters.listener.http_inspector"} {
+		if i := filterIndex(filters, inspector); i < 0 || i > module {
+			t.Errorf("%s is at listener_filters[%d], the egress-policy module at [%d]; the module would see no transport protocol or SNI", inspector, i, module)
+		}
+	}
+
+	matcherTree := child(child(l, "filter_chain_matcher"), "matcher_tree")
+	if got := str(child(child(matcherTree, "input"), "typed_config"), "key"); got != extproc.EgressFilterChainFilterStateKey {
+		t.Errorf("filter_chain_matcher keys on filter state %q, want %q", got, extproc.EgressFilterChainFilterStateKey)
+	}
+	actions := child(child(matcherTree, "exact_match_map"), "map")
+
+	chains := map[string]bool{}
+	for _, c := range list(l, "filter_chains") {
+		chains[str(c, "name")] = true
+		if child(c, "filter_chain_match") != nil {
+			t.Errorf("chain %q has a filter_chain_match, which Envoy ignores when the listener has a filter_chain_matcher", str(c, "name"))
+		}
+	}
+	for verdict, want := range map[string]string{
+		extproc.EgressFilterChainMITM:      extproc.EgressTLSMITMFilterChainName,
+		extproc.EgressFilterChainCleartext: extproc.EgressCleartextFilterChainName,
+	} {
+		got := str(child(child(child(actions, verdict), "action"), "typed_config"), "value")
+		if got != want {
+			t.Errorf("verdict %q selects chain %q, want %q", verdict, got, want)
+		}
+		if !chains[got] {
+			t.Errorf("verdict %q selects chain %q, which the listener does not have; the connection would be closed", verdict, got)
+		}
+	}
+	if action := child(child(actions, extproc.EgressFilterChainDenied), "action"); action != nil {
+		if got := str(child(action, "typed_config"), "value"); chains[got] {
+			t.Errorf("verdict %q selects chain %q; a denied connection must match no chain", extproc.EgressFilterChainDenied, got)
+		}
+	}
+}
+
+// The outer ext_proc must accept dev.ate.policy.egress, and the outer chain
+// must copy it after ext_proc into shared filter state for the module.
+func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.T) {
+	tree := bootstrapTree(t, sdsmintManifest)
+	outer := outerChain(t, tree)
+	cfg, extProcAt, filters := extProcOf(outer)
+	if cfg == nil {
+		t.Fatalf("chain %q has no ext_proc filter", extproc.EgressFilterChainName)
+	}
+	admitted := strs(child(child(cfg, "metadata_options"), "receiving_namespaces"), "untyped")
+	if !slices.Contains(admitted, extproc.EgressPolicyMetadataNamespace) {
+		t.Errorf("the CONNECT leg's ext_proc does not admit dynamic metadata in %q; the SNI rules would be dropped and every ClientHello denied", extproc.EgressPolicyMetadataNamespace)
+	}
+
+	writers := filterStateWriters(tree, extproc.EgressPolicyMetadataNamespace)
+	if len(writers) != 1 {
+		t.Fatalf("%s is set by %d filters, want exactly the CONNECT leg's copy of its answer", extproc.EgressPolicyMetadataNamespace, len(writers))
+	}
+	entry := writers[0]
+	at := -1
+	for i, f := range filters {
+		if str(f, "name") != setFilterStateFilter {
+			continue
+		}
+		for _, v := range list(child(f, "typed_config"), "on_request_headers") {
+			if str(v, "object_key") == extproc.EgressPolicyMetadataNamespace {
+				at = i
+			}
+		}
+	}
+	if at < 0 {
+		t.Fatalf("the writer of %s is not on the outer chain, where the answer is", extproc.EgressPolicyMetadataNamespace)
+	}
+	if at < extProcAt {
+		t.Errorf("%s is set at http_filters[%d], before ext_proc at [%d]; the metadata it reads does not exist yet", extproc.EgressPolicyMetadataNamespace, at, extProcAt)
+	}
+	format := child(entry, "format_string")
+	if got := str(child(format, "text_format_source"), "inline_string"); got != extproc.EgressPolicyMetadataFormat {
+		t.Errorf("%s is set from %q, want %q", extproc.EgressPolicyMetadataNamespace, got, extproc.EgressPolicyMetadataFormat)
+	}
+	if got := str(entry, "factory_key"); got != "envoy.string" {
+		t.Errorf("%s uses factory %q, want envoy.string, the string accessor the module reads", extproc.EgressPolicyMetadataNamespace, got)
+	}
+	if skip, _ := entry["skip_if_empty"].(bool); !skip {
+		t.Errorf("%s is not skip_if_empty; an absent answer would be written as unparseable JSON", extproc.EgressPolicyMetadataNamespace)
+	}
+	if str(entry, "shared_with_upstream") == "" {
+		t.Errorf("%s is not shared with upstream; the inner listener would never see it", extproc.EgressPolicyMetadataNamespace)
+	}
+}
+
+// Denied connections match no chain, so the listener access log is their only
+// record. It must log only NR connections and include the SNI, actor, and
+// verdict.
+func TestEgressManifestsInnerListenerLogsDeniedConnections(t *testing.T) {
+	tree := bootstrapTree(t, sdsmintManifest)
+	logs := list(mitmListener(t, tree), "access_log")
+	if len(logs) == 0 {
+		t.Fatal("mitm_listener has no access_log; a ClientHello the module denies would leave no record")
+	}
+	for i, al := range logs {
+		if flags := strs(child(child(al, "filter"), "response_flag_filter"), "flags"); !slices.Contains(flags, "NR") {
+			t.Errorf("access_log[%d] is not confined to response flag NR (got %v); it would log every connection the chains already log", i, flags)
+		}
+		format := child(child(child(al, "typed_config"), "log_format"), "json_format")
+		for _, want := range []string{
+			"%REQUESTED_SERVER_NAME%",
+			"%FILTER_STATE(" + extproc.ActorIdentityFilterStateKey + ":PLAIN)%",
+			"%FILTER_STATE(" + extproc.EgressFilterChainFilterStateKey + ":PLAIN)%",
+		} {
+			found := false
+			for _, v := range format {
+				if s, ok := v.(string); ok && strings.Contains(s, want) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("access_log[%d] does not log %s", i, want)
+			}
+		}
+	}
 }

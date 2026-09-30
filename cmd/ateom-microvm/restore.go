@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -32,7 +33,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -66,6 +66,30 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 	return ch.MemRestoreEager
 }
 
+// reseedGuestCRNG mixes fresh, per-restore entropy into the restored guest's kernel
+// CRNG through the kata-agent (see the call site in restoreFullScope for why a restore
+// needs this). The nonce is a throwaway; its only job is to differ between restores so
+// that clones of one snapshot diverge instead of producing identical randomness. The
+// caller owns ac: it stays open for log forwarding and guest stats.
+func reseedGuestCRNG(ctx context.Context, ac *kata.AgentClient) error {
+	nonce, err := newReseedNonce()
+	if err != nil {
+		return err
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return ac.ReseedRandomDev(rctx, nonce)
+}
+
+// newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.
+func newReseedNonce() ([]byte, error) {
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating reseed nonce: %w", err)
+	}
+	return nonce, nil
+}
+
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
 // pod. What that means depends on the scope the snapshot was taken with:
 //
@@ -73,14 +97,17 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 //     (restoreFullScope).
 //   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
 //     cold-boot the actor, which starts its containers afresh from the OCI image.
-//   - DATA_ON_GOLDEN: atelet staged a combined set into RestoreStateDir — the
+//   - DATA_ON_GOLDEN: atelet staged a combined set into restore_dir — the
 //     guest files (memory + VM state) from the template's golden snapshot plus
 //     the durable-dir tar from the actor's own snapshot — so this restores
 //     exactly like FULL: the golden guest resumes over the actor's data.
 //
-// Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
-// and the durable-dir volume directories re-created (empty).
+// Contract with atelet: the snapshot's files have been downloaded to
+// ActorDirs.restore_dir, and the durable-dir volume directories re-created (empty).
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
+	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
 	}
@@ -102,6 +129,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	p := actorBootParams{
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
+		actorDirs:        req.GetActorDirs(),
 		templateAtespace: req.GetActorTemplateAtespace(),
 		templateName:     req.GetActorTemplateName(),
 		containers:       req.GetSpec().GetContainers(),
@@ -109,8 +137,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		egressGateway:    req.GetEgressGateway(),
 		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
-	restoreDir := ateompath.RestoreStateDir(p.actorUID)
-	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
+	restoreDir := p.actorDirs.GetRestoreDir()
+	durableDir := p.actorDirs.GetDurableDirVolumeMountsDir()
 	tStart := time.Now()
 
 	attribution := p.actorAttribution()
@@ -119,7 +147,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// A VM still running for this actor would be dropped from tracking by the
 	// re-host below and left running, so stop it first.
 	if s.runningVM(attribution.UID) != nil {
-		if err := s.stopActorVM(ctx, attribution.UID); err != nil {
+		if err := s.stopActorVM(ctx, attribution.UID, req.GetActorDirs()); err != nil {
 			return nil, fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
 		}
 	}
@@ -153,7 +181,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		// files, and the untar above re-materialized the ACTOR's durable-dir
 		// data, so resuming the golden guest picks up the actor's data through
 		// the durable virtio-fs share.
-		if err := s.restoreFullScope(ctx, p, restoreDir, tStart); err != nil {
+		if err := s.restoreFullScope(ctx, p, scope, restoreDir, tStart); err != nil {
 			return nil, err
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
@@ -163,8 +191,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
 		}
+		dTotal := time.Since(tStart)
 		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",
-			slog.String("id", p.actorUID), slog.Duration("total", time.Since(tStart)))
+			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
+		// A cold boot has none of the full-scope phases, so the total is the
+		// only observation on its record.
+		logSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			restoreDurationKey, nil, []phase{{phaseTotal, dTotal}})
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
 	}
@@ -185,7 +218,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // and resume. Guest RAM — the actor's in-memory state and the frozen network config —
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
-func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, restoreDir string, tStart time.Time) (retErr error) {
+func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, scope ateompb.SnapshotScope, restoreDir string, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -225,7 +258,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(actorUID), restoreDir)
+		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir)
 	}()
 	defer func() {
 		if !untarJoined {
@@ -247,7 +280,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if len(containers) > maxActorContainers {
 		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(actorUID, containers)
+	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
 	if err != nil {
 		return err
 	}
@@ -266,7 +299,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return err
 	}
 	defer leaf.Close()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, ctrs, containers, leaf.SysProcAttr())
+	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
 	if err != nil {
 		return err
 	}
@@ -293,7 +326,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
-			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.Any("err", err))
 			}
 		}
@@ -362,6 +395,40 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	tResume := time.Now()
 
+	// One kata-agent connection serves this whole activation: the CRNG reseed below,
+	// then log forwarding and guest stats. As on cold boot, not reaching the agent
+	// fails the restore. A failing restore closes the connection on its way out.
+	guestAC, err := dialAgentRetry(ctx, kata.VsockSocketPath(actorUID), 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("while dialing kata-agent after resume: %w", err)
+	}
+	defer func() {
+		if retErr != nil {
+			_ = guestAC.Close()
+		}
+	}()
+
+	// Reseed the guest CRNG before the workload gets far. A restored guest resumes with
+	// the entropy pool frozen in the snapshot, so every actor restored from one snapshot
+	// (golden cold-start, tag clones) would share an identical CRNG state and emit the
+	// same "random" values. Cloud Hypervisor has no VmGenID device to signal the guest,
+	// so we feed fresh per-restore entropy through the kata-agent's ReseedRandomDev, which
+	// mixes it into /dev/random and reseeds. A failed reseed fails the restore, since the
+	// actor would otherwise run with randomness it shares with its clones.
+	//
+	// The reseed runs just after Resume, so a workload that reads randomness in its first
+	// instants after resume can still see the frozen state. Fully closing that needs the
+	// workload frozen across the reseed, or a VMM VmGenID that acts before the vCPUs resume.
+	//
+	// TODO: switch to a Cloud Hypervisor VmGenID device once it exists. clh has no such
+	// device today; Firecracker and QEMU do. With one, the VMM changes the generation id
+	// and notifies the guest before unpausing the vCPUs, so a >=5.18 kernel reseeds its
+	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
+	// race. At that point this agent-driven reseed can be dropped.
+	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
+		return fmt.Errorf("while reseeding guest CRNG: %w", err)
+	}
+
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
@@ -371,6 +438,8 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// which hid that a first (cold) restore and a later (warm) one differ by more
 	// than 5x on the same actor. upper/lowers is the host reassembling the rootfs;
 	// vm_restore is cloud-hypervisor reading guest RAM back.
+	dWakeupProbe := time.Since(tResume)
+	dTotal := time.Since(tStart)
 	slog.InfoContext(ctx, "Actor restore phases", slog.String("id", actorUID),
 		slog.Duration("prep", tPrep.Sub(tStart)),
 		slog.Duration("bundles", tBundles.Sub(tPrep)),
@@ -381,8 +450,24 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		slog.Duration("vmm_launch", tLaunch.Sub(tTap)),
 		slog.Duration("vm_restore", tVMRestore.Sub(tLaunch)),
 		slog.Duration("resume", tResume.Sub(tVMRestore)),
-		slog.Duration("wakeup_probe", time.Since(tResume)),
-		slog.Duration("total", time.Since(tStart)))
+		slog.Duration("wakeup_probe", dWakeupProbe),
+		slog.Duration("total", dTotal))
+	// The joinable per-actor record the benchmarking tooling aggregates. The
+	// durable delta is not carried: tDurable is pinned to tLowers today, so it
+	// would always be the zero a record skips.
+	logSnapshotPhases(ctx, "Restore timing breakdown", p.actorAttribution(), scope,
+		restoreDurationKey, nil, []phase{
+			{phasePrep, tPrep.Sub(tStart)},
+			{phaseBundles, tBundles.Sub(tPrep)},
+			{phaseUpperJoin, tUpper.Sub(tBundles)},
+			{phaseLowers, tLowers.Sub(tUpper)},
+			{phaseTap, tTap.Sub(tDurable)},
+			{phaseVMMLaunch, tLaunch.Sub(tTap)},
+			{phaseVMRestore, tVMRestore.Sub(tLaunch)},
+			{phaseResume, tResume.Sub(tVMRestore)},
+			{phaseWakeupProbe, dWakeupProbe},
+			{phaseTotal, dTotal},
+		})
 
 	// An eager restore has read the whole snapshot into guest memory, and nothing
 	// merges against it afterwards, so the staged copy is dead weight from here on —
@@ -406,23 +491,15 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		// Signaling an id the agent does not know fails the whole graceful
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
 		workloadIDs: workloadIDs(ctrs),
+		guestAgent:  guestAC,
 	}
 
-	// Re-attach stdout/stderr forwarding for each container: the restored guest's
-	// containers + kata-agent are alive, so a fresh dial over this actor's vsock
-	// resumes ReadStdout/ReadStderr. Best-effort — a failed dial must not fail the
-	// restore (the actor is already running); forwarding is just skipped.
-	vsockPath := kata.VsockSocketPath(actorUID)
-	guestAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
-	if dialErr != nil {
-		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding and guest stats disabled for this restore",
-			slog.String("id", actorUID), slog.Any("err", dialErr))
-	} else {
-		ra.guestAgent = guestAC
-		attribution := p.actorAttribution()
-		for _, c := range containers {
-			s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
-		}
+	// Re-attach stdout/stderr forwarding for each container over the agent
+	// connection dialed after resume: the restored guest's containers are alive, so
+	// ReadStdout/ReadStderr pick up where they left off.
+	attribution := p.actorAttribution()
+	for _, c := range containers {
+		s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
 	}
 
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
@@ -431,14 +508,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	s.setRunningVM(actorUID, ra)
 
 	// Publish the guest to GetWorkloadStats, past the last error return above
-	// for the same reason as in coldBootActor. Skipped when the dial failed:
-	// telemetry rides on the forwarding connection, so that activation answers
-	// FAILED_PRECONDITION until its next checkpoint. Not worth a second dial of
-	// its own — whatever kept the agent from answering a 15s retry loop would
-	// keep it from answering that one too.
-	if ra.guestAgent != nil {
-		s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: ra.workloadIDs})
-	}
+	// for the same reason as in coldBootActor. Same client the forwarding above
+	// reads over.
+	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: guestAC, workloadIDs: ra.workloadIDs})
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

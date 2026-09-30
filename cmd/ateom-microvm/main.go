@@ -56,6 +56,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 var (
@@ -382,6 +383,14 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 		return nil, err
 	}
 	return release, nil
+}
+
+// validateActorDirs rejects a request whose actor directories are unusable.
+func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
+	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+	return nil
 }
 
 // rejectIfDraining returns a codes.Unavailable error if ateom has begun graceful

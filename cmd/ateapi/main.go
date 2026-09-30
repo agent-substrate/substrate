@@ -76,10 +76,11 @@ var (
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	experimentalEnableAuthz  = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
 
-	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
-	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
+	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
+	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -170,14 +171,20 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
 	defer persistence.Close()
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
-	}
-	defer fgaServer.Close()
+	var authorizer *authz.Authorizer
+	if *experimentalEnableAuthz {
+		fgaServer, err := authz.NewOpenFGAServer(pool)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+		}
+		defer fgaServer.Close()
 
-	if _, _, err := authz.EnsureStoreAndModel(shutdownCtx, pool, fgaServer); err != nil {
-		serverboot.Fatal(ctx, "Failed to initialize OpenFGA store and model", err)
+		var policyManager *authz.PolicyManager
+		authorizer, policyManager, err = authz.New(shutdownCtx, pool, fgaServer)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
+		}
+		persistence.SetPolicyManager(policyManager)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -264,7 +271,7 @@ func main() {
 		storageClassLister,
 		ateletDialer,
 		instruments,
-		*egressGatewayAddress,
+		*defaultEgressGatewayAddress,
 		volPlugins,
 		objectStore,
 		resolvedActorJWTIssuer,
@@ -286,6 +293,18 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
+	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		apiauthn.UnaryServerInterceptor(authCfg),
+		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
+		ateinterceptors.ServerUnaryInterceptor,
+	}
+	if *experimentalEnableAuthz {
+		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
+	}
+	unaryInterceptors = append(unaryInterceptors,
+		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+	)
+
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -296,12 +315,7 @@ func main() {
 			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
-		grpc.ChainUnaryInterceptor(
-			apiauthn.UnaryServerInterceptor(authCfg),
-			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-			ateinterceptors.ServerUnaryInterceptor,
-			ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		),
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
 		),
@@ -368,6 +382,9 @@ func loadFlagsFromEnv() {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
+	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
+		*experimentalEnableAuthz = (v == "true" || v == "1")
+	}
 }
 
 func logFlagValues(ctx context.Context) {
@@ -377,6 +394,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("postgres-connection-string", *postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),

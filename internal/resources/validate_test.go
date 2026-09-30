@@ -21,8 +21,47 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func TestToGRPCStatusError(t *testing.T) {
+	err := ToGRPCStatusError(field.ErrorList{field.Required(field.NewPath("actor_name"), "")})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+	if !strings.Contains(status.Convert(err).Message(), "actor_name") {
+		t.Errorf("message %q does not name the field", status.Convert(err).Message())
+	}
+}
+
+func TestDeepEqual(t *testing.T) {
+	// Proto messages carry internal state that reflect.DeepEqual would
+	// compare; proto.Equal compares only field values.
+	a := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	b := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	_ = a.String() // populates a's internal state, not b's
+
+	tests := []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{name: "equal protos", got: DeepEqual(a, b), want: true},
+		{name: "different protos", got: DeepEqual(a, &ateapipb.ObjectRef{Atespace: "a", Name: "y"}), want: false},
+		{name: "nil protos", got: DeepEqual[*ateapipb.ObjectRef](nil, nil), want: true},
+		{name: "equal non-protos", got: DeepEqual([]string{"a"}, []string{"a"}), want: true},
+		{name: "different non-protos", got: DeepEqual(1, 2), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("DeepEqual() = %v, want %v", tt.got, tt.want)
+			}
+		})
+	}
+}
 
 func TestIsValidResourceName(t *testing.T) {
 	tests := []struct {
@@ -270,6 +309,32 @@ func TestValidateUUID(t *testing.T) {
 					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
 				}
 			}
+		})
+	}
+}
+
+func TestValidateLimit(t *testing.T) {
+	path := field.NewPath("limits").Index(0)
+	quantityPath := path.Child("quantity")
+	tests := []struct {
+		name     string
+		limit    string
+		quantity string
+		want     field.ErrorList
+	}{
+		{name: "cpu below the bound", limit: "cpu", quantity: "999"},
+		{name: "memory", limit: "memory", quantity: "1Gi"},
+		{name: "memory has no upper bound", limit: "memory", quantity: "1000"},
+		{name: "missing quantity left to tags", limit: "cpu"},
+		{name: "unsupported name", limit: "gpu", quantity: "1", want: field.ErrorList{field.NotSupported[string](path.Child("name"), nil, nil)}},
+		{name: "malformed quantity", limit: "cpu", quantity: "x", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "zero quantity", limit: "memory", quantity: "0", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "negative quantity", limit: "memory", quantity: "-1", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu at the bound", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateLimit(path, tt.limit, tt.quantity))
 		})
 	}
 }
