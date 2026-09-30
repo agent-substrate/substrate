@@ -96,6 +96,25 @@ var deployAtenetCmd = &cobra.Command{
 	},
 }
 
+var deployPodCertControllerCmd = &cobra.Command{
+	Use:     "podcertificate-controller",
+	Aliases: []string{"podcert"},
+	Short:   "Deploy podcertificate-controller only",
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.DeployPodCertificateController(cmd.Context())
+	},
+}
+
+var deploySandboxConfigCmd = &cobra.Command{
+	Use:   "sandboxconfig",
+	Short: "Deploy the SandboxConfig admission policy and the default gVisor SandboxConfig only",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.DeploySandboxConfig(cmd.Context())
+	},
+}
+
 var deployPostgresCmd = &cobra.Command{
 	Use:   "postgres",
 	Short: "Deploy the single-replica PostgreSQL StatefulSet",
@@ -119,6 +138,8 @@ func init() {
 		deployAPIServerCmd,
 		deployControllerCmd,
 		deployAtenetCmd,
+		deployPodCertControllerCmd,
+		deploySandboxConfigCmd,
 		deployPostgresCmd,
 	)
 

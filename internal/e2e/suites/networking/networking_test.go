@@ -112,7 +112,7 @@ func TestActorEgress(t *testing.T) {
 
 	fixture := egressFixture()
 
-	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress", fixture, e2e.EgressAllowAll())
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress", fixture, e2e.EgressAllowAll()...)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -144,14 +144,15 @@ func TestActorEgress(t *testing.T) {
 }
 
 // TestActorEgressHTTPS covers the same path as TestActorEgress with a TLS
-// origin, where the gateway cannot see inside the request. atenet-egress
-// authorizes the CONNECT against the Actor's actor-identity certificate and
-// then relays raw TCP: it never decrypts, so the TLS session runs end to end
-// between the Actor and the origin.
+// origin, through the sdsmint gateway's MITM. The plain gateway closes all TLS,
+// so this runs only against sdsmint.
 func TestActorEgressHTTPS(t *testing.T) {
+	if !egressMITM() {
+		t.Skip("covers the sdsmint gateway; set E2E_EGRESS_MITM")
+	}
 	ctx := context.Background()
 	fixture := egressFixture()
-	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", fixture, e2e.EgressAllowAll())
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", fixture, e2e.EgressAllowAll()...)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -198,7 +199,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 	target := e2e.DeployServerPod(t, ctx, httpTarget)
 
 	fixture := egressFixture()
-	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-port", fixture, e2e.EgressAllowAll())
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-port", fixture, e2e.EgressAllowAll()...)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -399,7 +400,7 @@ func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix st
 func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, string, *ateapipb.Actor) {
 	t.Helper()
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
-	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith, []*ateapipb.EgressRule{e2e.EgressAllowAll()})
+	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith, e2e.EgressAllowAll())
 }
 
 // createAndResume creates the actor, gives it an EgressPolicy with rules (none

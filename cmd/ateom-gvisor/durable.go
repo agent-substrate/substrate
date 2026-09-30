@@ -30,7 +30,7 @@ import (
 
 // durableTarFile is the snapshot file holding the tar of the actor's durable-dir
 // volumes. Its entries are <volumeName>/... relative to
-// ateompath.DurableDirVolumeMountsDir, so extraction restores the same layout.
+// ActorDirs.durable_dir_volume_mounts_dir, so extraction restores the same layout.
 // The name is shared with atelet, which uses it to carve durable data out of a
 // FULL snapshot's file set when uploading a paused checkpoint as DATA.
 const durableTarFile = resources.DurableDirTarFile

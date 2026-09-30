@@ -1,0 +1,65 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The egress credential-injection fixture: the Secret the suite's policy
+# injects, and the k8s-credential-provider authorization policy that lets the
+# probe fixture's atespaces resolve it. Applied by e2e.DeployCredentialProvider
+# before the provider Deployment itself, which reads the ConfigMap once at
+# startup.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-e2e-credinject-secrets
+  labels:
+    # Lets hack/cleanup-e2e.sh find and delete this namespace when a failed
+    # test leaves the fixture behind for debugging.
+    ate.dev/e2e: "true"
+
+---
+
+# The credential the suite's EgressPolicy injects, resolved by the URI
+# ate-secret://k8s.io/default/ate-e2e-credinject-secrets/api-token/token
+# (see e2e.CredentialInjectionURI).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-token
+  namespace: ate-e2e-credinject-secrets
+type: Opaque
+stringData:
+  token: "e2e-cred-inject-token"
+
+---
+
+# The atespace→namespace authorization policy the provider enforces
+# (default-deny). The name and namespace are dictated by the configMap volume
+# in manifests/egress-credential-injection/k8s-credential-provider.yaml. Both
+# probe-fixture atespaces are listed — the suffixes are deterministic per
+# sandbox class (see e2e.DeployProbe and probe-template.yaml.tmpl) — so one
+# policy serves the gVisor and micro-VM variants.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-credential-provider-namespace-policy
+  namespace: ate-system
+data:
+  namespace-policy.yaml: |
+    policies:
+    - atespace: ate-e2e-probe-egresscredinject
+      allowedNamespaces:
+      - ate-e2e-credinject-secrets
+    - atespace: ate-e2e-probe-microvm-egresscredinject
+      allowedNamespaces:
+      - ate-e2e-credinject-secrets

@@ -62,6 +62,10 @@ toolchain, and write access to a registry.
 `REPO` has to hold every component image the manifests reference, all under the
 same tag, which is how a release publishes them. A release that adds a component
 has to publish it alongside the others before a pre-built install can use it.
+`make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` publishes the full
+set, including `envoy-dataplane`, which is built from a Dockerfile with `docker
+buildx` rather than with `ko`. A build from source builds that image itself, so
+it needs `docker` as well as `ko`.
 Each reference is then pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the
 cluster does.
@@ -86,6 +90,8 @@ that already names a manifest is used as written, and is not looked up.
 | `deploy apiserver` | `--deploy-ate-apiserver` |
 | `deploy ate-controller` | (no shell equivalent) |
 | `deploy atenet` | `--deploy-atenet` |
+| `deploy podcertificate-controller` | (no shell equivalent) |
+| `deploy sandboxconfig` | (no shell equivalent) |
 | `deploy postgres` | (no shell equivalent) |
 
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the

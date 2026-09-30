@@ -60,10 +60,11 @@ type grpcEchoStreamedMsg struct {
 
 // TestActorEgressGRPC covers the egress path with gRPC, which fails in ways the
 // HTTP tests cannot see. atenet-egress terminates the Actor's CONNECT and
-// relays opaque TCP, so HTTP/2 framing has to survive end to end and the gRPC
-// status has to arrive in trailers, after the response body. An egress path
-// that parsed the traffic as HTTP/1.1, or dropped trailers, would still pass
-// TestActorEgress and fail here.
+// decides the cleartext requests inside it one by one, so HTTP/2 framing has
+// to survive that parsing end to end and the gRPC status has to arrive in
+// trailers, after the response body. An egress path that downgraded the
+// traffic to HTTP/1.1, or dropped trailers, would still pass TestActorEgress
+// and fail here.
 //
 // All three streaming shapes in one request, because each one fails
 // differently: unary is a status in trailers, a server-stream is many frames
@@ -76,7 +77,7 @@ func TestActorEgressGRPC(t *testing.T) {
 	ctx := context.Background()
 	target := e2e.DeployServerPod(t, ctx, grpcEcho).Address()
 
-	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-grpc", egressFixture(), e2e.EgressAllowAll())
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-grpc", egressFixture(), e2e.EgressAllowAll()...)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
