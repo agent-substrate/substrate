@@ -31,6 +31,7 @@ type Config struct {
 	ClusterName     string
 	ClusterLocation string
 	ClusterVersion  string
+	ReleaseChannel  string
 
 	Network           string
 	Subnetwork        string
