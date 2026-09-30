@@ -184,11 +184,20 @@ func logValue(v slog.Value) attribute.Value {
 // directly, so emit needs no global provider and can run in parallel.
 type Emitter struct {
 	logger log.Logger
+	// stdout writes the stdout copy. Nil means slog.Default() at call time.
+	stdout slog.Handler
 }
 
-// NewEmitter writes under ScopeName.
+// NewEmitter writes under ScopeName, with the stdout copy through
+// slog.Default().
 func NewEmitter(lp log.LoggerProvider) *Emitter {
 	return &Emitter{logger: lp.Logger(ScopeName)}
+}
+
+// NewEmitterTo is NewEmitter with the stdout copy through stdout, for a stream
+// whose stdout copy must not follow --log-level or block the caller.
+func NewEmitterTo(lp log.LoggerProvider, stdout slog.Handler) *Emitter {
+	return &Emitter{logger: lp.Logger(ScopeName), stdout: stdout}
 }
 
 // LogAt writes both copies of ev with t as their timestamp, so a consumer can
@@ -196,14 +205,18 @@ func NewEmitter(lp log.LoggerProvider) *Emitter {
 // the read time, not the write time. That is why the stdout record is built
 // here rather than through slog.LogAttrs, which would take its own reading.
 //
-// --log-level=warn silences the stdout copy of an info event while the OTLP copy
-// still ships.
+// With slog.Default() as the stdout handler, --log-level=warn silences the
+// stdout copy of an info event while the OTLP copy still ships.
 func (e *Emitter) LogAt(ctx context.Context, ev Event, t time.Time, attrs []slog.Attr) {
 	level := ev.Level()
-	if l := slog.Default(); l.Enabled(ctx, level) {
+	h := e.stdout
+	if h == nil {
+		h = slog.Default().Handler()
+	}
+	if h.Enabled(ctx, level) {
 		rec := slog.NewRecord(t, level, ev.Body, 0)
 		rec.AddAttrs(attrs...)
-		_ = l.Handler().Handle(ctx, rec)
+		_ = h.Handle(ctx, rec)
 	}
 
 	e.emit(ctx, ev, t, attrs)
