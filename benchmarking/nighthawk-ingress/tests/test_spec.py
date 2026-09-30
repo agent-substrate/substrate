@@ -21,6 +21,7 @@ by the Docker protogen stage and self-skips when NIGHTHAWK_DESC is absent
   docker run --rm --entrypoint python3 <image> -m pytest /app/tests
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -123,6 +124,30 @@ def test_tail_latency_slo_threshold():
     assert len(build(tail_latency_slo_ms=None)["metric_thresholds"]) == 2
 
 
+def test_file_plugin_config_parses_with_real_protos():
+    """The file-based plugin config and the options file parse as their
+    real Nighthawk messages; self-skips outside the runner image."""
+    desc = os.environ.get("NIGHTHAWK_DESC", "/app/nighthawk.desc")
+    if not os.path.exists(desc):
+        print("SKIP: FileDescriptorSet only present inside the runner image")
+        return
+    from google.protobuf import any_pb2, json_format
+
+    pool = spec_mod.load_pool(desc)
+    options_cls = spec_mod.message_class(pool, "nighthawk.client.RequestOptionsList")
+    options = json_format.Parse(
+        spec_mod.request_options_list_json(["sb-0", "sb-1"], "benchmark"),
+        options_cls(),
+        descriptor_pool=pool,
+    )
+    assert len(options.options) == 2
+    typed = spec_mod.file_request_source_plugin_config("/tmp/o.json", 4096)[
+        "typed_config"
+    ]
+    any_msg = json_format.ParseDict(typed, any_pb2.Any(), descriptor_pool=pool)
+    assert any_msg.type_url == spec_mod.FILE_REQUEST_SOURCE_TYPE_URL
+
+
 def test_spec_round_trips_through_real_protos():
     """Round-trip through the real Nighthawk protos; self-skips outside the
     runner image (no FileDescriptorSet)."""
@@ -140,6 +165,82 @@ def test_spec_round_trips_through_real_protos():
     assert msg.measuring_period.seconds == 10
     # success-rate + send-rate defaults, plus the tail-latency SLO.
     assert len(msg.metric_thresholds) == 3
+
+
+def fixed_args(**overrides):
+    kwargs = dict(
+        uri="http://atenet-router.ate-system.svc.cluster.local:80/ping",
+        options_path="/tmp/run/request_options.json",
+        options_size=4096,
+        client_concurrency=16,
+        connections=1000,
+        max_pending_requests=10000,
+        total_rps=8000,
+        duration_s=90,
+    )
+    kwargs.update(overrides)
+    return spec_mod.fixed_rps_client_args(**kwargs)
+
+
+def flag_values(args, flag):
+    return [args[i + 1] for i, a in enumerate(args) if a == flag]
+
+
+def test_fixed_rps_args_rate_is_per_worker():
+    args = fixed_args(total_rps=8000, client_concurrency=16)
+    assert flag_values(args, "--rps") == ["500"]
+    assert flag_values(args, "--concurrency") == ["16"]
+    assert flag_values(args, "--duration") == ["90"]
+    assert "--open-loop" in args
+    assert flag_values(args, "--output-format") == ["json"]
+    # The target URI is the one positional argument, last.
+    assert args[-1].endswith("/ping")
+
+
+def test_fixed_rps_args_read_options_from_file():
+    args = fixed_args()
+    plugin = json.loads(flag_values(args, "--request-source-plugin-config")[0])
+    assert plugin == spec_mod.file_request_source_plugin_config(
+        "/tmp/run/request_options.json", 4096
+    )
+    assert plugin["typed_config"]["num_requests"] == 0
+    assert plugin["typed_config"]["max_file_size"] == 4096
+    predicates = dict(
+        p.split(":", 1) for p in flag_values(args, "--failure-predicate")
+    )
+    assert predicates == spec_mod.PERMISSIVE_FAILURE_PREDICATES
+
+
+def test_options_file_matches_adaptive_traffic():
+    names = ["sb-0", "sb-1"]
+    options = json.loads(spec_mod.request_options_list_json(names, "benchmark"))
+    in_line = build(actor_names=names)["nighthawk_traffic_template"][
+        "request_source_plugin_config"
+    ]["typed_config"]["options_list"]
+    assert options == in_line
+
+
+def test_fixed_rps_args_fit_the_single_argument_limit():
+    # Linux rejects any one exec argument over MAX_ARG_STRLEN (128 KiB);
+    # the argv must not grow with the actor count.
+    args = fixed_args(options_size=10_000_000)
+    assert max(len(a.encode()) for a in args) < 128 * 1024
+
+
+def test_per_worker_rps_never_zero():
+    assert spec_mod.per_worker_rps(5, 16) == 1
+    assert spec_mod.per_worker_rps(4000, 16) == 250
+
+
+def test_parse_rps_list():
+    assert spec_mod.parse_rps_list("4000,8000, 12000") == [4000, 8000, 12000]
+    assert spec_mod.parse_rps_list("") == []
+    for bad in ("0", "-5", "abc"):
+        try:
+            spec_mod.parse_rps_list(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {bad!r}")
 
 
 if __name__ == "__main__":

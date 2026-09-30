@@ -28,6 +28,8 @@ ENVOY_CPU=2
 ACTORS=100
 TAIL_LATENCY_SLO_MS=25
 ATESPACE="ingress-benchmark"
+FIXED_RPS=""
+FIXED_STAGE_DURATION="90s"
 DEST=""
 VENV="${HOME}/.venvs/substrate-bench"
 NAMESPACE="benchmarking"
@@ -39,6 +41,9 @@ Usage: $0 [options]
   --actors N                actor fleet size; needs at least one worker Running (default: ${ACTORS})
   --tail-latency-slo-ms N   SLO bound; 0 disables (default: ${TAIL_LATENCY_SLO_MS})
   --atespace NAME           actor namespace (default: ${ATESPACE})
+  --fixed-rps LIST          comma-separated total rates, one stage each, instead
+                            of the adaptive search (e.g. 4000,8000,12000,15000)
+  --fixed-stage-duration D  length of each fixed-rate stage (default: ${FIXED_STAGE_DURATION})
   --dest gs://...           results root (default: gs://\$BUCKET_NAME/nighthawk-ingress-results)
 EOF
   exit "${1:-1}"
@@ -50,6 +55,8 @@ while [[ $# -gt 0 ]]; do
     --actors) ACTORS="$2"; shift 2 ;;
     --tail-latency-slo-ms) TAIL_LATENCY_SLO_MS="$2"; shift 2 ;;
     --atespace) ATESPACE="$2"; shift 2 ;;
+    --fixed-rps) FIXED_RPS="$2"; shift 2 ;;
+    --fixed-stage-duration) FIXED_STAGE_DURATION="$2"; shift 2 ;;
     --dest) DEST="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown flag: $1" >&2; usage ;;
@@ -101,6 +108,8 @@ echo "      actors:               ${ACTORS}"
 echo "      workers running:      ${RUNNING_WORKERS}"
 echo "      tail_latency_slo_ms:  ${TAIL_LATENCY_SLO_MS}"
 echo "      atespace:             ${ATESPACE}"
+echo "      fixed_rps:            ${FIXED_RPS:-(adaptive)}"
+[[ -n "${FIXED_RPS}" ]] && echo "      fixed_stage_duration: ${FIXED_STAGE_DURATION}"
 echo "      dest:                 ${DEST}"
 
 # venv: importing orchestrator.py (defaults/rendering/patch) needs PyYAML.
@@ -138,9 +147,14 @@ docker build --platform linux/amd64 \
 docker push "${IMAGE}"
 
 # --- render + submit the Job ---------------------------------------------------
-NAME="ingress_routercap_envoy_${ENVOY_CPU}cpu"
-JOB="runner-ingress-routercap-${ENVOY_CPU}cpu-quick-$(date +%H%M%S)"
-export IMAGE JOB NAME DEST TAG ENVOY_CPU ACTORS TAIL_LATENCY_SLO_MS ATESPACE
+# Fixed-rate results go under their own name so they never mix with
+# capacity searches.
+MODE=""
+[[ -n "${FIXED_RPS}" ]] && MODE="_fixed"
+NAME="ingress_routercap_envoy_${ENVOY_CPU}cpu${MODE}"
+JOB="runner-ingress-routercap-${ENVOY_CPU}cpu${MODE//_/-}-quick-$(date +%H%M%S)"
+export IMAGE JOB NAME DEST TAG ENVOY_CPU ACTORS TAIL_LATENCY_SLO_MS ATESPACE \
+  FIXED_RPS FIXED_STAGE_DURATION
 "${PY}" - <<'EOF' | kubectl apply -f -
 import os
 import sys
@@ -159,6 +173,8 @@ test = {
         "envoyCpu": int(os.environ["ENVOY_CPU"]),
         "atespace": os.environ["ATESPACE"],
         "tailLatencySloMs": float(os.environ["TAIL_LATENCY_SLO_MS"]),
+        "fixedRps": [int(r) for r in os.environ["FIXED_RPS"].split(",") if r],
+        "fixedStageDuration": os.environ["FIXED_STAGE_DURATION"],
     },
 }
 orchestrator.validate_and_normalize_tests([test])
