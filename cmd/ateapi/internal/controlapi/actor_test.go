@@ -388,6 +388,147 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	}
 }
 
+// TestUpdateActor_RepointTemplateStorageLocation covers the storage location
+// check on a repoint: an actor that owns an external snapshot may only move to
+// a template storing snapshots under the same location, so deleting the actor
+// still collects everything it wrote. Stored data the check cannot parse is a
+// server fault: the error carries no status, which ServerUnaryInterceptor
+// answers with INTERNAL.
+func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
+	const (
+		sameLocation      = "gs://my-bucket/snapshots"
+		differentLocation = "gs://other-bucket/snapshots"
+	)
+	// same-location-slash spells sameLocation differently but resolves to the
+	// same prefix. corrupt has no bucket, which template validation rejects, so
+	// only a write straight to the store can leave it behind.
+	for name, location := range map[string]string{
+		"same-location":       sameLocation,
+		"same-location-slash": sameLocation + "/",
+		"different-location":  differentLocation,
+		"corrupt":             "gs:///snapshots",
+	} {
+		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: location},
+			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		}); err != nil {
+			t.Fatalf("creating template %s: %v", name, err)
+		}
+	}
+
+	snapshotOwnedByActor := func(t *testing.T, actor *ateapipb.Actor) string {
+		t.Helper()
+		uri, err := resources.NewActorSnapshotURI(sameLocation, testAtespace, actor.GetMetadata().GetUid(), "snap")
+		if err != nil {
+			t.Fatalf("NewActorSnapshotURI: %v", err)
+		}
+		return uri.String()
+	}
+	snapshotOwnedByTag := func(t *testing.T, _ *ateapipb.Actor) string {
+		t.Helper()
+		uri, err := resources.NewTagSnapshotURI(sameLocation, testAtespace, "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60")
+		if err != nil {
+			t.Fatalf("NewTagSnapshotURI: %v", err)
+		}
+		return uri.String()
+	}
+	unparseableSnapshot := func(*testing.T, *ateapipb.Actor) string {
+		return sameLocation + "/not-a-snapshot"
+	}
+
+	tests := []struct {
+		name      string
+		template  string
+		snapshot  func(*testing.T, *ateapipb.Actor) string
+		repointTo string
+		wantCode  codes.Code
+	}{
+		{
+			name:      "no external snapshot moves freely",
+			template:  "same-location",
+			repointTo: "different-location",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "snapshot borrowed from a tag moves freely",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByTag,
+			repointTo: "different-location",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "owned snapshot moves to the same location spelled differently",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "same-location-slash",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "owned snapshot cannot move to another location",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "different-location",
+			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:      "snapshot location repoint is checked even when old template is gone",
+			template:  "gone",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "different-location",
+			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:      "unparseable snapshot",
+			template:  "same-location",
+			snapshot:  unparseableSnapshot,
+			repointTo: "different-location",
+			wantCode:  codes.Unknown,
+		},
+		{
+			name:      "invalid storage location on the new template",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "corrupt",
+			wantCode:  codes.Unknown,
+		},
+	}
+	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.template},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			if tt.snapshot != nil {
+				uri := tt.snapshot(t, actor)
+				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri}
+				})
+			}
+
+			updated, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actor.GetMetadata(),
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.repointTo},
+			}})
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("UpdateActor to %s = %v, want %v (err: %v)", tt.repointTo, got, tt.wantCode, err)
+			}
+			if err == nil {
+				if got := updated.GetActorTemplate().GetName(); got != tt.repointTo {
+					t.Errorf("updated actor_template.name = %q, want %q", got, tt.repointTo)
+				}
+			}
+		})
+	}
+}
+
 // TestValidateTemplateVolumesUnchanged exercises the volumes and
 // per-container mount comparison applied when an actor is repointed at a
 // replacement template.

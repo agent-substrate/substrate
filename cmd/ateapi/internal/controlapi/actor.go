@@ -294,7 +294,8 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
 		// cleanly), and the replacement's sandbox config, volumes, and
-		// volume mounts must match the old template's.
+		// volume mounts must match the old template's. It must also store
+		// snapshots under the location the actor's own already live in.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return status.Errorf(codes.FailedPrecondition,
@@ -302,6 +303,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
+				return err
+			}
+			if err := validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
 				return err
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
@@ -382,6 +386,40 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 			return status.Errorf(codes.FailedPrecondition,
 				"volume mounts of container %q differ between the current and the new actor template; volume mounts must be identical to repoint an actor", oldC.GetName())
 		}
+	}
+	return nil
+}
+
+// validateSnapshotLocationUnchanged rejects a template repoint that would
+// store the actor's next snapshots under a different location than the one it
+// already owns. This is needed to not leak snapshots when the actor is deleted:
+// Deleting an actor collects everything under its external snapshot prefix. If
+// the location prefix ever changes, we risk leaking the snapshots under the old prefix.
+func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
+	currentSnapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if currentSnapshotURI == "" {
+		return nil
+	}
+	currentURI, err := resources.ParseSnapshotURI(currentSnapshotURI)
+	if err != nil {
+		return fmt.Errorf("while parsing the external snapshot %q: %w", currentSnapshotURI, err)
+	}
+	// Tag-owned snapshot
+	if !currentURI.OwnedBy(actorSnapshotOwner(actor)) {
+		return nil
+	}
+	// Compared as prefixes, so a newLocation spelled with and without a
+	// trailing slash counts as the same.
+	newLocation := newTemplate.GetSnapshotConfig().GetStorageLocation()
+	// Generate what the new snapshot prefix would look like for this actor.
+	nextSnapshotLocationPrefix, err := currentURI.Owner().Prefix(newLocation)
+	if err != nil {
+		return fmt.Errorf("while resolving the new actor template's storage location %q: %w", newLocation, err)
+	}
+	if nextSnapshotLocationPrefix != currentURI.OwnerPrefix() {
+		return status.Errorf(codes.FailedPrecondition,
+			"the actor's snapshots are stored under %q but the new actor template stores them under %q: the storage location must be identical to repoint an actor that owns a snapshot",
+			currentURI.Location(), newLocation)
 	}
 	return nil
 }
