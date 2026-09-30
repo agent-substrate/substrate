@@ -19,14 +19,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
@@ -40,7 +39,7 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 	}
 
 	// Validate the request, including the object within it.
-	if errs := validateCreateAtespaceRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateCreateAtespaceRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
@@ -63,14 +62,8 @@ func (s *ServiceImpl) CreateAtespace(ctx context.Context, inAtespace *ateapipb.A
 	return stored, nil
 }
 
-func validateCreateAtespaceRequest(ctx context.Context, req *ateapipb.CreateAtespaceRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_CreateAtespaceRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest) (*ateapipb.Atespace, error) {
-	if errs := validateGetAtespaceRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateGetAtespaceRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
@@ -88,14 +81,8 @@ func (s *ServiceImpl) GetAtespace(ctx context.Context, name string) (*ateapipb.A
 	return atespace, nil
 }
 
-func validateGetAtespaceRequest(ctx context.Context, req *ateapipb.GetAtespaceRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_GetAtespaceRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespacesRequest) (*ateapipb.ListAtespacesResponse, error) {
-	if errs := validateListAtespacesRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateListAtespacesRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
@@ -118,14 +105,8 @@ func (s *ServiceImpl) ListAtespaces(ctx context.Context, opts store.ListOptions)
 	return page, nil
 }
 
-func validateListAtespacesRequest(ctx context.Context, req *ateapipb.ListAtespacesRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_ListAtespacesRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) (*ateapipb.Atespace, error) {
-	if errs := validateDeleteAtespaceRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateDeleteAtespaceRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
@@ -151,10 +132,4 @@ func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string, precondit
 	}
 
 	return deleted, nil
-}
-
-func validateDeleteAtespaceRequest(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_DeleteAtespaceRequest(ctx, op, nil, req, nil)
 }

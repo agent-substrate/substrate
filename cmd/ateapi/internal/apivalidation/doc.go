@@ -20,4 +20,4 @@
 // +k8s:validation-gen-scheme-registry=nil
 // +k8s:validation-gen-deep-equal-func=ateDeepEqual
 
-package controlapi
+package apivalidation
