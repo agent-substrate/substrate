@@ -388,3 +388,154 @@ func TestValidateActorDirs(t *testing.T) {
 		})
 	}
 }
+
+const testPinnedImage = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// stringRuleCase is one input to a single-string rule and whether it fails.
+type stringRuleCase struct {
+	name    string
+	value   string
+	wantErr bool
+}
+
+func runStringRule(t *testing.T, rule func(*field.Path, string) field.ErrorList, tests []stringRuleCase) {
+	t.Helper()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := rule(field.NewPath("f"), tt.value)
+			if (len(errs) > 0) != tt.wantErr {
+				t.Errorf("value %q: errs = %v, wantErr %v", tt.value, errs, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidatePinnedImage(t *testing.T) {
+	runStringRule(t, ValidatePinnedImage, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"pinned", testPinnedImage, false},
+		{"tag only", "example.com/app:v1", true},
+		{"malformed digest", "example.com/app@sha256:abc", true},
+		{"malformed reference", "Example.com/App", true},
+	})
+}
+
+func TestValidateMountPath(t *testing.T) {
+	runStringRule(t, ValidateMountPath, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"clean absolute", "/data/cache", false},
+		{"relative", "data", true},
+		{"root", "/", true},
+		{"trailing slash", "/data/", true},
+		{"double slash", "/data//x", true},
+		{"colon", "/data:x", true},
+		{"dot segment", "/data/./x", true},
+		{"dot-dot segment", "/data/../x", true},
+		{"control character", "/data\x01", true},
+	})
+}
+
+func TestValidateHTTPGetPath(t *testing.T) {
+	runStringRule(t, ValidateHTTPGetPath, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"simple", "/healthz", false},
+		{"percent escape", "/a%20b", false},
+		{"no leading slash", "healthz", true},
+		{"query", "/healthz?x=1", true},
+		{"fragment", "/healthz#x", true},
+		{"bad percent escape", "/a%2", true},
+	})
+}
+
+func TestValidateEnvVarName(t *testing.T) {
+	runStringRule(t, ValidateEnvVarName, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"conventional", "HOME_DIR", false},
+		{"printable punctuation", "a.b-c", false},
+		{"equals sign", "A=B", true},
+		{"control character", "A\tB", true},
+		{"non-ASCII", "é", true},
+	})
+}
+
+func TestValidateProjectedPath(t *testing.T) {
+	runStringRule(t, ValidateProjectedPath, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"relative file", "identity/name", false},
+		{"absolute", "/etc/name", true},
+		{"escape", "../name", true},
+	})
+}
+
+func TestValidateStorageVolumeID(t *testing.T) {
+	runStringRule(t, ValidateStorageVolumeID, []stringRuleCase{
+		{"empty", "", false},
+		{"plain", "projects/p/disks/d-1", false},
+		{"newline is allowed", "a\nb", false},
+		{"NUL", "a\x00b", true},
+		{"DEL", "a\x7fb", true},
+		{"C1 control", "a\u0085b", true},
+	})
+}
+
+func TestValidateVolumeType(t *testing.T) {
+	runStringRule(t, ValidateVolumeType, []stringRuleCase{
+		{"empty", "", false},
+		{"dns subdomain", "pd.csi.storage.gke.io", false},
+		{"substrate prefix", "substrate.io/gcs", false},
+		{"uppercase", "PD", true},
+		{"other prefix", "example.io/gcs", true},
+	})
+}
+
+func TestValidateCapabilities(t *testing.T) {
+	tests := []struct {
+		name     string
+		caps     []string
+		allowAll bool
+		wantErrs int
+	}{
+		{"valid names", []string{"NET_BIND_SERVICE", "SYS_PTRACE"}, false, 0},
+		{"ALL rejected for add", []string{"ALL"}, false, 1},
+		{"ALL accepted for drop", []string{"ALL"}, true, 0},
+		{"CAP_ prefix", []string{"CAP_NET_ADMIN"}, false, 1},
+		{"lowercase", []string{"net_admin"}, false, 1},
+		{"too long", []string{strings.Repeat("A", 64)}, false, 1},
+		{"each bad entry reported", []string{"CAP_X", "ok", "NET_ADMIN"}, false, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if errs := ValidateCapabilities(field.NewPath("add"), tt.caps, tt.allowAll); len(errs) != tt.wantErrs {
+				t.Errorf("errs = %v, want %d", errs, tt.wantErrs)
+			}
+		})
+	}
+}
+
+func TestValidateNestedMountPaths(t *testing.T) {
+	path := field.NewPath("volume_mounts")
+	tests := []struct {
+		name  string
+		paths []string
+		want  field.ErrorList
+	}{
+		{name: "siblings", paths: []string{"/a", "/b", "/ab"}},
+		{name: "identical paths are left to the list key", paths: []string{"/a", "/a"}},
+		{name: "empty paths are skipped", paths: []string{"", "/a"}},
+		{
+			name:  "nested under an earlier mount",
+			paths: []string{"/a", "/a/b"},
+			want:  field.ErrorList{field.Invalid(path.Index(1).Child("mount_path"), nil, "")},
+		},
+		{
+			name:  "nested over an earlier mount",
+			paths: []string{"/a/b", "/a"},
+			want:  field.ErrorList{field.Invalid(path.Index(1).Child("mount_path"), nil, "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateNestedMountPaths(path, tt.paths))
+		})
+	}
+}
