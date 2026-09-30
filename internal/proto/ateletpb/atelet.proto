@@ -660,12 +660,19 @@ message LocalCheckpointConfiguration {
   // data will be stored. atelet decides where that directory lives, from the
   // actor's UID, so this is a bare name and must not contain a path separator.
   // The structure of the checkpoint should generally be treated as opaque.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string snapshot_name = 1;
 }
 
 message ExternalCheckpointConfiguration {
   // The object storage URI of the snapshot to write. Object names are appended
   // to it, so it addresses the snapshot as a whole rather than any one object.
+  //
+  // +k8s:required
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # a parseable snapshot URI
   string snapshot_uri = 1;
 }
 
@@ -676,6 +683,7 @@ enum CheckpointType {
   CHECKPOINT_TYPE_LOCAL = 1;
   // Save snapshot to object storage
   CHECKPOINT_TYPE_EXTERNAL = 2;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 enum SnapshotScope {
@@ -708,30 +716,62 @@ message ExternalRestoreConfiguration {
   string snapshot_uri = 1;
 }
 
+// +k8s:customValidation # the set config matches type
 message CheckpointRequest {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string target_ateom_uid = 1;
 
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 3;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 4;
 
+  // The template identity is carried for metrics attribution.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 5;
+
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on checkpoint: atelet uses the version the
   // actor is currently running (recorded with the actor's on-node state at
   // Run/Restore) and records it into the snapshot manifest.
+  //
+  // +k8s:required
   WorkloadSpec spec = 7;
 
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the CheckpointType enum
   CheckpointType type = 8;
 
-  // The checkpoint configuration, depending on the type.
-  oneof config {
-    LocalCheckpointConfiguration local_config = 9;
-    ExternalCheckpointConfiguration external_config = 10;
-  }
+  // The checkpoint configuration: local_config when type is LOCAL,
+  // external_config when it is EXTERNAL. Exactly one is set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  LocalCheckpointConfiguration local_config = 9;
+
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalCheckpointConfiguration external_config = 10;
 
   // What should be included in the checkpoint.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
   SnapshotScope scope = 11;
 }
 
@@ -786,7 +826,7 @@ message UploadPausedCheckpointRequest {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only
+  // +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
   SnapshotScope desired_scope = 8;
 }
 

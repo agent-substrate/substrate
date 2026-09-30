@@ -45,6 +45,11 @@ func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateReques
 	return Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateCheckpointRequest runs the generated validation for req.
+func ValidateCheckpointRequest(ctx context.Context, req *ateletpb.CheckpointRequest) field.ErrorList {
+	return Validate_CheckpointRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateUploadPausedCheckpointRequest runs the generated validation for req.
 func ValidateUploadPausedCheckpointRequest(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) field.ErrorList {
 	return Validate_UploadPausedCheckpointRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -97,6 +102,26 @@ func ValidateCustom_UploadPausedCheckpointRequest_Atespace(_ context.Context, _ 
 		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
 	}
 	return nil
+}
+
+// ValidateCustom_CheckpointRequest requires the config that matches type. The
+// union tags already require exactly one config.
+func ValidateCustom_CheckpointRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.CheckpointRequest) field.ErrorList {
+	switch value.GetType() {
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+		if value.GetLocalConfig() == nil {
+			return field.ErrorList{field.Required(fldPath.Child("local_config"), "required when type is CHECKPOINT_TYPE_LOCAL")}
+		}
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
+		if value.GetExternalConfig() == nil {
+			return field.ErrorList{field.Required(fldPath.Child("external_config"), "required when type is CHECKPOINT_TYPE_EXTERNAL")}
+		}
+	}
+	return nil
+}
+
+func ValidateCustom_ExternalCheckpointConfiguration_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSnapshotURI(fldPath, *value)
 }
 
 func ValidateCustom_UploadPausedCheckpointRequest_DestinationSnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

@@ -401,28 +401,8 @@ func TestWriteFileAtomic(t *testing.T) {
 	})
 }
 
-// validCheckpointRequest and validRestoreRequest build
-// requests whose every field passes validation; the per-request tests below
-// break one field per case.
-func validCheckpointRequest() *ateletpb.CheckpointRequest {
-	return &ateletpb.CheckpointRequest{
-		Atespace:              "ate-demo",
-		ActorName:             "counter-1",
-		ActorTemplateAtespace: "ate-demo",
-		ActorTemplateName:     "counter",
-		TargetAteomUid:        "422938ba-8860-4983-a25d-d6bcb0a69d4e",
-		ActorUid:              "123e4567-e89b-12d3-a456-426614174000",
-		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-		Config: &ateletpb.CheckpointRequest_ExternalConfig{
-			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUri: testSnapshotURI,
-			},
-		},
-		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-	}
-}
-
+// validRestoreRequest builds a request whose every field passes validation;
+// the test below breaks one field per case.
 func validRestoreRequest() *ateletpb.RestoreRequest {
 	return &ateletpb.RestoreRequest{
 		Atespace:              "ate-demo",
@@ -443,68 +423,6 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 			SandboxClass: "gvisor",
 			PauseImage:   testPauseImage,
 		},
-	}
-}
-
-// Checkpoint and Restore must reject a bad snapshot URI even when
-// every common field is valid.
-func TestValidateCheckpointRequest(t *testing.T) {
-	makeReq := func(opts ...func(*ateletpb.CheckpointRequest)) *ateletpb.CheckpointRequest {
-		r := validCheckpointRequest()
-		for _, opt := range opts {
-			opt(r)
-		}
-		return r
-	}
-
-	tests := []struct {
-		name    string
-		req     *ateletpb.CheckpointRequest
-		wantErr bool
-	}{
-		{"valid", makeReq(), false},
-		{"empty snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUri = "" }), true},
-		{"bucketless snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUri = "relative/path" }), true},
-		{"invalid ateom uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }), true},
-		{"invalid atespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }), true},
-		{"invalid actor name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorName = "../escape" }), true},
-		{"invalid actor uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorUid = "../escape" }), true},
-		{"any actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.ActorTemplateAtespace, r.ActorTemplateName = "Not_Valid", "Not_Valid"
-		}), false},
-		{"empty actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateAtespace, r.ActorTemplateName = "", "" }), false},
-		{"invalid container name", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
-		}), true},
-		{"invalid local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ""}}
-		}), true},
-		{"local snapshot name escapes its directory", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "../escape"}}
-		}), true},
-		{"nested local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause/2"}}
-		}), true},
-		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
-		}), true},
-		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
-		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
-		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
-		// DATA_ON_GOLDEN is a restore-only scope: checkpoints only ever
-		// capture FULL or DATA, so a checkpoint carrying it is a bug upstream.
-		{"data-on-golden scope is restore-only", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN }), true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := validateCheckpointRequest(tc.req); (err != nil) != tc.wantErr {
-				t.Errorf("validateCheckpointRequest err = %v, wantErr %v", err, tc.wantErr)
-			}
-		})
 	}
 }
 

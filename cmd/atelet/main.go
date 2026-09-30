@@ -580,8 +580,8 @@ func recordSnapshotSize(ctx context.Context, file string, size int64, templateAt
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
-	if err := validateCheckpointRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+	if errs := apivalidation.ValidateCheckpointRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -1753,60 +1753,13 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	return conn, nil
 }
 
-// validateCheckpointRequest and validateRestoreRequest validate everything in
-// their request that atelet turns into host filesystem paths, plus the
-// request-specific fields. atelet listens on an insecure
+// validateRestoreRequest validates everything in its request that atelet
+// turns into host filesystem paths, plus the request-specific fields. atelet listens on an insecure
 // hostPort, so any reachable caller could otherwise smuggle a path separator
 // or ".." through these fields and make atelet read/RemoveAll/write outside
 // the intended directory tree, or collide bundles. Each RPC validates at its
 // boundary, before any path is built. The field rules live in
 // internal/resources so other components can apply them at their boundaries.
-func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	if len(errs) > 0 {
-		return errs.ToAggregate()
-	}
-	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(req.GetSpec().GetContainers()))
-	for _, ctr := range req.GetSpec().GetContainers() {
-		names = append(names, ctr.GetName())
-	}
-	if err := resources.ValidateContainerNames(names); err != nil {
-		return err
-	}
-
-	if err := validateSnapshotScope(req.GetScope()); err != nil {
-		return err
-	}
-
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if _, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri()); err != nil {
-			return err
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if !resources.IsValidResourceName(req.GetLocalConfig().GetSnapshotName()) {
-			return fmt.Errorf("invalid local snapshot name %q", req.GetLocalConfig().GetSnapshotName())
-		}
-	default:
-		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
-	}
-
-	// DATA_ON_GOLDEN is a restore-time operation (combine the golden
-	// snapshot's guest state with the actor's data): checkpoints only ever
-	// capture FULL or DATA.
-	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		return fmt.Errorf("snapshot scope %s is restore-only; checkpoints capture %s or %s", req.GetScope(), ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA)
-	}
-	return nil
-}
-
 func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	var errs field.ErrorList
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)

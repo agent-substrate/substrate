@@ -96,7 +96,7 @@ const (
 	// Save snapshot only in local filesystem
 	CheckpointType_CHECKPOINT_TYPE_LOCAL CheckpointType = 1
 	// Save snapshot to object storage
-	CheckpointType_CHECKPOINT_TYPE_EXTERNAL CheckpointType = 2
+	CheckpointType_CHECKPOINT_TYPE_EXTERNAL CheckpointType = 2 // Keep this in sync with the maximums on fields of this type.
 )
 
 // Enum value maps for CheckpointType.
@@ -2448,6 +2448,9 @@ type LocalCheckpointConfiguration struct {
 	// data will be stored. atelet decides where that directory lives, from the
 	// actor's UID, so this is a bare name and must not contain a path separator.
 	// The structure of the checkpoint should generally be treated as opaque.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	SnapshotName  string `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2494,6 +2497,10 @@ type ExternalCheckpointConfiguration struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The object storage URI of the snapshot to write. Object names are appended
 	// to it, so it addresses the snapshot as a whole rather than any one object.
+	//
+	// +k8s:required
+	// +k8s:maxLength=2048
+	// +k8s:customValidation # a parseable snapshot URI
 	SnapshotUri   string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2586,27 +2593,53 @@ func (x *ExternalRestoreConfiguration) GetSnapshotUri() string {
 	return ""
 }
 
+// +k8s:customValidation # the set config matches type
 type CheckpointRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-uuid
+	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The template identity is carried for metrics attribution.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on checkpoint: atelet uses the version the
 	// actor is currently running (recorded with the actor's on-node state at
 	// Run/Restore) and records it into the snapshot manifest.
-	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	//
+	// +k8s:required
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the CheckpointType enum
 	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
-	// The checkpoint configuration, depending on the type.
+	// The checkpoint configuration: local_config when type is LOCAL,
+	// external_config when it is EXTERNAL. Exactly one is set.
 	//
-	// Types that are valid to be assigned to Config:
-	//
-	//	*CheckpointRequest_LocalConfig
-	//	*CheckpointRequest_ExternalConfig
-	Config isCheckpointRequest_Config `protobuf_oneof:"config"`
+	// +k8s:optional
+	// +k8s:unionMember
+	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,9,opt,name=local_config,json=localConfig,proto3" json:"local_config,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	ExternalConfig *ExternalCheckpointConfiguration `protobuf:"bytes,10,opt,name=external_config,json=externalConfig,proto3" json:"external_config,omitempty"`
 	// What should be included in the checkpoint.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
 	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2698,27 +2731,16 @@ func (x *CheckpointRequest) GetType() CheckpointType {
 	return CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED
 }
 
-func (x *CheckpointRequest) GetConfig() isCheckpointRequest_Config {
-	if x != nil {
-		return x.Config
-	}
-	return nil
-}
-
 func (x *CheckpointRequest) GetLocalConfig() *LocalCheckpointConfiguration {
 	if x != nil {
-		if x, ok := x.Config.(*CheckpointRequest_LocalConfig); ok {
-			return x.LocalConfig
-		}
+		return x.LocalConfig
 	}
 	return nil
 }
 
 func (x *CheckpointRequest) GetExternalConfig() *ExternalCheckpointConfiguration {
 	if x != nil {
-		if x, ok := x.Config.(*CheckpointRequest_ExternalConfig); ok {
-			return x.ExternalConfig
-		}
+		return x.ExternalConfig
 	}
 	return nil
 }
@@ -2729,22 +2751,6 @@ func (x *CheckpointRequest) GetScope() SnapshotScope {
 	}
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
-
-type isCheckpointRequest_Config interface {
-	isCheckpointRequest_Config()
-}
-
-type CheckpointRequest_LocalConfig struct {
-	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,9,opt,name=local_config,json=localConfig,proto3,oneof"`
-}
-
-type CheckpointRequest_ExternalConfig struct {
-	ExternalConfig *ExternalCheckpointConfiguration `protobuf:"bytes,10,opt,name=external_config,json=externalConfig,proto3,oneof"`
-}
-
-func (*CheckpointRequest_LocalConfig) isCheckpointRequest_Config() {}
-
-func (*CheckpointRequest_ExternalConfig) isCheckpointRequest_Config() {}
 
 type CheckpointResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2824,7 +2830,7 @@ type UploadPausedCheckpointRequest struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only
+	// +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
 	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3347,7 +3353,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1fExternalCheckpointConfiguration\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"A\n" +
 	"\x1cExternalRestoreConfiguration\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xa9\x04\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\x9b\x04\n" +
 	"\x11CheckpointRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3357,12 +3363,11 @@ const file_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
-	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
-	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
+	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12G\n" +
+	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationR\vlocalConfig\x12P\n" +
 	"\x0fexternal_config\x18\n" +
-	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
-	"\x06config\"\x14\n" +
+	" \x01(\v2'.atelet.ExternalCheckpointConfigurationR\x0eexternalConfig\x12+\n" +
+	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\"\x14\n" +
 	"\x12CheckpointResponse\"\x85\x03\n" +
 	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
@@ -3564,10 +3569,6 @@ func file_atelet_proto_init() {
 		return
 	}
 	file_atelet_proto_msgTypes[11].OneofWrappers = []any{}
-	file_atelet_proto_msgTypes[38].OneofWrappers = []any{
-		(*CheckpointRequest_LocalConfig)(nil),
-		(*CheckpointRequest_ExternalConfig)(nil),
-	}
 	file_atelet_proto_msgTypes[42].OneofWrappers = []any{
 		(*RestoreRequest_LocalConfig)(nil),
 		(*RestoreRequest_ExternalConfig)(nil),

@@ -416,6 +416,171 @@ func TestValidateSandboxAssets(t *testing.T) {
 	}
 }
 
+func TestValidateCheckpointRequest(t *testing.T) {
+	const snapshotURI = "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1"
+	valid := func(mutate ...func(*ateletpb.CheckpointRequest)) *ateletpb.CheckpointRequest {
+		r := &ateletpb.CheckpointRequest{
+			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			Atespace:              "team-a",
+			ActorName:             "actor-1",
+			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+			ActorTemplateAtespace: "team-a",
+			ActorTemplateName:     "tmpl-1",
+			Spec:                  &ateletpb.WorkloadSpec{},
+			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+			ExternalConfig:        &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: snapshotURI},
+			Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+	local := func(name string) func(*ateletpb.CheckpointRequest) {
+		return func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.ExternalConfig = nil
+			r.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: name}
+		}
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.CheckpointRequest
+		want field.ErrorList
+	}{{
+		name: "valid external",
+		obj:  valid(),
+	}, {
+		name: "valid local",
+		obj:  valid(local("pause-snap-1")),
+	}, {
+		name: "valid data scope",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA }),
+	}, {
+		name: "missing target_ateom_uid",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("target_ateom_uid"), "")},
+	}, {
+		name: "invalid target_ateom_uid: path escape",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid atespace: path escape",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid actor_name: uppercase",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ActorName = "UPPER" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid actor_uid: not a UUID",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ActorUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid actor_template_name: trailing dash",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateName = "tmpl-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "unset template identity is allowed",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.ActorTemplateAtespace = ""
+			r.ActorTemplateName = ""
+		}),
+	}, {
+		name: "missing spec",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Spec = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
+	}, {
+		name: "spec errors surface at the spec's path",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "pause", Image: testDigestImage}}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "")},
+	}, {
+		name: "unspecified type",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("type"), "")},
+	}, {
+		name: "unknown type",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType(3) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("type"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "no config",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ExternalConfig = nil }),
+		want: field.ErrorList{
+			field.Invalid(nil, nil, "").WithOrigin("union"),
+			field.Required(field.NewPath("external_config"), ""),
+		},
+	}, {
+		name: "both configs",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause-snap-1"}
+		}),
+		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
+	}, {
+		name: "local type with external config",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("local_config"), "")},
+	}, {
+		name: "external type with local config",
+		obj: valid(local("pause-snap-1"), func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("external_config"), "")},
+	}, {
+		name: "missing local snapshot_name",
+		obj:  valid(local("")),
+		want: field.ErrorList{field.Required(field.NewPath("local_config", "snapshot_name"), "")},
+	}, {
+		name: "invalid local snapshot_name: path escape",
+		obj:  valid(local("../escape")),
+		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid local snapshot_name: nested",
+		obj:  valid(local("pause/2")),
+		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid local snapshot_name: parent directory",
+		obj:  valid(local("..")),
+		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing external snapshot_uri",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ExternalConfig.SnapshotUri = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("external_config", "snapshot_uri"), "")},
+	}, {
+		name: "invalid external snapshot_uri: no bucket",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ExternalConfig.SnapshotUri = "relative/path" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("external_config", "snapshot_uri"), nil, "")},
+	}, {
+		name: "external snapshot_uri too long",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.ExternalConfig.SnapshotUri = "gs://bucket/" + strings.Repeat("p", 2048)
+		}),
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("external_config", "snapshot_uri"), nil, 2048).WithOrigin("maxLength"),
+			field.Invalid(field.NewPath("external_config", "snapshot_uri"), nil, ""),
+		},
+	}, {
+		name: "unspecified scope",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }),
+		want: field.ErrorList{field.Required(field.NewPath("scope"), "")},
+	}, {
+		name: "data-on-golden scope is restore-only",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN }),
+		want: field.ErrorList{field.Invalid(field.NewPath("scope"), nil, "").WithOrigin("maximum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateCheckpointRequest(context.Background(), tt.obj), tt.want)
+		})
+	}
+}
+
 func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.UploadPausedCheckpointRequest)) *ateletpb.UploadPausedCheckpointRequest {
 		r := &ateletpb.UploadPausedCheckpointRequest{
