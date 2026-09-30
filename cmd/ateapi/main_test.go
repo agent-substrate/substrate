@@ -36,34 +36,30 @@ func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
 func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
 	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
-	oldBootstrap := *postgresBootstrap
 	oldAuthz := *experimentalEnableAuthz
 	t.Cleanup(func() {
 		*postgresReadWriteConnectionString = oldRuntime
 		*postgresOwnerConnectionString = oldDDL
 		*postgresReadWriteRole = oldRuntimeRole
 		*postgresOwnerRole = oldDDLRole
-		*postgresBootstrap = oldBootstrap
 		*experimentalEnableAuthz = oldAuthz
 	})
 	*postgresReadWriteConnectionString = "@env"
 	*postgresOwnerConnectionString = "@env"
 	*postgresReadWriteRole = "@env"
 	*postgresOwnerRole = "@env"
-	*postgresBootstrap = false
 	*experimentalEnableAuthz = false
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
 	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
 	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
-	t.Setenv("ATE_API_POSTGRES_BOOTSTRAP", "true")
 	t.Setenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "true")
 
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
 	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
-		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" || !*postgresBootstrap {
+		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" {
 		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
 	}
 	if !*experimentalEnableAuthz {
@@ -76,13 +72,6 @@ func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	}
 	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" {
 		t.Fatal("environment-backed connection strings changed after startup resolution")
-	}
-}
-
-func TestLoadFlagsFromEnvRejectsInvalidBootstrap(t *testing.T) {
-	t.Setenv("ATE_API_POSTGRES_BOOTSTRAP", "initialize")
-	if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "must be true or false") {
-		t.Fatalf("loadFlagsFromEnv() error = %v, want boolean validation", err)
 	}
 }
 

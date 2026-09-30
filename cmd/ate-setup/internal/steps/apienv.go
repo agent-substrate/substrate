@@ -23,8 +23,8 @@ import (
 	"os"
 	"regexp"
 	"slices"
-	"strconv"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
@@ -35,7 +35,7 @@ const envHashAnnotation = "ate.dev/env-hash"
 
 // CreateAPIServerEnvVars reconciles how ate-api-server reaches its PostgreSQL
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
-// stable roles, bootstrap mode, and Cloud SQL settings into the ConfigMap,
+// stable roles and Cloud SQL settings into the ConfigMap,
 // and an external server CA into postgres-server-ca.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
@@ -50,7 +50,8 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 
 	readWriteDSN := e.Cfg.PostgresReadWriteConnectionString
 	ownerDSN := e.Cfg.PostgresOwnerConnectionString
-	readWriteFromOperator := readWriteDSN != ""
+	readWriteRole := e.Cfg.PostgresReadWriteRole
+	ownerRole := e.Cfg.PostgresOwnerRole
 	poolMaxConns := e.Cfg.PostgresPoolMaxConns
 
 	cloudsql, err := e.resolveCloudSQL(ctx)
@@ -69,16 +70,23 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 				return err
 			}
 		} else {
-			if readWriteDSN, ownerDSN, err = e.postgresReadWriteConnectionStrings(ctx); err != nil {
-				return err
+			readWriteDSN = config.DefaultPostgresConnectionString
+			ownerDSN = readWriteDSN
+			if e.Cfg.Size10() {
+				readWriteDSN += config.Size10PostgresPoolParams
+			}
+			// Bundled PostgreSQL uses its existing account for both pools.
+			if !e.Cfg.PostgresReadWriteRoleSet {
+				readWriteRole = "postgres"
+			}
+			if !e.Cfg.PostgresOwnerRoleSet {
+				ownerRole = "postgres"
 			}
 		}
 	}
 	if ownerDSN == "" {
 		ownerDSN = readWriteDSN
 	}
-	readWriteRole := e.Cfg.PostgresReadWriteRole
-	ownerRole := e.Cfg.PostgresOwnerRole
 	schema := e.Cfg.PostgresSchemaName()
 	if cloudsql.Adopted {
 		recorded, err := e.recordedAPIServerEnvVars(ctx)
@@ -110,7 +118,6 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	configVars := cloudSQLEnvVars(cloudsql)
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
-	configVars["ATE_API_POSTGRES_BOOTSTRAP"] = strconv.FormatBool(cloudsql.Instance == "" && !readWriteFromOperator)
 	if poolMaxConns != "" {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}

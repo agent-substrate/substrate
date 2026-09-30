@@ -50,6 +50,17 @@ const (
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
 const DefaultRolloutTimeout = 60 * time.Second
 
+// DefaultPostgresConnectionString reaches bundled PostgreSQL over mTLS using the
+// podcertificate controller's projected servicedns trust bundle and its own
+// podidentity credential bundle.
+const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+
+// Size10PostgresPoolParams is appended to the default connection string on
+// size10 clusters. pgxpool defaults MaxConns to max(4, runtime.NumCPU()), which
+// under-uses the size10 server's raised max_connections; pinning the pool makes
+// the client side open the sockets the server is provisioned for.
+const Size10PostgresPoolParams = "&pool_max_conns=64&pool_min_conns=4"
+
 const (
 	DefaultPostgresSchema        = "substrate"
 	DefaultPostgresReadWriteRole = "substrate_readwrite"

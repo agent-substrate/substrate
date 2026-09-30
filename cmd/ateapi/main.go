@@ -25,7 +25,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -81,9 +80,6 @@ var (
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
-	postgresBootstrap                 = pflag.Bool("postgres-bootstrap", false, "Create missing fixed PostgreSQL identities before migrations.")
-	postgresAdminUsernameFile         = pflag.String("postgres-admin-username-file", "", "File that contains the PostgreSQL administrator username.")
-	postgresAdminPasswordFile         = pflag.String("postgres-admin-password-file", "", "File that contains the PostgreSQL administrator password.")
 	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
@@ -117,11 +113,6 @@ func main() {
 	}
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
-	}
-	if *postgresBootstrap {
-		if err := runPostgresBootstrap(ctx); err != nil {
-			serverboot.Fatal(ctx, "Failed to bootstrap PostgreSQL", err)
-		}
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
@@ -400,15 +391,6 @@ func loadFlagsFromEnv() error {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
-	if !pflag.CommandLine.Changed("postgres-bootstrap") {
-		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_BOOTSTRAP"); ok {
-			enabled, err := strconv.ParseBool(raw)
-			if err != nil {
-				return fmt.Errorf("ATE_API_POSTGRES_BOOTSTRAP must be true or false: %w", err)
-			}
-			*postgresBootstrap = enabled
-		}
-	}
 	if !pflag.CommandLine.Changed("postgres-pool-max-conns") {
 		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_POOL_MAX_CONNS"); ok && raw != "" {
 			value, err := strconv.ParseInt(raw, 10, 32)
@@ -422,42 +404,6 @@ func loadFlagsFromEnv() error {
 		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
 	return nil
-}
-
-func runPostgresBootstrap(ctx context.Context) error {
-	if *postgresOwnerConnectionString == "" || *postgresReadWriteConnectionString == "" {
-		return errors.New("both PostgreSQL owner and read/write connection strings are required for bootstrap")
-	}
-	adminUsername, err := readRequiredFile(*postgresAdminUsernameFile)
-	if err != nil {
-		return fmt.Errorf("reading PostgreSQL administrator username: %w", err)
-	}
-	adminPassword, err := readRequiredFile(*postgresAdminPasswordFile)
-	if err != nil {
-		return fmt.Errorf("reading PostgreSQL administrator password: %w", err)
-	}
-	return atepg.Bootstrap(ctx, atepg.BootstrapConfig{
-		EndpointSource:  *postgresOwnerConnectionString,
-		ReadWriteSource: *postgresReadWriteConnectionString,
-		AdminUsername:   adminUsername,
-		AdminPassword:   adminPassword,
-		Schema:          *postgresSchema,
-	})
-}
-
-func readRequiredFile(path string) (string, error) {
-	if path == "" {
-		return "", errors.New("file path must not be empty")
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	value := strings.TrimSpace(string(contents))
-	if value == "" {
-		return "", errors.New("file is empty")
-	}
-	return value, nil
 }
 
 func logFlagValues(ctx context.Context) {
