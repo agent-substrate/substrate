@@ -95,7 +95,10 @@ and state restoration latency when a durable directory is attached to the actor.
 
 #### DurDir Configuration Knobs
 
-* `--durdir-file-size-bytes`: Size in bytes of the data file (default `8388608` = 8 MiB).
+* `--durdir-file-size-bytes`: Total bytes of data written per actor (default `8388608` = 8 MiB).
+* `--durdir-file-count`: Number of files those bytes are spread over (default `1`). One 8 MiB file
+  and 10,000 files totaling 8 MiB exercise the storage transport very differently; raise this to
+  measure the many-small-files case while holding the byte count constant.
 * `--resume-mode`: Resume trigger mode:
   * `explicit` (default): Client invokes the `ResumeActor` RPC before sending traffic.
   * `implicit`: Client sends traffic through the router without an explicit wake RPC, testing traffic-triggered resume.

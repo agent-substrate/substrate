@@ -55,7 +55,8 @@ type Config struct {
 	MinLive           time.Duration // time a GluttonUser actor stays resumed between its first ping and suspend, lower bound
 	MaxLive           time.Duration // upper bound of the live window; zero (the default) suspends right after the ping
 	TraceProbability  float64
-	DurDirFileSize    int64  // bytes
+	DurDirFileSize    int64  // total bytes each DurdirUser writes, spread over DurDirFileCount files
+	DurDirFileCount   int    // files the bytes are spread over; values < 1 read as 1
 	ResumeMode        string // ResumeModeExplicit | ResumeModeImplicit
 	LifecycleMode     string // LifecycleModeSuspend | LifecycleModePause
 	DurDirReadMode    string // ReadModeData | ReadModeDigest
@@ -103,6 +104,7 @@ type payload struct {
 	MinLiveTime       *float64 `json:"min_live_time"`
 	MaxLiveTime       *float64 `json:"max_live_time"`
 	DurDirFileSize    *float64 `json:"durdir_file_size_bytes"`
+	DurDirFileCount   *float64 `json:"durdir_file_count"`
 	ResumeMode        *string  `json:"resume_mode"`
 	LifecycleMode     *string  `json:"lifecycle_mode"`
 	DurDirReadMode    *string  `json:"durdir_read_mode"`
@@ -189,6 +191,12 @@ func (c Config) Validate() error {
 	if c.DurDirFileSize > math.MaxInt32 {
 		return fmt.Errorf("durdir_file_size_bytes cannot exceed %d (2 GiB), got: %d", math.MaxInt32, c.DurDirFileSize)
 	}
+	if c.DurDirFileCount < 0 {
+		return fmt.Errorf("durdir_file_count cannot be negative: %d", c.DurDirFileCount)
+	}
+	if c.DurDirFileCount > math.MaxInt32 {
+		return fmt.Errorf("durdir_file_count cannot exceed %d, got: %d", math.MaxInt32, c.DurDirFileCount)
+	}
 	if c.ResumeMode != "" && c.ResumeMode != ResumeModeExplicit && c.ResumeMode != ResumeModeImplicit {
 		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", c.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
 	}
@@ -236,6 +244,9 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.DurDirFileSize != nil {
 		out.DurDirFileSize = int64(*p.DurDirFileSize)
+	}
+	if p.DurDirFileCount != nil {
+		out.DurDirFileCount = int(*p.DurDirFileCount)
 	}
 	if p.ResumeMode != nil {
 		out.ResumeMode = *p.ResumeMode
@@ -334,6 +345,7 @@ func StartPoll(
 					slog.Duration("min_live", next.MinLive),
 					slog.Duration("max_live", next.MaxLive),
 					slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
+					slog.Int("durdir_file_count", next.DurDirFileCount),
 					slog.String("resume_mode", next.ResumeMode),
 					slog.String("lifecycle_mode", next.LifecycleMode),
 					slog.String("durdir_read_mode", next.DurDirReadMode),
@@ -380,6 +392,7 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Duration("min_live", next.MinLive),
 			slog.Duration("max_live", next.MaxLive),
 			slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
+			slog.Int("durdir_file_count", next.DurDirFileCount),
 			slog.String("resume_mode", next.ResumeMode),
 			slog.String("lifecycle_mode", next.LifecycleMode),
 			slog.String("durdir_read_mode", next.DurDirReadMode),

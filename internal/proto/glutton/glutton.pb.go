@@ -348,11 +348,18 @@ func (x *ReadRAMResponse) GetChecksum() uint32 {
 
 type WriteDiskRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// name of the file to be written to
+	// name of the file to be written to. With file_count > 1, the name of the
+	// directory holding the files instead.
 	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	// size of bytes to be written
-	Size          int32     `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	WriteMode     WriteMode `protobuf:"varint,3,opt,name=write_mode,json=writeMode,proto3,enum=glutton.WriteMode" json:"write_mode,omitempty"`
+	// total size of bytes to be written, spread evenly over file_count files
+	Size      int32     `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	WriteMode WriteMode `protobuf:"varint,3,opt,name=write_mode,json=writeMode,proto3,enum=glutton.WriteMode" json:"write_mode,omitempty"`
+	// number of files to spread size over. 0 and 1 write a single file named
+	// key. Larger values write key/00000000, key/00000001, ... so the same
+	// bytes can be laid out as one large file or many small ones. Under
+	// WRITE_MODE_TRUNCATE the whole directory is replaced, so files left by a
+	// larger earlier count do not linger.
+	FileCount     int32 `protobuf:"varint,4,opt,name=file_count,json=fileCount,proto3" json:"file_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -408,11 +415,19 @@ func (x *WriteDiskRequest) GetWriteMode() WriteMode {
 	return WriteMode_WRITE_MODE_TRUNCATE
 }
 
+func (x *WriteDiskRequest) GetFileCount() int32 {
+	if x != nil {
+		return x.FileCount
+	}
+	return 0
+}
+
 type WriteDiskResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// size of the file after the write
+	// total size of the file, or of all the files, after the write
 	Size int64 `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
-	// sha256 of the whole file after the write
+	// sha256 of the whole file after the write. With several files, the
+	// digest of their bytes concatenated in file name order.
 	Sha256        []byte `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -464,7 +479,8 @@ func (x *WriteDiskResponse) GetSha256() []byte {
 
 type ReadDiskRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// name of the file to be read from
+	// name of the file to be read from. A directory written with file_count
+	// > 1 is read as its files concatenated in name order.
 	Key           string   `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	ReadMode      ReadMode `protobuf:"varint,2,opt,name=read_mode,json=readMode,proto3,enum=glutton.ReadMode" json:"read_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -897,12 +913,14 @@ const file_glutton_proto_rawDesc = "" +
 	"\x04size\x18\x02 \x01(\tR\x04size\"A\n" +
 	"\x0fReadRAMResponse\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x03R\x04size\x12\x1a\n" +
-	"\bchecksum\x18\x02 \x01(\rR\bchecksum\"k\n" +
+	"\bchecksum\x18\x02 \x01(\rR\bchecksum\"\x8a\x01\n" +
 	"\x10WriteDiskRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x05R\x04size\x121\n" +
 	"\n" +
-	"write_mode\x18\x03 \x01(\x0e2\x12.glutton.WriteModeR\twriteMode\"?\n" +
+	"write_mode\x18\x03 \x01(\x0e2\x12.glutton.WriteModeR\twriteMode\x12\x1d\n" +
+	"\n" +
+	"file_count\x18\x04 \x01(\x05R\tfileCount\"?\n" +
 	"\x11WriteDiskResponse\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x03R\x04size\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"S\n" +

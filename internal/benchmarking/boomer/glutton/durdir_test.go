@@ -92,7 +92,8 @@ func TestDurDirUsesConfiguredFileSize(t *testing.T) {
 	srv := &fake.Server{Data: make([]byte, configuredSize)}
 	du := newTestDurDirUser(t, srv, nil)
 
-	if err := du.writeDisk(context.Background(), "TestConfiguredSize", configuredSize, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
+	layout := durDirLayout{totalSize: configuredSize, fileCount: 16}
+	if err := du.writeDisk(context.Background(), "TestConfiguredSize", layout, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
 		t.Fatalf("writeDisk failed: %v", err)
 	}
 
@@ -102,6 +103,33 @@ func TestDurDirUsesConfiguredFileSize(t *testing.T) {
 	}
 	if int64(recorded[0]) != configuredSize {
 		t.Errorf("WriteDisk received size %d, want %d", recorded[0], configuredSize)
+	}
+	if counts := srv.RecordedWriteFileCounts(); len(counts) != 1 || counts[0] != 16 {
+		t.Errorf("WriteDisk received file_count %v, want [16]", counts)
+	}
+}
+
+// TestDurDirParamsLayout checks how the dynconfig knobs become the write
+// layout: the size and count each fall back independently, and the total is
+// the configured size, not size × count.
+func TestDurDirParamsLayout(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  dynconfig.Config
+		want durDirLayout
+	}{
+		{name: "defaults", want: durDirLayout{totalSize: defaultFileSize, fileCount: 1}},
+		{name: "size only", cfg: dynconfig.Config{DurDirFileSize: 4096}, want: durDirLayout{totalSize: 4096, fileCount: 1}},
+		{name: "count only", cfg: dynconfig.Config{DurDirFileCount: 10000}, want: durDirLayout{totalSize: defaultFileSize, fileCount: 10000}},
+		{name: "size and count", cfg: dynconfig.Config{DurDirFileSize: 4096, DurDirFileCount: 4}, want: durDirLayout{totalSize: 4096, fileCount: 4}},
+	}
+	du := &durDirUser{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, _ := du.params(tt.cfg); got != tt.want {
+				t.Errorf("params() layout = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 

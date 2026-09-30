@@ -287,20 +287,32 @@ func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(contex
 	return nil
 }
 
-func (u *durDirUser) params(dynCfg dynconfig.Config) (int64, gluttonpb.ReadMode) {
-	fileSize := dynCfg.DurDirFileSize
-	if fileSize <= 0 {
-		fileSize = defaultFileSize
+// durDirLayout is how a DurdirUser's bytes are laid out on the durable dir:
+// totalSize bytes spread over fileCount files. One 8 MiB file and 10,000
+// files totaling 8 MiB are very different workloads for the storage
+// underneath, so the two are set independently.
+type durDirLayout struct {
+	totalSize int64
+	fileCount int32
+}
+
+func (u *durDirUser) params(dynCfg dynconfig.Config) (durDirLayout, gluttonpb.ReadMode) {
+	layout := durDirLayout{totalSize: dynCfg.DurDirFileSize, fileCount: int32(dynCfg.DurDirFileCount)}
+	if layout.totalSize <= 0 {
+		layout.totalSize = defaultFileSize
+	}
+	if layout.fileCount < 1 {
+		layout.fileCount = 1
 	}
 	readMode := gluttonpb.ReadMode_READ_MODE_DATA
 	if dynCfg.DurDirReadMode == dynconfig.ReadModeDigest {
 		readMode = gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY
 	}
-	return fileSize, readMode
+	return layout, readMode
 }
 
 func (u *durDirUser) step(ctx context.Context, dynCfg dynconfig.Config) {
-	fileSize, readMode := u.params(dynCfg)
+	layout, readMode := u.params(dynCfg)
 
 	// 1. Suspend or pause actor
 	u.hibernate(ctx, dynCfg)
@@ -320,21 +332,21 @@ func (u *durDirUser) step(ctx context.Context, dynCfg dynconfig.Config) {
 		return
 	}
 
-	// 5. Overwrite file with fresh random bytes
-	if err := u.writeDisk(ctx, "DurDirOverwrite", fileSize, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
+	// 5. Overwrite file(s) with fresh random bytes
+	if err := u.writeDisk(ctx, "DurDirOverwrite", layout, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
 		return
 	}
 }
 
 func (u *durDirUser) bootstrap(ctx context.Context, dynCfg dynconfig.Config) error {
-	fileSize, readMode := u.params(dynCfg)
+	layout, readMode := u.params(dynCfg)
 
 	if !u.resume(ctx, dynCfg.ResumeMode) {
 		return fmt.Errorf("initial resume failed")
 	}
 
-	// Initial write to create DurDir file
-	if err := u.writeDisk(ctx, "DurDirWrite", fileSize, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
+	// Initial write to create DurDir file(s)
+	if err := u.writeDisk(ctx, "DurDirWrite", layout, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
 		return fmt.Errorf("initial WriteDisk failed: %w", err)
 	}
 
@@ -346,11 +358,13 @@ func (u *durDirUser) bootstrap(ctx context.Context, dynCfg dynconfig.Config) err
 	return nil
 }
 
-func (u *durDirUser) writeDisk(ctx context.Context, metricName string, size int64, mode gluttonpb.WriteMode) error {
+func (u *durDirUser) writeDisk(ctx context.Context, metricName string, layout durDirLayout, mode gluttonpb.WriteMode) error {
+	size := layout.totalSize
 	req := &gluttonpb.WriteDiskRequest{
 		Key:       durDirTestFile,
 		Size:      int32(size),
 		WriteMode: mode,
+		FileCount: layout.fileCount,
 	}
 	body, err := proto.Marshal(req)
 	if err != nil {
