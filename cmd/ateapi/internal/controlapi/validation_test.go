@@ -830,6 +830,19 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 			s.DataSources[1].TrustBundle.Path = "actor-uid"
 		}),
 		want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("trust_bundle", "path"), nil)},
+	}, {
+		name: "second actor_metadata entry",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources = append(s.DataSources, &ateapipb.SystemInfoDataSource{
+				ActorMetadata: &ateapipb.ActorMetadataDataSource{
+					Items: []*ateapipb.ActorMetadataItem{{
+						Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME,
+						Path:  "actor-name-2",
+					}},
+				},
+			})
+		}),
+		want: field.ErrorList{field.Forbidden(dsPath.Index(2).Child("actor_metadata"), "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

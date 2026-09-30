@@ -575,6 +575,10 @@ func TestValidateVolume(t *testing.T) {
 			obj:  systemInfo(bundle("podcert", "name"), metadata(item(fieldName, "name"))),
 			want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("actor_metadata", "items").Index(0).Child("path"), nil)},
 		}, {
+			name: "system info: second actor_metadata entry",
+			obj:  systemInfo(metadata(item(fieldName, "name")), metadata(item(fieldName, "name-2"))),
+			want: field.ErrorList{field.Forbidden(dsPath.Index(1).Child("actor_metadata"), "")},
+		}, {
 			name: "system info: too many data sources",
 			obj: systemInfo(
 				bundle("podcert", "a"), bundle("podcert", "b"), bundle("podcert", "c"),

@@ -189,12 +189,14 @@ func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Op
 	return resources.ValidateProjectedPath(fldPath, *value)
 }
 
-// ValidateCustom_SystemInfoVolumeSource_DataSources requires every projected
-// file path to be unique across all data sources: atelet writes them in
-// order into one tree, so a repeated path silently clobbers the earlier file.
+// ValidateCustom_SystemInfoVolumeSource_DataSources allows at most one
+// actor_metadata entry and requires every projected file path to be unique
+// across all data sources: atelet writes them in order into one tree, so a
+// repeated path silently clobbers the earlier file.
 func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.SystemInfoDataSource) field.ErrorList {
 	var errs field.ErrorList
 	seen := sets.New[string]()
+	sawMetadata := false
 	for i, ds := range value {
 		switch {
 		case ds == nil:
@@ -204,6 +206,10 @@ func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ oper
 			}
 			seen.Insert(ds.TrustBundle.Path)
 		case ds.ActorMetadata != nil:
+			if sawMetadata {
+				errs = append(errs, field.Forbidden(fldPath.Index(i).Child("actor_metadata"), "at most one actor_metadata entry may appear"))
+			}
+			sawMetadata = true
 			for j, item := range ds.ActorMetadata.Items {
 				if item == nil {
 					continue

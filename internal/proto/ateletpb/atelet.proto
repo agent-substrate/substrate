@@ -416,7 +416,7 @@ message SystemInfoVolume {
   // +k8s:optional
   // +k8s:maxItems=8 # matches the template's data_sources bound
   // +k8s:listType=atomic
-  // +k8s:customValidation # paths unique across entries
+  // +k8s:customValidation # at most one actor_metadata; paths unique across entries
   repeated SystemInfoDataSource data_sources = 1;
 }
 
