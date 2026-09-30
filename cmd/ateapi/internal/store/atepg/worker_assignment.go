@@ -297,7 +297,7 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 		}
 		assignment := &ateapipb.ActorAssignment{}
 		if err := proto.Unmarshal(protoBytes, assignment); err != nil {
-			return store.ListResponse[*ateapipb.ActorAssignment]{}, fmt.Errorf("unmarshaling assignment: %w", err)
+			return store.ListResponse[*ateapipb.ActorAssignment]{}, fmt.Errorf("unmarshaling assignment of actor %s: %w", actorUID, err)
 		}
 		result = append(result, assignment)
 		uids = append(uids, actorUID)

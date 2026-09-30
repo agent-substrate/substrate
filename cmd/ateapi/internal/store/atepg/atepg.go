@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -285,6 +286,15 @@ func unmarshalStored(b []byte, m proto.Message) error {
 		return err
 	}
 	defaults.Apply(m)
+	return nil
+}
+
+// unmarshalRow is unmarshalStored for a row in a listing. A listing fails as a
+// whole on one bad row, so the error names the row.
+func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
+	if err := unmarshalStored(b, m); err != nil {
+		return fmt.Errorf("unmarshaling %s %s: %w", kind, strings.Join(id, "/"), err)
+	}
 	return nil
 }
 
