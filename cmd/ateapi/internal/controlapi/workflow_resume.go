@@ -153,6 +153,16 @@ func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
 	}
 }
 
+// errGoldenTagMissing is the error for a Golden data resume on a template with
+// no golden tag. Unless the golden build failed, the template controller is
+// still making the tag, so the client may retry.
+func errGoldenTagMissing(tmpl *ateapipb.ActorTemplate) error {
+	if msg := tmpl.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage(); msg != "" {
+		return status.Errorf(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden tag, and its build failed: %s", msg)
+	}
+	return status.Error(codes.Unavailable, "a Golden data resume requires the ActorTemplate golden tag, which is not ready yet")
+}
+
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
@@ -206,7 +216,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		if dataOnly {
 			ref := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
 			if ref == nil {
-				return nil, nil, src, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden tag, which is not available")
+				return nil, nil, src, errGoldenTagMissing(actorTemplate)
 			}
 			tag, err := w.store.GetTag(ctx, resources.TagRefFromObjectRef(ref))
 			if errors.Is(err, store.ErrNotFound) {

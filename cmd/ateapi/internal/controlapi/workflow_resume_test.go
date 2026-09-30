@@ -949,8 +949,10 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 		// goldenURI and goldenScope are the template's recorded golden
 		// external snapshot; an empty URI means the template has none. A zero
 		// scope is treated as Full, the scope a golden snapshot must hold.
-		goldenURI     string
-		goldenScope   ateapipb.SnapshotContentScope
+		goldenURI   string
+		goldenScope ateapipb.SnapshotContentScope
+		// goldenError is the template's terminal golden build failure.
+		goldenError   string
 		wantCode      codes.Code
 		wantGoldenURI string
 	}{
@@ -994,9 +996,18 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			wantCode:     codes.FailedPrecondition,
 		},
 		{
-			name:         "fails when template has no golden snapshot",
+			// The template controller is still building the golden tag, so
+			// the client may retry.
+			name:         "is unavailable while the template has no golden snapshot yet",
 			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
 			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			wantCode:     codes.Unavailable,
+		},
+		{
+			name:         "fails when the golden build failed",
+			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
+			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			goldenError:  "GoldenActorInvalid: bad spec",
 			wantCode:     codes.FailedPrecondition,
 		},
 		{
@@ -1064,6 +1075,11 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			if tt.goldenURI != "" {
 				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
 					GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
+				}}
+			}
+			if tt.goldenError != "" {
+				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					ErrorMessage: tt.goldenError,
 				}}
 			}
 			stored, err := persistence.CreateActorTemplate(ctx, tmpl)
@@ -1650,7 +1666,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 			},
 			tmpl: templateSeed{onPause: dataScope, fromData: fromGolden},
-			want: restoreWant{code: codes.FailedPrecondition},
+			want: restoreWant{code: codes.Unavailable},
 		},
 		{
 			name: "24 Data pause snapshot under Golden fromData restores on the golden",
