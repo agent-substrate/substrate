@@ -280,6 +280,12 @@ func TestPlugin_AttachVolume(t *testing.T) {
 	}
 
 	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		if req.GetNodeId() != "node-1" {
+			t.Errorf("ControllerPublishVolume received NodeId %q, want %q", req.GetNodeId(), "node-1")
+		}
+		if req.GetVolumeId() != "test-vol" {
+			t.Errorf("ControllerPublishVolume received VolumeId %q, want %q", req.GetVolumeId(), "test-vol")
+		}
 		return &csi.ControllerPublishVolumeResponse{
 			PublishContext: map[string]string{"devicePath": "/dev/xvdba"},
 		}, nil
@@ -295,6 +301,9 @@ func TestPlugin_AttachVolume(t *testing.T) {
 
 	// Test Unimplemented warning bypass
 	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		if req.GetNodeId() != "node-1" {
+			t.Errorf("ControllerPublishVolume received NodeId %q, want %q", req.GetNodeId(), "node-1")
+		}
 		return nil, status.Error(codes.Unimplemented, "unimplemented")
 	}
 	resp, err = plugin.AttachVolume(ctx, volume.AttachVolumeRequest{VolumeID: "test-vol", Node: "node-1"})
@@ -321,6 +330,15 @@ func TestPlugin_DetachVolume(t *testing.T) {
 
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
+	driver.controllerUnpublishVolumeFunc = func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		if req.GetNodeId() != "node-1" {
+			t.Errorf("ControllerUnpublishVolume received NodeId %q, want %q", req.GetNodeId(), "node-1")
+		}
+		if req.GetVolumeId() != "test-vol" {
+			t.Errorf("ControllerUnpublishVolume received VolumeId %q, want %q", req.GetVolumeId(), "test-vol")
+		}
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
 	err = plugin.DetachVolume(ctx, "test-vol", "node-1")
 	if err != nil {
 		t.Fatalf("DetachVolume failed: %v", err)
@@ -328,6 +346,9 @@ func TestPlugin_DetachVolume(t *testing.T) {
 
 	// Test Unimplemented warning bypass
 	driver.controllerUnpublishVolumeFunc = func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		if req.GetNodeId() != "node-1" {
+			t.Errorf("ControllerUnpublishVolume received NodeId %q, want %q", req.GetNodeId(), "node-1")
+		}
 		return nil, status.Error(codes.Unimplemented, "unimplemented")
 	}
 	err = plugin.DetachVolume(ctx, "test-vol", "node-1")
