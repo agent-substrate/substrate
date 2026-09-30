@@ -48,7 +48,7 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 
 	// Not a valid encoding of any message.
 	bad := []byte{0xff}
-	for _, table := range []string{"atespaces", "actors", "actor_templates", "tags"} {
+	for _, table := range []string{"atespaces", "actors", "actor_templates", "tags", "workers"} {
 		if _, err := s.pool.Exec(ctx, "UPDATE "+table+" SET proto = $1", bad); err != nil {
 			t.Fatalf("corrupting %s: %v", table, err)
 		}
@@ -70,6 +70,7 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 		{"actor templates, all atespaces", func() error { _, err := s.ListActorTemplates(ctx, "", opts); return err }, "actor template team-a/t1"},
 		{"tags", func() error { _, err := s.ListTags(ctx, "team-a", opts); return err }, "tag team-a/v1"},
 		{"tags, all atespaces", func() error { _, err := s.ListTags(ctx, "", opts); return err }, "tag team-a/v1"},
+		{"workers", func() error { _, err := s.ListWorkers(ctx, opts); return err }, "worker w1"},
 		{"worker assignments", func() error { _, err := s.ListWorkerAssignments(ctx, "w1", opts); return err }, "actor uid-1"},
 	}
 	for _, tc := range tests {
