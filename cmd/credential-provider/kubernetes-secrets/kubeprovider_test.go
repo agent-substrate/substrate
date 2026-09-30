@@ -254,9 +254,9 @@ func TestFetchSecret(t *testing.T) {
 	}
 }
 
-// A grant narrowed by name or by label admits only what it names. A grant with
-// neither keeps admitting every Secret in the namespace, which is what every
-// policy written before those fields existed already means.
+// A grant narrowed by label admits only Secrets carrying those labels. A grant
+// with no selector keeps admitting every Secret in the namespace, which is
+// what every policy written before the field existed already means.
 func TestFetchSecretSecretNarrowing(t *testing.T) {
 	const actorURI = "spiffe://substrate-actor.local/actor/team-a/my-actor"
 	model := &corev1.Secret{
@@ -283,19 +283,6 @@ func TestFetchSecretSecretNarrowing(t *testing.T) {
 			secret: "actor-id-ca-pool",
 		},
 		{
-			name: "named grant admits the named secret",
-			policy: atespaceNamespacePolicy{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
-				AllowedSecretNames: []string{"model-key"}},
-			secret: "model-key",
-		},
-		{
-			name: "named grant refuses everything else",
-			policy: atespaceNamespacePolicy{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
-				AllowedSecretNames: []string{"model-key"}},
-			secret:   "actor-id-ca-pool",
-			wantCode: codes.PermissionDenied,
-		},
-		{
 			name: "label grant admits a labeled secret",
 			policy: atespaceNamespacePolicy{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
 				SecretSelector: &secretSelector{MatchLabels: map[string]string{"example.com/credential": "true"}}},
@@ -306,32 +293,6 @@ func TestFetchSecretSecretNarrowing(t *testing.T) {
 			policy: atespaceNamespacePolicy{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
 				SecretSelector: &secretSelector{MatchLabels: map[string]string{"example.com/credential": "true"}}},
 			secret:   "actor-id-ca-pool",
-			wantCode: codes.PermissionDenied,
-		},
-		{
-			// The criteria of one policy are AND-ed. actor-id-ca-pool is named
-			// but carries no label, so the policy does not admit it.
-			name: "name and label in one policy must both hold",
-			policy: atespaceNamespacePolicy{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
-				AllowedSecretNames: []string{"actor-id-ca-pool"},
-				SecretSelector:     &secretSelector{MatchLabels: map[string]string{"example.com/credential": "true"}}},
-			secret:   "actor-id-ca-pool",
-			wantCode: codes.PermissionDenied,
-		},
-		{
-			name: "name and label in one policy admit a secret satisfying both",
-			policy: atespaceNamespacePolicy{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
-				AllowedSecretNames: []string{"model-key"},
-				SecretSelector:     &secretSelector{MatchLabels: map[string]string{"example.com/credential": "true"}}},
-			secret: "model-key",
-		},
-		{
-			// model-key carries the label but the policy names another Secret.
-			name: "a labeled secret the policy does not name is refused",
-			policy: atespaceNamespacePolicy{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
-				AllowedSecretNames: []string{"some-other-secret"},
-				SecretSelector:     &secretSelector{MatchLabels: map[string]string{"example.com/credential": "true"}}},
-			secret:   "model-key",
 			wantCode: codes.PermissionDenied,
 		},
 	}
@@ -365,40 +326,13 @@ func TestFetchSecretSecretNarrowing(t *testing.T) {
 	}
 }
 
-// A grant narrowed by name only refuses before it reads anything, so a denied
-// request cannot be used to learn whether a Secret exists.
-func TestFetchSecretNamedGrantDeniesBeforeRead(t *testing.T) {
-	authz, err := newNamespaceAuthorizer(namespacePolicyFile{Policies: []atespaceNamespacePolicy{{
-		Atespace: "team-a", AllowedNamespaces: []string{"ns1"}, AllowedSecretNames: []string{"model-key"},
-	}}})
-	if err != nil {
-		t.Fatalf("newNamespaceAuthorizer: %v", err)
-	}
-	client := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "actor-id-ca-pool", Namespace: "ns1"},
-		Data:       map[string][]byte{"token": []byte("private")},
-	})
-	srv := NewServer(client, authz)
-	if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
-		Uri:           "ate-secret://k8s.io/default/ns1/actor-id-ca-pool/token",
-		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
-	}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
-	}
-	if len(client.Actions()) != 0 {
-		t.Fatal("denied request reached Kubernetes")
-	}
-}
-
-// A malformed name or label can never match, so it would narrow a grant to
-// nothing and read as the policy being ignored. Loading fails instead.
+// A malformed label can never match, so it would narrow a grant to nothing and
+// read as the policy being ignored. Loading fails instead.
 func TestNewNamespaceAuthorizerRejectsMalformedNarrowing(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy atespaceNamespacePolicy
 	}{
-		{"invalid secret name", atespaceNamespacePolicy{Atespace: "team-a",
-			AllowedNamespaces: []string{"ns1"}, AllowedSecretNames: []string{"Not A Name"}}},
 		{"invalid label key", atespaceNamespacePolicy{Atespace: "team-a",
 			AllowedNamespaces: []string{"ns1"}, SecretSelector: &secretSelector{MatchLabels: map[string]string{"not a key": "v"}}}},
 		{"invalid label value", atespaceNamespacePolicy{Atespace: "team-a",
@@ -424,7 +358,6 @@ func TestLoadNamespaceAuthorizerSecretNarrowing(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`policies:
 - atespace: team-a
   allowedNamespaces: [ns1]
-  allowedSecretNames: [model-key]
   secretSelector:
     matchLabels:
       example.com/credential: "true"
@@ -437,24 +370,18 @@ func TestLoadNamespaceAuthorizerSecretNarrowing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadNamespaceAuthorizer: %v", err)
 	}
-	// The policy narrows by name and by label, so both criteria apply.
-	if got := authz.Authorize("team-a", "ns1", "model-key"); got != DecisionCheckLabels {
-		t.Errorf("named secret with a selector: got %v, want DecisionCheckLabels", got)
+	// team-a narrows by label, so only the Secret's labels can settle it.
+	if got := authz.Authorize("team-a", "ns1"); got != DecisionCheckLabels {
+		t.Errorf("policy with a selector: got %v, want DecisionCheckLabels", got)
 	}
-	if got := authz.Authorize("team-a", "ns1", "other"); got != DecisionDeny {
-		t.Errorf("secret the policy does not name: got %v, want DecisionDeny", got)
+	if !authz.AllowedLabels("team-a", "ns1", map[string]string{"example.com/credential": "true"}) {
+		t.Error("labeled secret: got refused, want permitted")
 	}
-	if !authz.AllowedLabels("team-a", "ns1", "model-key", map[string]string{"example.com/credential": "true"}) {
-		t.Error("named and labeled secret: got refused, want permitted")
+	if authz.AllowedLabels("team-a", "ns1", map[string]string{"other": "x"}) {
+		t.Error("unlabeled secret: got permitted, want refused")
 	}
-	if authz.AllowedLabels("team-a", "ns1", "model-key", map[string]string{"other": "x"}) {
-		t.Error("named but unlabeled secret: got permitted, want refused")
-	}
-	if authz.AllowedLabels("team-a", "ns1", "other", map[string]string{"example.com/credential": "true"}) {
-		t.Error("labeled secret the policy does not name: got permitted, want refused")
-	}
-	// team-b narrows by neither, so the grant stays namespace-wide.
-	if got := authz.Authorize("team-b", "ns2", "anything-at-all"); got != DecisionAllow {
+	// team-b narrows by nothing, so the grant stays namespace-wide.
+	if got := authz.Authorize("team-b", "ns2"); got != DecisionAllow {
 		t.Errorf("policy without narrowing: got %v, want DecisionAllow", got)
 	}
 }
@@ -466,12 +393,13 @@ func TestNamespaceAuthorizerPoliciesAreOred(t *testing.T) {
 	t.Run("a narrow policy does not revoke a broad one", func(t *testing.T) {
 		a, err := newNamespaceAuthorizer(namespacePolicyFile{Policies: []atespaceNamespacePolicy{
 			{Atespace: "team-a", AllowedNamespaces: []string{"ns1"}},
-			{Atespace: "team-a", AllowedNamespaces: []string{"ns1"}, AllowedSecretNames: []string{"model-key"}},
+			{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
+				SecretSelector: &secretSelector{MatchLabels: map[string]string{"example.com/credential": "true"}}},
 		}})
 		if err != nil {
 			t.Fatalf("newNamespaceAuthorizer: %v", err)
 		}
-		if got := a.Authorize("team-a", "ns1", "anything-else"); got != DecisionAllow {
+		if got := a.Authorize("team-a", "ns1"); got != DecisionAllow {
 			t.Errorf("got %v, want DecisionAllow: the unrestricted policy still stands", got)
 		}
 	})
@@ -486,13 +414,13 @@ func TestNamespaceAuthorizerPoliciesAreOred(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newNamespaceAuthorizer: %v", err)
 		}
-		if !a.AllowedLabels("team-a", "ns1", "any-secret", map[string]string{"tier": "prod"}) {
+		if !a.AllowedLabels("team-a", "ns1", map[string]string{"tier": "prod"}) {
 			t.Error("a Secret matching the first policy was refused")
 		}
-		if !a.AllowedLabels("team-a", "ns1", "any-secret", map[string]string{"team": "x"}) {
+		if !a.AllowedLabels("team-a", "ns1", map[string]string{"team": "x"}) {
 			t.Error("a Secret matching the second policy was refused")
 		}
-		if a.AllowedLabels("team-a", "ns1", "any-secret", map[string]string{"other": "y"}) {
+		if a.AllowedLabels("team-a", "ns1", map[string]string{"other": "y"}) {
 			t.Error("a Secret matching neither policy was admitted")
 		}
 	})
@@ -505,10 +433,10 @@ func TestNamespaceAuthorizerPoliciesAreOred(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newNamespaceAuthorizer: %v", err)
 		}
-		if a.AllowedLabels("team-a", "ns1", "any-secret", map[string]string{"tier": "prod"}) {
+		if a.AllowedLabels("team-a", "ns1", map[string]string{"tier": "prod"}) {
 			t.Error("a Secret carrying only one of the two labels was admitted")
 		}
-		if !a.AllowedLabels("team-a", "ns1", "any-secret", map[string]string{"tier": "prod", "team": "x"}) {
+		if !a.AllowedLabels("team-a", "ns1", map[string]string{"tier": "prod", "team": "x"}) {
 			t.Error("a Secret carrying both labels was refused")
 		}
 	})
