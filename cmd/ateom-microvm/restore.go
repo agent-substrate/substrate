@@ -451,14 +451,15 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// a second ~160MiB per running actor on top of the checkpoint it will write.
 	// Drop the memory image but keep the directory: atelet re-stages it wholesale
 	// before any later restore, and the small files beside it stay cheap to keep.
+	//
+	// Unlinking it here cost the caller the whole image (0.4-4.3s for 1 GiB on a
+	// network-backed worker dir) after the phases above were already logged, so
+	// it never showed up in them. The rename is synchronous and the unlink is not,
+	// which is what takes the bytes off the resume path: the staged name is gone
+	// by the time this returns, and a later re-stage under that name cannot be
+	// raced by the unlink because that targets the renamed path.
 	if memMode == ch.MemRestoreEager {
-		staged := filepath.Join(restoreDir, "memory-ranges")
-		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
-			// Not fatal: it only costs disk until the actor is torn down.
-			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
-		} else {
-			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
-		}
+		startStagedDrop(ctx, filepath.Join(restoreDir, "memory-ranges"))
 	}
 
 	ra := &runningActor{
