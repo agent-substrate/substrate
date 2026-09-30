@@ -662,12 +662,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		if _, err = client.Restore(ctx, req); err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateletCrashMessage("Restore", err)); cerr != nil {
-				return tele, cerr
-			}
-			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 		}
 		return tele, nil
 	} else if !src.SnapshotURI.IsZero() {
@@ -699,12 +694,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			MemoryBytes:   memBytes,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateletCrashMessage("Restore", err)); cerr != nil {
-				return tele, cerr
-			}
-			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 		}
 		return tele, nil
 	} else {
@@ -725,12 +715,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			MemoryBytes:           memBytes,
 		}
 		if _, err = client.Run(ctx, req); err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateletCrashMessage("Run", err)); cerr != nil {
-				return tele, cerr
-			}
-			return tele, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
 		}
 		return tele, nil
 	}

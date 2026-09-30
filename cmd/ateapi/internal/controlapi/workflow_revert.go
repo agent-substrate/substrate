@@ -180,15 +180,12 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			return err
 		}
 		if hosted {
-			if terr := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); terr != nil {
-				// A failed terminate lands the actor in CRASHED, which the user
-				// can revert again — that retry needs no live worker.
-				slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-					append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", terr))...)
-				if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationRevert, ateletCrashMessage("Terminate", terr)); cerr != nil {
-					return cerr
-				}
-				return fmt.Errorf("actor %s crashed: %w", actorRef, terr)
+			if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
+				// A failed terminate leaves the actor REVERTING with its
+				// assignment, so the next revert terminates it again. If the
+				// worker's pod goes away, worker deletion crashes the actor, and
+				// the next revert needs no live worker.
+				return err
 			}
 			if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
 				return err
