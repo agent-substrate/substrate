@@ -421,7 +421,7 @@ func TestValidateWorkloadSpec(t *testing.T) {
 	}
 }
 
-// TestValidateVolume covers Volume and its sources, with errors
+// TestValidateVolume covers Volume and every source it can hold, with errors
 // asserted at their paths under the volume.
 func TestValidateVolume(t *testing.T) {
 	durable := func(mutate ...func(*ateletpb.Volume)) *ateletpb.Volume {
@@ -445,8 +445,24 @@ func TestValidateVolume(t *testing.T) {
 	image := func(ref string) *ateletpb.Volume {
 		return &ateletpb.Volume{Name: "data", Image: &ateletpb.ImageVolumeSource{Reference: ref}}
 	}
+	systemInfo := func(ds ...*ateletpb.SystemInfoDataSource) *ateletpb.Volume {
+		return &ateletpb.Volume{Name: "data", SystemInfo: &ateletpb.SystemInfoVolume{DataSources: ds}}
+	}
+	bundle := func(name, path string) *ateletpb.SystemInfoDataSource {
+		return &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: name, Path: path}}
+	}
+	item := func(f ateletpb.ActorMetadataField, path string) *ateletpb.ActorMetadataItem {
+		return &ateletpb.ActorMetadataItem{Field: f, Path: path}
+	}
+	metadata := func(items ...*ateletpb.ActorMetadataItem) *ateletpb.SystemInfoDataSource {
+		return &ateletpb.SystemInfoDataSource{ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: items}}
+	}
+	fieldName := ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME
 
 	extPath := field.NewPath("external")
+	dsPath := field.NewPath("system_info", "data_sources")
+	bundlePath := dsPath.Index(0).Child("trust_bundle")
+	itemsPath := dsPath.Index(0).Child("actor_metadata", "items")
 
 	tests := []struct {
 		name string
@@ -533,6 +549,99 @@ func TestValidateVolume(t *testing.T) {
 			name: "image: reference with a malformed digest",
 			obj:  image("example.com/app@sha256:abc"),
 			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
+		},
+
+		// SystemInfoVolume and SystemInfoDataSource.
+		{
+			name: "valid system info",
+			obj:  systemInfo(bundle("podcert", "a.pem"), bundle("podcert", "b.pem"), metadata(item(fieldName, "name"))),
+		}, {
+			name: "system info: data source with neither set",
+			obj:  systemInfo(&ateletpb.SystemInfoDataSource{}),
+			want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
+		}, {
+			name: "system info: data source with both set",
+			obj: systemInfo(&ateletpb.SystemInfoDataSource{
+				ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{item(fieldName, "name")}},
+				TrustBundle:   &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"},
+			}),
+			want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
+		}, {
+			name: "system info: duplicate path across trust bundles",
+			obj:  systemInfo(bundle("podcert", "a.pem"), bundle("podcert", "a.pem")),
+			want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("trust_bundle", "path"), nil)},
+		}, {
+			name: "system info: duplicate path between bundle and metadata item",
+			obj:  systemInfo(bundle("podcert", "name"), metadata(item(fieldName, "name"))),
+			want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("actor_metadata", "items").Index(0).Child("path"), nil)},
+		}, {
+			name: "system info: too many data sources",
+			obj: systemInfo(
+				bundle("podcert", "a"), bundle("podcert", "b"), bundle("podcert", "c"),
+				bundle("podcert", "d"), bundle("podcert", "e"), bundle("podcert", "f"),
+				bundle("podcert", "g"), bundle("podcert", "h"), bundle("podcert", "i"),
+			),
+			want: field.ErrorList{field.TooMany(dsPath, 9, 8).WithOrigin("maxItems")},
+		},
+
+		// TrustBundleDataSource.
+		{
+			name: "trust bundle: missing path",
+			obj:  systemInfo(bundle("podcert", "")),
+			want: field.ErrorList{field.Required(bundlePath.Child("path"), "")},
+		}, {
+			name: "trust bundle: absolute path",
+			obj:  systemInfo(bundle("podcert", "/trust/bundle.pem")),
+			want: field.ErrorList{field.Invalid(bundlePath.Child("path"), nil, "")},
+		}, {
+			name: "trust bundle: path with a dot segment",
+			obj:  systemInfo(bundle("podcert", "trust/./bundle.pem")),
+			want: field.ErrorList{field.Invalid(bundlePath.Child("path"), nil, "")},
+		}, {
+			name: "trust bundle: path too long",
+			obj:  systemInfo(bundle("podcert", strings.Repeat("p", 256))),
+			want: field.ErrorList{field.TooLong(bundlePath.Child("path"), nil, 255).WithOrigin("maxLength")},
+		}, {
+			name: "trust bundle: missing name",
+			obj:  systemInfo(bundle("", "trust/bundle.pem")),
+			want: field.ErrorList{field.Required(bundlePath.Child("name"), "")},
+		}, {
+			name: "trust bundle: name too long",
+			obj:  systemInfo(bundle(strings.Repeat("n", 254), "trust/bundle.pem")),
+			want: field.ErrorList{field.TooLong(bundlePath.Child("name"), nil, 253).WithOrigin("maxLength")},
+		},
+
+		// ActorMetadataDataSource.
+		{
+			name: "actor metadata: several fields",
+			obj: systemInfo(metadata(
+				item(fieldName, "name"),
+				item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, "ids/uid"),
+			)),
+		}, {
+			name: "actor metadata: empty items",
+			obj:  systemInfo(metadata()),
+			want: field.ErrorList{field.Required(itemsPath, "")},
+		}, {
+			name: "actor metadata: same field projected twice",
+			obj:  systemInfo(metadata(item(fieldName, "a"), item(fieldName, "b"))),
+			want: field.ErrorList{field.Duplicate(itemsPath.Index(1), nil)},
+		}, {
+			name: "actor metadata: unspecified field",
+			obj:  systemInfo(metadata(item(ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED, "a"))),
+			want: field.ErrorList{field.Required(itemsPath.Index(0).Child("field"), "")},
+		}, {
+			name: "actor metadata: field outside the enum",
+			obj:  systemInfo(metadata(item(ateletpb.ActorMetadataField(4), "a"))),
+			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("field"), nil, "").WithOrigin("maximum")},
+		}, {
+			name: "actor metadata: absolute item path",
+			obj:  systemInfo(metadata(item(fieldName, "/etc/name"))),
+			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+		}, {
+			name: "actor metadata: escaping item path",
+			obj:  systemInfo(metadata(item(fieldName, "../name"))),
+			want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
 		},
 	}
 	for _, tt := range tests {

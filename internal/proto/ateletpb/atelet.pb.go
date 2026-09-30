@@ -42,7 +42,7 @@ const (
 	ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED ActorMetadataField = 0
 	ActorMetadataField_ACTOR_METADATA_FIELD_NAME        ActorMetadataField = 1
 	ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE    ActorMetadataField = 2
-	ActorMetadataField_ACTOR_METADATA_FIELD_UID         ActorMetadataField = 3
+	ActorMetadataField_ACTOR_METADATA_FIELD_UID         ActorMetadataField = 3 // Keep this in sync with the maximums on fields of this type.
 )
 
 // Enum value maps for ActorMetadataField.
@@ -1418,9 +1418,19 @@ func (x *ImageVolumeSource) GetReference() string {
 // ActorMetadataItem projects one actor identity field to one file at the
 // given path, relative to the root of the enclosing system-info volume.
 type ActorMetadataItem struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Field         ActorMetadataField     `protobuf:"varint,1,opt,name=field,proto3,enum=atelet.ActorMetadataField" json:"field,omitempty"`
-	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3 # keep this in sync with the ActorMetadataField enum
+	Field ActorMetadataField `protobuf:"varint,1,opt,name=field,proto3,enum=atelet.ActorMetadataField" json:"field,omitempty"`
+	// path must be a clean relative Unix path; the rule is shared with the
+	// control plane through internal/resources.
+	//
+	// +k8s:required
+	// +k8s:minLength=1
+	// +k8s:maxLength=255
+	// +k8s:customValidation # clean relative path
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1472,8 +1482,16 @@ func (x *ActorMetadataItem) GetPath() string {
 // ActorMetadataDataSource projects the actor's identity fields to files, one
 // per item. Values are written raw with no trailing newline.
 type ActorMetadataDataSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Items         []*ActorMetadataItem   `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// items must not project the same field twice.
+	//
+	// +k8s:required
+	// +k8s:minItems=1
+	// +k8s:maxItems=8 # matches the template's items bound
+	// +k8s:listType=atomic
+	// +k8s:unique=map
+	// +k8s:listMapKey=field
+	Items         []*ActorMetadataItem `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1522,9 +1540,19 @@ func (x *ActorMetadataDataSource) GetItems() []*ActorMetadataItem {
 // write time, sanitizing kubelet-style; an unsupported name or missing
 // bundle fails the actor start.
 type TrustBundleDataSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// path must be a clean relative Unix path; the rule is shared with the
+	// control plane through internal/resources.
+	//
+	// +k8s:required
+	// +k8s:minLength=1
+	// +k8s:maxLength=255
+	// +k8s:customValidation # clean relative path
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// +k8s:required
+	// +k8s:minLength=1
+	// +k8s:maxLength=253 # matches the template's bundle-name bound
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1573,11 +1601,18 @@ func (x *TrustBundleDataSource) GetName() string {
 	return ""
 }
 
+// SystemInfoDataSource selects exactly one projection to place in the
+// volume.
 type SystemInfoDataSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Exactly one data source is set.
+	// Exactly one of actor_metadata / trust_bundle must be set.
+	//
+	// +k8s:optional
+	// +k8s:unionMember
 	ActorMetadata *ActorMetadataDataSource `protobuf:"bytes,1,opt,name=actor_metadata,json=actorMetadata,proto3" json:"actor_metadata,omitempty"`
-	TrustBundle   *TrustBundleDataSource   `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3" json:"trust_bundle,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	TrustBundle   *TrustBundleDataSource `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3" json:"trust_bundle,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1630,7 +1665,11 @@ func (x *SystemInfoDataSource) GetTrustBundle() *TrustBundleDataSource {
 // on every Run/Restore, so they carry the values of the actor actually being
 // started, whatever checkpointed state it boots from.
 type SystemInfoVolume struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	// +k8s:maxItems=8 # matches the template's data_sources bound
+	// +k8s:listType=atomic
+	// +k8s:customValidation # paths unique across entries
 	DataSources   []*SystemInfoDataSource `protobuf:"bytes,1,rep,name=data_sources,json=dataSources,proto3" json:"data_sources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

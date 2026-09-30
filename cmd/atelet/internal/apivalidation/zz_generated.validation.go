@@ -29,6 +29,148 @@ import (
 	field "k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// Validate_ActorMetadataDataSource validates an instance of ActorMetadataDataSource according
+// to declarative validation rules in the API schema.
+func Validate_ActorMetadataDataSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.ActorMetadataDataSource) (errs field.ErrorList) {
+
+	{ // field ateletpb.ActorMetadataDataSource.Items
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateletpb.ActorMetadataItem,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateletpb.ActorMetadataItem](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 8).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MinItems(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.ActorMetadataItem, b *ateletpb.ActorMetadataItem) bool { return a.Field == b.Field }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.ActorMetadataItem, b *ateletpb.ActorMetadataItem) bool { return a.Field == b.Field }, ateDeepEqual, Validate_ActorMetadataItem); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ActorMetadataDataSource) []*ateletpb.ActorMetadataItem {
+				return oldObj.Items
+			})
+		errs = append(errs, fn(fldPath.Child("items"), obj.Items, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_ActorMetadataItem validates an instance of ActorMetadataItem according
+// to declarative validation rules in the API schema.
+func Validate_ActorMetadataItem(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.ActorMetadataItem) (errs field.ErrorList) {
+
+	{ // field ateletpb.ActorMetadataItem.Field
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.ActorMetadataField,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ActorMetadataItem) *ateletpb.ActorMetadataField {
+				return &oldObj.Field
+			})
+		errs = append(errs, fn(fldPath.Child("field"), &obj.Field, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.ActorMetadataItem.Path
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_ActorMetadataItem_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 255); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MinLength(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ActorMetadataItem) *string {
+				return &oldObj.Path
+			})
+		errs = append(errs, fn(fldPath.Child("path"), &obj.Path, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_Capabilities validates an instance of Capabilities according
 // to declarative validation rules in the API schema.
 func Validate_Capabilities(
@@ -1314,6 +1456,146 @@ func Validate_SetWorkerCapacityRequest(
 	return errs
 }
 
+var unionMembershipFor_github_com_agent_substrate_substrate_internal_proto_ateletpb_SystemInfoDataSource_ = validate.NewUnionMembership(validate.NewUnionMember("actor_metadata"), validate.NewUnionMember("trust_bundle"))
+
+// Validate_SystemInfoDataSource validates an instance of SystemInfoDataSource according
+// to declarative validation rules in the API schema.
+func Validate_SystemInfoDataSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.SystemInfoDataSource) (errs field.ErrorList) {
+
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_internal_proto_ateletpb_SystemInfoDataSource_,
+		func(obj *ateletpb.SystemInfoDataSource) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.ActorMetadata != nil
+		},
+		func(obj *ateletpb.SystemInfoDataSource) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.TrustBundle != nil
+		}); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
+	{ // field ateletpb.SystemInfoDataSource.ActorMetadata
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.ActorMetadataDataSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorMetadataDataSource(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SystemInfoDataSource) *ateletpb.ActorMetadataDataSource {
+				return oldObj.ActorMetadata
+			})
+		errs = append(errs, fn(fldPath.Child("actor_metadata"), obj.ActorMetadata, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.SystemInfoDataSource.TrustBundle
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.TrustBundleDataSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_TrustBundleDataSource(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SystemInfoDataSource) *ateletpb.TrustBundleDataSource {
+				return oldObj.TrustBundle
+			})
+		errs = append(errs, fn(fldPath.Child("trust_bundle"), obj.TrustBundle, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_SystemInfoVolume validates an instance of SystemInfoVolume according
+// to declarative validation rules in the API schema.
+func Validate_SystemInfoVolume(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.SystemInfoVolume) (errs field.ErrorList) {
+
+	{ // field ateletpb.SystemInfoVolume.DataSources
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateletpb.SystemInfoDataSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateletpb.SystemInfoDataSource](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 8).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_SystemInfoVolume_DataSources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_SystemInfoDataSource); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SystemInfoVolume) []*ateletpb.SystemInfoDataSource {
+				return oldObj.DataSources
+			})
+		errs = append(errs, fn(fldPath.Child("data_sources"), obj.DataSources, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_TerminateRequest validates an instance of TerminateRequest according
 // to declarative validation rules in the API schema.
 func Validate_TerminateRequest(
@@ -1543,6 +1825,89 @@ func Validate_TerminateRequest(
 	return errs
 }
 
+// Validate_TrustBundleDataSource validates an instance of TrustBundleDataSource according
+// to declarative validation rules in the API schema.
+func Validate_TrustBundleDataSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.TrustBundleDataSource) (errs field.ErrorList) {
+
+	{ // field ateletpb.TrustBundleDataSource.Path
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_TrustBundleDataSource_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 255); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MinLength(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.TrustBundleDataSource) *string {
+				return &oldObj.Path
+			})
+		errs = append(errs, fn(fldPath.Child("path"), &obj.Path, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.TrustBundleDataSource.Name
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MinLength(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.TrustBundleDataSource) *string {
+				return &oldObj.Name
+			})
+		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 var unionMembershipFor_github_com_agent_substrate_substrate_internal_proto_ateletpb_Volume_ = validate.NewUnionMembership(validate.NewUnionMember("durable_dir"), validate.NewUnionMember("external"), validate.NewUnionMember("system_info"), validate.NewUnionMember("image"))
 
 // Validate_Volume validates an instance of Volume according
@@ -1688,6 +2053,8 @@ func Validate_Volume(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_SystemInfoVolume(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
