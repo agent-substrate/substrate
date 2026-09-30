@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -141,5 +143,74 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		if _, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1, PageToken: workerPage.NextPageToken}); err == nil {
 			t.Errorf("ListAtespaces with a worker page token = nil error, want an error")
 		}
+	}
+}
+
+// A move to DELETING still in flight holds the tag row locked, so a new borrow
+// waits for it and then checks the state it left behind.
+func TestCreateActor_BorrowWaitsForInFlightMarkDeleting(t *testing.T) {
+	tests := []struct {
+		name               string
+		commit             bool
+		wantCreateActorErr error
+	}{
+		{
+			name:               "deleting tag tx commits",
+			commit:             true,
+			wantCreateActorErr: store.ErrTagNotReady,
+		},
+		{
+			name:               "deleting tag tx rolls back",
+			commit:             false,
+			wantCreateActorErr: nil,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := setupPostgresPersistence(t)
+			ctx := context.Background()
+			createTestAtespace(t, s, "team-a")
+			tag := createReadyTestTag(t, s, "team-a", "tag-a")
+
+			deleting := proto.CloneOf(tag)
+			deleting.Status.State = ateapipb.TagState_TAG_STATE_DELETING
+			deletingBytes, err := proto.Marshal(deleting)
+			if err != nil {
+				t.Fatalf("marshaling tag: %v", err)
+			}
+			updateTagTx, err := s.pool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("beginning mark: %v", err)
+			}
+			defer updateTagTx.Rollback(ctx) //nolint:errcheck // no-op once committed
+			if _, err := updateTagTx.Exec(ctx, `UPDATE tags SET proto = $1 WHERE uid = $2`, deletingBytes, tag.GetMetadata().GetUid()); err != nil {
+				t.Fatalf("marking tag deleting: %v", err)
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.CreateActor(ctx, &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "session-1"},
+					Status: &ateapipb.ActorStatus{
+						State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+						ExternalSnapshot: proto.CloneOf(tag.GetStatus().GetSnapshot()),
+					},
+				})
+				done <- err
+			}()
+			waitUntilBlockedOnLock(t, s, done)
+
+			if test.commit {
+				err = updateTagTx.Commit(ctx)
+			} else {
+				err = updateTagTx.Rollback(ctx)
+			}
+			if err != nil {
+				t.Fatalf("ending mark: %v", err)
+			}
+			if err := <-done; !errors.Is(err, test.wantCreateActorErr) {
+				t.Errorf("CreateActor borrowing the tag = %v, want %v", err, test.wantCreateActorErr)
+			}
+		})
 	}
 }

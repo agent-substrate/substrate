@@ -89,22 +89,20 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // row, in that order: the row is the only handle on that snapshot, so dropping
 // it first would leak.
 //
-// The workflow is built in 3 phases:
+// The workflow is built in 4 phases:
 //  1. Load the tag (which names the snapshot to collect).
-//  2. Release that snapshot, tolerating a previous attempt partly collected.
-//  3. Finalize: drop the row.
+//  2. Mark it DELETING, which the store refuses while an Actor is borrowing
+//     the snapshot and which stops any new Actor from borrowing it.
+//  3. Release the snapshot, tolerating a previous attempt partly collected.
+//  4. Finalize: drop the row.
 //
 // Idempotent: a failure at any phase leaves the row in place, so the same
 // delete run again rediscovers the work from it and resumes over whatever is
 // left.
 //
-// The tag stays resolvable while its snapshot is being collected, so a
-// CreateActor racing this delete can seed an Actor from content that is going
-// away. That race is accepted for now.
-//
-// Note that this destroys the external snapshot: an Actor created from the tag
-// and never suspended is still borrowing it and becomes unrecoverable. Do not
-// delete a tag while clones of it exist.
+// The delete is refused with FailedPrecondition while at least one Actor is
+// still borrowing the tag's snapshot: releasing it would leave that Actor
+// unrecoverable.
 func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
@@ -126,10 +124,13 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 		}
 		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 	}
+	if tag, err = w.ensureTagMarkedDeleting(ctx, tag); err != nil {
+		return nil, err
+	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
 		return nil, err
 	}
-	return w.finalizeTagDeleted(ctx, tagRef, precondition)
+	return w.finalizeTagDeleted(ctx, tag)
 }
 
 // loadTagForDelete fetches the row the delete works from. The row records where
@@ -147,6 +148,42 @@ func (w *ActorWorkflow) loadTagForDelete(ctx context.Context, tagRef resources.T
 		return nil, fmt.Errorf("while getting tag %s: %w", tagRef, err)
 	}
 	return tag, nil
+}
+
+// ensureTagMarkedDeleting moves the tag to DELETING. The store refuses the
+// move while an Actor is still using the tag's external snapshot as its own,
+// and refuses any new borrow once it lands. A tag already DELETING is a retry
+// of a delete that got this far, so it is returned as is.
+func (w *ActorWorkflow) ensureTagMarkedDeleting(ctx context.Context, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
+	ctx, done := stepSpan(ctx, "MarkTagDeleting")
+	defer func() { err = done(err) }()
+
+	if tag.GetStatus().GetState() == ateapipb.TagState_TAG_STATE_DELETING {
+		markSkipped(ctx, "already deleting")
+		return tag, nil
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+		if toUpdate.Status == nil {
+			toUpdate.Status = &ateapipb.TagStatus{}
+		}
+		toUpdate.Status.State = ateapipb.TagState_TAG_STATE_DELETING
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrTagBorrowed) {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"Tag %s cannot be deleted because its snapshot is still in use by at least one Actor created from it", tagRef)
+		}
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
+		}
+		return nil, fmt.Errorf("while marking tag %s deleting: %w", tagRef, err)
+	}
+	return stored, nil
 }
 
 // ensureTagSnapshotReleased deletes the objects the tag's external snapshot is
@@ -172,11 +209,13 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 }
 
 // finalizeTagDeleted drops the row, once nothing it names is left behind.
-func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTagDeleted")
 	defer func() { err = done(err) }()
 
-	tag, err := w.store.DeleteTag(ctx, tagRef, precondition)
+	tagRef := resources.TagRefFromTag(tag)
+	precondition := store.DeletePreconditions{UID: tag.GetMetadata().GetUid(), Version: tag.GetMetadata().GetVersion()}
+	deleted, err := w.store.DeleteTag(ctx, tagRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
@@ -189,7 +228,7 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources
 		}
 		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
 	}
-	return tag, nil
+	return deleted, nil
 }
 
 // loadActorForTag fetches the actor to tag and its template, and checks that
@@ -246,6 +285,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 		Scope:       tag.GetScope(),
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
+			State: ateapipb.TagState_TAG_STATE_CREATING,
 			// The tag records the template the snapshot's guest state was built under, not
 			// the one the actor currently points at. A suspended actor can be repointed,
 			// and a tag that claimed the new template would hand clones the old template's
@@ -304,6 +344,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 	}
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
+		toUpdate.Status.State = ateapipb.TagState_TAG_STATE_READY
 		return nil
 	})
 	if err != nil {

@@ -29,6 +29,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // seedTagSource stores a suspended actor whose external snapshot is made of
@@ -102,6 +103,9 @@ func TestTagActorSnapshot(t *testing.T) {
 	}
 	if got, want := tag.GetStatus().GetSnapshot().GetContentScope(), ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL; got != want {
 		t.Errorf("content scope = %v, want the source's %v", got, want)
+	}
+	if got, want := tag.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_READY; got != want {
+		t.Errorf("state = %v, want %v", got, want)
 	}
 
 	// Both prefixes hold the same objects: the tag copied rather than moved.
@@ -250,6 +254,9 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 	if got := pending.GetStatus().GetSnapshot().GetSnapshotUri(); got != "" {
 		t.Errorf("snapshot uri after the failure = %q, want unset: the copy never finished", got)
+	}
+	if got, want := pending.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_CREATING; got != want {
+		t.Errorf("state after the failure = %v, want %v", got, want)
 	}
 	strandedURI := mustReservedTagSnapshotURI(t, pending)
 	stranded := strandedURI.String()
@@ -451,6 +458,121 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
+	}
+}
+
+// seedTagBorrower stores a suspended actor running on the tag's external
+// snapshot rather than one of its own, which is what CreateActor leaves behind
+// for an actor cloned from a tag.
+func seedTagBorrower(t *testing.T, ctx context.Context, persistence store.Interface, tag *ateapipb.Tag, name string) *ateapipb.Actor {
+	t.Helper()
+	atespace := tag.GetMetadata().GetAtespace()
+	return storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: "sub-tmpl"},
+		SourceTag:     resources.TagRefFromTag(tag).ToObjectRef(),
+		Status: &ateapipb.ActorStatus{
+			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ExternalSnapshot: proto.CloneOf(tag.GetStatus().GetSnapshot()),
+		},
+	})
+}
+
+// TestDeleteTag_RefusesWhileBorrowed verifies the delete is refused while an
+// actor is still running on the tag's snapshot, leaving both the row and the
+// objects alone, and goes through once that actor holds a snapshot of its own.
+func TestDeleteTag_RefusesWhileBorrowed(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	source, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(source), "v1"))
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	uri := mustReservedTagSnapshotURI(t, tag)
+	borrower := seedTagBorrower(t, ctx, persistence, tag, "clone-1")
+
+	_, err = w.DeleteTag(ctx, tagRef, store.DeletePreconditions{})
+	if got, want := status.Code(err), codes.FailedPrecondition; got != want {
+		t.Fatalf("DeleteTag = %v (code %v), want %v", err, got, want)
+	}
+	refused, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the refusal: %v", err)
+	}
+	// Still READY, so more clones can be made from it.
+	if got, want := refused.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_READY; got != want {
+		t.Errorf("state after the refusal = %v, want %v", got, want)
+	}
+	if got := objects.Snapshot(t, uri); len(got) == 0 {
+		t.Error("the refused delete collected the tag's external snapshot anyway")
+	}
+
+	// The borrower suspends and writes a snapshot under its own prefix, which is
+	// what ends the borrow.
+	own := mustActorSnapshotURI(t, template, borrower, "clone-1-snapshot")
+	mustUpdateActorStatus(t, ctx, persistence, borrower, func(s *ateapipb.ActorStatus) {
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: own.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+	})
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteTag once the borrow ended: %v", err)
+	}
+	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
+	}
+}
+
+// TestDeleteTag_ResumesDeletingTag verifies that a delete which died after
+// marking the tag DELETING is finished by a retry, and that no Actor can
+// borrow the tag in between.
+func TestDeleteTag_ResumesDeletingTag(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	source, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(source), "v1"))
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	uri := mustReservedTagSnapshotURI(t, tag)
+
+	// The first attempt dies between marking the tag and collecting it.
+	objects.OnDelete = func(string, string) error { return errObjectStore }
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
+		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	objects.OnDelete = nil
+	deleting, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the failed delete: %v", err)
+	}
+	if got, want := deleting.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_DELETING; got != want {
+		t.Fatalf("state after the failed delete = %v, want %v", got, want)
+	}
+
+	if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: "clone-1"},
+		Status: &ateapipb.ActorStatus{
+			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ExternalSnapshot: proto.CloneOf(tag.GetStatus().GetSnapshot()),
+		},
+	}); !errors.Is(err, store.ErrTagNotReady) {
+		t.Fatalf("CreateActor borrowing the DELETING tag = %v, want ErrTagNotReady", err)
+	}
+
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteTag retry: %v", err)
+	}
+	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after the retry = %v, want ErrNotFound", err)
+	}
+	if got := objects.Snapshot(t, uri); len(got) != 0 {
+		t.Errorf("objects left after the retry = %v, want none", got)
 	}
 }
 

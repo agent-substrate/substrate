@@ -201,6 +201,9 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
 		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
+	if stored, mutated := storedTag.GetStatus().GetState(), mutatedTag.GetStatus().GetState(); stored == ateapipb.TagState_TAG_STATE_DELETING && mutated != stored {
+		return fmt.Errorf("status.state is terminal once %v: mutation changed it to %v", ateapipb.TagState_TAG_STATE_DELETING, mutated)
+	}
 	return nil
 }
 
@@ -246,7 +249,13 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning tag update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	commandTag, err := tx.Exec(ctx, `
 			UPDATE tags
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
@@ -260,6 +269,21 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating tag %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
+	// If this UPDATE is trying to set a tag's state to DELETING, check if there's at least one actor borrowing
+	// it before committing the deletion.
+	if tagBeforeMutation.GetStatus().GetState() != ateapipb.TagState_TAG_STATE_DELETING &&
+		dbTag.GetStatus().GetState() == ateapipb.TagState_TAG_STATE_DELETING {
+		var borrowed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tag_borrows WHERE tag_uid = $1)`, currentUID).Scan(&borrowed); err != nil {
+			return nil, fmt.Errorf("checking the borrows of tag %s/%s: %w", atespace, name, err)
+		}
+		if borrowed {
+			return nil, store.ErrTagBorrowed
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing tag update: %w", err)
+	}
 	return dbTag, nil
 }
 
@@ -267,16 +291,28 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
-		DELETE FROM tags
-		WHERE atespace = $1 AND name = $2
-		  AND ($3::text = '' OR uid = $3::text)
-		  AND ($4::bigint = 0 OR version = $4::bigint)
-		RETURNING proto`, atespace, name, precondition.UID, precondition.Version).Scan(&protoBytes)
+		DELETE FROM tags AS t
+		WHERE t.atespace = $1 AND t.name = $2
+		  AND ($3::text = '' OR t.uid = $3::text)
+		  AND ($4::bigint = 0 OR t.version = $4::bigint)
+		  AND NOT EXISTS (SELECT 1 FROM tag_borrows AS b WHERE b.tag_uid = t.uid)
+		RETURNING t.proto`, atespace, name, precondition.UID, precondition.Version).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Nothing matched: there is no such tag, the precondition no longer
+		// holds, or the tag is borrowed.
 		var uid string
 		var version int64
 		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM tags WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
-		return nil, mapDeleteError(err, uid, version, precondition)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading tag %s/%s after a guarded delete matched nothing: %w", atespace, name, err)
+		}
+		if err := precondition.Check(&ateapipb.ResourceMetadata{Uid: uid, Version: version}); err != nil {
+			return nil, err
+		}
+		return nil, store.ErrTagBorrowed
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deleting tag %s/%s: %w", atespace, name, err)
