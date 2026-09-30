@@ -135,27 +135,7 @@ The writable home mount lets the kind/ko workflows write into your checkout,
 8 CPUs / 16 GiB is a comfortable floor for the control plane plus a microVM
 worker, and `vzNAT` gives the VM outbound networking under the vz VM type.
 
-### 3. Assemble the arm64 assets inside the Lima VM
-
-Assemble the arm64 assets in the guest because macOS does not ship `zstd` by default:
-
-```sh
-limactl shell docker-nested
-
-# Inside the VM — 24.04's git 2.43 can't read a reftable checkout:
-sudo add-apt-repository -y ppa:git-core/ppa
-sudo apt-get install -y git
-
-cd <your substrate checkout>    # visible via the writable home mount
-./hack/microvm-assets/assemble.sh
-exit
-```
-
-The script downloads about 590 MB and takes a minute or two, leaving ~285 MB in
-`bin/microvm-assets/arm64/`. That directory is shared with the host through the
-home mount — the demo script will find the assets there and skip re-assembling.
-
-### 4. Point the Docker CLI at Lima and bring everything up (on macOS)
+### 3. Point the Docker CLI at Lima and bring everything up (on macOS)
 
 ```sh
 export DOCKER_HOST="unix://${HOME}/.lima/docker-nested/sock/docker.sock"
@@ -166,6 +146,10 @@ cd <your substrate checkout>
 ./hack/create-kind-cluster.sh
 ./hack/run-microvm-demo-kind.sh
 ```
+
+The first run of `run-microvm-demo-kind.sh` downloads about 590 MB of guest
+runtime assets and extracts ~285 MB into `bin/microvm-assets/arm64/`; later runs
+reuse that directory when the version stamp matches.
 
 Verify as in Option A, step 4.
 

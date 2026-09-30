@@ -26,7 +26,7 @@ the router capacity benchmark — see
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
    runner's calls pass [authorization](../../docs/authorization.md). For a `microvm` test the orchestrator also
-   runs `hack/install-microvm-deps.sh --install` between the two, which
+   runs `go run ./cmd/ate-setup deploy microvm-deps` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
