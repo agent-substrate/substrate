@@ -18,19 +18,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -42,8 +38,8 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		scrubResourceMetadataForCreate(policy.Metadata)
 		defaults.Apply(policy)
 	}
-	if errs := validateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.CreateEgressPolicy(ctx, actorRef, policy)
@@ -54,13 +50,9 @@ func (s *ServiceImpl) CreateEgressPolicy(ctx context.Context, actorRef resources
 	return mapEgressPolicyWrite(created, err)
 }
 
-func validateCreateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) field.ErrorList {
-	return Validate_CreateActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
-}
-
 func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
-	if errs := validateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
@@ -77,17 +69,13 @@ func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.Ac
 	return policy, nil
 }
 
-func validateGetActorEgressPolicyRequest(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) field.ErrorList {
-	return Validate_GetActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
-}
-
 func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	policy := req.GetEgressPolicy()
 	if policy != nil {
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
-	if errs := validateUpdateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateUpdateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapipb.EgressPolicy) error {
@@ -106,8 +94,8 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 		if err := mutate(toUpdate); err != nil {
 			return err
 		}
-		if errs := validateEgressPolicyUpdate(ctx, field.NewPath("egress_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return toGRPCStatusError(errs)
+		if errs := apivalidation.ValidateEgressPolicyUpdate(ctx, field.NewPath("egress_policy"), toUpdate, oldVal); len(errs) > 0 {
+			return resources.ToGRPCStatusError(errs)
 		}
 		// EgressPolicy has no status or other server-derived fields to verify.
 		return nil
@@ -115,17 +103,9 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	return mapEgressPolicyWrite(updated, err)
 }
 
-func validateUpdateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest) field.ErrorList {
-	return Validate_UpdateActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
-}
-
-func validateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldVal *ateapipb.EgressPolicy) field.ErrorList {
-	return Validate_EgressPolicy(ctx, operation.Operation{Type: operation.Update}, p, newVal, oldVal)
-}
-
 func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
-	if errs := validateDeleteActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateDeleteActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
@@ -134,174 +114,6 @@ func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.
 func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {
 	deleted, err := s.store.DeleteEgressPolicy(ctx, actorRef, precondition)
 	return mapEgressPolicyWrite(deleted, err)
-}
-
-func validateDeleteActorEgressPolicyRequest(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) field.ErrorList {
-	return Validate_DeleteActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
-}
-
-func ValidateCustom_CreateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateActorEgressPolicyRequest) field.ErrorList {
-	return validateEgressPolicyParentAtespace(req.GetActor(), req.GetEgressPolicy(), p)
-}
-
-func ValidateCustom_UpdateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.UpdateActorEgressPolicyRequest) field.ErrorList {
-	return validateEgressPolicyParentAtespace(req.GetActor(), req.GetEgressPolicy(), p)
-}
-
-func validateEgressPolicyParentAtespace(actor *ateapipb.ObjectRef, policy *ateapipb.EgressPolicy, p *field.Path) field.ErrorList {
-	if actor == nil || actor.Atespace == "" {
-		return nil // regular DV will handle it
-	}
-	actorAtespace := actor.GetAtespace()
-	if policy == nil || policy.Metadata == nil || policy.Metadata.Atespace == "" {
-		return nil // regular DV will handle it
-	}
-	policyAtespace := policy.GetMetadata().GetAtespace()
-	if actorAtespace != policyAtespace {
-		return field.ErrorList{
-			field.Invalid(p.Child("egress_policy", "metadata", "atespace"), policyAtespace, "must match actor.atespace"),
-		}
-	}
-	return nil
-}
-
-func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapipb.ResourceMetadata) field.ErrorList {
-	if meta == nil || meta.Name == "" {
-		return nil // regular DV will handle it
-	}
-	if meta.Name != "default" {
-		return field.ErrorList{field.Invalid(root.Child("name"), meta.Name, `must be "default"`).WithOrigin("custom=default")}
-	}
-	return nil
-}
-
-func ValidateCustom_HostnameRule_Patterns(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
-	var errs field.ErrorList
-	for i, raw := range patterns {
-		errs = append(errs, validateHostnamePattern(raw, p.Index(i))...)
-	}
-	return errs
-}
-
-func ValidateCustom_EgressRuleEffects(_ context.Context, _ operation.Operation, p *field.Path, effects, _ *ateapipb.EgressRuleEffects) field.ErrorList {
-	var errs field.ErrorList
-	if len(effects.GetInjectStaticHeaders()) == 0 {
-		errs = append(errs, field.Required(p, "at least one effect must be specified"))
-	}
-	return errs
-}
-
-func ValidateCustom_EgressRuleEffects_InjectStaticHeaders(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeaderInjection) field.ErrorList {
-	var errs field.ErrorList
-	seenHeaders := map[string]bool{}
-	for i, inj := range injections {
-		if inj == nil {
-			continue // handled by DV
-		}
-		norm := strings.ToLower(inj.Header)
-		if seenHeaders[norm] {
-			errs = append(errs, field.Duplicate(p.Index(i).Child("header"), inj.Header))
-		}
-		seenHeaders[norm] = true
-	}
-	return errs
-}
-
-// Validation uses the parsers the egress gateway matches with, so what the
-// API accepts and what the gateway can evaluate cannot drift apart.
-func ValidateCustom_CIDRRule_Cidrs(_ context.Context, _ operation.Operation, p *field.Path, cidrs, _ []string) field.ErrorList {
-	var errs field.ErrorList
-	for i, cidr := range cidrs {
-		if _, err := egresspolicy.ParseCIDR(cidr); err != nil {
-			errs = append(errs, field.Invalid(p.Index(i), cidr, "must be a canonical IPv4 or IPv6 prefix"))
-		}
-	}
-	return errs
-}
-
-func validateHostnamePattern(raw string, p *field.Path) field.ErrorList {
-	if raw == "" {
-		return field.ErrorList{field.Required(p, "")}
-	}
-	if _, err := egresspolicy.ParseHostnamePattern(raw); err != nil {
-		return field.ErrorList{
-			field.Invalid(p, raw, "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
-		}
-	}
-	return nil
-}
-
-func ValidateCustom_CredentialHeaderInjection_Header(_ context.Context, _ operation.Operation, p *field.Path, header, _ *string) field.ErrorList {
-	if !validHeaderName(*header) {
-		return field.ErrorList{
-			field.Invalid(p, *header, "must be an HTTP header name"),
-		}
-	}
-	return nil
-}
-
-func ValidateCustom_CredentialHeaderInjection_Prefix(_ context.Context, _ operation.Operation, p *field.Path, prefix, _ *string) field.ErrorList {
-	if !validHeaderValue(*prefix) {
-		return field.ErrorList{
-			field.Invalid(p, *prefix, "must be a valid HTTP field value prefix"),
-		}
-	}
-	return nil
-}
-
-func ValidateCustom_CredentialHeaderInjection_CredentialUri(_ context.Context, _ operation.Operation, p *field.Path, uri, _ *string) field.ErrorList {
-	if !validCredentialURI(*uri) {
-		return field.ErrorList{
-			field.Invalid(p, *uri, "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
-		}
-	}
-	return nil
-}
-
-func validCredentialURI(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "ate-secret" || u.Host == "" || u.Host != u.Hostname() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(validation.IsDNS1123Subdomain(u.Host)) != 0 {
-		return false
-	}
-	escapedPath := u.EscapedPath()
-	// Reject percent-encoding in the path of secret uri.
-	if escapedPath != u.Path {
-		return false
-	}
-	if !strings.HasPrefix(escapedPath, "/") || strings.HasSuffix(escapedPath, "/") {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(escapedPath, "/"), "/")
-	if len(parts) < 2 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "" {
-			return false
-		}
-	}
-	return true
-}
-
-func validHeaderName(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, c := range []byte(value) {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
-			return false
-		}
-	}
-	return true
-}
-
-func validHeaderValue(value string) bool {
-	for _, c := range []byte(value) {
-		if c != '\t' && (c < ' ' || c == 0x7f) {
-			return false
-		}
-	}
-	return true
 }
 
 func mapEgressPolicyWrite(policy *ateapipb.EgressPolicy, err error) (*ateapipb.EgressPolicy, error) {

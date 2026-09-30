@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -749,7 +750,7 @@ func TestFail_TruncatesErrorMessage(t *testing.T) {
 		t.Error("error_message is not valid UTF-8")
 	}
 	op := operation.Operation{Type: operation.Update}
-	if errs := Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapipb.GoldenSnapshotStatus{}); len(errs) != 0 {
+	if errs := apivalidation.Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapipb.GoldenSnapshotStatus{}); len(errs) != 0 {
 		t.Errorf("stored status fails validation: %v", errs)
 	}
 }

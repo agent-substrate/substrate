@@ -19,12 +19,43 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"path/filepath"
+	"reflect"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// ToGRPCStatusError turns validation errors into the InvalidArgument error an
+// RPC handler responds with. Callers check len(errs) > 0 first.
+func ToGRPCStatusError(errs field.ErrorList) error {
+	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
+
+// DeepEqual compares two values of any type, using proto.Equal if both are
+// proto messages, and reflect.DeepEqual otherwise. Declarative validation's
+// generated code reaches it through each generating package's ateDeepEqual.
+func DeepEqual[T any](a, b T) bool {
+	asProto := func(x any) proto.Message {
+		pm, ok := x.(proto.Message)
+		if !ok {
+			return nil
+		}
+		return pm
+	}
+
+	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
+		return proto.Equal(pa, pb)
+	}
+	return reflect.DeepEqual(a, b)
+}
 
 // ValidateResourceName checks that a string conforms to Agent Substrate's
 // rules for a resource name, which is a subset of the rules for an RFC-1123
@@ -83,6 +114,37 @@ func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field
 func ValidateAteomUID(targetAteomUID string) error {
 	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
 		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// ValidateActorDirs checks that every directory atelet passes to ateom is
+// set, absolute and clean.
+func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+	if actorDirs == nil {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	var errs field.ErrorList
+	for _, actorDir := range []struct{ name, path string }{
+		{"root_dir", actorDirs.GetRootDir()},
+		{"oci_bundle_dir", actorDirs.GetOciBundleDir()},
+		{"checkpoint_dir", actorDirs.GetCheckpointDir()},
+		{"restore_dir", actorDirs.GetRestoreDir()},
+		{"durable_dir_volume_mounts_dir", actorDirs.GetDurableDirVolumeMountsDir()},
+		{"system_info_volume_roots_dir", actorDirs.GetSystemInfoVolumeRootsDir()},
+		{"volumes_dir", actorDirs.GetVolumesDir()},
+	} {
+		errs = append(errs, validateAbsDir(actorDir.path, fldPath.Child(actorDir.name))...)
+	}
+	return errs
+}
+
+func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
+	if dir == "" {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
+		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
 	}
 	return nil
 }
@@ -205,4 +267,32 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 		}
 	}
 	return nil
+}
+
+// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
+var cpuLimitMax = resource.MustParse("1k")
+
+// ValidateLimit validates one resource limit entry at fldPath: only cpu and
+// memory are supported, the quantity must be greater than zero, and the cpu
+// limit must be less than 1000 cores. An empty quantity is left to the
+// required tag.
+func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
+	if name != ResourceCPU && name != ResourceMemory {
+		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
+	}
+	if quantity == "" {
+		return nil
+	}
+	q, err := resource.ParseQuantity(quantity)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath.Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
+	}
+	var errs field.ErrorList
+	if q.Sign() <= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
+	}
+	if name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be less than 1000 cores"))
+	}
+	return errs
 }

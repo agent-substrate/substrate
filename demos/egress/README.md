@@ -83,7 +83,7 @@ rejects that option with agentgateway rather than silently omitting it.
 - **Egress gateway** — the `atenet-egress` Deployment. Envoy uses a co-located atenet `ext_proc`
   container started with `--mode=egress`; agentgateway uses its built-in `substrateEgress` policy
   and does not need that sidecar. The installer renders the matching configuration and container.
-- **Egress opt-in** — `ate-api-server --egress-gateway-address=atenet-egress.ate-system.svc:443`
+- **Egress opt-in** — `ate-api-server --default-egress-gateway-address=atenet-egress.ate-system.svc:443`
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
   atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.
 - **Egress policy** — the gateway denies by default, so the demo Actor needs an `EgressPolicy`
@@ -148,9 +148,12 @@ kubectl ate create actor egress-demo -a ate-demo-egress --template egress
 kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
 
 # 3. Allow the Actor's egress; without a policy the gateway denies everything.
+#    Any host or address: cleartext HTTP on any port, and HTTPS on 443,
+#    intercepted by the gateway.
 kubectl ate create egress-policy egress-demo -a ate-demo-egress -f - <<'EOF'
 rules:
-- all: {}
+- http: {hostnames: ["*"], ports: {all: {}}}
+- https: {hostnames: ["*"]}
 EOF
 
 # 4. Drive the Actor's egress through the ingress gateway. The gateway caches a
@@ -229,9 +232,9 @@ from the cluster, works for a manual run.
 ## Notes / limitations
 
 - The gateway **authenticates** identity (is this a real, running actor?) and **authorizes**
-  destinations against the Actor's `EgressPolicy`. Injecting upstream credentials/tokens is a
-  follow-up in the same `ext_proc`; a policy rule that declares an injection is denied (501)
-  until it lands.
+  destinations against the Actor's `EgressPolicy`. The same `ext_proc` can also replace a
+  placeholder request header with an upstream credential on HTTPS an `https` rule allows — see
+  [docs/egress-credential-injection.md](../../docs/egress-credential-injection.md).
 - Identity comes entirely from the actor certificate: the atespace, actor name, and UID are read
   out of the `ActorIdentity` extension and the UID is matched against the live actor, so a
   certificate cannot survive its actor being deleted and recreated under the same name. Nothing

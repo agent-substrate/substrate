@@ -116,6 +116,33 @@ and state restoration latency when a durable directory is attached to the actor.
 * `DurDirServeWarm`: Subsequent read within the same active cycle (cached state baseline).
 * `DurDirOverwrite`: In-place file overwrite with checksum verification.
 
+### Sweperf Benchmark
+
+The sweperf benchmark replays a recorded SWE-Perf task inside an actor, suspending and
+resuming between cycles to measure the cost of actor state transitions under a realistic
+agent workload. One task is four cycles by default.
+
+#### Sweperf Reported Metrics
+
+All rows are in milliseconds. CEL (command execution latency) is the time the trace commands
+ran inside the sandbox, as reported by `replay.py`.
+
+* `ResumeToFirstExec`: Resume RPC start until the sandbox accepts the cycle's `/execute`.
+* `CycleCEL`: CEL for one cycle.
+* `TaskCEL`: CEL summed over one task.
+* `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time.
+* `CreateAtespace`, `CreateActor`, `ResumeActor`, `SuspendActor`, `DeleteActor`: Server-side
+  elapsed time for each control-plane RPC from the response trailer, or client time without one.
+* `<rpc>_rtt`: Client round trip for the RPC of the same name, recorded only when the trailer is
+  present, so network and queueing overhead stays visible separately.
+* `Workload_Cycle_<n>`: Client time for cycle `n`: `POST /execute` plus `/status` polling until
+  the job finishes. Polled every `--sweperf-poll-interval-ms` (default 100), so this row sits
+  up to one interval above the job's actual end.
+
+The liveness check at session start already has the actor running, so the first cycle's
+resume is a no-op. Its successful `ResumeActor`, `ResumeActor_rtt` and `ResumeToFirstExec`
+samples are not recorded; failures still are.
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 

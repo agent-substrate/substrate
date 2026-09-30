@@ -13,7 +13,7 @@ In standard Kubernetes, CSI drivers are deployed to interact with asynchronous s
 | **CSI Controller Communication** | Controller listens strictly on an in-pod Unix domain socket (`/csi/csi.sock`). Sidecars (`csi-provisioner`, `csi-attacher`) watch `etcd` and talk to the driver locally. | The Substrate control plane (`ateapi`) communicates directly with the CSI Controller via gRPC over the cluster network. The controller must be exposed over TCP via a Kubernetes `Service`. |
 | **Controller Authentication** | None (in-pod socket communication only). | Optional but recommended: Mutual TLS (mTLS) authenticated via Substrate's SPIFFE Pod Identity certificates and dynamic CA rotation. |
 | **CSI Node Communication** | `kubelet` communicates with the node plugin Unix domain socket. | Substrate's node daemon (`atelet`) connects directly to the CSI node plugin Unix socket (discovered via `CSIDriverConfig`). |
-| **Node Mount Propagation** | `kubelet` manages mounts under `/var/lib/kubelet/pods`. | The CSI Node plugin must mount Substrate target directories on the host (e.g. `/var/lib/ateom-gvisor`) with `mountPropagation: Bidirectional` so that `atelet` can bind-mount them into actor sandboxes. |
+| **Node Mount Propagation** | `kubelet` manages mounts under `/var/lib/kubelet/pods`. | The CSI Node plugin must mount Substrate target directories on the host (e.g. `/var/lib/ate`) with `mountPropagation: Bidirectional` so that `atelet` can bind-mount them into actor sandboxes. |
 
 ---
 
@@ -285,12 +285,12 @@ The CSI Node plugin runs as a DaemonSet on each worker node and handles `NodeSta
 
 When the CSI Node plugin mounts an external volume (such as an NFS share or a formatted block device), the filesystem mount is created inside the plugin container. For Substrate's node supervisor (`atelet`) and worker sandboxes (`ateom-gvisor`) on the host to see this filesystem mount, the following requirements must be met:
 
-1. **Bidirectional Mount Propagation (`mountPropagation: Bidirectional`):** The volume mount on the host Substrate target directory (e.g. `/var/lib/ateom-gvisor`) in the CSI Node plugin container must have `mountPropagation: Bidirectional`. This ensures that any mounts made by the CSI plugin inside the container propagate back to the host filesystem.
+1. **Bidirectional Mount Propagation (`mountPropagation: Bidirectional`):** The volume mount on the host Substrate target directory (e.g. `/var/lib/ate`) in the CSI Node plugin container must have `mountPropagation: Bidirectional`. This ensures that any mounts made by the CSI plugin inside the container propagate back to the host filesystem.
 2. **Unix Domain Socket Accessibility:** The CSI Node plugin must place its Unix domain socket under `/var/lib/kubelet/plugins/<driverName>/` (or the path defined in `CSIDriverConfig.spec.nodeSocketOverride`), which is shared with `atelet`.
 
 ### Example: `csi-nfs-node` DaemonSet Configuration
 
-In the `csi-nfs` driver deployment (see [`hack/third_party/csi-driver-nfs/deploy/csi-nfs-node.yaml`](../hack/third_party/csi-driver-nfs/deploy/csi-nfs-node.yaml) and [`hack/setup-csi-nfs-kind.sh`](../hack/setup-csi-nfs-kind.sh)), the DaemonSet is configured with bidirectional mount propagation to `/var/lib/ateom-gvisor`:
+In the `csi-nfs` driver deployment (see [`hack/third_party/csi-driver-nfs/deploy/csi-nfs-node.yaml`](../hack/third_party/csi-driver-nfs/deploy/csi-nfs-node.yaml) and [`hack/setup-csi-nfs-kind.sh`](../hack/setup-csi-nfs-kind.sh)), the DaemonSet is configured with bidirectional mount propagation to `/var/lib/ate`:
 
 ```yaml
 apiVersion: apps/v1
@@ -334,7 +334,7 @@ spec:
           mountPath: /csi
         # Target directory with bidirectional mount propagation
         - name: ateom-dir
-          mountPath: /var/lib/ateom-gvisor
+          mountPath: /var/lib/ate
           mountPropagation: Bidirectional
       volumes:
       - name: socket-dir
@@ -343,6 +343,6 @@ spec:
           type: DirectoryOrCreate
       - name: ateom-dir
         hostPath:
-          path: /var/lib/ateom-gvisor
+          path: /var/lib/ate
           type: DirectoryOrCreate
 ```

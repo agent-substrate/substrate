@@ -29,7 +29,11 @@ package extproc
 const (
 	// TargetActorFilterStateKey carries the ingress actor routing target across
 	// Envoy's CONNECT internal-listener hop.
-	TargetActorFilterStateKey      = "dev.ate.target.actor"
+	TargetActorFilterStateKey = "dev.ate.target.actor"
+	// ConnectAuthorityFilterStateKey carries the outer CONNECT authority across
+	// the same hop. Ingress selects the target port from it; the egress request
+	// legs read the IP:port the actor dialed from it, since the port a rule
+	// names is that one and not any port in the request's Host.
 	ConnectAuthorityFilterStateKey = "dev.ate.connect.authority"
 
 	// TargetActorFilterStateAttribute is the CEL expression ext_proc evaluates
@@ -55,6 +59,29 @@ const (
 	// allowed it. The outer chain copies it into the ORIGINAL_DST filter state;
 	// absent, a TLS or opaque connection has no upstream and is closed.
 	EgressPassthroughDestinationKey = "passthrough_destination"
+	// EgressPolicyMetadataNamespace holds the SNI rules returned on CONNECT.
+	// The outer chain copies it as JSON into filter state of the same name for
+	// the egress-policy module: {"rules": [{"pattern": ..., "mode": ...}]},
+	// most specific first.
+	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
+	// EgressSNIRulesKey, under EgressPolicyMetadataNamespace, is the ordered
+	// list of rules; EgressSNIRulePatternKey and EgressSNIRuleModeKey are the
+	// fields of each.
+	EgressSNIRulesKey       = "rules"
+	EgressSNIRulePatternKey = "pattern"
+	EgressSNIRuleModeKey    = "mode"
+
+	// EgressFilterChainFilterStateKey holds the egress-policy module's verdict:
+	// the filter chain name the sdsmint manifest's matcher selects on.
+	EgressFilterChainFilterStateKey = "dev.ate.egress.filter_chain"
+	// EgressFilterChainMITM: TLS terminated on EgressTLSMITMFilterChainName.
+	EgressFilterChainMITM = "mitm"
+	// EgressFilterChainPassthrough: forwarded unread. Unused for now.
+	EgressFilterChainPassthrough = "passthrough"
+	// EgressFilterChainCleartext: not TLS, EgressCleartextFilterChainName.
+	EgressFilterChainCleartext = "cleartext"
+	// EgressFilterChainDenied matches no chain; the connection is closed.
+	EgressFilterChainDenied = "denied"
 	// EgressDialKey, under EgressMetadataNamespace, is a request leg's answer
 	// for an allowed request: where it goes. The manifests' routes match on
 	// it, one route per value and none without, so a request with no answer
@@ -92,6 +119,9 @@ const FilterChainNameAttribute = "xds.filter_chain_name"
 // EgressPassthroughDestinationFormat is the access-log and set_filter_state
 // format string that reads EgressPassthroughDestinationKey back out.
 const EgressPassthroughDestinationFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":" + EgressPassthroughDestinationKey + ")%"
+
+// EgressPolicyMetadataFormat renders EgressPolicyMetadataNamespace as JSON.
+const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
 
 // OriginalDstFilterStateKey is Envoy's filter-state key for the address an
 // ORIGINAL_DST cluster dials. The outer CONNECT chain sets it from

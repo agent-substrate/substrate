@@ -148,12 +148,28 @@ test_argv+=(-args --e2e)
 test_argv+=(${extra_e2e_args[@]+"${extra_e2e_args[@]}"})
 test_argv+=(${e2e_args[@]+"${e2e_args[@]}"})
 
+# CI requires a JUnit file: it checks that every test run reported tests, and a
+# run without one cannot be checked. Optional locally, where this stays a plain
+# `go test`.
+if [[ -z "${E2E_JUNIT_FILE:-}" && "${CI:-}" == "true" ]]; then
+    echo "run-e2e.sh: E2E_JUNIT_FILE must be set when CI=true." >&2
+    echo "  Set it to a path unique to this run, e.g." >&2
+    echo "    E2E_JUNIT_FILE=\"\${ARTIFACTS}/e2e-gvisor.xml\"" >&2
+    echo "  CI verifies each run reported at least one test; a run that writes" >&2
+    echo "  no JUnit file cannot be verified." >&2
+    exit 1
+fi
+
 # E2E_JUNIT_FILE opts into a machine-readable record of the run: the XML for
 # report consumers, the JSON event stream for failure analysis. Unset, this is a
 # plain go test and gotestsum is never built, so a local run needs no toolchain
 # beyond go itself.
 if [[ -n "${E2E_JUNIT_FILE:-}" ]]; then
     mkdir -p "$(dirname "${E2E_JUNIT_FILE}")"
+    # Claim the path before running, so a run killed part-way still owes a file
+    # that `junittool verify` will report as missing. junittool rejects a path
+    # another run already claimed, which would otherwise be overwritten.
+    go -C "${ROOT}/tools/junittool" run . register "${E2E_JUNIT_FILE}"
     exec "${ROOT}/hack/run-tool.sh" gotestsum \
         --junitfile "${E2E_JUNIT_FILE}" \
         --jsonfile "${E2E_JUNIT_FILE%.xml}.json" \

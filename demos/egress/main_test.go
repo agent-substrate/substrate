@@ -69,6 +69,52 @@ func TestFetch(t *testing.T) {
 	}
 }
 
+func TestFetchHTTPAndHTTPS(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "from http")
+	}))
+	defer httpSrv.Close()
+
+	httpsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "from https")
+	}))
+	defer httpsSrv.Close()
+
+	// The demo verifies origins with the roots its client is given: in the
+	// cluster the projected trust bundle, here the test server's own.
+	handler := newHandler(httpsSrv.Client())
+
+	for _, tc := range []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "http", url: httpSrv.URL, want: "from http"},
+		{name: "https", url: httpsSrv.URL, want: "from https"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(fetchRequest{URL: tc.url})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(payload)))
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			var got fetchResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&got); err != nil {
+				t.Fatalf("decoding response: %v", err)
+			}
+			if got.StatusCode != http.StatusOK || got.Body != tc.want {
+				t.Errorf("response = %+v, want status 200 and body %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInvalidRequests(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -41,7 +41,8 @@ func TestParseValid(t *testing.T) {
 		"durdir_template": "glutton-durdir-data",
 		"sweperf_template": "swebench-astropy-7336",
 		"sweperf_total_steps": 21,
-		"sweperf_num_cycles": 4
+		"sweperf_num_cycles": 4,
+		"sweperf_poll_interval_ms": 100
 	}`)
 
 	cfg, err := Parse(jsonBlob, Config{})
@@ -87,6 +88,9 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.SweperfNumCycles != 4 {
 		t.Errorf("SweperfNumCycles: got %d, want 4", cfg.SweperfNumCycles)
+	}
+	if cfg.SweperfPollIntervalMs != 100 {
+		t.Errorf("SweperfPollIntervalMs: got %d, want 100", cfg.SweperfPollIntervalMs)
 	}
 }
 
@@ -154,6 +158,10 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "negative sweperf num cycles",
 			json: `{"sweperf_num_cycles": -1}`,
+		},
+		{
+			name: "negative sweperf poll interval",
+			json: `{"sweperf_poll_interval_ms": -1}`,
 		},
 	}
 

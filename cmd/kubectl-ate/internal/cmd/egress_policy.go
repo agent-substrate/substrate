@@ -36,6 +36,8 @@ import (
 var egressPolicyFlags struct {
 	atespace string
 	filename string
+	uid      string
+	version  int64
 }
 
 var getEgressPolicyCmd = &cobra.Command{
@@ -72,6 +74,14 @@ Its metadata.uid and metadata.version are required preconditions; the server
 rejects the update when they no longer match those of the stored egress policy.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runUpdateEgressPolicy,
+}
+
+var deleteEgressPolicyCmd = &cobra.Command{
+	Use:     "egress-policy <actor-name>",
+	Aliases: []string{"egress-policies"},
+	Short:   "Delete the egress policy of an actor",
+	Args:    cobra.ExactArgs(1),
+	RunE:    runDeleteEgressPolicy,
 }
 
 // egressPolicyFromManifest parses a single protojson-shaped YAML or JSON
@@ -338,6 +348,94 @@ func runUpdateEgressPolicy(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx)
 }
 
+// egressPolicyDeleter abstracts the RPCs delete egress-policy makes: the policy
+// delete, and the actor read that tells a missing actor from a missing policy.
+type egressPolicyDeleter interface {
+	DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error)
+	GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
+}
+
+// deleteEgressPolicyRunner executes the delete egress-policy command logic.
+type deleteEgressPolicyRunner struct {
+	deleter egressPolicyDeleter
+	actor   *ateapipb.ObjectRef
+	// options carries the uid/version guards; nil is an unguarded delete.
+	options *ateapipb.DeleteOptions
+	stdout  io.Writer
+}
+
+func (r *deleteEgressPolicyRunner) Run(ctx context.Context) error {
+	_, err := r.deleter.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: r.actor, Options: r.options})
+	if status.Code(err) == codes.NotFound {
+		// The server answers NotFound for a missing actor too, so read the actor
+		// to tell the two apart.
+		if _, err := r.deleter.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actor}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				return fmt.Errorf("actor %q in atespace %q not found", r.actor.GetName(), r.actor.GetAtespace())
+			}
+			return fmt.Errorf("failed to get actor %q in atespace %q: %w", r.actor.GetName(), r.actor.GetAtespace(), err)
+		}
+		return fmt.Errorf("actor %q in atespace %q has no egress policy", r.actor.GetName(), r.actor.GetAtespace())
+	}
+	if err != nil {
+		return fmt.Errorf("failed to delete egress policy for actor %q in atespace %q: %w", r.actor.GetName(), r.actor.GetAtespace(), err)
+	}
+	_, err = fmt.Fprintf(r.stdout, "egress policy for actor %q in atespace %q deleted\n", r.actor.GetName(), r.actor.GetAtespace())
+	return err
+}
+
+// deleteGuardFlags holds the --uid and --version flags and whether each was
+// passed.
+type deleteGuardFlags struct {
+	uidSet     bool
+	uid        string
+	versionSet bool
+	version    int64
+}
+
+// deleteOptionsFromFlags rejects a passed guard that is empty or zero, which
+// the server would read as "skip the check".
+func deleteOptionsFromFlags(f deleteGuardFlags) (*ateapipb.DeleteOptions, error) {
+	if !f.uidSet && !f.versionSet {
+		return nil, nil
+	}
+	if f.uidSet && f.uid == "" {
+		return nil, errors.New("--uid must not be empty")
+	}
+	if f.versionSet && f.version < 1 {
+		return nil, fmt.Errorf("--version must be at least 1, got %d", f.version)
+	}
+	return &ateapipb.DeleteOptions{Uid: f.uid, Version: f.version}, nil
+}
+
+func runDeleteEgressPolicy(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+
+	options, err := deleteOptionsFromFlags(deleteGuardFlags{
+		uidSet:     cmd.Flags().Changed("uid"),
+		uid:        egressPolicyFlags.uid,
+		versionSet: cmd.Flags().Changed("version"),
+		version:    egressPolicyFlags.version,
+	})
+	if err != nil {
+		return err
+	}
+
+	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+	}
+	defer apiClient.Close()
+
+	runner := &deleteEgressPolicyRunner{
+		deleter: apiClient,
+		actor:   &ateapipb.ObjectRef{Atespace: egressPolicyFlags.atespace, Name: args[0]},
+		options: options,
+		stdout:  cmd.OutOrStdout(),
+	}
+	return runner.Run(ctx)
+}
+
 func init() {
 	getEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
 	_ = getEgressPolicyCmd.MarkFlagRequired("atespace")
@@ -354,4 +452,10 @@ func init() {
 	_ = updateEgressPolicyCmd.MarkFlagRequired("atespace")
 	_ = updateEgressPolicyCmd.MarkFlagRequired("filename")
 	updateCmd.AddCommand(updateEgressPolicyCmd)
+
+	deleteEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
+	_ = deleteEgressPolicyCmd.MarkFlagRequired("atespace")
+	deleteEgressPolicyCmd.Flags().StringVar(&egressPolicyFlags.uid, "uid", "", "Delete only if the policy's metadata.uid matches; from get -o yaml")
+	deleteEgressPolicyCmd.Flags().Int64Var(&egressPolicyFlags.version, "version", 0, "Delete only if the policy's metadata.version matches; from get -o yaml")
+	deleteCmd.AddCommand(deleteEgressPolicyCmd)
 }
