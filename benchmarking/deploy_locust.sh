@@ -34,6 +34,7 @@ ACTOR_MEMORY=""
 # Empty leaves the WorkerPool pods unsized.
 WORKER_MEMORY=""
 STORAGE_CLASS_NAME=""
+VOLUME_POOL=""
 WAIT_TIMEOUT_SECS=""
 
 usage() {
@@ -51,7 +52,10 @@ usage() {
   echo "                          benchmark ActorTemplates (default: 256Mi, the microvm minimum)."
   echo "  --worker-memory SIZE    Forwarded to workloads/deploy.sh. Memory request and limit"
   echo "                          for each WorkerPool pod (default: unset, the pod is unsized)."
-  echo "  --storage-class-name S  Forwarded to workloads/deploy.sh. StorageClass name for external volumes."
+  echo "  --storage-class-name S  Forwarded to workloads/deploy.sh. StorageClass for the glutton-storage"
+  echo "                          external volume; setting it deploys glutton-storage."
+  echo "  --volume-pool NAME      Forwarded to workloads/deploy.sh. Filestore volume pool"
+  echo "                          (projects/P/locations/L/volumePools/ID) backing glutton-storage."
   echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
   echo "                          waiting for the ateom workers to be ready (default: 300)"
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
@@ -84,6 +88,8 @@ while [[ "$#" -gt 0 ]]; do
     --worker-memory=*) WORKER_MEMORY="${1#*=}" ;;
     --storage-class-name) shift; STORAGE_CLASS_NAME="$1" ;;
     --storage-class-name=*) STORAGE_CLASS_NAME="${1#*=}" ;;
+    --volume-pool) shift; VOLUME_POOL="$1" ;;
+    --volume-pool=*) VOLUME_POOL="${1#*=}" ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
@@ -127,6 +133,9 @@ if [[ "${action}" == "deploy" ]]; then
   fi
   if [[ -n "${STORAGE_CLASS_NAME}" ]]; then
     workload_args+=(--storage-class-name "${STORAGE_CLASS_NAME}")
+  fi
+  if [[ -n "${VOLUME_POOL}" ]]; then
+    workload_args+=(--volume-pool "${VOLUME_POOL}")
   fi
   if [[ -n "${WAIT_TIMEOUT_SECS}" ]]; then
     workload_args+=(--wait-timeout "${WAIT_TIMEOUT_SECS}")

@@ -31,11 +31,17 @@ fi
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
+VOLUME_POOL_SC_MANIFEST="${MANIFEST_DIR}/filestore-volumepool-storageclass.yaml.tmpl"
+# The StorageClass that --volume-pool creates. It is backed by a Filestore
+# volume pool through the Filestore CSI driver.
+VOLUME_POOL_SC_NAME="filestore-volumepool"
 # The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
 # through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
-# matching locust tests) are not deployed by default.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full glutton-storage}"
+# matching locust tests) are not deployed by default. The glutton-storage
+# template is added when a StorageClass or volume pool is set, because it needs
+# a CSI driver that not every cluster has.
+read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
   echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
@@ -53,8 +59,14 @@ ACTOR_MEMORY="256Mi"
 # and limit. Empty leaves the pod unsized. The limit is also the memory the
 # worker reports as its actor capacity.
 WORKER_MEMORY=""
-# The StorageClass for the glutton-storage external volume.
-STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-csi-nfs-sc}"
+# The StorageClass for the glutton-storage external volume. Empty means the
+# template is not deployed, unless VOLUME_POOL is set.
+STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
+# The full resource name of a Filestore volume pool,
+# projects/<project>/locations/<location>/volumePools/<name>. When set, deploy
+# creates the filestore-volumepool StorageClass for it, and glutton-storage
+# uses that class unless --storage-class-name names another one.
+VOLUME_POOL="${VOLUME_POOL:-}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -76,7 +88,12 @@ usage() {
   echo "                              the smallest size microvm admits)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
-  echo "  --storage-class-name NAME   StorageClass for external volume ActorTemplates (default: csi-nfs-sc)"
+  echo "  --volume-pool NAME          Filestore volume pool (projects/P/locations/L/volumePools/ID)."
+  echo "                              Creates the ${VOLUME_POOL_SC_NAME} StorageClass and deploys the"
+  echo "                              glutton-storage template on it. Env: VOLUME_POOL."
+  echo "  --storage-class-name NAME   StorageClass for the glutton-storage external volume. Setting it"
+  echo "                              deploys glutton-storage (default: ${VOLUME_POOL_SC_NAME} when"
+  echo "                              --volume-pool is set, otherwise not deployed). Env: STORAGE_CLASS_NAME."
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
@@ -149,6 +166,8 @@ substitute() {
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
+      -e "s|\${VOLUME_POOL}|${VOLUME_POOL}|g" \
+      -e "s|\${VOLUME_POOL_SC_NAME}|${VOLUME_POOL_SC_NAME}|g" \
       "${manifest}"
 }
 
@@ -199,7 +218,11 @@ wait_templates_ready() {
 
 deploy() {
   resolve_otlp_endpoint
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  if [[ -n "${VOLUME_POOL}" ]]; then
+    echo "Applying StorageClass ${VOLUME_POOL_SC_NAME} for volume pool ${VOLUME_POOL}..."
+    substitute "${VOLUME_POOL_SC_MANIFEST}" | kubectl apply -f -
+  fi
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl wait --for=create deployment/benchmark-ateom \
@@ -300,6 +323,13 @@ while [[ "$#" -gt 0 ]]; do
     --storage-class-name=*)
       STORAGE_CLASS_NAME="${1#*=}"
       ;;
+    --volume-pool)
+      shift
+      VOLUME_POOL="$1"
+      ;;
+    --volume-pool=*)
+      VOLUME_POOL="${1#*=}"
+      ;;
     --wait-timeout)
       shift
       WAIT_TIMEOUT_SECS="$1"
@@ -330,6 +360,27 @@ esac
 
 if ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
   echo "Error: --wait-timeout must be a whole number of seconds like 300, got '${WAIT_TIMEOUT_SECS}'" >&2
+  exit 1
+fi
+
+if [[ -n "${VOLUME_POOL}" ]]; then
+  if ! [[ "${VOLUME_POOL}" =~ ^projects/[^/]+/locations/[^/]+/volumePools/[^/]+$ ]]; then
+    echo "Error: --volume-pool must look like projects/P/locations/L/volumePools/ID, got '${VOLUME_POOL}'" >&2
+    exit 1
+  fi
+  STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-${VOLUME_POOL_SC_NAME}}"
+fi
+
+# glutton-storage joins the default set only when it has a StorageClass. Delete
+# always includes it, because deleting a template that does not exist is a
+# no-op.
+if [[ -z "${WORKLOAD_TEMPLATES:-}" ]] \
+  && { [[ -n "${STORAGE_CLASS_NAME}" ]] || [[ "${action}" == "delete" ]]; }; then
+  TEMPLATES+=(glutton-storage)
+fi
+
+if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then
+  echo "Error: the glutton-storage template needs --volume-pool or --storage-class-name" >&2
   exit 1
 fi
 
