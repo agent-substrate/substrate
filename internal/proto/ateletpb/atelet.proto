@@ -713,6 +713,10 @@ message ExternalRestoreConfiguration {
   // The object storage URI of the snapshot to read. Object names are
   // appended to it, so it addresses the snapshot as a whole rather than any
   // one object.
+  //
+  // +k8s:required
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # a parseable snapshot URI
   string snapshot_uri = 1;
 }
 
@@ -833,47 +837,92 @@ message UploadPausedCheckpointRequest {
 message UploadPausedCheckpointResponse {
 }
 
+// +k8s:customValidation # the set config matches type; base_config only with DATA_ON_GOLDEN
 message RestoreRequest {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string target_ateom_uid = 1;
 
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 3;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 4;
 
+  // The template identity is carried for metrics attribution.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 5;
+
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 6;
 
+  // +k8s:required
   WorkloadSpec spec = 7;
 
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the CheckpointType enum
   CheckpointType type = 8;
 
-  // The checkpoint configuration, depending on the type.
-  oneof config {
-    LocalCheckpointConfiguration local_config = 9;
-    ExternalRestoreConfiguration external_config = 10;
-  }
+  // The checkpoint configuration: local_config when type is LOCAL,
+  // external_config when it is EXTERNAL. Exactly one is set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  LocalCheckpointConfiguration local_config = 9;
+
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalRestoreConfiguration external_config = 10;
 
   // What content to restore from the checkpoint.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotScope enum
   SnapshotScope scope = 11;
 
-  // The base guest state (memory + rootfs delta) combined with `config`'s
-  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
-  // field rather than part of the `config` oneof: the actor's snapshot may
-  // be local (a pause checkpoint) while the base is always external.
+  // The base guest state (memory + rootfs delta) combined with the
+  // checkpoint's durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
+  // and only then. Separate from local_config and external_config: the
+  // actor's snapshot may be local (a pause checkpoint) while the base is
+  // always external.
+  //
+  // +k8s:optional
   ExternalRestoreConfiguration base_config = 12;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
   optional EgressGateway egress_gateway = 13;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
   // for a FULL micro-VM restore the size baked into the snapshot wins. Zero
   // means "unset": keep the runtime default.
-  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
+  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+
+  // +k8s:optional
+  // +k8s:minimum=0
   int64 memory_bytes = 15; // Memory limit in bytes.
 
   // The sandbox binaries and pause image to restore with, resolved from the
-  // ActorTemplate's SandboxConfig. Required.
+  // ActorTemplate's SandboxConfig.
+  //
+  // +k8s:required
   SandboxAssets sandbox_assets = 16;
 }
 

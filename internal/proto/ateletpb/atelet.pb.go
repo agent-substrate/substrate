@@ -2551,6 +2551,10 @@ type ExternalRestoreConfiguration struct {
 	// The object storage URI of the snapshot to read. Object names are
 	// appended to it, so it addresses the snapshot as a whole rather than any
 	// one object.
+	//
+	// +k8s:required
+	// +k8s:maxLength=2048
+	// +k8s:customValidation # a parseable snapshot URI
 	SnapshotUri   string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2958,40 +2962,78 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{41}
 }
 
+// +k8s:customValidation # the set config matches type; base_config only with DATA_ON_GOLDEN
 type RestoreRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	Type                  CheckpointType         `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
-	// The checkpoint configuration, depending on the type.
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Atespace string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	ActorName string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-uuid
+	ActorUid string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The template identity is carried for metrics attribution.
 	//
-	// Types that are valid to be assigned to Config:
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	ActorTemplateAtespace string `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	// +k8s:required
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the CheckpointType enum
+	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
+	// The checkpoint configuration: local_config when type is LOCAL,
+	// external_config when it is EXTERNAL. Exactly one is set.
 	//
-	//	*RestoreRequest_LocalConfig
-	//	*RestoreRequest_ExternalConfig
-	Config isRestoreRequest_Config `protobuf_oneof:"config"`
+	// +k8s:optional
+	// +k8s:unionMember
+	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,9,opt,name=local_config,json=localConfig,proto3" json:"local_config,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	ExternalConfig *ExternalRestoreConfiguration `protobuf:"bytes,10,opt,name=external_config,json=externalConfig,proto3" json:"external_config,omitempty"`
 	// What content to restore from the checkpoint.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3 # keep this in sync with the SnapshotScope enum
 	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
-	// The base guest state (memory + rootfs delta) combined with `config`'s
-	// durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
-	// field rather than part of the `config` oneof: the actor's snapshot may
-	// be local (a pause checkpoint) while the base is always external.
+	// The base guest state (memory + rootfs delta) combined with the
+	// checkpoint's durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
+	// and only then. Separate from local_config and external_config: the
+	// actor's snapshot may be local (a pause checkpoint) while the base is
+	// always external.
+	//
+	// +k8s:optional
 	BaseConfig *ExternalRestoreConfiguration `protobuf:"bytes,12,opt,name=base_config,json=baseConfig,proto3" json:"base_config,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
+	//
+	// +k8s:optional
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
 	// gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
 	// for a FULL micro-VM restore the size baked into the snapshot wins. Zero
 	// means "unset": keep the runtime default.
-	CpuMilli    int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	// +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
+	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	// +k8s:optional
+	// +k8s:minimum=0
 	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// The sandbox binaries and pause image to restore with, resolved from the
-	// ActorTemplate's SandboxConfig. Required.
+	// ActorTemplate's SandboxConfig.
+	//
+	// +k8s:required
 	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3083,27 +3125,16 @@ func (x *RestoreRequest) GetType() CheckpointType {
 	return CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED
 }
 
-func (x *RestoreRequest) GetConfig() isRestoreRequest_Config {
-	if x != nil {
-		return x.Config
-	}
-	return nil
-}
-
 func (x *RestoreRequest) GetLocalConfig() *LocalCheckpointConfiguration {
 	if x != nil {
-		if x, ok := x.Config.(*RestoreRequest_LocalConfig); ok {
-			return x.LocalConfig
-		}
+		return x.LocalConfig
 	}
 	return nil
 }
 
 func (x *RestoreRequest) GetExternalConfig() *ExternalRestoreConfiguration {
 	if x != nil {
-		if x, ok := x.Config.(*RestoreRequest_ExternalConfig); ok {
-			return x.ExternalConfig
-		}
+		return x.ExternalConfig
 	}
 	return nil
 }
@@ -3149,22 +3180,6 @@ func (x *RestoreRequest) GetSandboxAssets() *SandboxAssets {
 	}
 	return nil
 }
-
-type isRestoreRequest_Config interface {
-	isRestoreRequest_Config()
-}
-
-type RestoreRequest_LocalConfig struct {
-	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,9,opt,name=local_config,json=localConfig,proto3,oneof"`
-}
-
-type RestoreRequest_ExternalConfig struct {
-	ExternalConfig *ExternalRestoreConfiguration `protobuf:"bytes,10,opt,name=external_config,json=externalConfig,proto3,oneof"`
-}
-
-func (*RestoreRequest_LocalConfig) isRestoreRequest_Config() {}
-
-func (*RestoreRequest_ExternalConfig) isRestoreRequest_Config() {}
 
 type RestoreResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3379,7 +3394,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xbe\x06\n" +
+	"\x1eUploadPausedCheckpointResponse\"\xb0\x06\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3389,18 +3404,17 @@ const file_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
-	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
-	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12O\n" +
+	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12G\n" +
+	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationR\vlocalConfig\x12M\n" +
 	"\x0fexternal_config\x18\n" +
-	" \x01(\v2$.atelet.ExternalRestoreConfigurationH\x00R\x0eexternalConfig\x12+\n" +
+	" \x01(\v2$.atelet.ExternalRestoreConfigurationR\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12E\n" +
 	"\vbase_config\x18\f \x01(\v2$.atelet.ExternalRestoreConfigurationR\n" +
 	"baseConfig\x12A\n" +
-	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
-	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\b\n" +
-	"\x06configB\x11\n" +
+	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*\x9a\x01\n" +
 	"\x12ActorMetadataField\x12$\n" +
@@ -3569,10 +3583,7 @@ func file_atelet_proto_init() {
 		return
 	}
 	file_atelet_proto_msgTypes[11].OneofWrappers = []any{}
-	file_atelet_proto_msgTypes[42].OneofWrappers = []any{
-		(*RestoreRequest_LocalConfig)(nil),
-		(*RestoreRequest_ExternalConfig)(nil),
-	}
+	file_atelet_proto_msgTypes[42].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

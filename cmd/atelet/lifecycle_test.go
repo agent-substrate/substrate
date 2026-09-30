@@ -223,9 +223,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
-		},
+		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -375,9 +373,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
-		},
+		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

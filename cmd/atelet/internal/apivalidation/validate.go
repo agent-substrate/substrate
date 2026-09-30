@@ -50,6 +50,11 @@ func ValidateCheckpointRequest(ctx context.Context, req *ateletpb.CheckpointRequ
 	return Validate_CheckpointRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateRestoreRequest runs the generated validation for req.
+func ValidateRestoreRequest(ctx context.Context, req *ateletpb.RestoreRequest) field.ErrorList {
+	return Validate_RestoreRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateUploadPausedCheckpointRequest runs the generated validation for req.
 func ValidateUploadPausedCheckpointRequest(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) field.ErrorList {
 	return Validate_UploadPausedCheckpointRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -104,23 +109,42 @@ func ValidateCustom_UploadPausedCheckpointRequest_Atespace(_ context.Context, _ 
 	return nil
 }
 
-// ValidateCustom_CheckpointRequest requires the config that matches type. The
-// union tags already require exactly one config.
+// ValidateCustom_CheckpointRequest requires the config that matches type.
 func ValidateCustom_CheckpointRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.CheckpointRequest) field.ErrorList {
-	switch value.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if value.GetLocalConfig() == nil {
-			return field.ErrorList{field.Required(fldPath.Child("local_config"), "required when type is CHECKPOINT_TYPE_LOCAL")}
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if value.GetExternalConfig() == nil {
-			return field.ErrorList{field.Required(fldPath.Child("external_config"), "required when type is CHECKPOINT_TYPE_EXTERNAL")}
-		}
+	return validateConfigMatchesType(fldPath, value.GetType(), value.GetLocalConfig() != nil, value.GetExternalConfig() != nil)
+}
+
+// ValidateCustom_RestoreRequest requires the config that matches type, and
+// base_config exactly when the scope is DATA_ON_GOLDEN.
+func ValidateCustom_RestoreRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.RestoreRequest) field.ErrorList {
+	errs := validateConfigMatchesType(fldPath, value.GetType(), value.GetLocalConfig() != nil, value.GetExternalConfig() != nil)
+	onGolden := value.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+	switch {
+	case onGolden && value.GetBaseConfig() == nil:
+		errs = append(errs, field.Required(fldPath.Child("base_config"), "required when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN"))
+	case !onGolden && value.GetBaseConfig() != nil:
+		errs = append(errs, field.Forbidden(fldPath.Child("base_config"), "only valid when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN"))
+	}
+	return errs
+}
+
+// validateConfigMatchesType requires the config that matches a checkpoint
+// type. The union tags already require exactly one config.
+func validateConfigMatchesType(fldPath *field.Path, typ ateletpb.CheckpointType, hasLocal, hasExternal bool) field.ErrorList {
+	switch {
+	case typ == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL && !hasLocal:
+		return field.ErrorList{field.Required(fldPath.Child("local_config"), "required when type is CHECKPOINT_TYPE_LOCAL")}
+	case typ == ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL && !hasExternal:
+		return field.ErrorList{field.Required(fldPath.Child("external_config"), "required when type is CHECKPOINT_TYPE_EXTERNAL")}
 	}
 	return nil
 }
 
 func ValidateCustom_ExternalCheckpointConfiguration_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSnapshotURI(fldPath, *value)
+}
+
+func ValidateCustom_ExternalRestoreConfiguration_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)
 }
 

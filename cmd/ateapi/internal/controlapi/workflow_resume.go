@@ -697,9 +697,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			MemoryBytes:           memBytes,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-		req.Config = &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
-		}
+		req.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()}
 		// The wire scope describes the restore OPERATION: DATA_ON_GOLDEN when
 		// loadActorForResume resolved a golden URI per the template's onResume
 		// configuration, else what the pause captured.
@@ -749,10 +747,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-			Config: &ateletpb.RestoreRequest_ExternalConfig{
-				ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
-					SnapshotUri: src.SnapshotURI.String(),
-				},
+			ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
+				SnapshotUri: src.SnapshotURI.String(),
 			},
 			Scope: scope,
 			// Empty unless this is a Golden data resume.

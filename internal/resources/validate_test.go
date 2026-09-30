@@ -160,32 +160,6 @@ func TestValidateAteomUID(t *testing.T) {
 	}
 }
 
-func TestValidateContainerNames(t *testing.T) {
-	tests := []struct {
-		name    string
-		names   []string
-		wantErr bool
-	}{
-		{"no containers", nil, false},
-		{"single valid", []string{"worker"}, false},
-		{"multiple valid", []string{"worker", "sidecar"}, false},
-		{"separator", []string{"a/b"}, true},
-		{"traversal", []string{".."}, true},
-		{"empty name", []string{""}, true},
-		{"uppercase", []string{"Worker"}, true},
-		{"reserved pause", []string{"pause"}, true},
-		{"reserved pause among valid", []string{"worker", "pause"}, true},
-		{"duplicate", []string{"worker", "worker"}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateContainerNames(tt.names); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateContainerNames(%v) err = %v, wantErr %v", tt.names, err, tt.wantErr)
-			}
-		})
-	}
-}
-
 func TestValidateRunscHash(t *testing.T) {
 	const valid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 

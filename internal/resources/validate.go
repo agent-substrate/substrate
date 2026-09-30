@@ -155,29 +155,6 @@ func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	return nil
 }
 
-// ValidateContainerNames ensures every application container name is safe to
-// use as an OCI bundle path component. Each must be a DNS-1123 label (no
-// separator or ".."), must not be the reserved "pause" name (which would
-// collide with the sandbox-infra bundle and race its concurrent writer), and
-// must be unique (duplicates map to the same bundle path and corrupt each
-// other).
-func ValidateContainerNames(names []string) error {
-	seen := make(map[string]struct{})
-	for _, name := range names {
-		if errs := content.IsDNS1123Label(name); len(errs) > 0 {
-			return fmt.Errorf("invalid container name %q: %s", name, strings.Join(errs, "; "))
-		}
-		if name == "pause" {
-			return fmt.Errorf("invalid container name %q: reserved for sandbox infrastructure", name)
-		}
-		if _, dup := seen[name]; dup {
-			return fmt.Errorf("duplicate container name %q", name)
-		}
-		seen[name] = struct{}{}
-	}
-	return nil
-}
-
 // ValidateRunscHash ensures the runsc SHA-256 hash is exactly 64 hex
 // characters before it is used to build the on-disk binary path
 // (static-files/runsc-<hash>) and, on a cache hit, returned for ateom to
