@@ -1,0 +1,48 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Pushing a vX.Y.Z[-PRERELEASE] tag creates a DRAFT release with generated
+# notes (.github/release.yml). A maintainer edits and publishes it; see
+# docs/dev/release-notes.md. Run manually to draft a release for a tag that
+# has none; an existing release is never modified.
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to draft a release for (e.g. v0.3.0)'
+        required: true
+# Creating a release needs contents: write.
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        # The committer list is read from local history back to the
+        # previous release tag.
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Draft release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: hack/release/draft-release.sh "${TAG}"
