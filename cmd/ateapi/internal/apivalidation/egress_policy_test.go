@@ -17,6 +17,7 @@ package apivalidation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
@@ -40,6 +41,16 @@ func validEgressPolicy() *ateapipb.EgressPolicy {
 				},
 			},
 		}},
+	}
+}
+
+// actorJWTHeader is an Authorization header replaced with a 900-second actor
+// JWT for audiences.
+func actorJWTHeader(audiences ...string) *ateapipb.CredentialHeader {
+	return &ateapipb.CredentialHeader{
+		Header:   "Authorization",
+		Prefix:   "Bearer ",
+		ActorJwt: &ateapipb.ActorJWTSource{Audiences: audiences, ExpirationSeconds: 900},
 	}
 }
 
@@ -801,12 +812,12 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value prefix"),
 		},
 	}, {
-		name: "missing credential URI",
+		name: "no credential source",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = ""
 		},
 		want: field.ErrorList{
-			field.Required(staticHeader.Child("credential_uri"), ""),
+			field.Invalid(staticHeader, nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "invalid credential URI",
@@ -815,6 +826,113 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
+		},
+	}, {
+		name: "actor JWT on an http rule",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("https://api.example.com")
+		},
+	}, {
+		name: "actor JWT on an https rule",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{
+				Hostnames: []string{"api.example.com"},
+				Effects:   &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{actorJWTHeader("https://api.example.com")}},
+			}}
+		},
+	}, {
+		name: "actor JWT next to a credential URI",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			jwt := actorJWTHeader("https://api.example.com")
+			jwt.Header = "X-Actor-Token"
+			p.Rules[0].Http.Effects.ReplaceHeaders = append(p.Rules[0].Http.Effects.ReplaceHeaders, jwt)
+		},
+	}, {
+		name: "credential URI and actor JWT in one header",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt = &ateapipb.ActorJWTSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900}
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader, nil, "one of").WithOrigin("union"),
+		},
+	}, {
+		name: "actor JWT without audiences",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader()
+		},
+		want: field.ErrorList{
+			field.Required(staticHeader.Child("actor_jwt", "audiences"), ""),
+		},
+	}, {
+		name: "actor JWT with an empty audience",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("")
+		},
+		want: field.ErrorList{
+			field.TooShort(staticHeader.Child("actor_jwt", "audiences").Index(0), "", 1).WithOrigin("minLength"),
+		},
+	}, {
+		name: "actor JWT with a long audience",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader(strings.Repeat("a", 513))
+		},
+		want: field.ErrorList{
+			field.TooLong(staticHeader.Child("actor_jwt", "audiences").Index(0), "", 512).WithOrigin("maxLength"),
+		},
+	}, {
+		name: "actor JWT with a repeated audience",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a", "a")
+		},
+		want: field.ErrorList{
+			field.Duplicate(staticHeader.Child("actor_jwt", "audiences").Index(1), "a"),
+		},
+	}, {
+		name: "actor JWT with too many audiences",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var audiences []string
+			for i := range 17 {
+				audiences = append(audiences, fmt.Sprintf("aud-%d", i))
+			}
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader(audiences...)
+		},
+		want: field.ErrorList{
+			field.TooMany(staticHeader.Child("actor_jwt", "audiences"), 17, 16).WithOrigin("maxItems"),
+		},
+	}, {
+		name: "actor JWT without a lifetime",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a")
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt.ExpirationSeconds = 0
+		},
+		want: field.ErrorList{
+			field.Required(staticHeader.Child("actor_jwt", "expiration_seconds"), ""),
+		},
+	}, {
+		name: "actor JWT lifetime at its bounds",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			short, long := actorJWTHeader("a"), actorJWTHeader("a")
+			short.ActorJwt.ExpirationSeconds = 300
+			long.Header, long.ActorJwt.ExpirationSeconds = "X-Actor-Token", 3600
+			p.Rules[0].Http.Effects.ReplaceHeaders = []*ateapipb.CredentialHeader{short, long}
+		},
+	}, {
+		name: "actor JWT lifetime too short",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a")
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt.ExpirationSeconds = 299
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader.Child("actor_jwt", "expiration_seconds"), 299, "").WithOrigin("minimum"),
+		},
+	}, {
+		name: "actor JWT lifetime too long",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a")
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt.ExpirationSeconds = 3601
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader.Child("actor_jwt", "expiration_seconds"), 3601, "").WithOrigin("maximum"),
 		},
 	}, {
 		name: "empty effects",
