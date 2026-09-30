@@ -292,8 +292,8 @@
     "priority": "High",
     "threat": "Compromised node accesses filesystem storage for actors on other nodes.",
     "mitigating_invariants": "Node access to network filesystems must be scoped to actors actively scheduled to the node.",
-    "suggested_concrete_mitigations": "TBD - depends on network filesystem implementation and what it supports.",
-    "notes": ""
+    "suggested_concrete_mitigations": "Scope storage access to the scheduled worker node via CSI ControllerPublishVolume/ControllerUnpublishVolume: ateapi publishes each mounted volume to the assigned worker's node on resume, delivering publish_context directly to atelet on the wire, and unpublishes it on pause, suspend, revert, and delete. Drivers that support per-node ACLs (e.g. Filestore IP ACLs) enforce the restriction.",
+    "notes": "Enforcement depends on the CSI driver implementing ControllerPublishVolume; the Filestore driver support is pending. Unpublish is not issued when a node dies abruptly; tracked in #1715."
   },
   {
     "threat_id": "T-38",

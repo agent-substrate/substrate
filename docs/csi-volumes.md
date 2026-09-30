@@ -188,3 +188,39 @@ volumes:
     capacity: 5Gi
     storageClassName: csi-nfs-sc
 ```
+
+---
+
+## 5. Storage Isolation & Dynamic Node Scoping (Threat T-37)
+
+In multi-tenant environments where actors multiplex across shared Kubernetes nodes, external network filesystems (such as Cloud Filestore NFS shares) present a lateral traversal risk: a compromised worker node could attempt to mount filesystems belonging to actors on other nodes (documented under threat **T-37**).
+
+### Dynamic Node Scoping via CSI Publish
+
+Substrate addresses this by coupling network filesystem access directly with actor scheduling and lifecycle:
+
+1. **Scheduled Node Scoping (`NodeId`):**  
+   When an actor is scheduled onto a worker node, the control plane (`ateapi`) passes the worker's hosting node (`worker.GetNodeName()`) as `NodeId` in `csi.ControllerPublishVolumeRequest`. A driver that supports dynamic network ACLs (such as Google Cloud Filestore, once its driver implements `ControllerPublishVolume`) can then restrict the share's export rules (`nfsExportOptions`) so NFS access is permitted only from that node.
+2. **Wire Delivery of Attachment Metadata (`publish_context`):**  
+   Attachment metadata returned by the driver's `ControllerPublishVolume` response is collected in memory during `ensureVolumesAttached` and passed directly to `atelet` over gRPC on the `RestoreRequest` (`WorkloadSpec.Volumes.ExternalVolume.PublishContext`). The node plugin on the destination worker node uses this metadata (e.g. device path or export options) to mount the volume into the sandbox. Attachment metadata is scoped to the active execution run and is not persisted in the actor status database record.
+3. **Revocation on Lifecycle Transitions:**  
+   When an actor is paused, suspended, reverted, or deleted, the control plane calls `csi.ControllerUnpublishVolumeRequest` for the node of the actor's currently assigned worker, allowing the driver to remove that node from the share's ACLs.
+4. **Cross-Node Migration:**  
+   When an actor migrates to a different node upon resume, `ensureVolumesAttached` publishes the volume to the new worker node and hands the updated `publish_context` to the new node's `atelet`. The previous node was already unpublished during pause or suspend.
+
+> [!NOTE]
+> If a worker node dies abruptly, no unpublish is issued for it and its access persists until cleaned up out of band. Crash-path revocation is tracked separately in [#1715](https://github.com/agent-substrate/substrate/issues/1715).
+
+### Latency Budget & OpenTelemetry Profiling
+
+Because `ControllerPublishVolume` executes synchronously on the actor resume path, volume attachment latency directly impacts cold-start and resume latency:
+
+* **OpenTelemetry Instrumentation:** The attachment phase is measured under the OpenTelemetry span **`step.AttachVolumes`** on the `controlapi` tracer (fully sampled on kind).
+* **Latency Budget:** The atenet ingress router parks a request for at most `--parked-request-budget` (default 5s) while its actor resumes. Control-plane attachment, including any storage ACL mutation, should target under 500 ms–1 s to leave margin for worker assignment and restore.
+* **Querying Spans in Jaeger:**
+  ```bash
+  kubectl port-forward -n otel-system svc/jaeger 16686:16686
+  curl -s "http://localhost:16686/api/traces?service=ateapi&operation=step.AttachVolumes&limit=20" | \
+    jq '.data[].spans[] | select(.operationName=="step.AttachVolumes") | {duration: .duration, tags: .tags}'
+  ```
+
