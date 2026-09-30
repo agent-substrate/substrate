@@ -20,10 +20,11 @@
 // Kubernetes codegen tools required this to be in doc.go, no other name will
 // work.
 //
-// Only the AteomSupport requests are generated today.
+// The AteomSupport requests and TerminateRequest are generated today.
 // +k8s:validation-gen=TypesWithSuffix=SetWorkerCapacityRequest
 // +k8s:validation-gen=TypesWithSuffix=RequestActorSuspendRequest
 // +k8s:validation-gen=TypesWithSuffix=MintActorCertificateRequest
+// +k8s:validation-gen=TypesWithSuffix=TerminateRequest
 // +k8s:validation-gen-input=github.com/agent-substrate/substrate/internal/proto/ateletpb
 // +k8s:validation-gen-scheme-registry=nil
 // +k8s:validation-gen-deep-equal-func=ateDeepEqual

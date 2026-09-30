@@ -148,6 +148,87 @@ func TestValidateMintActorCertificateRequest(t *testing.T) {
 	}
 }
 
+func TestValidateTerminateRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.TerminateRequest)) *ateletpb.TerminateRequest {
+		r := &ateletpb.TerminateRequest{
+			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			Atespace:              "team-a",
+			ActorName:             "actor-1",
+			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+			ActorTemplateAtespace: "team-a",
+			ActorTemplateName:     "tmpl-1",
+			Spec:                  &ateletpb.WorkloadSpec{},
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.TerminateRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing target_ateom_uid",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("target_ateom_uid"), "")},
+	}, {
+		name: "invalid target_ateom_uid: path escape",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing atespace",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.Atespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name: "invalid atespace: uppercase",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.Atespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_name",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		name: "invalid actor_name: path escape",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorName = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_uid",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid: not a uuid",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorUid = "not-a-uuid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid actor_template_atespace: uppercase",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorTemplateAtespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "invalid actor_template_name: trailing dash",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.ActorTemplateName = "tmpl-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "unset template identity is allowed",
+		obj: valid(func(r *ateletpb.TerminateRequest) {
+			r.ActorTemplateAtespace = ""
+			r.ActorTemplateName = ""
+		}),
+	}, {
+		name: "unset spec is allowed",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.Spec = nil }),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateTerminateRequest(context.Background(), tt.obj), tt.want)
+		})
+	}
+}
+
 func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	withLimits := func(limits ...*ateletpb.Limits) *ateletpb.SetWorkerCapacityRequest {
 		return &ateletpb.SetWorkerCapacityRequest{

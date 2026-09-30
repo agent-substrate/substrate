@@ -33,6 +33,7 @@ import (
 
 	"sync"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
@@ -1302,7 +1303,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 // Terminate terminates any running workload on ateom, unmounts external volumes,
 // and resets actor directories on the node.
 func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
-	if err := validateTerminateRequest(req); err != nil {
+	if errs := apivalidation.ValidateTerminateRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+	// TODO: drop once the WorkloadSpec tree is validated declaratively.
+	if err := validateContainerNames(req.GetSpec()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
@@ -1882,19 +1887,11 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	return nil
 }
 
-func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	if len(errs) > 0 {
-		return errs.ToAggregate()
-	}
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(req.GetSpec().GetContainers()))
-	for _, ctr := range req.GetSpec().GetContainers() {
+// validateContainerNames checks every container name in spec is safe to use
+// as an OCI bundle path component.
+func validateContainerNames(spec *ateletpb.WorkloadSpec) error {
+	names := make([]string, 0, len(spec.GetContainers()))
+	for _, ctr := range spec.GetContainers() {
 		names = append(names, ctr.GetName())
 	}
 	return resources.ValidateContainerNames(names)

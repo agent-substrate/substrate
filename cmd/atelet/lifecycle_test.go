@@ -141,7 +141,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 	const (
 		atespace     = "ate-demo"
 		actorName    = "counter"
-		actorUID     = "actor-uid-1"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
 		ateomUID     = "ateom-uid-1"
 		snapshotName = "pause-snap-1"
 	)

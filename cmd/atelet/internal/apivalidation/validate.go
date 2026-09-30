@@ -33,6 +33,11 @@ func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.Mint
 	return Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateTerminateRequest runs the generated validation for req.
+func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateRequest) field.ErrorList {
+	return Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateSetWorkerCapacityRequest runs the generated validation for req.
 func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) field.ErrorList {
 	return Validate_SetWorkerCapacityRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
