@@ -87,7 +87,7 @@ func TestPadEmptyExponentialHistograms(t *testing.T) {
 func TestPadEmptyExponentialHistogramsIdleWorkqueue(t *testing.T) {
 	t.Parallel()
 
-	q := workqueue.NewNamed("atecontroller-metrics-pad-probe")
+	q := workqueue.NewWithConfig(workqueue.QueueConfig{Name: "atecontroller-metrics-pad-probe"})
 	defer q.ShutDown()
 
 	base := prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry))
