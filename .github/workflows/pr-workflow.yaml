@@ -190,7 +190,12 @@ jobs:
     - name: Install Agent Substrate (${{ matrix.dataplane }})
       # The dataplane selection applies to both the ingress router and egress
       # gateway.
-      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }}
+      # This runs with all preview features on, and below we runagain with them
+      # off.
+      run: |
+        hack/install-ate-kind.sh --deploy-ate-system \
+          --atenet-dataplane=${{ matrix.dataplane }} \
+          --preview='*'
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -246,6 +251,23 @@ jobs:
         E2E_SANDBOX_CLASS: microvm
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-identity-microvm.xml
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/identity -v -args --no-color
+    - name: Redeploy without preview features
+      run: |
+        hack/install-ate-kind.sh --deploy-ate-system \
+          --atenet-dataplane=${{ matrix.dataplane }} \
+          --preview=''
+        kubectl --context kind-kind get deployment -A -l ate.dev/worker-pool \
+          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers \
+          | while read -r ns name; do
+              kubectl --context kind-kind rollout status -n "$ns" "deployment/$name" --timeout=5m
+            done
+    - name: Run E2E tests (gVisor, preview off)
+      # The default install has no preview features. Proves the suites pass
+      # without them, except the tests that use external volumes, which are a
+      # preview feature.
+      env:
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor-no-preview.xml
+      run: hack/run-e2e-kind.sh -skip '^(TestCombinedVolumes|TestExternalVolume.*|TestDeleteActorAnyStateWithExternalVolume)$' -v -args --no-color
     # Every lane must have reported tests; a `-run` filter that stops matching
     # otherwise leaves its lane green and empty. The set comes from the manifest
     # each lane registers itself in, so adding a lane needs no change here, and

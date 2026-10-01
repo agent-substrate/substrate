@@ -52,6 +52,7 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
+		"ATE_ENABLE_PREVIEW",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
@@ -198,6 +199,36 @@ func TestLoadCordonControlPlane(t *testing.T) {
 			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_CONTROL_PLANE"]
 			if exported != tc.want {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadEnablePreview(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		env  string
+		want bool
+	}{
+		{name: "default", want: false},
+		{name: "flag", opts: Options{EnablePreview: true}, want: true},
+		{name: "environment true", env: "true", want: true},
+		{name: "environment false", env: "false", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_ENABLE_PREVIEW", tc.env)
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.EnablePreview != tc.want {
+				t.Errorf("EnablePreview = %v, want %v", cfg.EnablePreview, tc.want)
+			}
+			_, exported := scriptEnvMap(t, cfg)["ATE_ENABLE_PREVIEW"]
+			if exported != tc.want {
+				t.Errorf("ScriptEnv() exports ATE_ENABLE_PREVIEW = %v, want %v", exported, tc.want)
 			}
 		})
 	}
