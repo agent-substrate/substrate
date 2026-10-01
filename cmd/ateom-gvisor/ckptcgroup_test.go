@@ -349,12 +349,68 @@ func TestRemoveStaleCheckpointCgroups(t *testing.T) {
 	}
 }
 
+func TestDropStagedRestoreFiles_SingleLink(t *testing.T) {
+	restoreDir := filepath.Join(t.TempDir(), "restore-state")
+	mustMkdir(t, restoreDir)
+	for _, name := range []string{"checkpoint.img", "pages.img", "durable-dir.tar"} {
+		mustWrite(t, filepath.Join(restoreDir, name), "staged data")
+	}
+
+	actorDirs := &ateompb.ActorDirs{RestoreDir: restoreDir}
+	staged := findSnapshotFilesInDirs(restoreDir)
+	if len(staged) != 3 {
+		t.Fatalf("findSnapshotFilesInDirs() = %d files, want 3", len(staged))
+	}
+	dropStagedRestoreFiles(actorDirs, restoreDir, staged)
+
+	for _, name := range []string{"checkpoint.img", "pages.img", "durable-dir.tar"} {
+		if _, err := os.Stat(filepath.Join(restoreDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("staged %s still exists after dropStagedRestoreFiles: err=%v", name, err)
+		}
+	}
+}
+
+func TestDropStagedRestoreFiles_HardLinkedPreservesLocalCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "local-checkpoint", "snap-1")
+	restoreDir := filepath.Join(dir, "restore-state")
+	mustMkdir(t, sub)
+	mustMkdir(t, restoreDir)
+
+	localImg := filepath.Join(sub, "pages.img")
+	stagedImg := filepath.Join(restoreDir, "pages.img")
+	mustWrite(t, localImg, "paused pages")
+	if err := os.Link(localImg, stagedImg); err != nil {
+		t.Fatal(err)
+	}
+
+	actorDirs := &ateompb.ActorDirs{
+		RootDir:    dir,
+		RestoreDir: restoreDir,
+	}
+	staged := findSnapshotFilesInDirs(restoreDir)
+	targets := findCheckpointImages(actorDirs)
+	dropStagedRestoreFiles(actorDirs, restoreDir, staged)
+
+	if _, err := os.Stat(stagedImg); !os.IsNotExist(err) {
+		t.Fatalf("staged pages.img still exists: err=%v", err)
+	}
+	if got := mustRead(t, localImg); got != "paused pages" {
+		t.Fatalf("local-checkpoint pages.img = %q, want %q", got, "paused pages")
+	}
+	if !evictCheckpointImages(targets) {
+		t.Errorf("evictCheckpointImages(targets) = false after unlinking restore-state copy, want true for preserved local-checkpoint")
+	}
+}
+
 func TestDropCheckpointPageCache(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "local-checkpoint", "snap-1")
 	mustMkdir(t, sub)
 	img := filepath.Join(sub, "pages.img")
 	mustWrite(t, img, "checkpoint pages")
+	tar := filepath.Join(sub, "durable-dir.tar")
+	mustWrite(t, tar, "durable tar")
 	manifest := filepath.Join(sub, "manifest.json")
 	mustWrite(t, manifest, "{}")
 
@@ -370,11 +426,11 @@ func TestDropCheckpointPageCache(t *testing.T) {
 		RestoreDir: restoreDir,
 	}
 	targets := findCheckpointImages(actorDirs)
-	if len(targets) != 1 {
-		t.Fatalf("findCheckpointImages returned %d targets (%+v), want 1 deduplicated inode", len(targets), targets)
+	if len(targets) != 2 {
+		t.Fatalf("findCheckpointImages returned %d targets (%+v), want 2 deduplicated inodes (.img + .tar)", len(targets), targets)
 	}
 	if !evictCheckpointImages(targets) {
-		t.Errorf("evictCheckpointImages() = false for existing inode, want true")
+		t.Errorf("evictCheckpointImages() = false for existing inodes, want true")
 	}
 	if got := mustRead(t, img); got != "checkpoint pages" {
 		t.Errorf("pages.img content = %q, want %q", got, "checkpoint pages")
@@ -386,7 +442,7 @@ func TestDropCheckpointPageCache(t *testing.T) {
 	if err := os.Rename(replacement, targets[0].path); err != nil {
 		t.Fatal(err)
 	}
-	if evictCheckpointImages(targets) {
+	if evictCheckpointImages(targets[:1]) {
 		t.Errorf("evictCheckpointImages() = true after inode replacement, want false")
 	}
 }

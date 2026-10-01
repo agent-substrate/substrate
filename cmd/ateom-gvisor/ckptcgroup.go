@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -47,7 +48,8 @@ import (
 // before checkpoint charges newly written image pages to <uid>-_ckpt while
 // existing guest memory remains charged to <uid>-_pause. Removing <uid>-_ckpt
 // after sandbox teardown reparents the cache to the worker scope for fast
-// local Resume, and dropActorCheckpointCacheAsync evicts the .img cache via
+// local Resume, and dropActorCheckpointCacheAsync disposes of staged
+// restore-state files and evicts preserved checkpoint page cache via
 // POSIX_FADV_DONTNEED once Restore completes.
 
 const (
@@ -59,6 +61,9 @@ const (
 	sentryArgv0        = "runsc-sandbox"
 	defaultProcRoot    = "/proc"
 	waitRestoreTimeout = 30 * time.Second
+	// minImmediateEvictAge is the fallback age threshold when the kernel does
+	// not support the cachestat(2) syscall (Linux < 6.5).
+	minImmediateEvictAge = 5 * time.Second
 )
 
 type checkpointCgroup struct {
@@ -217,13 +222,81 @@ type cachedImageFile struct {
 	info fs.FileInfo
 }
 
+func isCheckpointDataFile(name string) bool {
+	ext := filepath.Ext(name)
+	return ext == ".img" || ext == ".tar"
+}
+
+// evictCleanFilePageCache evicts path's resident pages from the host page cache
+// via POSIX_FADV_DONTNEED only if the file currently has no dirty or writeback
+// pages (verified via the Linux 6.5+ cachestat(2) syscall, with a ModTime
+// fallback on older kernels). This guarantees FADV_DONTNEED never triggers a
+// synchronous dirty-page disk flush (__filemap_fdatawrite_range).
+func evictCleanFilePageCache(path string, info fs.FileInfo) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	var cstat unix.Cachestat_t
+	if err := unix.Cachestat(uint(f.Fd()), &unix.CachestatRange{}, &cstat, 0); err == nil {
+		if cstat.Cache == 0 || cstat.Dirty > 0 || cstat.Writeback > 0 {
+			return
+		}
+	} else if time.Since(info.ModTime()) < minImmediateEvictAge {
+		return
+	}
+	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+}
+
+// dropStagedSnapshotFile drops a staged snapshot file (.img or .tar) in
+// restoreDir once Restore has finished consuming it, pinned by inode:
+//
+//   - If restoreDir is not the expendable RestoreStateDir (e.g. a direct local
+//     restore from LocalSnapshotDir), the file on disk is preserved and its
+//     page cache is evicted immediately if its pages are already clean.
+//   - If the file in restoreDir is hard-linked from local-checkpoint/
+//     (Nlink > 1), its page cache is evicted before unlinking if its pages are
+//     already clean (Dirty == 0 && Writeback == 0), avoiding a synchronous
+//     dirty-page flush on freshly-written pause snapshots.
+//   - If the file in restoreDir has a single link (Nlink == 1), it is
+//     truncated to 0 before unlinking so the kernel immediately discards both
+//     dirty and clean pages without disk writeback.
+func dropStagedSnapshotFile(actorDirs *ateompb.ActorDirs, restoreDir string, t cachedImageFile) {
+	st, err := os.Stat(t.path)
+	if err != nil || !os.SameFile(st, t.info) || !st.ModTime().Equal(t.info.ModTime()) || st.Size() != t.info.Size() {
+		return
+	}
+	if restoreDir != actorDirs.GetRestoreDir() && filepath.Base(restoreDir) != "restore-state" {
+		evictCleanFilePageCache(t.path, st)
+		return
+	}
+	if sys, ok := st.Sys().(*syscall.Stat_t); ok && sys.Nlink > 1 {
+		evictCleanFilePageCache(t.path, st)
+	} else {
+		_ = os.Truncate(t.path, 0)
+	}
+	if err := os.Remove(t.path); err != nil && !os.IsNotExist(err) {
+		slog.Warn("could not drop staged snapshot file", slog.String("path", t.path), slog.Any("err", err))
+	}
+}
+
+func dropStagedRestoreFiles(actorDirs *ateompb.ActorDirs, restoreDir string, staged []cachedImageFile) {
+	for _, t := range staged {
+		dropStagedSnapshotFile(actorDirs, restoreDir, t)
+	}
+}
+
 // dropActorCheckpointCacheAsync waits for background restore page loading to
-// finish and then evicts the actor's .img files from page cache in the
-// background, pinned by inode so delayed post-writeback passes cannot evict
-// newer checkpoints.
+// finish, disposes of staged restore-state files, and evicts the actor's
+// remaining .img and .tar snapshot files from page cache in the background,
+// pinned by inode so delayed post-writeback passes cannot evict newer
+// checkpoints.
 func dropActorCheckpointCacheAsync(actorUID string, actorDirs *ateompb.ActorDirs, waitRestore func(context.Context) error) {
+	restoreDir := actorDirs.GetRestoreDir()
+	staged := findSnapshotFilesInDirs(restoreDir)
 	targets := findCheckpointImages(actorDirs)
-	if len(targets) == 0 {
+	if len(staged) == 0 && len(targets) == 0 {
 		return
 	}
 	go func() {
@@ -237,10 +310,11 @@ func dropActorCheckpointCacheAsync(actorUID string, actorDirs *ateompb.ActorDirs
 				return
 			}
 		}
+		dropStagedRestoreFiles(actorDirs, restoreDir, staged)
 		if !evictCheckpointImages(targets) {
 			return
 		}
-		for _, delay := range []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond} {
+		for _, delay := range []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond, 3000 * time.Millisecond} {
 			time.Sleep(delay)
 			if !evictCheckpointImages(targets) {
 				return
@@ -250,13 +324,17 @@ func dropActorCheckpointCacheAsync(actorUID string, actorDirs *ateompb.ActorDirs
 }
 
 func findCheckpointImages(actorDirs *ateompb.ActorDirs) []cachedImageFile {
+	return findSnapshotFilesInDirs(localCheckpointsDir(actorDirs), actorDirs.GetRestoreDir())
+}
+
+func findSnapshotFilesInDirs(dirs ...string) []cachedImageFile {
 	var targets []cachedImageFile
-	for _, dir := range []string{actorDirs.GetRestoreDir(), localCheckpointsDir(actorDirs)} {
+	for _, dir := range dirs {
 		if dir == "" {
 			continue
 		}
 		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || !d.Type().IsRegular() || filepath.Ext(d.Name()) != ".img" {
+			if err != nil || !d.Type().IsRegular() || !isCheckpointDataFile(d.Name()) {
 				return nil
 			}
 			info, err := d.Info()
@@ -273,6 +351,10 @@ func findCheckpointImages(actorDirs *ateompb.ActorDirs) []cachedImageFile {
 	return targets
 }
 
+// evictCheckpointImages evicts clean cached pages of targets and returns true
+// if any target still exists and has pages (clean or dirty) remaining in cache.
+// Files with dirty or writeback pages are skipped so FADV_DONTNEED never forces
+// synchronous disk writeback I/O.
 func evictCheckpointImages(targets []cachedImageFile) bool {
 	anyRemaining := false
 	for _, t := range targets {
@@ -282,7 +364,24 @@ func evictCheckpointImages(targets []cachedImageFile) bool {
 		}
 		info, err := f.Stat()
 		if err == nil && os.SameFile(info, t.info) && info.ModTime().Equal(t.info.ModTime()) && info.Size() == t.info.Size() {
-			anyRemaining = true
+			var cstat unix.Cachestat_t
+			if err := unix.Cachestat(uint(f.Fd()), &unix.CachestatRange{}, &cstat, 0); err == nil {
+				if cstat.Cache == 0 {
+					_ = f.Close()
+					continue
+				}
+				anyRemaining = true
+				if cstat.Dirty > 0 || cstat.Writeback > 0 {
+					_ = f.Close()
+					continue
+				}
+			} else {
+				anyRemaining = true
+				if time.Since(info.ModTime()) < minImmediateEvictAge {
+					_ = f.Close()
+					continue
+				}
+			}
 			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
 		}
 		_ = f.Close()

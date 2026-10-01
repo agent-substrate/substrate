@@ -946,6 +946,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	switch req.GetScope() {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		dropActorCheckpointCacheAsync(req.GetActorUid(), req.GetActorDirs(), nil)
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
 		dropActorCheckpointCacheAsync(req.GetActorUid(), req.GetActorDirs(), func(waitCtx context.Context) error {
 			return rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer)
