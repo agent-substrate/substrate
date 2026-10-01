@@ -28,7 +28,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -95,6 +98,7 @@ func (k workerKey) logAttrs() []any {
 // backoff on transient failures such as a lost version precondition.
 type WorkerPoolSyncer struct {
 	client             ateapipb.ControlClient
+	pods               corev1client.PodsGetter
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
@@ -106,10 +110,12 @@ type WorkerPoolSyncer struct {
 	listCap     time.Duration
 }
 
-// NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+// NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
+// worker pods that have reached a terminal phase.
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
+		pods:               pods,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
@@ -269,6 +275,12 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
 	}
+	// Checked before eligibility for the same reason: a terminal pod is never
+	// Ready, so the eligibility gate would leave its Worker, and the Actors bound
+	// to it, registered for as long as the pod object lingers.
+	if isPodTerminal(pod) {
+		return s.deleteTerminalPod(ctx, key, pod)
+	}
 	if !isWorkerEligible(pod) {
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues
 		// it. A registered Worker still takes a raised epoch: an ateom that is
@@ -421,6 +433,40 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// isPodTerminal reports whether every container in the pod has stopped for
+// good: a terminal phase is never left, so the pod will not serve again.
+func isPodTerminal(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+}
+
+// deleteTerminalPod deletes a worker pod that has reached a terminal phase.
+// The API server deletes a terminal pod without a grace period, and the
+// resulting Pod Deleted event deregisters the Worker and releases its Actors
+// through reconcileDeadWorker. The Worker is marked DRAINING first so the
+// scheduler stops routing to it even while a failed delete is being retried.
+//
+// The delete is preconditioned on the key's UID so it can never remove a
+// same-named replacement. A pod already gone, or replaced, is the state this
+// drives towards, so NotFound and Conflict are success.
+func (s *WorkerPoolSyncer) deleteTerminalPod(ctx context.Context, key workerKey, pod *corev1.Pod) error {
+	if err := s.markWorkerDraining(ctx, key); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "Syncer: deleting worker pod (terminal phase)",
+		append(key.logAttrs(), slog.String("phase", string(pod.Status.Phase)))...)
+	uid := pod.UID
+	err := s.pods.Pods(key.namespace).Delete(ctx, key.name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid},
+	})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("deleting terminal pod: %w", err)
+	}
+	return nil
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler
