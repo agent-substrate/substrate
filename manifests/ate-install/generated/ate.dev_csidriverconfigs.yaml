@@ -66,7 +66,9 @@ spec:
                 description: |-
                   ControllerEndpoint is the gRPC endpoint for the CSI Controller service.
                   Must be a valid network URI (e.g. dns:///csi-service:9000 or tcp://127.0.0.1:9000).
-                pattern: ^(tcp|dns)://.+$
+                maxLength: 270
+                minLength: 1
+                pattern: ^(tcp://([a-zA-Z0-9][-a-zA-Z0-9.]*|\[[a-fA-F0-9:]+\]):[0-9]+|dns:///[a-zA-Z0-9][-a-zA-Z0-9.]*:[0-9]+)$
                 type: string
               driverName:
                 description: |-
@@ -80,7 +82,8 @@ spec:
                 description: |-
                   NodeSocketOverride is an optional override for the CSI Node service socket
                   on the worker nodes. If empty, ATE defaults to unix:///var/lib/kubelet/plugins/[DriverName]/csi.sock.
-                pattern: ^unix://.+$
+                maxLength: 253
+                pattern: ^unix:///[^/].*$
                 type: string
               tls:
                 description: TLS configures TLS/mTLS for the connection to the ControllerEndpoint.
@@ -90,6 +93,8 @@ spec:
                     type: boolean
                   serverName:
                     description: ServerName override for TLS verification.
+                    maxLength: 253
+                    pattern: ^[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?)*$
                     type: string
                   usePodIdentity:
                     description: UsePodIdentity indicates whether to reuse Substrate's
