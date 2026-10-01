@@ -86,6 +86,7 @@ var (
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
 	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
+	egressGatewayServiceAccount = pflag.String("egress-gateway-service-account", installdefaults.EgressServiceAccount, "ServiceAccount the egress gateway runs as, in ateapi's namespace. When --experimental-enable-authz is set, only a caller presenting its SPIFFE ID may call MintActorJWT.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -184,12 +185,19 @@ func main() {
 		// AccessPolicy, so the enforced API would be unusable.
 		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
 	}
+	// An empty ServiceAccount still yields a SPIFFE ID, one that matches no
+	// caller, so the gateway would be denied with no hint at the cause.
+	if *egressGatewayServiceAccount == "" {
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--egress-gateway-service-account must not be empty"))
+	}
 	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
 	}
 	defer fgaServer.Close()
-	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners)
+	egressGatewaySPIFFEID := installdefaults.SPIFFEID(installdefaults.NamespaceFromPodEnv(), *egressGatewayServiceAccount)
+	slog.InfoContext(ctx, "Granting MintActorJWT to the egress gateway", slog.String("egress-gateway-spiffe-id", egressGatewaySPIFFEID))
+	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners, authz.WithActorJWTMinter(egressGatewaySPIFFEID))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}
