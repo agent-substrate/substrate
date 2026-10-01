@@ -74,7 +74,7 @@ func TestEgressManifestsCarryDNSCaches(t *testing.T) {
 		want    int
 	}{
 		{name: "envoy", want: 2},
-		{name: "sdsmint", sdsmint: true, want: 5},
+		{name: "sdsmint", sdsmint: true, want: 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := &Env{Cfg: &config.Config{Root: repoRoot(t), ExperimentalUseSDSMint: tc.sdsmint}}

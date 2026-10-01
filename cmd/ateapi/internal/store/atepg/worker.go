@@ -199,8 +199,8 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("scanning worker row: %w", err)
 		}
 		w := &ateapipb.Worker{}
-		if err := unmarshalStored(protoBytes, w); err != nil {
-			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("unmarshaling worker: %w", err)
+		if err := unmarshalRow(protoBytes, w, "worker", name); err != nil {
+			return store.ListResponse[*ateapipb.Worker]{}, err
 		}
 		result = append(result, w)
 		names = append(names, name)

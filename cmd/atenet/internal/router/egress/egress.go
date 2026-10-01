@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,8 +131,8 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 // certificate atunnel presented. Nothing the actor can write contributes to
 // the identity.
 //
-// It returns the SNI rules for the dialed port. Actors without policy rules
-// are refused here.
+// It returns the SNI rules for the dialed port, and the port itself for the
+// passthrough chain. Actors without policy rules are refused here.
 func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	// Sanity check that we were called on the Egress listener filter chain with
 	// a CONNECT.
@@ -182,13 +183,14 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
 		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
 	res := allow()
-	res.DynamicMetadata = connectMetadata(rules)
+	res.DynamicMetadata = connectMetadata(dest, rules)
 	return res, nil
 }
 
-// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace.
-// An empty list denies all TLS.
-func connectMetadata(rules []egresspolicy.SNIRule) *structpb.Struct {
+// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
+// the dialed port for EgressMetadataNamespace. The port is always set: without
+// it the passthrough chain falls back to its configured port instead of closing.
+func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
 		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
@@ -197,6 +199,9 @@ func connectMetadata(rules []egresspolicy.SNIRule) *structpb.Struct {
 		}})
 	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
+		}}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
 		}}),

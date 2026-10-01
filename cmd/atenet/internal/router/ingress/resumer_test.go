@@ -17,6 +17,7 @@ package ingress
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -48,7 +49,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				resumeCalled++
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
+						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
 					},
 					Resumed: true,
 				}, nil
@@ -60,8 +61,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+		if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 		}
 		if outcome != ResumeOutcomeTriggered {
 			t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
@@ -77,7 +78,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
 						Metadata: &ateapipb.ResourceMetadata{Name: testActorName},
-						Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
+						Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
 					},
 					Resumed: false,
 				}, nil
@@ -104,7 +105,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				}
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
+						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
 					},
 					Resumed: true,
 				}, nil
@@ -116,8 +117,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+		if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 		}
 		if outcome != ResumeOutcomeTriggered {
 			t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
@@ -236,7 +237,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				time.Sleep(20 * time.Millisecond)
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
+						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
 					},
 					Resumed: true,
 				}, nil
@@ -265,8 +266,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			if errs[i] != nil {
 				t.Fatalf("request %d failed: %v", i, errs[i])
 			}
-			if results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("request %d expected IP %q, got %q", i, expectedIP, results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+			if !slices.Equal(results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("request %d expected IP %q, got %q", i, expectedIP, results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 			}
 			switch outcomes[i] {
 			case ResumeOutcomeTriggered:
@@ -318,7 +319,7 @@ func TestActorResumer_Parking(t *testing.T) {
 						return nil, status.Error(codes.FailedPrecondition, "no free workers available")
 					}
 					return &ateapipb.ResumeActorResponse{
-						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
+						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
 					}, nil
 				},
 			}
@@ -328,8 +329,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -388,7 +389,7 @@ func TestActorResumer_Parking(t *testing.T) {
 						return nil, status.Error(codes.Unavailable, "connection refused")
 					}
 					return &ateapipb.ResumeActorResponse{
-						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
+						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
 					}, nil
 				},
 			}
@@ -398,8 +399,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -465,7 +466,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					ctxErrAtReturn = ctx.Err()
 					mu.Unlock()
 					return &ateapipb.ResumeActorResponse{
-						Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
+						Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
 						Resumed: true,
 					}, nil
 				},
@@ -476,8 +477,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected the overshooting resume to be served, got %v", err)
 			}
-			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -588,7 +589,7 @@ func testCallerCancelDoesNotAbortFlight(t *testing.T) {
 			// Hold the flight open until the test releases it.
 			<-proceed
 			return &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
+				Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
 			}, nil
 		},
 	}
@@ -635,8 +636,8 @@ func testCallerCancelDoesNotAbortFlight(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("second caller: unexpected error: %v", res.err)
 	}
-	if res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-		t.Errorf("second caller IP = %q, want %q", res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp(), expectedIP)
+	if !slices.Equal(res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+		t.Errorf("second caller IP = %q, want %q", res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), expectedIP)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -662,7 +663,7 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: testActorName},
 				Status: &ateapipb.ActorStatus{
 					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP},
+					WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}},
 				},
 			},
 			Resumed: true,
@@ -695,8 +696,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a first-attempt resolution must be served despite a full lot: %v", err)
 			}
-			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 			}
 			if got := lot.activeCount(); got != 1 {
 				t.Errorf("fast path must not take a slot; active = %d, want 1 (the priming entry)", got)
@@ -738,8 +739,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -860,8 +861,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if res.outcome != ResumeOutcomeTriggered {
 				t.Errorf("leader outcome = %q, want %q", res.outcome, ResumeOutcomeTriggered)
 			}
-			if res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("leader IP = %q, want %q", res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp(), expectedIP)
+			if !slices.Equal(res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("leader IP = %q, want %q", res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), expectedIP)
 			}
 			if got := lot.activeCount(); got != 0 {
 				t.Errorf("all slots must be released; active = %d, want 0", got)
@@ -1016,7 +1017,7 @@ func TestActorResumer_FlightKeepsCallerTraceContext(t *testing.T) {
 		ResumeActorFunc: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			got = trace.SpanContextFromContext(ctx)
 			return &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"}}},
+				Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.1"}}}},
 			}, nil
 		},
 	}

@@ -1,0 +1,106 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gsm-credential-provider
+  namespace: ate-system
+  labels:
+    app: gsm-credential-provider
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gsm-credential-provider
+  template:
+    metadata:
+      labels:
+        app: gsm-credential-provider
+    spec:
+      serviceAccountName: gsm-credential-provider
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+      containers:
+      - name: gsm-credential-provider
+        image: ko://github.com/agent-substrate/substrate/internal/plugins/gcp-secret-manager/cmd/gsm-credential-provider
+        args:
+        - "--listen-address=:50051"
+        - "--health-address=:9090"
+        # A servicedns certificate for gsm-credential-provider.ate-system.svc,
+        # the name the egress gateway pins when it dials the provider.
+        - "--server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        # Admit only the egress gateway (atenet-egress in ate-system). Change
+        # the namespace if substrate runs elsewhere.
+        - "--client-ca-file=/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+        - "--injector-identity=spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
+        # Enforce the atespace→project authorization policy (default-deny).
+        - "--project-policy-file=/etc/gsm-credential-provider/project-policy.yaml"
+        - "--log-level=info"
+        ports:
+        - name: grpc
+          containerPort: 50051
+        - name: health
+          containerPort: 9090
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: project-policy
+          mountPath: /etc/gsm-credential-provider
+          readOnly: true
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+      volumes:
+      # Created by project-policy.yaml, which the kustomization omits so a
+      # redeploy never overwrites an edited policy.
+      - name: project-policy
+        configMap:
+          name: gsm-credential-provider-project-policy
+      # The serving certificate, issued for the Services that select this pod.
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      # The CA the egress gateway's client certificate chains to.
+      - name: podidentity
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem

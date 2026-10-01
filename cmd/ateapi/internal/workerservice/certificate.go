@@ -36,7 +36,7 @@ import (
 // an ateom acting on behalf of a particular actor.
 func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) (*ateapipb.MintAteomActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintAteomActorCertificateRequest(ctx, req); len(errs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// TODO(identity): This check should be handled by OpenFGA.

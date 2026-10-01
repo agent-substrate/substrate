@@ -117,7 +117,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                   log_format:
                     text_format_source:
-                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% passthrough=%DYNAMIC_METADATA(dev.ate.egress:passthrough_destination)% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
+                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
               route_config:
                 name: connect_route
                 virtual_hosts:
@@ -184,8 +184,8 @@ data:
                       omit_empty_values: true
               # The CONNECT leg. The sidecar authenticates the actor from its
               # certificate (see cmd/atenet/internal/router/egress) and returns
-              # the SNI rules in dev.ate.policy.egress. Fails closed if the
-              # router is down.
+              # the SNI rules in dev.ate.policy.egress and the dialed port in
+              # dev.ate.egress. Fails closed if the router is down.
               - name: envoy.filters.http.ext_proc
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
@@ -227,21 +227,22 @@ data:
                       untyped:
                       - dev.ate.egress
                       - dev.ate.policy.egress
-              # The address the passthrough chains may dial, from the CONNECT
-              # leg's answer, shared with the inner listener as the filter state
-              # the ORIGINAL_DST cluster reads. With no answer nothing is written
-              # (omit_empty_values plus skip_if_empty), and a TLS or opaque
-              # connection is closed. Must stay after ext_proc.
+              # The CONNECT leg's answers, copied into filter state shared with
+              # the inner listener. Must stay after ext_proc.
               - name: envoy.filters.http.set_filter_state
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
                   on_request_headers:
-                  - object_key: envoy.network.transport_socket.original_dst_address
+                  # The port the actor dialed, under the key Envoy's dynamic
+                  # forward proxy reads, so the passthrough chain dials the
+                  # resolved SNI on that port. The address the actor dialed is
+                  # never carried.
+                  - object_key: envoy.upstream.dynamic_port
                     skip_if_empty: true
                     shared_with_upstream: ONCE
                     format_string:
                       text_format_source:
-                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:passthrough_destination)%"
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:dialed_port)%"
                       omit_empty_values: true
                   # SNI rules for the egress-policy module. If absent, all TLS
                   # is denied.
@@ -704,15 +705,27 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 
-        # The passthrough chain, unused for now. tcp_proxy dials
-        # original_dst_address and closes the connection if it is unset (UH).
+        # The passthrough chain, selected by the module's "passthrough" verdict.
+        # The gateway resolves the SNI itself and relays the bytes to it unread,
+        # on the port the actor dialed. The address the actor dialed plays no
+        # part: an SNI only authorizes a dial to the name it claims
+        # (docs/network-egress.md).
         - name: egress_passthrough
           filters:
+          - name: envoy.filters.network.sni_dynamic_forward_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.sni_dynamic_forward_proxy.v3.FilterConfig
+              dns_cache_config:
+                name: egress_dns_cache
+                dns_lookup_family: ALL
+              # Fallback when envoy.upstream.dynamic_port is absent; the CONNECT
+              # leg always sets it.
+              port_value: 443
           - name: envoy.filters.network.tcp_proxy
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
               stat_prefix: passthrough
-              cluster: egress_tcp_passthrough
+              cluster: egress_forward_proxy_passthrough
               access_log:
               - name: envoy.access_loggers.file
                 typed_config:
@@ -723,10 +736,10 @@ data:
                       leg: passthrough
                       time: "%START_TIME%"
                       actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
-                      # What tls_inspector read; nothing is decided on it.
+                      # The name the rule matched and the gateway dialed.
                       sni: "%REQUESTED_SERVER_NAME%"
-                      # The address an address rule allowed; null when nothing was dialed.
-                      destination: "%FILTER_STATE(envoy.network.transport_socket.original_dst_address:PLAIN)%"
+                      # What the actor dialed; upstream is where the connection went.
+                      dialed: "%FILTER_STATE(dev.ate.connect.authority:PLAIN)%"
                       flags: "%RESPONSE_FLAGS%"
                       duration_ms: "%DURATION%"
                       bytes_sent: "%BYTES_SENT%"
@@ -753,7 +766,7 @@ data:
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection: dev.ate.actor.identity,
         # dev.ate.connect.authority, dev.ate.policy.egress, and
-        # original_dst_address, all set on the CONNECT leg above.
+        # envoy.upstream.dynamic_port, all set on the CONNECT leg above.
         #
         # Without this none of them reaches mitm_listener, and nothing reports it:
         # the request proxies and every read resolves to the zero value, which
@@ -934,7 +947,7 @@ data:
               http2_protocol_options: {}
 
       # The MITM leg's by-address upstreams: the address the actor dialed, from
-      # the same original_dst_address filter state the passthrough chain uses.
+      # the original_dst_address filter state. Nothing sets this anymoroe.
       # Same TLS as the forward proxies above, SNI and certificate check from
       # the Host, so a Host the dialed origin cannot prove fails the handshake.
       - name: egress_original_dst_tls
@@ -994,13 +1007,20 @@ data:
               http_protocol_options: {}
               http2_protocol_options: {}
 
-      # The passthrough chains' upstream. It dials the original_dst_address
-      # filter state the CONNECT leg produced and has no other source of an
-      # address; without it the connection is closed.
-      - name: egress_tcp_passthrough
-        type: ORIGINAL_DST
+      # The passthrough chain's upstream: the MITM leg's forward proxy on the
+      # same DNS cache, with no transport socket (the bytes are the actor's own
+      # TLS) and no HTTP options. Only egress_passthrough may dial it; nothing
+      # else authorizes a raw dial by name.
+      - name: egress_forward_proxy_passthrough
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: egress_dns_cache
+              dns_lookup_family: ALL
 
       #ATE_MITM_EXTPROC_CLUSTER -- Don't modify this line.
   # SDS resource for the gateway serving cert. kubelet rotates the projected

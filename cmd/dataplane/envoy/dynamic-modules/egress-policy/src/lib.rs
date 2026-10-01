@@ -32,6 +32,9 @@ pub const ATE_EGRESS_FILTER_CHAIN: &[u8] = b"dev.ate.egress.filter_chain";
 /// Verdict for TLS an https rule allows.
 pub const ATE_EGRESS_FILTER_CHAIN_MITM: &str = "mitm";
 
+/// Verdict for TLS a tls_passthrough rule allows.
+pub const ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH: &str = "passthrough";
+
 /// Verdict for anything that is not TLS.
 pub const ATE_EGRESS_FILTER_CHAIN_CLEARTEXT: &str = "cleartext";
 
@@ -40,6 +43,9 @@ pub const ATE_EGRESS_FILTER_CHAIN_DENIED: &str = "denied";
 
 /// Mode of a rule whose match terminates the connection.
 pub const SNI_MODE_MITM: &str = "mitm";
+
+/// Mode of a rule whose match forwards the connection without decryption.
+pub const SNI_MODE_PASSTHROUGH: &str = "passthrough";
 
 /// Transport protocol tls_inspector sets for TLS.
 const TRANSPORT_TLS: &str = "tls";
@@ -113,6 +119,7 @@ pub fn tls_verdict(policy: Option<&EgressPolicy>, sni: Option<&str>) -> &'static
     .find(|rule| pattern_matches(&rule.pattern, &hostname))
   {
     Some(rule) if rule.mode == SNI_MODE_MITM => ATE_EGRESS_FILTER_CHAIN_MITM,
+    Some(rule) if rule.mode == SNI_MODE_PASSTHROUGH => ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH,
     _ => ATE_EGRESS_FILTER_CHAIN_DENIED,
   }
 }
@@ -291,10 +298,18 @@ mod tests {
       tls_verdict(Some(&unknown_first), Some("api.example.com")),
       ATE_EGRESS_FILTER_CHAIN_DENIED
     );
-    let known_first = policy(&[("api.example.com", SNI_MODE_MITM), ("*.example.com", "not-a-mode")]);
+    let known_first = policy(&[
+      ("api.example.com", SNI_MODE_MITM),
+      ("pinned.example.com", SNI_MODE_PASSTHROUGH),
+      ("*.example.com", "not-a-mode"),
+    ]);
     assert_eq!(
       tls_verdict(Some(&known_first), Some("api.example.com")),
       ATE_EGRESS_FILTER_CHAIN_MITM
+    );
+    assert_eq!(
+      tls_verdict(Some(&known_first), Some("pinned.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH
     );
     assert_eq!(
       tls_verdict(Some(&known_first), Some("www.example.com")),

@@ -95,7 +95,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			})
 	}()
 
-	if err := s.deactivateActorNetworking(ctx, attribution); err != nil {
+	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		return nil, err
 	}
 
@@ -412,7 +412,7 @@ func (s *AteomService) stopActorVM(ctx context.Context, actorUID string, actorDi
 
 func (s *AteomService) terminateWorkload(ctx context.Context, actor resources.ActorAttribution, actorDirs *ateompb.ActorDirs) error {
 	var errs []error
-	if err := s.deactivateActorNetworking(ctx, actor); err != nil {
+	if err := s.tunnel.Deactivate(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 

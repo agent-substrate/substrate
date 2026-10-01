@@ -42,7 +42,8 @@ func TestParseValid(t *testing.T) {
 		"sweperf_template": "swebench-astropy-7336",
 		"sweperf_total_steps": 21,
 		"sweperf_num_cycles": 4,
-		"sweperf_poll_interval_ms": 100
+		"sweperf_poll_interval_ms": 100,
+		"agentsession_script": "coding-session"
 	}`)
 
 	cfg, err := Parse(jsonBlob, Config{})
@@ -91,6 +92,9 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.SweperfPollIntervalMs != 100 {
 		t.Errorf("SweperfPollIntervalMs: got %d, want 100", cfg.SweperfPollIntervalMs)
+	}
+	if cfg.AgentSessionScript != "coding-session" {
+		t.Errorf("AgentSessionScript: got %q, want coding-session", cfg.AgentSessionScript)
 	}
 }
 

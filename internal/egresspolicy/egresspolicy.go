@@ -17,7 +17,7 @@
 // matches with, so the two cannot drift.
 //
 // Requests are decided here; TLS connections are decided by the dataplane
-// against SNIRules. tls_passthrough rules match nothing for now.
+// against SNIRules.
 //
 // The package is pure: no I/O, no logging.
 package egresspolicy
@@ -167,8 +167,12 @@ func (r compiledRule) matchesPort(port uint16) bool {
 // must match cmd/dataplane/envoy/dynamic-modules/egress-policy.
 type SNIMode string
 
-// SNIModeMITM terminates TLS and decides each request inside.
-const SNIModeMITM SNIMode = "mitm"
+const (
+	// SNIModeMITM terminates TLS and decides each request inside.
+	SNIModeMITM SNIMode = "mitm"
+	// SNIModePassthrough forwards TLS without decryption.
+	SNIModePassthrough SNIMode = "passthrough"
+)
 
 // SNIRule is an SNI pattern and the mode applied when it matches first.
 type SNIRule struct {
@@ -176,10 +180,8 @@ type SNIRule struct {
 	Mode    SNIMode
 }
 
-// SNIRules returns the https rules for port, most specific first: exact names
-// before wildcards, then named ports before all ports. Ties keep policy order.
-// tls_passthrough rules are left out so their names are denied, not
-// intercepted.
+// SNIRules returns the https and tls_passthrough rules for a dialed port,
+// sorted according to the API tie-breaking rules
 func (p *Policy) SNIRules(port uint16) []SNIRule {
 	type ranked struct {
 		rule SNIRule
@@ -187,12 +189,21 @@ func (p *Policy) SNIRules(port uint16) []SNIRule {
 	}
 	var entries []ranked
 	for _, rule := range p.rules {
-		if rule.protocol != protocolHTTPS || !rule.matchesPort(port) {
+		if !rule.matchesPort(port) {
+			continue
+		}
+		var mode SNIMode
+		switch rule.protocol {
+		case protocolHTTPS:
+			mode = SNIModeMITM
+		case protocolTLSPassthrough:
+			mode = SNIModePassthrough
+		default:
 			continue
 		}
 		for _, pattern := range rule.patterns {
 			entries = append(entries, ranked{
-				rule: SNIRule{Pattern: pattern.String(), Mode: SNIModeMITM},
+				rule: SNIRule{Pattern: pattern.String(), Mode: mode},
 				rank: matchRank{name: pattern.rank(), port: rule.portRank()},
 			})
 		}

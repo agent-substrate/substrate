@@ -25,14 +25,17 @@ it:
 
 | First bytes | Verdict | Chain |
 |---|---|---|
-| A ClientHello whose SNI matches a rule (first match wins; `*` matches every name, `*.suffix` exactly one label, anything else the whole name, ASCII case folded) | `mitm` | `egress_tls_mitm`: terminated with a minted leaf, decided per request |
+| A ClientHello whose SNI matches an https rule (first match wins; `*` matches every name, `*.suffix` exactly one label, anything else the whole name, ASCII case folded) | `mitm` | `egress_tls_mitm`: terminated with a minted leaf, decided per request |
+| A ClientHello whose first matching rule is tls_passthrough | `passthrough` | `egress_passthrough`: relayed unread to the resolved SNI on the dialed port |
 | Any other ClientHello: no SNI, no match, no rules, unparseable rules | `denied` | none: the connection is closed |
 | Not TLS | `cleartext` | `egress_cleartext`: decided per request |
 | A transport protocol other than `tls` or `raw_buffer` | `denied` | none |
 
-`tls_passthrough` rules are not in the answer yet, so their names are closed
-rather than forwarded. A connection that sends nothing before the listener
-filter timeout never reaches this filter, sets no verdict, and is closed.
+A `tls_passthrough` rule yields the `passthrough` verdict and the
+`egress_passthrough` chain, which resolves the SNI itself and relays the bytes
+to it unread, on the port the actor dialed. The address the actor dialed is
+never used. A connection that sends nothing before the listener filter timeout
+never reaches this filter, sets no verdict, and is closed.
 
 The Go side of the contract is `cmd/atenet/internal/router/extproc`
 (`EgressPolicyMetadataNamespace`, `EgressFilterChainFilterStateKey`) and

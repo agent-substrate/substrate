@@ -212,3 +212,58 @@ func TestInjectionDenials(t *testing.T) {
 		})
 	}
 }
+
+func TestActorJWTInjectionNotImplemented(t *testing.T) {
+	effects := &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
+		Header:   "authorization",
+		Prefix:   "Bearer ",
+		ActorJwt: &ateapipb.ActorJWTSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900},
+	}}}
+	httpsPolicy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}, Effects: effects}}}}
+	httpPolicy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Effects: effects}}}}
+	tests := []struct {
+		name     string
+		leg      string
+		policy   *ateapipb.EgressPolicy
+		provider *fakeProvider // nil means no provider configured
+		wantDeny bool
+	}{{
+		name:     "https rule",
+		leg:      extproc.EgressTLSMITMFilterChainName,
+		policy:   httpsPolicy,
+		provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
+		wantDeny: true,
+	}, {
+		name:     "https rule without a provider",
+		leg:      extproc.EgressTLSMITMFilterChainName,
+		policy:   httpsPolicy,
+		wantDeny: true,
+	}, {
+		name:     "http rule skips injection",
+		leg:      extproc.EgressCleartextFilterChainName,
+		policy:   httpPolicy,
+		provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var h *Handler
+			if tc.provider == nil {
+				h = injectionHandlerFor(tc.policy, nil, injectionProviderName)
+			} else {
+				h = injectionHandlerFor(tc.policy, tc.provider, injectionProviderName)
+			}
+			res, err := h.HandleRequestHeaders(context.Background(),
+				innerMetadata(tc.leg, "GET", "api.example.com", nil))
+			if tc.wantDeny {
+				wantStatus(t, err, envoy_type.StatusCode_NotImplemented)
+			} else if err != nil {
+				t.Fatalf("HandleRequestHeaders: %v", err)
+			} else if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
+				t.Errorf("got %d injected headers, want 0", len(got))
+			}
+			if tc.provider != nil && tc.provider.got != nil {
+				t.Errorf("provider was asked for %v, want no fetch", tc.provider.got)
+			}
+		})
+	}
+}

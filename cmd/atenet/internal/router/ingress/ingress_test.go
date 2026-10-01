@@ -57,7 +57,7 @@ func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
 				t.Errorf("atespace = %q, want %q", got, want)
 			}
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -95,7 +95,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 
 	h := New(&controlclienttest.Fake{
 		ResumeActorFunc: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}}}}, nil
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
 	}, ParkedRequestConfig{}, nil)
 
@@ -201,7 +201,19 @@ func TestHandleRequestHeaders(t *testing.T) {
 			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "invalid-ip"}},
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"invalid-ip"}}},
+				},
+			},
+			expectErr:      true,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 routing failed`,
+			expectedStatus: envoy_type.StatusCode_InternalServerError,
+		},
+		{
+			name:      "No Actor IPs from resume returns 500",
+			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			resumeResp: &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{}},
 				},
 			},
 			expectErr:      true,
@@ -213,11 +225,23 @@ func TestHandleRequestHeaders(t *testing.T) {
 			authority: "127.0.0.1:44681",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
 				},
 			},
 			expectErr:          false,
 			expectedTarget:     "10.0.0.52:443",
+			expectedTargetPort: "80",
+		},
+		{
+			name:      "dual-stack resume routes to the first IP",
+			authority: "127.0.0.1:44681",
+			resumeResp: &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"fd00::52", "10.0.0.52"}}},
+				},
+			},
+			expectErr:          false,
+			expectedTarget:     "[fd00::52]:443",
 			expectedTargetPort: "80",
 		},
 	}
@@ -322,7 +346,7 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 
 	clientMock := &controlclienttest.Fake{
 		ResumeActorFunc: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}}}}, nil
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
 	}
 	h := New(clientMock, ParkedRequestConfig{}, nil)
@@ -355,7 +379,7 @@ func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
 	clientMock := &controlclienttest.Fake{
 		ResumeActorFunc: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -401,7 +425,7 @@ func TestHandleRequestHeaders_FullLotServesRunningActor(t *testing.T) {
 				Actor: &ateapipb.Actor{
 					Status: &ateapipb.ActorStatus{
 						State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"},
+						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.1"}},
 					},
 				},
 			}, nil

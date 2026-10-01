@@ -16,7 +16,6 @@ package glutton
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"testing"
 
@@ -204,7 +203,7 @@ func TestGluttonIterate_KeepsActorOnTransientResumeFailure(t *testing.T) {
 // An exhausted conflict-retry budget only replaces the actor once it has
 // repeated maxConsecutiveFailures times.
 func TestGluttonIterate_ReplacesActorAfterRepeatedConflicts(t *testing.T) {
-	errs := make([]error, resumeMaxAttempts*maxConsecutiveFailures)
+	errs := make([]error, boomerutil.ConflictRetryAttempts*maxConsecutiveFailures)
 	for i := range errs {
 		errs[i] = conflictErr()
 	}
@@ -258,35 +257,6 @@ func TestGluttonIterate_RetriesStrandedHibernate(t *testing.T) {
 	final := fakeCtrl.RecordedCalls()
 	if got, want := countCalls(final, "ResumeActor"), countCalls(after, "ResumeActor")+1; got != want {
 		t.Errorf("ResumeActor count = %d, want %d after the suspend cleared; calls = %v", got, want, final)
-	}
-}
-
-func TestClassifyLifecycleFailure(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		err  error
-		want failureAction
-	}{
-		{"actor gone", status.Error(codes.NotFound, "Actor not found"), replaceNow},
-		{"snapshot unreadable", status.Error(codes.DataLoss, "external snapshot"), replaceNow},
-		{"stuck state", status.Error(codes.FailedPrecondition, "MarkSuspending prerequisite not met"), replaceNow},
-		{"crashed", status.Error(codes.Aborted, "actor bench/sb-1 crashed"), replaceNow},
-		{"no capacity", status.Error(codes.ResourceExhausted, "no free workers available"), retryLater},
-		{"api server down", status.Error(codes.Unavailable, "connection refused"), retryLater},
-		{"timeout", status.Error(codes.DeadlineExceeded, "context deadline exceeded"), retryLater},
-		{"canceled", status.Error(codes.Canceled, "context canceled"), retryLater},
-		{"misconfigured run", status.Error(codes.InvalidArgument, "bad template"), retryLater},
-		{"unauthorized", status.Error(codes.PermissionDenied, "denied"), retryLater},
-		{"update conflict", conflictErr(), replaceIfPersistent},
-		{"wrapped atelet error", status.Error(codes.Unknown, "while checkpointing workload"), replaceIfPersistent},
-		{"internal", status.Error(codes.Internal, "boom"), replaceIfPersistent},
-		{"not a status", errors.New("plain error"), replaceIfPersistent},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyLifecycleFailure(tc.err); got != tc.want {
-				t.Errorf("classifyLifecycleFailure(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
 	}
 }
 

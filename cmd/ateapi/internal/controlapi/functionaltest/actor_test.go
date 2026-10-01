@@ -2812,7 +2812,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-1",
 				WorkerPodUid:    podUID,
-				WorkerPodIp:     "127.0.0.1",
+				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
 			},
 		},
@@ -2843,7 +2843,7 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		WorkerPodUid:    podUID,
-		Ip:              "127.0.0.1",
+		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
 		SandboxClass:    "gvisor",
 		Labels:          map[string]string{poolLabelKey: ns},
@@ -4141,7 +4141,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -4393,7 +4393,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -5033,8 +5033,9 @@ func TestMintActorJWT_Success(t *testing.T) {
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		ActorUid: createResp.GetMetadata().GetUid(),
-		Audience: []string{"foo"},
+		ActorUid:          createResp.GetMetadata().GetUid(),
+		Audience:          []string{"foo"},
+		ExpirationSeconds: 1800,
 	})
 	if err != nil {
 		t.Fatalf("Error while calling MintActorJWT: %v", err)
@@ -5056,8 +5057,21 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if claims.Issuer != testActorJWTIssuer {
 		t.Errorf("iss = %q, want %q", claims.Issuer, testActorJWTIssuer)
 	}
-	if want := "atespaces:" + testAtespace + ":actors:id1"; claims.Subject != want {
+	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
+	}
+	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
+}
+
+// assertActorJWTLifetime checks that expires_at matches the exp claim and that
+// the token is valid for want after it was issued.
+func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJWTResponse, claims actoridjwt.WireClaims, want time.Duration) {
+	t.Helper()
+	if got, exp := resp.GetExpiresAt().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
+		t.Errorf("expires_at = %v, want the exp claim %v", got, exp)
+	}
+	if got := time.Duration(claims.Expiration-claims.IssuedAt) * time.Second; got != want {
+		t.Errorf("exp - iat = %v, want %v", got, want)
 	}
 }
 

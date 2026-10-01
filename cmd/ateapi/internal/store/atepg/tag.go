@@ -90,8 +90,8 @@ func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageS
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
 		tag := &ateapipb.Tag{}
-		if err := unmarshalStored(protoBytes, tag); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling tag: %w", err)
+		if err := unmarshalRow(protoBytes, tag, "tag", atespace, name); err != nil {
+			return nil, "", err
 		}
 		result = append(result, tag)
 		names = append(names, name)
@@ -136,8 +136,8 @@ func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTo
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
 		tag := &ateapipb.Tag{}
-		if err := unmarshalStored(protoBytes, tag); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling tag: %w", err)
+		if err := unmarshalRow(protoBytes, tag, "tag", k.atespace, k.name); err != nil {
+			return nil, "", err
 		}
 		result = append(result, tag)
 		keys = append(keys, k)
