@@ -115,41 +115,51 @@ var _ store.Interface = (*Persistence)(nil)
 // PostgreSQL connection. Callers can retry this error before startup.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
+// ConnectConfig configures the PostgreSQL pools used by Persistence.
+type ConnectConfig struct {
+	ReadWriteDSN  string
+	OwnerDSN      string
+	ReadWriteRole string
+	OwnerRole     string
+	Schema        string
+	PoolMaxConns  int32
+}
+
 // Connect opens read/write and owner pools. It creates the schema and applies migrations.
-func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRole, schema string, poolMaxConns int32) (*Persistence, error) {
-	if schema == "" {
+func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
+	if config.Schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
-	if readWriteRole == "" {
+	if config.ReadWriteRole == "" {
 		return nil, fmt.Errorf("PostgreSQL read/write role must not be empty")
 	}
-	if ownerRole == "" {
+	if config.OwnerRole == "" {
 		return nil, fmt.Errorf("PostgreSQL owner role must not be empty")
 	}
-	if poolMaxConns < 0 {
+	if config.PoolMaxConns < 0 {
 		return nil, fmt.Errorf("PostgreSQL pool maximum connections must not be negative")
 	}
-	if ownerDSN == "" {
+	if config.OwnerDSN == "" {
 		return nil, fmt.Errorf("PostgreSQL owner connection string must not be empty")
 	}
-	cfg, err := poolConfig(readWriteDSN, readWriteRole)
+	readWriteConfig, err := poolConfig(config.ReadWriteDSN, config.ReadWriteRole)
 	if err != nil {
 		return nil, err
 	}
-	if poolMaxConns > 0 {
-		cfg.MaxConns = poolMaxConns
+	if config.PoolMaxConns > 0 {
+		readWriteConfig.MaxConns = config.PoolMaxConns
 	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	ownerCfg, err := poolConfig(ownerDSN, ownerRole)
+	readWriteConfig.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{config.Schema}.Sanitize()
+	ownerConfig, err := poolConfig(config.OwnerDSN, config.OwnerRole)
 	if err != nil {
 		return nil, fmt.Errorf("parse PostgreSQL owner connection string: %w", err)
 	}
-	ownerCfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	ownerCfg.MaxConns = ownerPoolMaxConns
-	ownerCfg.MinConns = 0
-	ownerCfg.MinIdleConns = 0
+	ownerConfig.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{config.Schema}.Sanitize()
+	ownerConfig.MaxConns = ownerPoolMaxConns
+	ownerConfig.MinConns = 0
+	ownerConfig.MinIdleConns = 0
 
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	pool, err := pgxpool.NewWithConfig(ctx, readWriteConfig)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
@@ -158,7 +168,7 @@ func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRo
 		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
 	}
 
-	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerCfg)
+	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerConfig)
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("open PostgreSQL owner pool: %w", err)
@@ -168,13 +178,13 @@ func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRo
 		pool.Close()
 		return nil, fmt.Errorf("%w: ping PostgreSQL owner connection: %w", ErrUnavailable, err)
 	}
-	if err := createSchema(ctx, ownerPool, schema); err != nil {
+	if err := createSchema(ctx, ownerPool, config.Schema); err != nil {
 		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
 
-	watchCfg := cfg.Copy()
+	watchCfg := readWriteConfig.Copy()
 	watchCfg.MaxConns = watchPoolMaxConns
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)

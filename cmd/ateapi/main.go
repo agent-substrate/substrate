@@ -510,7 +510,14 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole, *postgresSchema, *postgresPoolMaxConns)
+		persistence, err := atepg.Connect(ctx, atepg.ConnectConfig{
+			ReadWriteDSN:  *postgresReadWriteConnectionString,
+			OwnerDSN:      *postgresOwnerConnectionString,
+			ReadWriteRole: *postgresReadWriteRole,
+			OwnerRole:     *postgresOwnerRole,
+			Schema:        *postgresSchema,
+			PoolMaxConns:  *postgresPoolMaxConns,
+		})
 		if err == nil {
 			return persistence, nil
 		}
