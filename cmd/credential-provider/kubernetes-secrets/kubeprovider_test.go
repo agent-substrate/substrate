@@ -371,18 +371,56 @@ func TestLoadNamespaceAuthorizerSecretNarrowing(t *testing.T) {
 		t.Fatalf("LoadNamespaceAuthorizer: %v", err)
 	}
 	// team-a narrows by label, so only the Secret's labels can settle it.
-	if got := authz.Authorize("team-a", "ns1"); got != DecisionCheckLabels {
-		t.Errorf("policy with a selector: got %v, want DecisionCheckLabels", got)
+	if authz.AllowedUnconditionally("team-a", "ns1") {
+		t.Error("policy with a selector: got unconditionally allowed, want narrowed")
 	}
-	if !authz.AllowedLabels("team-a", "ns1", map[string]string{"example.com/credential": "true"}) {
+	if !authz.AllowedSecret("team-a", "ns1", map[string]string{"example.com/credential": "true"}) {
 		t.Error("labeled secret: got refused, want permitted")
 	}
-	if authz.AllowedLabels("team-a", "ns1", map[string]string{"other": "x"}) {
+	if authz.AllowedSecret("team-a", "ns1", map[string]string{"other": "x"}) {
 		t.Error("unlabeled secret: got permitted, want refused")
 	}
 	// team-b narrows by nothing, so the grant stays namespace-wide.
-	if got := authz.Authorize("team-b", "ns2"); got != DecisionAllow {
-		t.Errorf("policy without narrowing: got %v, want DecisionAllow", got)
+	if !authz.AllowedUnconditionally("team-b", "ns2") {
+		t.Error("policy without narrowing: got narrowed, want unconditionally allowed")
+	}
+}
+
+// A typo like matchLabel, or an unsupported field like matchExpressions, must
+// fail to load rather than silently parse as an empty selector, which would
+// grant every Secret in the namespace.
+func TestLoadNamespaceAuthorizerRejectsUnknownFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string
+	}{
+		{"misspelled field", `policies:
+- atespace: team-a
+  allowedNamespaces: [ns1]
+  secretSelector:
+    matchLabel:
+      example.com/credential: "true"
+`},
+		{"unsupported field", `policies:
+- atespace: team-a
+  allowedNamespaces: [ns1]
+  secretSelector:
+    matchExpressions:
+    - key: example.com/credential
+      operator: Exists
+`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := dir + "/policy.yaml"
+			if err := os.WriteFile(path, []byte(tc.policy), 0o600); err != nil {
+				t.Fatalf("write policy: %v", err)
+			}
+			if _, err := LoadNamespaceAuthorizer(path); err == nil {
+				t.Fatal("expected an error, got none")
+			}
+		})
 	}
 }
 
@@ -399,8 +437,8 @@ func TestNamespaceAuthorizerPoliciesAreOred(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newNamespaceAuthorizer: %v", err)
 		}
-		if got := a.Authorize("team-a", "ns1"); got != DecisionAllow {
-			t.Errorf("got %v, want DecisionAllow: the unrestricted policy still stands", got)
+		if got := a.AllowedUnconditionally("team-a", "ns1"); !got {
+			t.Error("got narrowed, want unconditionally allowed: the unrestricted policy still stands")
 		}
 	})
 
@@ -414,13 +452,13 @@ func TestNamespaceAuthorizerPoliciesAreOred(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newNamespaceAuthorizer: %v", err)
 		}
-		if !a.AllowedLabels("team-a", "ns1", map[string]string{"tier": "prod"}) {
+		if !a.AllowedSecret("team-a", "ns1", map[string]string{"tier": "prod"}) {
 			t.Error("a Secret matching the first policy was refused")
 		}
-		if !a.AllowedLabels("team-a", "ns1", map[string]string{"team": "x"}) {
+		if !a.AllowedSecret("team-a", "ns1", map[string]string{"team": "x"}) {
 			t.Error("a Secret matching the second policy was refused")
 		}
-		if a.AllowedLabels("team-a", "ns1", map[string]string{"other": "y"}) {
+		if a.AllowedSecret("team-a", "ns1", map[string]string{"other": "y"}) {
 			t.Error("a Secret matching neither policy was admitted")
 		}
 	})
@@ -433,10 +471,10 @@ func TestNamespaceAuthorizerPoliciesAreOred(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newNamespaceAuthorizer: %v", err)
 		}
-		if a.AllowedLabels("team-a", "ns1", map[string]string{"tier": "prod"}) {
+		if a.AllowedSecret("team-a", "ns1", map[string]string{"tier": "prod"}) {
 			t.Error("a Secret carrying only one of the two labels was admitted")
 		}
-		if !a.AllowedLabels("team-a", "ns1", map[string]string{"tier": "prod", "team": "x"}) {
+		if !a.AllowedSecret("team-a", "ns1", map[string]string{"tier": "prod", "team": "x"}) {
 			t.Error("a Secret carrying both labels was refused")
 		}
 	})

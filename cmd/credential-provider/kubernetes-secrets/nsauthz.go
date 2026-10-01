@@ -61,19 +61,6 @@ func (s *secretSelector) labels() map[string]string {
 	return s.MatchLabels
 }
 
-// Decision is as much as a namespace can settle on its own.
-type Decision int
-
-const (
-	// DecisionDeny: refuse without reading anything from Kubernetes.
-	DecisionDeny Decision = iota
-	// DecisionAllow: the grant admits every Secret in this namespace.
-	DecisionAllow
-	// DecisionCheckLabels: the grant is narrowed by label, so only the Secret's
-	// own labels can settle it and it has to be read first.
-	DecisionCheckLabels
-)
-
 // grant is what one atespace may read in one namespace.
 type grant struct {
 	// labels is empty when the grant is not narrowed by label.
@@ -99,7 +86,10 @@ func LoadNamespaceAuthorizer(path string) (*NamespaceAuthorizer, error) {
 		return nil, fmt.Errorf("reading namespace policy file %q: %w", path, err)
 	}
 	var file namespacePolicyFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	// Strict: a typo like matchLabel, or an unsupported field like
+	// matchExpressions, must fail rather than silently parse as an empty
+	// selector, which would grant every Secret in the namespace.
+	if err := yaml.UnmarshalStrict(data, &file); err != nil {
 		return nil, fmt.Errorf("parsing namespace policy file %q: %w", path, err)
 	}
 	return newNamespaceAuthorizer(file)
@@ -171,31 +161,29 @@ func (a *NamespaceAuthorizer) Allowed(atespace, namespace string) bool {
 	return len(set[namespace]) > 0
 }
 
-// Authorize settles as much as a namespace can, before anything is read from
-// Kubernetes. DecisionCheckLabels means the grant is narrowed by label and
-// only AllowedLabels can finish the decision.
-func (a *NamespaceAuthorizer) Authorize(atespace, namespace string) Decision {
-	labeled := false
+// AllowedUnconditionally reports whether atespace may resolve every Secret in
+// namespace without inspecting the Secret itself: true when some grant there
+// carries no label selector. Callers use this to decide whether a Secret that
+// turns out not to exist may be reported as NotFound, or must be masked the
+// same as one whose labels do not match a restricted grant.
+func (a *NamespaceAuthorizer) AllowedUnconditionally(atespace, namespace string) bool {
 	for _, g := range a.allowed[atespace][namespace] {
 		if len(g.labels) == 0 {
-			// Every criterion this grant carries is satisfied.
-			return DecisionAllow
+			return true
 		}
-		labeled = true
 	}
-	if !labeled {
-		return DecisionDeny
-	}
-	return DecisionCheckLabels
+	return false
 }
 
-// AllowedLabels reports whether a Secret satisfies a grant that narrows by
-// label. Every label in that grant must be present with the same value; the
-// Secret may carry others.
-func (a *NamespaceAuthorizer) AllowedLabels(atespace, namespace string, labels map[string]string) bool {
+// AllowedSecret reports whether a fetched Secret satisfies some grant for
+// atespace/namespace: a grant without a label selector admits every Secret, and
+// a grant with one admits a Secret carrying every one of its labels. Every
+// label in a grant's selector must be present with the same value; the Secret
+// may carry others.
+func (a *NamespaceAuthorizer) AllowedSecret(atespace, namespace string, labels map[string]string) bool {
 	for _, g := range a.allowed[atespace][namespace] {
 		if len(g.labels) == 0 {
-			continue
+			return true
 		}
 		match := true
 		for k, want := range g.labels {
