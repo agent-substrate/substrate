@@ -251,7 +251,7 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-large",
 		},
 		{
-			name: "breaks actor-utilization ties using compute resource utilization",
+			name: "prefers lower compute utilization at equal actor utilization",
 			fleet: fleet{
 				worker("w-heavy", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "a", resources.CPUMemory(1000, 6<<30))),
@@ -260,6 +260,22 @@ func TestSchedule(t *testing.T) {
 			},
 			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(500, 1<<30)},
 			wantPod:     "w-light",
+		},
+		{
+			// With a uniform actor ceiling, slot utilization alone would pick
+			// w-hot (5/1000 < 6/1000) even though its memory is 95% used.
+			name: "compute hotspot outweighs one fewer actor",
+			fleet: fleet{
+				worker("w-hot", "gvisor", "node-a", tierTwo, withCapacity(4000, 20<<30), withMaxActors(1000),
+					assignedFor("demo", "a1", resources.CPUMemory(100, 19<<30)),
+					assigned("demo", "a2"), assigned("demo", "a3"), assigned("demo", "a4"), assigned("demo", "a5")),
+				worker("w-cool", "gvisor", "node-b", tierTwo, withCapacity(4000, 20<<30), withMaxActors(1000),
+					assignedFor("demo", "b1", resources.CPUMemory(100, 2<<30)),
+					assigned("demo", "b2"), assigned("demo", "b3"), assigned("demo", "b4"), assigned("demo", "b5"),
+					assigned("demo", "b6")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(100, 512<<20)},
+			wantPod:     "w-cool",
 		},
 		{
 			name: "prefers worker with known resource utilization over unreported capacity",
@@ -533,5 +549,49 @@ func TestSchedulePowerOfTwoChoicesTieBreaking(t *testing.T) {
 		if got.GetWorkerPod() != wantPod {
 			t.Fatalf("Schedule() for index %d = %q, want %q", wantIdx, got.GetWorkerPod(), wantPod)
 		}
+	}
+}
+
+// seqIntn returns vals in order, one per call.
+func seqIntn(vals ...int) func(int) int {
+	i := 0
+	return func(int) int {
+		v := vals[i]
+		i++
+		return v
+	}
+}
+
+func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
+	// intn yields i=0, then j=1; since j >= i the second sample shifts to
+	// candidates[2], the only lighter worker. An off-by-one in the shift would
+	// compare w-0 against w-1 and return a busy worker.
+	f := fleet{
+		worker("w-0", "gvisor", "node-a", nil, withMaxActors(4), assigned("demo", "a"), assigned("demo", "b")),
+		worker("w-1", "gvisor", "node-b", nil, withMaxActors(4), assigned("demo", "c"), assigned("demo", "d")),
+		worker("w-2", "gvisor", "node-c", nil, withMaxActors(4)),
+	}
+	s := New(f, WithIntn(seqIntn(0, 1)))
+	got, err := s.Schedule(context.Background(), Constraints{SandboxClass: "gvisor"})
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if got.GetWorkerPod() != "w-2" {
+		t.Fatalf("Schedule() = %q, want %q", got.GetWorkerPod(), "w-2")
+	}
+}
+
+func TestScheduleMalformedLimitsIsNotNoCapacity(t *testing.T) {
+	f := fleet{worker("w-1", "gvisor", "node-a", nil)}
+	constraints := Constraints{
+		SandboxClass: "gvisor",
+		Limits:       &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
+	}
+	_, err := New(f, WithIntn(firstIntn)).Schedule(context.Background(), constraints)
+	if err == nil {
+		t.Fatal("Schedule() error = nil, want a parse error")
+	}
+	if errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("Schedule() error = %v, want an error other than ErrNoCapacity", err)
 	}
 }

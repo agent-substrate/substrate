@@ -97,8 +97,9 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 }
 
 // Schedule filters the fleet for eligible candidates with room, samples two at
-// random (power of two choices), and returns the less-loaded one. Spreading
-// across the warm pool avoids hotspots until autoscaling reclaims idle workers.
+// random (power of two choices), and returns the less-loaded one, where load is
+// the higher of actor-slot and compute-resource utilization. Spreading across
+// the warm pool avoids hotspots until autoscaling reclaims idle workers.
 func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
@@ -107,7 +108,7 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 
 	want, err := resources.ParseQuantities(constraints.Limits)
 	if err != nil {
-		return nil, ErrNoCapacity
+		return nil, fmt.Errorf("while parsing actor resource limits: %w", err)
 	}
 
 	var candidates []candidate
@@ -153,20 +154,26 @@ func (c *candidate) resourceUtilization() float64 {
 	return c.resUtil
 }
 
-// lessLoaded compares actor-slot utilization (allocated/capacity) first, then
-// dominant compute-resource utilization, and finally remaining actor slots.
+// lessLoaded compares dominant utilization — the higher of actor-slot
+// utilization (allocated/capacity) and compute-resource utilization — so either
+// dimension can mark a worker as hot. Ties fall back to actor-slot utilization,
+// then to remaining actor slots.
 func lessLoaded(a, b *candidate) bool {
 	aAlloc := int64(a.worker.GetStatus().GetAllocated().GetActors())
 	bAlloc := int64(b.worker.GetStatus().GetAllocated().GetActors())
+	// checkRoom admits only workers with allocated < capacity, so capacity >= 1.
 	aCap := int64(a.worker.GetStatus().GetCapacity().GetActors())
 	bCap := int64(b.worker.GetStatus().GetCapacity().GetActors())
 
-	if lhs, rhs := aAlloc*bCap, bAlloc*aCap; lhs != rhs {
-		return lhs < rhs
+	aLoad := max(float64(aAlloc)/float64(aCap), a.resourceUtilization())
+	bLoad := max(float64(bAlloc)/float64(bCap), b.resourceUtilization())
+	if aLoad != bLoad {
+		return aLoad < bLoad
 	}
 
-	if aRes, bRes := a.resourceUtilization(), b.resourceUtilization(); aRes != bRes {
-		return aRes < bRes
+	// Compare slot utilization exactly via cross-multiplication.
+	if lhs, rhs := aAlloc*bCap, bAlloc*aCap; lhs != rhs {
+		return lhs < rhs
 	}
 
 	return aCap-aAlloc > bCap-bAlloc
