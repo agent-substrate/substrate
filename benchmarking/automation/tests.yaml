@@ -44,6 +44,41 @@
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
+#   gcsPrewarm     Optional. When present, tools/gcs-prewarm ramps synthetic
+#                  writes against the snapshot bucket while substrate and
+#                  workloads deploy, and the test starts only once it has
+#                  finished, so the bucket's key ranges are already scaled
+#                  up and the run doesn't measure GCS autoscaling (a cold
+#                  bucket sheds write bursts with 429s for ~20 minutes per
+#                  doubling of load). A failed warm-up fails the test. It
+#                  adds roughly ramp + hold to the run: log2(targetRate /
+#                  startRate) * doubleEvery, plus hold. `gcsPrewarm: {}`
+#                  takes every default; the fields, all optional, are:
+#                    bucket       Default: BUCKET_NAME from the target
+#                                 cluster config.
+#                    prefix       Object prefix the real snapshots are
+#                                 written under. Default: the glutton
+#                                 template's
+#                                 benchmark-workloads/glutton/atespaces/benchmark/actors.
+#                    startRate    Initial writes/s (tool default 50).
+#                    targetRate   Writes/s to ramp to and hold (tool
+#                                 default 500).
+#                    doubleEvery  How often the rate doubles while ramping,
+#                                 e.g. "5m" (tool default 5m).
+#                    hold         How long to hold targetRate after the
+#                                 ramp (tool default 5m).
+#                    objectBytes  Size of each warm-up object (tool default
+#                                 4096); scaling follows request rate, not
+#                                 bytes.
+#                    workers      Max writes in flight (tool default 128).
+#                    cleanup      Delete the warm-up objects before the
+#                                 test starts (tool default true).
+#                  For example, a 20m ramp from 50 to 800 writes/s:
+#                    gcsPrewarm:
+#                      startRate: 50
+#                      targetRate: 800
+#                      doubleEvery: 5m
+#                      hold: 5m
 #
 # ---- type: locust -----------------------------------------------------------
 #

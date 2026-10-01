@@ -27,7 +27,9 @@ contract). The flow, with the type hooks marked:
         target cluster.
      b. Sweep leftovers, deploy substrate, let the type shape the
         cluster [hook: pre_test], deploy workloads (+ microvm deps when
-        the sandbox class needs them).
+        the sandbox class needs them). A gcsPrewarm test warms the
+        snapshot bucket in the background meanwhile, and the test waits
+        for the warm-up to finish.
      c. Render the type's Job template [hooks: job_tmpl, job_subs],
         submit it, wait, tail logs, delete the Job.
      d. Tear substrate + workloads down again so tests don't pollute
@@ -52,6 +54,7 @@ from typing import Any
 
 import yaml
 
+import gcs_prewarm
 from testtypes import TYPES
 from util import parse_duration_seconds, run, run_no_check
 
@@ -302,6 +305,8 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"test {name!r} has invalid type {ttype!r} "
                 f"(want one of {list(TEST_TYPES)})"
             )
+        if "gcsPrewarm" in t:
+            gcs_prewarm.validate(name, t["gcsPrewarm"])
         TYPES[ttype].validate(t)
 
 
@@ -512,7 +517,12 @@ def main() -> None:
             status = "error"
             failure_msg = None
             start_time = time.time()
+            prewarm_proc = None
             try:
+                # Started first so its ramp overlaps substrate + workload
+                # setup.
+                if "gcsPrewarm" in test:
+                    prewarm_proc = gcs_prewarm.start(test["gcsPrewarm"])
                 deploy_substrate(test.get("ateArgs", []))
                 TYPES[ttype].pre_test(test)
                 # install-microvm-deps needs the CRDs from deploy_substrate;
@@ -525,6 +535,9 @@ def main() -> None:
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
                 )
+                # The bucket's key ranges must be split before run_test
+                # kicks off snapshot traffic.
+                gcs_prewarm.wait(prewarm_proc)
                 try:
                     status = run_test(
                         test,
@@ -542,6 +555,8 @@ def main() -> None:
                 print(f"Test {test['name']} setup failed: {e}", flush=True)
                 failure_msg = str(e)
             finally:
+                # Stop the prewarm if setup failed before the wait above.
+                gcs_prewarm.kill(prewarm_proc)
                 # Always tear down, even if deploy or run failed, so the
                 # next test (and the next CronJob fire) starts clean.
                 # microvm-deps must go before substrate for the same reason

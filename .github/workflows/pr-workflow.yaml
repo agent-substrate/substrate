@@ -67,6 +67,11 @@ jobs:
       run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml"
         --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose
         -- -race -v ./...
+    - name: gcs-prewarm tests
+      working-directory: tools/gcs-prewarm
+      run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcs-prewarm.xml"
+        --jsonfile "${ARTIFACTS}/gcs-prewarm.json" --format standard-verbose
+        -- -race -v ./...
     # Kept apart from the root module so it can move to its own repository.
     - name: gcp-secret-manager credential provider tests
       working-directory: internal/plugins/gcp-secret-manager
