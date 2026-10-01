@@ -67,6 +67,34 @@ jobs:
       run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml"
         --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose
         -- -race -v ./...
+    # Kept apart from the root module so it can move to its own repository.
+    - name: gcp-secret-manager credential provider tests
+      working-directory: internal/plugins/gcp-secret-manager
+      run: ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcp-secret-manager.xml"
+        --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" --format standard-verbose
+        -- -race -v ./...
+    # The root verifiers stop at the module's go.mod, so it gets its own run:
+    # gofmt, go vet and the tidy check, then golangci-lint with the root config.
+    - name: gcp-secret-manager credential provider verify
+      working-directory: internal/plugins/gcp-secret-manager
+      run: |
+        make verify
+        ../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
+    - name: Cache cargo
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          cmd/dataplane/envoy/dynamic-modules/*/target
+        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/*/Cargo.lock') }}
+        restore-keys: cargo-${{ runner.os }}-
+    - name: dynamic module tests
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends clang libclang-dev
+        make test-dynamic-modules
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.

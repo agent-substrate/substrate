@@ -13,14 +13,14 @@
 # limitations under the License.
 
 # MITM variant of the egress demo template: the same workload as
-# egress-template.yaml.tmpl, but trusting only the egress gateway
+# egress-template.yaml.tmpl, but also trusting the egress gateway
 # CA. The networking suite builds its egress actors from this fixture instead
 # of the plain one when E2E_EGRESS_MITM is set, because under an sdsmint
 # gateway TestActorEgressHTTPS's origin certificate is a per-SNI leaf the
 # gateway minted, which chains to no public CA.
 #
 # Kept in step with egress-template.yaml.tmpl; the deltas are the
-# names, the projected trust bundle, and the two SSL_CERT_* variables.
+# names, the projected trust bundle, and the SSL_CERT_FILE variable.
 
 metadata:
   atespace: ate-demo-egress-mitm
@@ -32,21 +32,13 @@ containers:
 - name: egress
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
-  # The demo fetches with a stock net/http client, so its roots come from
-  # crypto/x509's system pool — which on Unix reads both of these.
-  #
-  # SSL_CERT_FILE alone is not enough to make the projected bundle the whole
-  # story: it replaces the default cert FILE list, but the default cert
-  # DIRECTORY list is still scanned, and the base image keeps its public
-  # roots in /etc/ssl/certs. Pointing SSL_CERT_DIR at the projection too
-  # makes the anchor set exactly the gateway CA, so a successful HTTPS fetch
-  # proves the projected bundle validated the minted leaf. Under sdsmint the
-  # public roots are useless anyway: every origin is fronted by the gateway.
+  # The demo fetches with a stock net/http client. SSL_CERT_FILE adds the
+  # gateway CA, and Go still scans /etc/ssl/certs, so the image's public
+  # roots stay available for tls_passthrough origins. SSL_CERT_DIR would
+  # drop them, so it is deliberately not set.
   env:
   - name: SSL_CERT_FILE
     value: /run/ate/trust-bundle.pem
-  - name: SSL_CERT_DIR
-    value: /run/ate
   volumeMounts:
   # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info

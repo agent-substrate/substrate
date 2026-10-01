@@ -29,11 +29,14 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -126,7 +129,7 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, workerInformer, workerPoolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -136,14 +139,16 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 // setupReconcileTest builds a syncer whose pod and pool caches can be seeded
 // directly, for tests that drive reconcile synchronously without starting
 // factories or worker goroutines. It returns those caches alongside the syncer.
+// The syncer's pod client is a fake clientset that the caches do not watch.
 func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer) {
 	t.Helper()
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
-	_, workerInformer := WorkerPodInformer(fake.NewSimpleClientset())
+	fakeK8s := fake.NewSimpleClientset()
+	_, workerInformer := WorkerPodInformer(fakeK8s)
 	workerPoolInformer, poolIndexer := newWorkerPoolInformer(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -714,6 +719,112 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
 		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING
 	})
+}
+
+// TestSyncer_TerminalPod_DeletesPod verifies that a worker pod in a terminal
+// phase is deleted, preconditioned on its UID, and its worker marked DRAINING
+// until the Pod Deleted event removes the record.
+func TestSyncer_TerminalPod_DeletesPod(t *testing.T) {
+	ns, poolName, podName, ip := "ns-terminal", "pool1", "worker-terminal", "10.0.0.20"
+
+	for _, phase := range []corev1.PodPhase{corev1.PodFailed, corev1.PodSucceeded} {
+		t.Run(string(phase), func(t *testing.T) {
+			ctx := context.Background()
+			api := newFakeControl()
+			api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+
+			pod := workerPod(ns, podName, poolName, testPodUID, ip)
+			pod.Status.Phase = phase
+			//nolint:staticcheck // NewSimpleClientset is the fake the syncer's pod client takes.
+			fakeK8s := fake.NewSimpleClientset(pod.DeepCopy())
+			s.pods = fakeK8s.CoreV1()
+			mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+			if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				t.Errorf("get pod after reconcile = %v, want NotFound", err)
+			}
+			var deletes []k8stesting.DeleteAction
+			for _, a := range fakeK8s.Actions() {
+				if d, ok := a.(k8stesting.DeleteAction); ok {
+					deletes = append(deletes, d)
+				}
+			}
+			if len(deletes) != 1 {
+				t.Fatalf("pod deletes = %d, want 1", len(deletes))
+			}
+			if got := deletes[0].GetDeleteOptions().Preconditions; got == nil || got.UID == nil || *got.UID != testPodUID {
+				t.Errorf("delete preconditions = %+v, want UID %s", got, testPodUID)
+			}
+			if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+				t.Errorf("worker state = %v, want DRAINING", got)
+			}
+		})
+	}
+}
+
+// TestSyncer_TerminalPod_AlreadyGoneOrReplaced verifies that a terminal pod
+// whose delete finds it gone (NotFound) or replaced under its name (the UID
+// precondition fails with Conflict) reconciles cleanly rather than requeueing.
+func TestSyncer_TerminalPod_AlreadyGoneOrReplaced(t *testing.T) {
+	ns, poolName, podName := "ns-terminal-gone", "pool1", "worker-terminal-gone"
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"not found", apierrors.NewNotFound(corev1.Resource("pods"), podName)},
+		{"conflict", apierrors.NewConflict(corev1.Resource("pods"), podName, errors.New("precondition failed: UID"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, pods, _ := setupReconcileTest(t, newFakeControl())
+
+			//nolint:staticcheck // NewSimpleClientset is the fake the syncer's pod client takes.
+			fakeK8s := fake.NewSimpleClientset()
+			fakeK8s.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+			s.pods = fakeK8s.CoreV1()
+
+			pod := workerPod(ns, podName, poolName, testPodUID, "")
+			pod.Status.Phase = corev1.PodFailed
+			mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+		})
+	}
+}
+
+// TestSyncer_TerminalPod_ViaInformer walks a registered worker through its pod
+// failing: the syncer deletes the pod, and the resulting Pod Deleted event
+// removes the worker record, which is what releases its Actors.
+func TestSyncer_TerminalPod_ViaInformer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ns, podName, poolName := "ns-syncer-terminal", "worker-terminal-1", "pool1"
+
+	api := newFakeControl()
+	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "gvisor", nil))
+
+	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.21")
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
+		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
+	})
+
+	failed := pod.DeepCopy()
+	failed.Status.Phase = corev1.PodFailed
+	failed.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
+	if _, err := fakeK8s.CoreV1().Pods(ns).UpdateStatus(ctx, failed, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w == nil })
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("get pod = %v, want NotFound", err)
+	}
 }
 
 // TestSyncer_PodRecreatedWithNewUID verifies that when a pod is deleted and

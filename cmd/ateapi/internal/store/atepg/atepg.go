@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -341,17 +342,13 @@ func unmarshalStored(b []byte, m proto.Message) error {
 	return nil
 }
 
-// TODO: EOL this in favor of setCreateMetadata
-func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
-	now := timestamppb.Now()
-	return &ateapipb.ResourceMetadata{
-		Atespace:   atespace,
-		Name:       name,
-		Uid:        uuid.NewString(),
-		Version:    1,
-		CreateTime: now,
-		UpdateTime: now,
+// unmarshalRow is unmarshalStored for a row in a listing. A listing fails as a
+// whole on one bad row, so the error names the row.
+func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
+	if err := unmarshalStored(b, m); err != nil {
+		return fmt.Errorf("unmarshaling %s %s: %w", kind, strings.Join(id, "/"), err)
 	}
+	return nil
 }
 
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
@@ -359,14 +356,6 @@ func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
-}
-
-// TODO: EOL this in favor of setUpdateMetadata
-func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
-	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
-	metadata.Version++
-	metadata.UpdateTime = timestamppb.Now()
-	return metadata
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database

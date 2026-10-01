@@ -51,6 +51,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -82,9 +83,9 @@ var (
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
 	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
 
-	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
-	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
+	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
+	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -277,7 +278,7 @@ func main() {
 		storageClassLister,
 		ateletDialer,
 		instruments,
-		*egressGatewayAddress,
+		*defaultEgressGatewayAddress,
 		volPlugins,
 		objectStore,
 		resolvedActorJWTIssuer,
@@ -288,6 +289,10 @@ func main() {
 	// Drive stored ActorTemplates through the golden actor flow.
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
+
+	// Crash the Actors lost when a Worker's ateom restarts.
+	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
+	workerAssignmentReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -411,8 +416,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		slog.Bool("postgres-read-write-connection-string-set", *postgresReadWriteConnectionString != ""),
-		slog.Bool("postgres-owner-connection-string-set", *postgresOwnerConnectionString != ""),
+		postgresConnectionAttr("postgres-read-write-connection-string", *postgresReadWriteConnectionString),
+		postgresConnectionAttr("postgres-owner-connection-string", *postgresOwnerConnectionString),
 		slog.String("postgres-read-write-role", *postgresReadWriteRole),
 		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
@@ -455,6 +460,30 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 		}
 		return objectstore.NewGCS(client), nil
 	}
+}
+
+// postgresConnectionAttr describes the connection string for the startup log
+// without echoing it. The bundled and Cloud SQL IAM setups use passwordless
+// strings, but an external database DSN can carry a password, and the raw
+// value would otherwise be written to the log on every restart. Only the
+// parsed, non-secret parts are logged; a string that does not parse is
+// reported as invalid and connectStore surfaces the actual error.
+func postgresConnectionAttr(key, connString string) slog.Attr {
+	if connString == "" {
+		return slog.String(key, "")
+	}
+	cfg, err := pgconn.ParseConfig(connString)
+	if err != nil {
+		return slog.String(key, "<invalid pg connection string>")
+	}
+	return slog.Group(key,
+		slog.String("host", cfg.Host),
+		slog.Int("port", int(cfg.Port)),
+		slog.String("database", cfg.Database),
+		slog.String("user", cfg.User),
+		slog.Bool("password-set", cfg.Password != ""),
+		slog.Bool("tls", cfg.TLSConfig != nil),
+	)
 }
 
 // connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if

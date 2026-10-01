@@ -80,15 +80,18 @@ func TestFetchHTTPAndHTTPS(t *testing.T) {
 	}))
 	defer httpsSrv.Close()
 
-	handler := newHandler(&http.Client{Timeout: requestTimeout})
+	// The demo verifies origins with the roots its client is given: in the
+	// cluster the projected trust bundle, here the test server's own.
+	handler := newHandler(httpsSrv.Client())
 
 	for _, tc := range []struct {
-		name string
-		url  string
-		want string
+		name     string
+		url      string
+		want     string
+		wantCert string
 	}{
 		{name: "http", url: httpSrv.URL, want: "from http"},
-		{name: "https", url: httpsSrv.URL, want: "from https"},
+		{name: "https", url: httpsSrv.URL, want: "from https", wantCert: httpsSrv.Certificate().Issuer.String()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload, err := json.Marshal(fetchRequest{URL: tc.url})
@@ -106,8 +109,8 @@ func TestFetchHTTPAndHTTPS(t *testing.T) {
 			if err := json.NewDecoder(recorder.Body).Decode(&got); err != nil {
 				t.Fatalf("decoding response: %v", err)
 			}
-			if got.StatusCode != http.StatusOK || got.Body != tc.want {
-				t.Errorf("response = %+v, want status 200 and body %q", got, tc.want)
+			if got.StatusCode != http.StatusOK || got.Body != tc.want || got.ServerCert != tc.wantCert {
+				t.Errorf("response = %+v, want status 200, body %q, serverCert %q", got, tc.want, tc.wantCert)
 			}
 		})
 	}

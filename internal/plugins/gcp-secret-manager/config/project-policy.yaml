@@ -1,0 +1,35 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Which Google Cloud projects each atespace may read secrets from. An actor can
+# resolve a secret only if its URI's project is listed for the actor's atespace;
+# an atespace that isn't listed resolves nothing. Write each project the way
+# your URIs do, by ID or by number.
+#
+# Apply this before deploying the provider; the kustomization leaves it out so a
+# redeploy doesn't overwrite it. The provider reads it only at startup, so
+# restart the Deployment after editing it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gsm-credential-provider-project-policy
+  namespace: ate-system
+data:
+  project-policy.yaml: |
+    # Actors in atespace "team-a" may use secrets in project "my-project", e.g.
+    # ate-secret://secretmanager.googleapis.com/projects/my-project/secrets/example-api-token/versions/1.
+    policies:
+    - atespace: team-a
+      allowedProjects:
+      - my-project

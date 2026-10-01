@@ -18,22 +18,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
-	"strings"
 
-	"github.com/distribution/reference"
-
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/volumepath"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -48,7 +41,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	}
 
 	// Validate the request, including the object within it.
-	if errs := validateCreateActorTemplateRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateCreateActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
@@ -80,27 +73,15 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 	outTemplate.Status = &ateapipb.ActorTemplateStatus{}
 
 	// Validate the final value before storing it.
-	if errs := validateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
+	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
 	}
 
 	return s.store.CreateActorTemplate(ctx, outTemplate)
 }
 
-func validateCreateActorTemplateRequest(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_CreateActorTemplateRequest(ctx, op, nil, req, nil)
-}
-
-func validateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorTemplate) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
-	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
-}
-
 func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
-	if errs := validateGetActorTemplateRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateGetActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
@@ -120,14 +101,8 @@ func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resource
 	return s.store.GetActorTemplate(ctx, templateRef)
 }
 
-func validateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActorTemplateRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
-	if errs := validateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
@@ -146,14 +121,8 @@ func (s *ServiceImpl) ListActorTemplates(ctx context.Context, atespace string, o
 	return s.store.ListActorTemplates(ctx, atespace, opts)
 }
 
-func validateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
-	if errs := validateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
@@ -164,203 +133,12 @@ func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resou
 	return s.store.DeleteActorTemplate(ctx, templateRef, precondition)
 }
 
-func validateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
-}
-
 func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
 	// ActorTemplates are immutable to clients: there is no update RPC, and
 	// the only writer is the template reconciler, which updates status
 	// against the store directly. The store enforces metadata immutability,
 	// so this layer has nothing to add.
 	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
-}
-
-// httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
-// characters only, with well-formed percent-escapes, and no query string
-// or fragment.
-var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
-
-func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if !httpGetPathRE.MatchString(*value) {
-		return field.ErrorList{field.Invalid(fldPath, *value, "must be a URL path starting with '/', using only RFC 3986 path-segment characters, without query or fragment")}
-	}
-	return nil
-}
-
-// mountPathBadSegmentRE matches '.' or '..' path segments.
-var mountPathBadSegmentRE = regexp.MustCompile(`(^|/)[.][.]?(/|$)`)
-
-// ValidateCustom_VolumeMount_MountPath requires a clean absolute Unix path
-// that starts with '/', is not '/', and contains no ':', '.' or '..'
-// segments, '//', trailing '/', or control characters.
-func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	p := *value
-	bad := !strings.HasPrefix(p, "/") || len(p) == 1 ||
-		strings.HasSuffix(p, "/") || strings.Contains(p, "//") ||
-		strings.Contains(p, ":") || mountPathBadSegmentRE.MatchString(p)
-	if !bad {
-		for _, r := range p {
-			if r < 0x20 || r == 0x7f {
-				bad = true
-				break
-			}
-		}
-	}
-	if bad {
-		return field.ErrorList{field.Invalid(fldPath, p, "must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters")}
-	}
-	return nil
-}
-
-// validateProjectedPath applies the projected-path rule shared with atelet,
-// which re-checks it before writing to the host.
-func validateProjectedPath(fldPath *field.Path, p string) field.ErrorList {
-	if err := volumepath.ValidateProjected(p); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
-	}
-	return nil
-}
-
-func ValidateCustom_ActorMetadataItem_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validateProjectedPath(fldPath, *value)
-}
-
-func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validateProjectedPath(fldPath, *value)
-}
-
-// ValidateCustom_SystemInfoVolumeSource_DataSources requires every projected
-// file path to be unique across all data sources: atelet writes them in
-// order into one tree, so a repeated path silently clobbers the earlier file.
-func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.SystemInfoDataSource) field.ErrorList {
-	var errs field.ErrorList
-	seen := sets.New[string]()
-	for i, ds := range value {
-		switch {
-		case ds == nil:
-		case ds.TrustBundle != nil:
-			if seen.Has(ds.TrustBundle.Path) {
-				errs = append(errs, field.Duplicate(fldPath.Index(i).Child("trust_bundle", "path"), ds.TrustBundle.Path))
-			}
-			seen.Insert(ds.TrustBundle.Path)
-		case ds.ActorMetadata != nil:
-			for j, item := range ds.ActorMetadata.Items {
-				if item == nil {
-					continue
-				}
-				if seen.Has(item.Path) {
-					errs = append(errs, field.Duplicate(fldPath.Index(i).Child("actor_metadata", "items").Index(j).Child("path"), item.Path))
-				}
-				seen.Insert(item.Path)
-			}
-		}
-	}
-	return errs
-}
-
-// validatePinnedImage requires a well-formed OCI image reference pinned by
-// digest (e.g. "name@sha256:..."): changing the image content under a fixed
-// reference invalidates snapshots. It parses with the same grammar the
-// container runtimes use, so a malformed digest is rejected rather than
-// treated as pinned.
-func validatePinnedImage(fldPath *field.Path, value string) field.ErrorList {
-	if value == "" {
-		return nil // required is enforced by tags
-	}
-	ref, err := reference.ParseNormalizedNamed(value)
-	if err != nil {
-		return field.ErrorList{field.Invalid(fldPath, value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
-	}
-	if _, ok := ref.(reference.Digested); !ok {
-		return field.ErrorList{field.Invalid(fldPath, value, "must be pinned by digest (changing the image invalidates snapshots)")}
-	}
-	return nil
-}
-
-func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validatePinnedImage(fldPath, *value)
-}
-
-func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validatePinnedImage(fldPath, *value)
-}
-
-func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if _, err := resource.ParseQuantity(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
-	}
-	return nil
-}
-
-// ValidateCustom_Limits validates one limit with resources.ValidateLimit.
-// Presence and uniqueness of names are enforced by tags.
-func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Limits) field.ErrorList {
-	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
-}
-
-// ValidateCustom_SnapshotConfig_StorageLocation ensures an
-// ActorTemplate's snapshotConfig.location is a well-formed
-// URI with a bucket, so a bad location fails fast.
-func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if err := resources.ValidateSnapshotLocation(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
-	}
-	return nil
-}
-
-// ValidateCustom_SnapshotConfig requires on_commit to be a subset of on_pause.
-func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
-	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
-		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
-	}
-	return nil
-}
-
-// envVarNameRE constrains env var names to any printable ASCII character
-// except '='.
-var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)
-
-func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if !envVarNameRE.MatchString(*value) {
-		return field.ErrorList{field.Invalid(fldPath, *value, "may contain any printable ASCII character except '='")}
-	}
-	return nil
-}
-
-// capabilityRE constrains Linux capability names: uppercase, without the
-// "CAP_" prefix (which is added when the OCI spec is written; the prefixed
-// spelling would silently grant nothing).
-var capabilityRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
-
-func validateCapabilities(fldPath *field.Path, caps []string, allowAll bool) field.ErrorList {
-	var errs field.ErrorList
-	for i, c := range caps {
-		p := fldPath.Index(i)
-		switch {
-		case c == "ALL" && !allowAll:
-			errs = append(errs, field.Invalid(p, c, "add does not accept 'ALL'; name the individual capabilities the container needs"))
-		case c == "ALL":
-		case len(c) > 63:
-			errs = append(errs, field.TooLong(p, nil, 63))
-		case strings.HasPrefix(c, "CAP_"):
-			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
-		case !capabilityRE.MatchString(c):
-			errs = append(errs, field.Invalid(p, c, "must be an uppercase capability name like 'NET_BIND_SERVICE'"))
-		}
-	}
-	return errs
-}
-
-func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
-	return validateCapabilities(fldPath, value, false)
-}
-
-func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
-	return validateCapabilities(fldPath, value, true)
 }
 
 // actorTemplateGetter is the storage subset template resolution needs.
@@ -397,53 +175,4 @@ func actorTemplateObjectRef(actor *ateapipb.Actor) *ateapipb.ObjectRef {
 		return nil
 	}
 	return &ateapipb.ObjectRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
-}
-
-// ValidateCustom_Container_VolumeMounts rejects mounts that nest under one
-// another.
-func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
-	var errs field.ErrorList
-	for i, m := range value {
-		path := m.GetMountPath()
-		if path == "" {
-			continue // required is enforced by tags
-		}
-		// Nested mounts are unsupported (volumes cannot mount onto
-		// other volumes).
-		for j := 0; j < i; j++ {
-			prior := value[j].GetMountPath()
-			if prior == "" || prior == path {
-				continue
-			}
-			if strings.HasPrefix(path, prior+"/") || strings.HasPrefix(prior, path+"/") {
-				errs = append(errs, field.Invalid(fldPath.Index(i).Child("mount_path"), path,
-					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
-			}
-		}
-	}
-	return errs
-}
-
-// ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects container
-// volume mounts that reference volumes the template does not declare.
-func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
-	declared := make(map[string]bool, len(value.GetVolumes()))
-	for _, vol := range value.GetVolumes() {
-		declared[vol.GetName()] = true
-	}
-	var errs field.ErrorList
-	for i, ctr := range value.GetContainers() {
-		for j, mount := range ctr.GetVolumeMounts() {
-			name := mount.GetName()
-			if name == "" {
-				continue // required is enforced by tags
-			}
-			if !declared[name] {
-				errs = append(errs, field.Invalid(
-					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
-					name, "must reference a volume declared in the template"))
-			}
-		}
-	}
-	return errs
 }
