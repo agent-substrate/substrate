@@ -51,6 +51,18 @@ func EgressAllowHTTPS(patterns ...string) *ateapipb.EgressRule {
 	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns}}
 }
 
+// EgressAllowPassthrough is a rule that lets an actor send TLS, forwarded
+// without decryption by the gateway, to the hosts matching patterns on any
+// port.
+func EgressAllowPassthrough(patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{
+		TlsPassthrough: &ateapipb.TLSPassthroughRule{
+			Hostnames: patterns,
+			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+		},
+	}
+}
+
 // EgressInjectHeader is an https rule (see EgressAllowHTTPS) that also carries
 // a replace_headers effect: on a match, the gateway resolves credentialURI
 // through its credential provider and replaces header with prefix plus the

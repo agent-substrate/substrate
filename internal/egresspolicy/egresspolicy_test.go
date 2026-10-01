@@ -411,6 +411,13 @@ func TestSNIRules(t *testing.T) {
 		}
 		return rules
 	}
+	passthrough := func(patterns ...string) []SNIRule {
+		rules := make([]SNIRule, len(patterns))
+		for i, p := range patterns {
+			rules[i] = SNIRule{Pattern: p, Mode: SNIModePassthrough}
+		}
+		return rules
+	}
 	tests := []struct {
 		name   string
 		policy *ateapipb.EgressPolicy
@@ -419,34 +426,47 @@ func TestSNIRules(t *testing.T) {
 	}{
 		{name: "no rules", policy: &ateapipb.EgressPolicy{}, port: 443},
 		{name: "http rules decide requests, not connections", policy: policy(httpRule("api.example.com")), port: 80},
-		{name: "tls_passthrough is not decided yet", policy: policy(passthroughRule(ports(443), "tls.example.com", "*")), port: 443},
+		{name: "tls_passthrough on a named port", policy: policy(passthroughRule(ports(443), "tls.example.com", "*")), port: 443, want: passthrough("tls.example.com", "*")},
+		{name: "tls_passthrough on all ports", policy: policy(passthroughRule(allPorts(), "tls.example.com")), port: 8443, want: passthrough("tls.example.com")},
 		{name: "https on its default port", policy: policy(httpsRule("api.example.com", "*.example.org")), port: 443, want: mitm("api.example.com", "*.example.org")},
 		{name: "https default port covers no other", policy: policy(httpsRule("api.example.com")), port: 8443},
 		{name: "https on a named port", policy: policy(httpsRuleOnPorts(ports(8443, 9443), "api.example.com")), port: 9443, want: mitm("api.example.com")},
 		{name: "https on all ports", policy: policy(httpsRuleOnPorts(allPorts(), "api.example.com")), port: 12345, want: mitm("api.example.com")},
 		{
-			name: "only https rules, only those for the dialed port",
+			name: "https and tls_passthrough rules for the dialed port",
 			policy: policy(
 				httpsRule("api.example.com"),
 				httpsRuleOnPorts(ports(8443), "alt.example.com"),
 				httpRule("plain.example.com"),
 				passthroughRule(ports(443), "pinned.example.com"),
+				passthroughRule(ports(8443), "other-pinned.example.com"),
 			),
 			port: 443,
-			want: mitm("api.example.com"),
+			want: []SNIRule{
+				{Pattern: "api.example.com", Mode: SNIModeMITM},
+				{Pattern: "pinned.example.com", Mode: SNIModePassthrough},
+			},
 		},
 		{
-			// Name specificity outranks port specificity.
-			name: "most specific first",
+			// Name specificity outranks port specificity across https and tls_passthrough.
+			name: "most specific first across https and tls_passthrough",
 			policy: policy(
 				httpsRule("*"),
-				httpsRuleOnPorts(allPorts(), "a.example.com"),
+				passthroughRule(allPorts(), "a.example.com"),
 				httpsRule("*.example.com"),
 				httpsRule("b.example.com"),
-				httpsRuleOnPorts(allPorts(), "*.example.org"),
+				passthroughRule(ports(443), "*.example.org"),
+				httpsRuleOnPorts(allPorts(), "*.example.net"),
 			),
 			port: 443,
-			want: mitm("b.example.com", "a.example.com", "*.example.com", "*.example.org", "*"),
+			want: []SNIRule{
+				{Pattern: "b.example.com", Mode: SNIModeMITM},
+				{Pattern: "a.example.com", Mode: SNIModePassthrough},
+				{Pattern: "*.example.com", Mode: SNIModeMITM},
+				{Pattern: "*.example.org", Mode: SNIModePassthrough},
+				{Pattern: "*.example.net", Mode: SNIModeMITM},
+				{Pattern: "*", Mode: SNIModeMITM},
+			},
 		},
 		{
 			// Patterns rank individually, not per rule, matching
@@ -458,9 +478,13 @@ func TestSNIRules(t *testing.T) {
 		},
 		{
 			name:   "ties keep policy order",
-			policy: policy(httpsRule("b.example.com", "a.example.com"), httpsRule("c.example.com")),
+			policy: policy(httpsRule("b.example.com", "a.example.com"), passthroughRule(ports(443), "c.example.com")),
 			port:   443,
-			want:   mitm("b.example.com", "a.example.com", "c.example.com"),
+			want: []SNIRule{
+				{Pattern: "b.example.com", Mode: SNIModeMITM},
+				{Pattern: "a.example.com", Mode: SNIModeMITM},
+				{Pattern: "c.example.com", Mode: SNIModePassthrough},
+			},
 		},
 		{name: "invalid patterns dropped", policy: policy(httpsRule("good.example.com", "not a hostname")), port: 443, want: mitm("good.example.com")},
 	}

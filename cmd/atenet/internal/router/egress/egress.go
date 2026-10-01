@@ -30,7 +30,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,13 +184,13 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
 		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
 	res := allow()
-	res.DynamicMetadata = connectMetadata(rules)
+	res.DynamicMetadata = connectMetadata(dest, rules)
 	return res, nil
 }
 
-// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace.
-// An empty list denies all TLS.
-func connectMetadata(rules []egresspolicy.SNIRule) *structpb.Struct {
+// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
+// the dialed destination for EgressMetadataNamespace.
+func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
 		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
@@ -197,6 +199,9 @@ func connectMetadata(rules []egresspolicy.SNIRule) *structpb.Struct {
 		}})
 	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressPassthroughDestinationKey: structpb.NewStringValue(net.JoinHostPort(dest.IP.String(), strconv.Itoa(int(dest.Port)))),
+		}}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
 		}}),
