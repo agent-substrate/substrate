@@ -175,6 +175,11 @@ func resolveVolumeSource(ctx context.Context, plugin volume.VolumePluginControlP
 	}
 
 	snapshotID := source.GetStorageSnapshotId()
+	// An entry without a handle is a volume whose snapshot creation did not
+	// finish; provisioning it empty would be silent data loss.
+	if snapshotID == "" {
+		return "", status.Errorf(codes.FailedPrecondition, "volume %q has no snapshot handle: its snapshot creation did not finish", volName)
+	}
 	observed, found, err := plugin.GetSnapshot(ctx, snapshotID)
 	if err != nil {
 		return "", status.Errorf(codes.Internal, "failed to read snapshot %q for volume %q: %v", snapshotID, volName, err)

@@ -1,5 +1,10 @@
 [
   {
+    "rule": "create-request-shape",
+    "subject": "ateapi.Control.CreateTag",
+    "message": "field \"include_external_volumes\" is not a message, want ateapi.Tag or ateapi.CreateOptions - non-resource control fields belong in ateapi.CreateOptions"
+  },
+  {
     "rule": "delete-request-shape",
     "subject": "ateapi.Control.DeleteActor",
     "message": "field \"any_state\" is not a message, want ateapi.ObjectRef or ateapi.DeleteOptions - non-resource control fields belong in ateapi.DeleteOptions"

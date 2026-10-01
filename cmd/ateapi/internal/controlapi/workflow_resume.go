@@ -176,21 +176,22 @@ func validateTagVolumeCompatibility(tag *ateapipb.Tag, template *ateapipb.ActorT
 		return nil
 	}
 
-	snapshot := tag.GetStatus().GetSnapshot()
-	if snapshot.GetExternalVolumeScope() != ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_ALL {
-		return status.Errorf(codes.FailedPrecondition,
-			"ActorTemplate declares external volumes but Tag %s captured none; create the tag with an external volume scope of ALL",
-			resources.TagRefFromTag(tag))
-	}
-	captured := make(map[string]bool, len(snapshot.GetVolumeSnapshots()))
-	for _, snap := range snapshot.GetVolumeSnapshots() {
-		captured[snap.GetVolumeName()] = true
+	tagRef := resources.TagRefFromTag(tag)
+	captured := make(map[string]*ateapipb.ExternalVolumeSnapshot, len(tag.GetStatus().GetSnapshot().GetVolumeSnapshots()))
+	for _, snap := range tag.GetStatus().GetSnapshot().GetVolumeSnapshots() {
+		captured[snap.GetVolumeName()] = snap
 	}
 	for _, name := range externalVolumes {
-		if !captured[name] {
+		snap, ok := captured[name]
+		if !ok {
 			return status.Errorf(codes.FailedPrecondition,
-				"Tag %s has no snapshot for external volume %q declared by the ActorTemplate",
-				resources.TagRefFromTag(tag), name)
+				"Tag %s has no snapshot for external volume %q declared by the ActorTemplate; create the tag with external volumes included",
+				tagRef, name)
+		}
+		if snap.GetStorageSnapshotId() == "" {
+			return status.Errorf(codes.FailedPrecondition,
+				"Tag %s has no snapshot handle for external volume %q: its snapshot creation did not finish",
+				tagRef, name)
 		}
 	}
 	return nil

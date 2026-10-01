@@ -116,17 +116,13 @@ var createTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		volumeScope := ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE
-		if createTagWithVolumesFlag {
-			volumeScope = ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_ALL
-		}
 		tag, err := client.CreateTag(ctx, &ateapipb.CreateTagRequest{
 			Tag: &ateapipb.Tag{
 				Metadata:    &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
 				Scope:       scope,
 				SourceActor: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			},
-			ExternalVolumeScope: volumeScope,
+			IncludeExternalVolumes: createTagWithVolumesFlag,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create tag: %w", err)

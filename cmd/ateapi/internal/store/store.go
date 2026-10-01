@@ -151,7 +151,9 @@ type Interface interface {
 	// exhausted, ErrImmutableField if the mutated tag changed a field that is
 	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	//
-	// status.snapshot is immutable once set
+	// status.snapshot is immutable once snapshot_uri is set. Before that, while
+	// the tag is pending, the volume_snapshots list is fixed once recorded and
+	// each entry's storage_snapshot_id may be filled in once.
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing, or

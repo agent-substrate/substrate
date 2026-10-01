@@ -192,14 +192,43 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
 		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
-	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); stored != nil && !proto.Equal(stored, mutated) {
-		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
+	if err := validateUpdateTagSnapshotMutation(storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot()); err != nil {
+		return err
 	}
 	if stored, mutated := storedTag.GetStatus().GetStorageLocation(), mutatedTag.GetStatus().GetStorageLocation(); stored != mutated {
 		return fmt.Errorf("status.storage_location is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
 	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
 		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
+
+// validateUpdateTagSnapshotMutation enforces that status.snapshot is immutable
+// once finalized (snapshot_uri is set), while allowing in-progress tag creation
+// to populate each pre-registered volume snapshot's handle at most once.
+func validateUpdateTagSnapshotMutation(stored, mutated *ateapipb.ExternalSnapshot) error {
+	if stored == nil || proto.Equal(stored, mutated) {
+		return nil
+	}
+	if mutated == nil || stored.GetSnapshotUri() != "" {
+		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
+	}
+	if stored.GetContentScope() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED && stored.GetContentScope() != mutated.GetContentScope() {
+		return fmt.Errorf("status.snapshot.content_scope is immutable once set: mutation changed it from %v to %v", stored.GetContentScope(), mutated.GetContentScope())
+	}
+	storedVols, mutatedVols := stored.GetVolumeSnapshots(), mutated.GetVolumeSnapshots()
+	if len(storedVols) != len(mutatedVols) {
+		return fmt.Errorf("status.snapshot.volume_snapshots length is immutable once set: mutation changed it from %d to %d", len(storedVols), len(mutatedVols))
+	}
+	for i := range storedVols {
+		sv, mv := storedVols[i], mutatedVols[i]
+		if sv.GetVolumeName() != mv.GetVolumeName() || sv.GetVolumeType() != mv.GetVolumeType() {
+			return fmt.Errorf("status.snapshot.volume_snapshots[%d] identity is immutable: mutation changed it from %s to %s", i, sv, mv)
+		}
+		if sv.GetStorageSnapshotId() != "" && !proto.Equal(sv, mv) {
+			return fmt.Errorf("status.snapshot.volume_snapshots[%d] is immutable once storage_snapshot_id is set: mutation changed it from %s to %s", i, sv, mv)
+		}
 	}
 	return nil
 }

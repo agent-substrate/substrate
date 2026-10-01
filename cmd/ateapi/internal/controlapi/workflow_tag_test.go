@@ -82,7 +82,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	actor, actorSnapshot := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 		t.Fatalf("repointing actor %s: %v", actorRef, err)
 	}
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 				})
 			}
 
-			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
 			if code := status.Code(err); code != tt.wantCode {
 				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
@@ -213,12 +213,55 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 	}
 }
 
-// TestTagActorSnapshot_RecreateAfterCopyFailure verifies what a create that
-// dies mid-copy leaves behind, and how a client gets past it. The row survives
-// as a pending tag naming the prefix the copy was writing into, so the objects
-// it stranded are reachable; the name it holds is taken until the tag is
-// deleted, and only then does a create under that name run again.
-func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
+// TestTagActorSnapshot_CopyFailureRollsBack verifies a create that fails
+// mid-copy cleans up after itself: the partial copy is collected, the row is
+// dropped, and the name is free for an immediate retry.
+func TestTagActorSnapshot_CopyFailureRollsBack(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+
+	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	actorRef := resources.ActorRefFromActor(actor)
+	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
+	before := objects.Objects()
+
+	// The copy dies halfway through: the first object lands, the second does not.
+	objects.OnCopy = func(_, srcObject, _, _ string) error {
+		if strings.HasSuffix(srcObject, "memory.zst") {
+			return errObjectStore
+		}
+		return nil
+	}
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false); !errors.Is(err, errObjectStore) {
+		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	objects.OnCopy = nil
+
+	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after the failed create = %v, want ErrNotFound", err)
+	}
+	if diff := cmp.Diff(before, objects.Objects()); diff != "" {
+		t.Errorf("objects after the failed create mismatch, want the partial copy collected (-want +got):\n%s", diff)
+	}
+
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
+	if err != nil {
+		t.Fatalf("TagActorSnapshot retry: %v", err)
+	}
+	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, tag.GetStatus().GetSnapshot().GetSnapshotUri()))); diff != "" {
+		t.Errorf("the retried tag's external snapshot mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestTagActorSnapshot_RecreateAfterFailedRollback verifies what a create
+// leaves behind when it dies mid-copy and its rollback fails too, and how a
+// client gets past it. The row survives as a pending tag naming the prefix the
+// copy was writing into, so the objects it stranded are reachable; the name it
+// holds is taken until the tag is deleted, and only then does a create under
+// that name run again.
+func TestTagActorSnapshot_RecreateAfterFailedRollback(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
@@ -228,17 +271,20 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	actorRef := resources.ActorRefFromActor(actor)
 	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
 
-	// The copy dies halfway through: the first object lands, the second does not.
+	// The copy dies halfway through: the first object lands, the second does
+	// not. Object storage then refuses the deletes the rollback issues.
 	objects.OnCopy = func(_, srcObject, _, _ string) error {
 		if strings.HasSuffix(srcObject, "memory.zst") {
 			return errObjectStore
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE); !errors.Is(err, errObjectStore) {
+	objects.OnDelete = func(_, _ string) error { return errObjectStore }
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	objects.OnCopy = nil
+	objects.OnDelete = nil
 
 	pending, err := persistence.GetTag(ctx, tagRef)
 	if err != nil {
@@ -255,7 +301,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 
 	// Creating under the same name again is refused, even for the actor the
 	// pending row was reserved for, and leaves that row exactly as it was.
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot over the pending tag = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -279,7 +325,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// The create now runs from scratch, into a prefix of its own.
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
@@ -295,7 +341,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// A create over the finished tag is refused the same way.
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot over the finished tag = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -331,7 +377,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 		return nil
 	}
 
-	tag, createErr := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	tag, createErr := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), false)
 	if pendingURI == "" {
 		t.Fatalf("the create never reserved a row to race with (TagActorSnapshot = %v)", createErr)
 	}
@@ -371,16 +417,19 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	second, secondSnapshot := seedTagSource(t, ctx, persistence, objects, template, "actor-2", "other.json")
 	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
 
-	// The first actor reserves the name, then dies in the copy.
+	// The first actor reserves the name, then dies in the copy, and its
+	// rollback cannot collect the partial copy, so the tag is left pending.
 	objects.OnCopy = func(_, srcObject, _, _ string) error {
 		if strings.HasSuffix(srcObject, "memory.zst") {
 			return errObjectStore
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE); !errors.Is(err, errObjectStore) {
-		t.Fatalf("TagActorSnapshot(actor-1, ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE) = %v, want an error wrapping %v", err, errObjectStore)
+	objects.OnDelete = func(_, _ string) error { return errObjectStore }
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1"), false); !errors.Is(err, errObjectStore) {
+		t.Fatalf("TagActorSnapshot(actor-1, false) = %v, want an error wrapping %v", err, errObjectStore)
 	}
+	objects.OnDelete = nil
 	pending, err := persistence.GetTag(ctx, tagRef)
 	if err != nil {
 		t.Fatalf("GetTag: %v", err)
@@ -390,9 +439,9 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	// The second actor asks for the same name, with object storage healthy: it
 	// must not inherit the first actor's prefix.
 	objects.OnCopy = nil
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"), false)
 	if code := status.Code(err); code != codes.AlreadyExists {
-		t.Fatalf("TagActorSnapshot(actor-2, ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE) = %v (code %v), want code AlreadyExists", err, code)
+		t.Fatalf("TagActorSnapshot(actor-2, false) = %v (code %v), want code AlreadyExists", err, code)
 	}
 	if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, strandedURI)); diff != "" {
 		t.Errorf("the rejected create wrote into the pending tag's prefix (-want +got):\n%s", diff)
@@ -419,7 +468,7 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), false)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -525,7 +574,7 @@ func TestDeleteTag_Preconditions(t *testing.T) {
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), false)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}

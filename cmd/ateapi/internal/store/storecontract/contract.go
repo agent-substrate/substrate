@@ -1373,6 +1373,92 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}
 	})
 
+	t.Run("Tag_PendingVolumeSnapshots", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		actor := seedSuspendedActor(t, s, "team-a", "actor-1")
+		tagRef := resources.TagRef{Atespace: "team-a", Name: "production"}
+		pending, err := s.CreateTag(ctx, newTestInProgressTag("production", actor))
+		if err != nil {
+			t.Fatalf("CreateTag failed: %v", err)
+		}
+		update := func(from *ateapipb.Tag, mutate func(*ateapipb.Tag)) (*ateapipb.Tag, error) {
+			return s.UpdateTag(ctx, tagRef, store.PreconditionFrom(from), func(toUpdate *ateapipb.Tag) error {
+				mutate(toUpdate)
+				return nil
+			})
+		}
+
+		// Recording the volumes to capture, each without a handle yet.
+		recorded, err := update(pending, func(toUpdate *ateapipb.Tag) {
+			toUpdate.Status.Snapshot = &ateapipb.ExternalSnapshot{
+				VolumeSnapshots: []*ateapipb.ExternalVolumeSnapshot{
+					{VolumeName: "data", VolumeType: "substrate.io/mock"},
+					{VolumeName: "cache", VolumeType: "substrate.io/mock"},
+				},
+			}
+		})
+		if err != nil {
+			t.Fatalf("recording volume snapshots failed: %v", err)
+		}
+
+		rejected := []struct {
+			name   string
+			mutate func(*ateapipb.Tag)
+		}{
+			{
+				name: "adding a volume",
+				mutate: func(toUpdate *ateapipb.Tag) {
+					toUpdate.Status.Snapshot.VolumeSnapshots = append(toUpdate.Status.Snapshot.VolumeSnapshots, &ateapipb.ExternalVolumeSnapshot{VolumeName: "extra"})
+				},
+			},
+			{
+				name:   "renaming a volume",
+				mutate: func(toUpdate *ateapipb.Tag) { toUpdate.Status.Snapshot.VolumeSnapshots[0].VolumeName = "other" },
+			},
+			{
+				name:   "clearing the snapshot",
+				mutate: func(toUpdate *ateapipb.Tag) { toUpdate.Status.Snapshot = nil },
+			},
+		}
+		for _, tt := range rejected {
+			t.Run("pending "+tt.name, func(t *testing.T) {
+				if _, err := update(recorded, tt.mutate); !errors.Is(err, store.ErrImmutableField) {
+					t.Errorf("UpdateTag error = %v, want one matching store.ErrImmutableField", err)
+				}
+			})
+		}
+
+		// Filling in a handle is allowed once.
+		withHandle, err := update(recorded, func(toUpdate *ateapipb.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].StorageSnapshotId = "snap-data"
+		})
+		if err != nil {
+			t.Fatalf("recording a volume snapshot handle failed: %v", err)
+		}
+		if _, err := update(withHandle, func(toUpdate *ateapipb.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].StorageSnapshotId = "snap-other"
+		}); !errors.Is(err, store.ErrImmutableField) {
+			t.Errorf("replacing a recorded handle = %v, want one matching store.ErrImmutableField", err)
+		}
+
+		// Finalizing keeps the volume snapshots, and seals status.snapshot.
+		ready, err := update(withHandle, func(toUpdate *ateapipb.Tag) {
+			toUpdate.Status.Snapshot.SnapshotUri = testTagSnapshotURI(toUpdate.GetStatus().GetStorageLocation(), "team-a", toUpdate.GetMetadata().GetUid())
+		})
+		if err != nil {
+			t.Fatalf("finalizing tag failed: %v", err)
+		}
+		if got := len(ready.GetStatus().GetSnapshot().GetVolumeSnapshots()); got != 2 {
+			t.Errorf("finalized tag volume snapshots = %d, want 2", got)
+		}
+		if _, err := update(ready, func(toUpdate *ateapipb.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[1].StorageSnapshotId = "snap-cache"
+		}); !errors.Is(err, store.ErrImmutableField) {
+			t.Errorf("filling in a handle after finalize = %v, want one matching store.ErrImmutableField", err)
+		}
+	})
+
 	t.Run("CreateTag_ReusedTagName", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

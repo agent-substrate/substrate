@@ -162,44 +162,19 @@ message ExternalSnapshot {
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 2;
 
-  // external_volume_scope records which of the source's external volumes this
-  // snapshot captured. Recorded before the first volume snapshot is taken, so
-  // that readers can tell "no volumes were asked for" from "volumes were asked
-  // for and the capture did not finish". A reader that wants volume data must
-  // check this rather than the emptiness of volume_snapshots below.
-  //
-  // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the ExternalVolumeSnapshotScope enum
-  ExternalVolumeSnapshotScope external_volume_scope = 3;
-
-  // volume_snapshots holds one entry per external volume captured, and is set
-  // only when external_volume_scope is ALL. Actors seeded from a Tag provision
-  // their own volumes from these, so the entries are handles to copy from, not
-  // volumes to attach. Each template volume appears at most once.
+  // volume_snapshots holds one entry per external volume to be captured.
+  // Entries are added before the snapshots are taken and their
+  // storage_snapshot_id is populated as each snapshot completes, so any entry
+  // with an empty storage_snapshot_id means snapshot creation did not finish.
+  // Actors seeded from a Tag provision their own volumes from these, so the
+  // entries are handles to copy from, not volumes to attach. Each template
+  // volume appears at most once.
   //
   // +k8s:optional
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
   // +k8s:listMapKey=volume_name
-  repeated ExternalVolumeSnapshot volume_snapshots = 4;
-}
-
-// ExternalVolumeSnapshotScope is which of a source's external volumes an
-// ExternalSnapshot captured. External volumes are persistent and outlive any
-// single actor sprint, so they are captured only when a snapshot is persisted
-// past the latest state: at tag creation, opted into per request.
-enum ExternalVolumeSnapshotScope {
-  EXTERNAL_VOLUME_SNAPSHOT_SCOPE_UNSPECIFIED = 0;
-  // No external volume was captured. An Actor seeded from this snapshot gets
-  // empty volumes, so a template that declares any external volume cannot be
-  // seeded from it.
-  EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE = 1;
-  // Every external volume the source declared was captured. Partial capture is
-  // not representable: tag creation is all-or-nothing, so a snapshot recording
-  // ALL has an entry for each of the source's external volumes.
-  EXTERNAL_VOLUME_SNAPSHOT_SCOPE_ALL = 2;
-  // Keep this in sync with the maximums on fields of this type.
+  repeated ExternalVolumeSnapshot volume_snapshots = 3;
 }
 
 // ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
@@ -220,10 +195,13 @@ message ExternalVolumeSnapshot {
   string volume_name = 1;
 
   // storage_snapshot_id is the snapshot handle returned by the storage system.
-  // Its format is the storage system's own, so it is only bounded and checked
-  // for control characters, like ExternalVolume.storage_volume_id.
+  // Initially empty while the snapshot is being created, and set once when the
+  // storage system returns the handle; an empty value after tag creation means
+  // snapshot creation failed. Its format is the storage system's own, so it is
+  // only bounded and checked for control characters, like
+  // ExternalVolume.storage_volume_id.
   //
-  // +k8s:required
+  // +k8s:optional
   // +k8s:maxLength=256
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
@@ -784,20 +762,6 @@ message TagStatus {
   // +k8s:required
   // +k8s:maxLength=1024
   string storage_location = 3;
-
-  // in_progress_volume_snapshots holds volume snapshots taken for this tag but
-  // not yet committed to snapshot above. Each handle is recorded here as the
-  // storage system returns it, so that a CreateTag that fails partway through
-  // -- or whose caller disappears -- still leaves every snapshot it created
-  // reachable for deletion. Cleared when the tag is finalized, at which point
-  // snapshot.volume_snapshots owns them. Each template volume appears at most
-  // once.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volumes bound
-  // +k8s:listType=map
-  // +k8s:listMapKey=volume_name
-  repeated ExternalVolumeSnapshot in_progress_volume_snapshots = 5;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
@@ -1776,8 +1740,13 @@ message ListTagsResponse {
 //
 // The tag is given its own copy of that snapshot, so it survives the Actor
 // being suspended again or deleted.
-// To retry a create that failed or timed out, delete the tag first,
-// which collects whatever that attempt stranded, and create it again.
+//
+// Creation is all-or-nothing: a call that fails, including one that is
+// canceled or times out, releases whatever it copied or snapshotted and
+// removes the tag, so it can be retried as is. Only a server crash mid-call or
+// a failed cleanup leaves the tag behind, unfinished; a retry then returns
+// ALREADY_EXISTS, and deleting the tag collects whatever that attempt stranded
+// and frees the name.
 //
 // +k8s:customValidation # metadata.atespace must match source_actor.atespace
 message CreateTagRequest {
@@ -1788,18 +1757,15 @@ message CreateTagRequest {
   // +k8s:required
   Tag tag = 1;
 
-  // external_volume_scope opts the tag into capturing the source Actor's
-  // external volumes. Unset reads as NONE, so volumes are captured only when
-  // asked for: snapshotting them costs storage and time that a tag of the core
-  // session alone does not.
+  // include_external_volumes opts the tag into capturing the source Actor's
+  // external volumes. Volumes are captured only when asked for: snapshotting
+  // them costs storage and time that a tag of the core session alone does not.
   //
-  // Requesting ALL requires every external volume's driver to support
+  // Enabling this requires every external volume's driver to support
   // snapshots, and fails the call if any does not.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the ExternalVolumeSnapshotScope enum
-  ExternalVolumeSnapshotScope external_volume_scope = 2;
+  bool include_external_volumes = 2;
 }
 
 // Request to update mutable fields on an existing Tag.
