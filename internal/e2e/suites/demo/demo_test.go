@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/hardware"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -424,6 +425,7 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 }
 
 func TestExternalVolumeLifecycle(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
 
 	tests := []struct {
@@ -451,6 +453,7 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 }
 
 func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -514,6 +517,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 }
 
 func TestExternalVolume_NodeMigration(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
 	if e2e.IsMicroVM() {
 		t.Skip("Skipping TestExternalVolume_NodeMigration for microVM environment")
@@ -673,7 +677,8 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	t.Logf("Successfully created Actor: %s", createResp.GetMetadata().GetName())
 	defer func() {
 		clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+			Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+			AnyState: true,
 		})
 	}()
 

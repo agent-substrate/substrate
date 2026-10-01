@@ -90,7 +90,7 @@ usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
-  echo "  --preview                              Enable preview features for this deployment"
+  echo "  --preview GATES                        Enable preview gates (comma-separated, '*' for all, '' for none)"
   echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
   echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
