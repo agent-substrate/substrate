@@ -242,6 +242,12 @@ blind_spots:
   - area: podcertcontroller
     code: cmd/podcertcontroller
     brief: This component has no metrics.
+  - area: ate-idp-server
+    code: cmd/ate-idp-server
+    brief: >
+      This component has no metrics. A relying party that cannot fetch the
+      discovery document or key set sees only failed token verification; check
+      the server's readiness and its "Ignoring invalid key set" logs.
   - area: golden snapshot pipeline
     code: cmd/ateapi/internal/controlapi/template_reconciler.go
     brief: The template reconciler in ate-api has no instruments. Thus nothing measures a build of a golden image.
