@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"regexp"
 	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
@@ -112,9 +111,6 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 			}
 		}
 	}
-	log.Infof("POSTGRES_READ_WRITE_CONNECTION_STRING: %s", redactDSN(readWriteDSN))
-	log.Infof("POSTGRES_OWNER_CONNECTION_STRING: %s", redactDSN(ownerDSN))
-
 	configVars := cloudSQLEnvVars(cloudsql)
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
@@ -181,19 +177,6 @@ func (e *Env) applyPostgresServerCA(ctx context.Context) error {
 	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresServerCA, map[string]string{
 		"server-ca.pem": string(pem),
 	})
-}
-
-var (
-	// dsnURIPassword matches the password in a URI userinfo section.
-	dsnURIPassword = regexp.MustCompile(`(://[^:/@]*):[^@]*@`)
-	// dsnKeywordPassword matches a keyword/value or query parameter password.
-	dsnKeywordPassword = regexp.MustCompile(`(password=)[^ &]*`)
-)
-
-// redactDSN masks any password before the connection string is logged.
-func redactDSN(dsn string) string {
-	redacted := dsnURIPassword.ReplaceAllString(dsn, "$1:***@")
-	return dsnKeywordPassword.ReplaceAllString(redacted, "$1***")
 }
 
 // EnsureEnvVarsSafeStandalone guards `ate-setup create api-server-env-vars` on
