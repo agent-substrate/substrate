@@ -547,10 +547,8 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorJWT permission/relation with this actor.  This could be an
-	// atelet (via the relationship of the atelet running the actor), or the
-	// egress gateway (via a cluster-level grant?)
+	// With --experimental-enable-authz, the authz interceptor has already
+	// checked can_mint_actor_jwt.
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.

@@ -150,6 +150,51 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 	}
 }
 
+func TestUnaryServerInterceptor_MintActorJWT(t *testing.T) {
+	ctx := context.Background()
+	pool := startPostgres(t)
+	fgaServer, err := NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	const gateway = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil, WithSystemRole(RoleEgressGateway, gateway))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	writeTestTuple(t, ctx, pool, policyManager, "alice@example.com", "owner", GlobalRootObject)
+	interceptor := UnaryServerInterceptor(authorizer, true)
+
+	tests := []struct {
+		name   string
+		caller principal.PrincipalInfo
+		want   codes.Code
+	}{
+		{name: "egress gateway", caller: principal.PrincipalInfo{ID: gateway, Kind: principal.KindMTLS}, want: codes.OK},
+		{name: "bearer token naming the gateway", caller: principal.PrincipalInfo{ID: gateway, Kind: principal.KindJWT}, want: codes.PermissionDenied},
+		{name: "other workload", caller: principal.PrincipalInfo{ID: "spiffe://cluster.local/ns/ate-system/sa/atelet", Kind: principal.KindMTLS}, want: codes.PermissionDenied},
+		{name: "global owner", caller: principal.PrincipalInfo{ID: "alice@example.com", Kind: principal.KindJWT}, want: codes.PermissionDenied},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handlerCalled := false
+			_, err := interceptor(principal.InjectContext(ctx, tc.caller), &ateapipb.MintActorJWTRequest{},
+				&grpc.UnaryServerInfo{FullMethod: ateapipb.Control_MintActorJWT_FullMethodName},
+				func(ctx context.Context, req any) (any, error) {
+					handlerCalled = true
+					return "ok", nil
+				})
+			if apierror.Code(err) != tc.want {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.want, err)
+			}
+			if handlerCalled != (tc.want == codes.OK) {
+				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, tc.want == codes.OK)
+			}
+		})
+	}
+}
+
 func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesValidation(t *testing.T) {
 	authorizer := setupTestAuthorizer(t)
 	interceptor := UnaryServerInterceptor(authorizer, true)
@@ -221,6 +266,13 @@ func TestUnaryServerInterceptor_EnforcementDisabled(t *testing.T) {
 			ctx:        bobCtx,
 			fullMethod: ateapipb.Control_CreateAtespace_FullMethodName,
 			req:        &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team1"}}},
+			wantCode:   codes.OK,
+		},
+		{
+			name:       "MintActorJWT skips the check",
+			ctx:        bobCtx,
+			fullMethod: ateapipb.Control_MintActorJWT_FullMethodName,
+			req:        &ateapipb.MintActorJWTRequest{},
 			wantCode:   codes.OK,
 		},
 		{

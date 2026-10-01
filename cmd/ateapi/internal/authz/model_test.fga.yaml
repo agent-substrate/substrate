@@ -23,6 +23,9 @@ tuples:
   - user: user:frank
     relation: viewer
     object: global:root
+  - user: user:sa-egress
+    relation: egress_gateway
+    object: global:root
 
   # Atespace Scope (space-1 linked to global:root)
   - user: global:root
@@ -268,3 +271,14 @@ tests:
         object: actor:runner-1
         assertions:
           can_mint_ateom_actor_credential: false
+
+  - name: 6. Actor JWT Minting (can_mint_actor_jwt)
+    check:
+      - user: user:sa-egress # Egress gateway
+        object: global:root
+        assertions:
+          can_mint_actor_jwt: true
+      - user: user:carol # Global owner
+        object: global:root
+        assertions:
+          can_mint_actor_jwt: false

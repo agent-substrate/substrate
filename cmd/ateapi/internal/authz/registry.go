@@ -80,4 +80,5 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: governance(atespaceRule(RelationCanCreateAccessPolicy, (*ateapipb.CreateAtespaceAccessPolicyRequest).GetAtespace)),
 	ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName: governance(atespaceRule(RelationCanUpdateAccessPolicy, (*ateapipb.UpdateAtespaceAccessPolicyRequest).GetAtespace)),
 	ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName: governance(atespaceRule(RelationCanDeleteAccessPolicy, (*ateapipb.DeleteAtespaceAccessPolicyRequest).GetAtespace)),
+	ateapipb.Control_MintActorJWT_FullMethodName:               rule(globalRule[*ateapipb.MintActorJWTRequest](RelationCanMintActorJWT)),
 }
