@@ -147,18 +147,8 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			s.enqueuePod(newPod)
 		},
 		DeleteFunc: func(obj interface{}) {
-			var pod *corev1.Pod
-			switch t := obj.(type) {
-			case *corev1.Pod:
-				pod = t
-			case cache.DeletedFinalStateUnknown:
-				var ok bool
-				pod, ok = t.Obj.(*corev1.Pod)
-				if !ok {
-					slog.ErrorContext(ctx, "Failed to cast DeletedFinalStateUnknown object to Pod")
-					return
-				}
-			default:
+			pod, ok := deletedObject[*corev1.Pod](obj)
+			if !ok {
 				slog.ErrorContext(ctx, "Unknown object type in delete handler", slog.Any("obj", obj))
 				return
 			}
@@ -168,11 +158,16 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 	s.workerPoolInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    s.enqueueWorkerPool,
 		UpdateFunc: func(_, obj interface{}) { s.enqueueWorkerPool(obj) },
+		// Orphaned pods outlive their pool; reconcile them now, not at the
+		// next resync.
+		DeleteFunc: s.enqueueWorkerPool,
 	})
 
 	go func() {
 		defer s.queue.ShutDown()
-		if !cache.WaitForCacheSync(ctx.Done(), s.workerInformer.HasSynced) {
+		// The pool cache must be warm too: reconciling a pod against an empty
+		// one would read every pool as missing and deregister every Worker.
+		if !cache.WaitForCacheSync(ctx.Done(), s.workerInformer.HasSynced, s.workerPoolInformer.HasSynced) {
 			slog.ErrorContext(ctx, "Syncer: failed to sync informer cache")
 			return
 		}
@@ -192,9 +187,20 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 	}()
 }
 
+// deletedObject returns the T that a delete event carries. An informer that
+// missed the delete itself delivers a cache.DeletedFinalStateUnknown holding the
+// last state it knew of, so that is unwrapped first.
+func deletedObject[T any](obj interface{}) (T, bool) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	t, ok := obj.(T)
+	return t, ok
+}
+
 // enqueueWorkerPool schedules every current pod in pool.
 func (s *WorkerPoolSyncer) enqueueWorkerPool(obj interface{}) {
-	pool, ok := obj.(*atev1alpha1.WorkerPool)
+	pool, ok := deletedObject[*atev1alpha1.WorkerPool](obj)
 	if !ok {
 		slog.Error("Syncer: unexpected WorkerPool informer object", slog.Any("obj", obj))
 		return
@@ -337,7 +343,12 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
 	}
 	if !exists {
-		return fmt.Errorf("getting WorkerPool %s/%s: not found", key.namespace, poolName)
+		// A pod without a pool gets no Worker, as a deleted pod gets none. A
+		// pool that appears later enqueues its pods, so nothing is lost by not
+		// retrying here.
+		slog.InfoContext(ctx, "Syncer: deregistering worker (pool not found)",
+			append(key.logAttrs(), slog.String("workerPool", key.namespace+"/"+poolName))...)
+		return s.reconcileDeadWorker(ctx, key)
 	}
 	pool, ok := poolObject.(*atev1alpha1.WorkerPool)
 	if !ok {
