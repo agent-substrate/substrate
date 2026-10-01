@@ -18,6 +18,7 @@ import os
 import re
 import signal
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -26,18 +27,32 @@ from unittest import mock
 import gcs_prewarm
 import orchestrator
 
-TOOL_MAIN = Path(__file__).resolve().parents[2] / "tools" / "gcs-prewarm" / "main.go"
+REPO = Path(__file__).resolve().parents[2]
+TOOL_MAIN = REPO / "tools" / "gcs-prewarm" / "main.go"
 TESTS_YAML = Path(__file__).resolve().parent / "tests.yaml"
+REQUIRED = {"actorTemplate": "web", "atespace": "load"}
 
 
-class ValidateTest(unittest.TestCase):
-    def test_accepts_empty_and_full(self):
-        gcs_prewarm.validate("t", {})
+def write_template(dir_: str, name: str, location: str | None) -> None:
+    snapshot = f"snapshotConfig:\n  storageLocation: {location}\n" if location else ""
+    Path(dir_, f"{name}-template.yaml.tmpl").write_text(
+        f"metadata:\n  name: {name}\n{snapshot}"
+    )
+
+
+class TemplatesTestCase(unittest.TestCase):
+    def setUp(self):
+        self.dir = self.enterContext(tempfile.TemporaryDirectory())
+        write_template(self.dir, "web", "gs://${BUCKET_NAME}/workloads/web/")
+
+
+class ValidateTest(TemplatesTestCase):
+    def test_accepts_required_only_and_full(self):
+        gcs_prewarm.validate("t", REQUIRED, self.dir)
         gcs_prewarm.validate(
             "t",
             {
-                "bucket": "b",
-                "prefix": "p",
+                **REQUIRED,
                 "startRate": 50,
                 "targetRate": 800.5,
                 "doubleEvery": "5m",
@@ -46,50 +61,73 @@ class ValidateTest(unittest.TestCase):
                 "workers": 64,
                 "cleanup": False,
             },
+            self.dir,
         )
 
     def test_rejects(self):
         for cfg in (
             None,
-            True,
-            ["startRate"],
-            {"startrate": 50},
-            {"bucket": ""},
-            {"startRate": 0},
-            {"startRate": True},
-            {"targetRate": "800"},
-            {"doubleEvery": "0s"},
-            {"doubleEvery": "5 minutes"},
-            {"hold": "1h30m"},
-            {"workers": 0},
-            {"objectBytes": 1.5},
-            {"cleanup": "false"},
+            {},
+            {"actorTemplate": "web"},
+            {"atespace": "load"},
+            {**REQUIRED, "atespace": ""},
+            {**REQUIRED, "atespace": "a/b"},
+            {**REQUIRED, "actorTemplate": "missing"},
+            {**REQUIRED, "bucket": "b"},
+            {**REQUIRED, "startrate": 50},
+            {**REQUIRED, "startRate": 0},
+            {**REQUIRED, "startRate": True},
+            {**REQUIRED, "targetRate": "800"},
+            {**REQUIRED, "doubleEvery": "0s"},
+            {**REQUIRED, "doubleEvery": "5 minutes"},
+            {**REQUIRED, "hold": "1h30m"},
+            {**REQUIRED, "workers": 0},
+            {**REQUIRED, "objectBytes": 1.5},
+            {**REQUIRED, "cleanup": "false"},
         ):
             with self.subTest(cfg=cfg), self.assertRaises(ValueError):
-                gcs_prewarm.validate("t", cfg)
+                gcs_prewarm.validate("t", cfg, self.dir)
+
+    def test_rejects_template_without_gcs_location(self):
+        write_template(self.dir, "local", "file:///tmp/snapshots")
+        write_template(self.dir, "none", None)
+        for template in ("local", "none"):
+            with self.subTest(template=template), self.assertRaisesRegex(
+                ValueError, "gs://"
+            ):
+                gcs_prewarm.validate("t", {**REQUIRED, "actorTemplate": template}, self.dir)
 
     def test_orchestrator_validates_block(self):
+        # The orchestrator validates from the repo root, where the real
+        # benchmark templates are.
+        cwd = os.getcwd()
+        os.chdir(REPO)
+        self.addCleanup(os.chdir, cwd)
         test = {"name": "t", "type": "locust", "targetCluster": "dev",
                 "file": "f", "duration": "1m", "users": 1}
-        orchestrator.validate_and_normalize_tests([{**test, "gcsPrewarm": {}}])
+        cfg = {"actorTemplate": "sleep", "atespace": "benchmark-workloads"}
+        orchestrator.validate_and_normalize_tests([{**test, "gcsPrewarm": cfg}])
         with self.assertRaisesRegex(ValueError, "gcsPrewarm.workers"):
             orchestrator.validate_and_normalize_tests(
-                [{**test, "gcsPrewarm": {"workers": -1}}]
+                [{**test, "gcsPrewarm": {**cfg, "workers": -1}}]
             )
 
     def test_checked_in_tests_yaml_is_valid(self):
+        cwd = os.getcwd()
+        os.chdir(REPO)
+        self.addCleanup(os.chdir, cwd)
         tests = orchestrator.yaml.safe_load(TESTS_YAML.read_text())["tests"]
         orchestrator.validate_and_normalize_tests(tests)
 
 
-class CommandTest(unittest.TestCase):
-    def test_defaults(self):
+class CommandTest(TemplatesTestCase):
+    def test_required_only(self):
         self.assertEqual(
-            gcs_prewarm.command({}, "snap-bucket"),
+            gcs_prewarm.command(REQUIRED, "snap-bucket", self.dir),
             [
                 "go", "-C", "tools/gcs-prewarm", "run", ".",
                 "--bucket=snap-bucket",
-                f"--prefix={gcs_prewarm.GLUTTON_SNAPSHOT_PREFIX}",
+                "--prefix=workloads/web/atespaces/load/actors",
             ],
         )
 
@@ -103,16 +141,14 @@ class CommandTest(unittest.TestCase):
                 "targetRate": 800,
                 "objectBytes": 1024,
                 "workers": 32,
-                "prefix": "custom/prefix",
-                "bucket": "explicit",
+                **REQUIRED,
             },
-            "ignored",
+            "snap-bucket",
+            self.dir,
         )
         self.assertEqual(
-            cmd[5:],
+            cmd[7:],
             [
-                "--bucket=explicit",
-                "--prefix=custom/prefix",
                 "--start-rate=50",
                 "--target-rate=800",
                 "--double-every=90s",
@@ -123,15 +159,49 @@ class CommandTest(unittest.TestCase):
             ],
         )
 
+    def test_location_shapes(self):
+        for location, bucket, prefix in (
+            ("gs://fixed-bucket/a/b", "fixed-bucket", "a/b/atespaces/load/actors"),
+            ("gs://fixed-bucket/", "fixed-bucket", "atespaces/load/actors"),
+            ("gs://fixed-bucket", "fixed-bucket", "atespaces/load/actors"),
+        ):
+            with self.subTest(location=location):
+                write_template(self.dir, "web", location)
+                # A literal bucket needs no BUCKET_NAME.
+                cmd = gcs_prewarm.command(REQUIRED, "", self.dir)
+                self.assertEqual(cmd[5:7], [f"--bucket={bucket}", f"--prefix={prefix}"])
+
     def test_no_bucket(self):
         with self.assertRaisesRegex(RuntimeError, "BUCKET_NAME"):
-            gcs_prewarm.command({}, "")
+            gcs_prewarm.command(REQUIRED, "", self.dir)
+
+    def test_real_templates(self):
+        # Every benchmark template deploy.sh can deploy resolves.
+        templates = sorted(
+            p.name.removesuffix("-template.yaml.tmpl")
+            for p in (REPO / gcs_prewarm.TEMPLATES_DIR).glob("*-template.yaml.tmpl")
+        )
+        self.assertIn("glutton", templates)
+        for template in templates:
+            with self.subTest(template=template):
+                cmd = gcs_prewarm.command(
+                    {"actorTemplate": template, "atespace": "benchmark"},
+                    "snap-bucket",
+                    str(REPO / gcs_prewarm.TEMPLATES_DIR),
+                )
+                self.assertEqual(
+                    cmd[5:7],
+                    [
+                        "--bucket=snap-bucket",
+                        f"--prefix=benchmark-workloads/{template}/atespaces/benchmark/actors",
+                    ],
+                )
 
     def test_flags_exist_in_tool(self):
         # Guards against the tool renaming a flag out from under tests.yaml.
         tool_flags = set(re.findall(r'flag\.\w+\("([\w-]+)"', TOOL_MAIN.read_text()))
-        for field, (flag, _, _) in gcs_prewarm.FIELDS.items():
-            with self.subTest(field=field):
+        for flag in ["--bucket", "--prefix"] + [f for f, _, _ in gcs_prewarm.FIELDS.values()]:
+            with self.subTest(flag=flag):
                 self.assertIn(flag.removeprefix("--"), tool_flags)
 
 
@@ -170,7 +240,10 @@ class ProcessTest(unittest.TestCase):
     @mock.patch.dict("os.environ", {"BUCKET_NAME": "env-bucket"})
     @mock.patch("subprocess.Popen")
     def test_start_uses_target_cluster_bucket(self, popen):
-        gcs_prewarm.start({"hold": "5m"})
+        cwd = os.getcwd()
+        os.chdir(REPO)
+        self.addCleanup(os.chdir, cwd)
+        gcs_prewarm.start({"actorTemplate": "glutton", "atespace": "benchmark", "hold": "5m"})
         cmd = popen.call_args.args[0]
         self.assertIn("--bucket=env-bucket", cmd)
         self.assertIn("--hold=300s", cmd)

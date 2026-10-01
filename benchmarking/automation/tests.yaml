@@ -52,29 +52,35 @@
 #                  bucket sheds write bursts with 429s for ~20 minutes per
 #                  doubling of load). A failed warm-up fails the test. It
 #                  adds roughly ramp + hold to the run: log2(targetRate /
-#                  startRate) * doubleEvery, plus hold. `gcsPrewarm: {}`
-#                  takes every default; the fields, all optional, are:
-#                    bucket       Default: BUCKET_NAME from the target
-#                                 cluster config.
-#                    prefix       Object prefix the real snapshots are
-#                                 written under. Default: the glutton
-#                                 template's
-#                                 benchmark-workloads/glutton/atespaces/benchmark/actors.
-#                    startRate    Initial writes/s (tool default 50).
-#                    targetRate   Writes/s to ramp to and hold (tool
-#                                 default 500).
-#                    doubleEvery  How often the rate doubles while ramping,
-#                                 e.g. "5m" (tool default 5m).
-#                    hold         How long to hold targetRate after the
-#                                 ramp (tool default 5m).
-#                    objectBytes  Size of each warm-up object (tool default
-#                                 4096); scaling follows request rate, not
-#                                 bytes.
-#                    workers      Max writes in flight (tool default 128).
-#                    cleanup      Delete the warm-up objects before the
-#                                 test starts (tool default true).
+#                  startRate) * doubleEvery, plus hold. Fields:
+#                    actorTemplate  Required. The benchmark ActorTemplate
+#                                   whose snapshots the test writes, i.e.
+#                                   benchmarking/workloads/manifests/<name>-template.yaml.tmpl.
+#                                   Its storageLocation (BUCKET_NAME rendered
+#                                   from the target cluster config) gives the
+#                                   bucket and base prefix.
+#                    atespace       Required. The atespace the test creates
+#                                   its actors in (boomer's --atespace for
+#                                   glutton, "benchmark-workloads" for the
+#                                   locust-only workloads). Snapshots go
+#                                   under <storageLocation>/atespaces/<atespace>/actors/.
+#                    startRate      Initial writes/s (tool default 50).
+#                    targetRate     Writes/s to ramp to and hold (tool
+#                                   default 500).
+#                    doubleEvery    How often the rate doubles while ramping,
+#                                   e.g. "5m" (tool default 5m).
+#                    hold           How long to hold targetRate after the
+#                                   ramp (tool default 5m).
+#                    objectBytes    Size of each warm-up object (tool default
+#                                   4096); scaling follows request rate, not
+#                                   bytes.
+#                    workers        Max writes in flight (tool default 128).
+#                    cleanup        Delete the warm-up objects before the
+#                                   test starts (tool default true).
 #                  For example, a 20m ramp from 50 to 800 writes/s:
 #                    gcsPrewarm:
+#                      actorTemplate: glutton
+#                      atespace: benchmark
 #                      startRate: 50
 #                      targetRate: 800
 #                      doubleEvery: 5m

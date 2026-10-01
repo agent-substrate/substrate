@@ -18,24 +18,24 @@ key ranges are scaled up before the test's real snapshot traffic starts. A
 bucket sheds write bursts with 429s until its autoscaler splits the loaded
 key ranges, which takes on the order of 20 minutes per doubling.
 
-Every field is optional; a field left out takes the tool's own default
-(see tools/gcs-prewarm/main.go), except bucket and prefix, defaulted below.
+actorTemplate and atespace are required: together they say where the test's
+actors write their snapshots. Every other field is optional and takes the
+tool's own default (see tools/gcs-prewarm/main.go) when left out.
 """
 
 import os
 import signal
 import subprocess
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from util import parse_duration_seconds
 
-# The object prefix the glutton suites' snapshots are written under: the
-# glutton ActorTemplate's storageLocation (benchmark-workloads/glutton, see
-# workloads/manifests/glutton-template.yaml.tmpl) plus the actor prefix the
-# atelet derives from it, atespaces/<atespace>/actors/<uid>. The random actor
-# uid comes right after this prefix, which is what lets the prewarm's random
-# keys land in the same key range as the real traffic.
-GLUTTON_SNAPSHOT_PREFIX = "benchmark-workloads/glutton/atespaces/benchmark/actors"
+# Where benchmarking/workloads/deploy.sh reads the benchmark ActorTemplates
+# from, one <name>-template.yaml.tmpl each, relative to the repo root.
+TEMPLATES_DIR = "benchmarking/workloads/manifests"
 
 
 def _is_number(v: Any) -> bool:
@@ -54,10 +54,15 @@ def _is_duration(v: Any) -> bool:
     return True
 
 
-# tests.yaml field -> (gcs-prewarm flag, validity check, what the check wants).
+def _is_name(v: Any) -> bool:
+    return isinstance(v, str) and v != "" and "/" not in v
+
+
+REQUIRED = ("actorTemplate", "atespace")
+
+# The optional tests.yaml fields, which map one-to-one onto gcs-prewarm
+# flags: field -> (flag, validity check, what the check wants).
 FIELDS = {
-    "bucket": ("--bucket", lambda v: isinstance(v, str) and v, "a non-empty string"),
-    "prefix": ("--prefix", lambda v: isinstance(v, str) and v, "a non-empty string"),
     "startRate": ("--start-rate", lambda v: _is_number(v) and v > 0, "a positive number"),
     "targetRate": ("--target-rate", lambda v: _is_number(v) and v > 0, "a positive number"),
     "doubleEvery": (
@@ -74,39 +79,80 @@ FIELDS = {
 DURATION_FIELDS = ("doubleEvery", "hold")
 
 
-def validate(name: str, cfg: Any) -> None:
-    """Raise ValueError if test `name`'s gcsPrewarm block is malformed."""
-    if not isinstance(cfg, dict):
+def storage_location(template: str, templates_dir: str = TEMPLATES_DIR) -> str:
+    """The unrendered snapshotConfig.storageLocation of benchmark
+    ActorTemplate `template`, read from its manifest rather than the cluster
+    because the prewarm starts before the template is deployed."""
+    path = Path(templates_dir) / f"{template}-template.yaml.tmpl"
+    if not path.exists():
+        raise ValueError(f"no ActorTemplate manifest for {template!r} at {path}")
+    location = (yaml.safe_load(path.read_text()).get("snapshotConfig") or {}).get(
+        "storageLocation", ""
+    )
+    if not location.startswith("gs://"):
         raise ValueError(
-            f"test {name!r} gcsPrewarm must be a mapping "
-            f"(use `gcsPrewarm: {{}}` for all defaults)"
+            f"ActorTemplate {template!r} storageLocation {location!r} is not a "
+            f"gs:// location"
         )
+    return location
+
+
+def validate(name: str, cfg: Any, templates_dir: str = TEMPLATES_DIR) -> None:
+    """Raise ValueError if test `name`'s gcsPrewarm block is malformed or
+    names an ActorTemplate with no gs:// manifest."""
+    if not isinstance(cfg, dict):
+        raise ValueError(f"test {name!r} gcsPrewarm must be a mapping")
+    for field in REQUIRED:
+        if not _is_name(cfg.get(field)):
+            raise ValueError(
+                f"test {name!r} gcsPrewarm.{field} is required and must be a "
+                f"name, got {cfg.get(field)!r}"
+            )
     for field, value in cfg.items():
+        if field in REQUIRED:
+            continue
         if field not in FIELDS:
             raise ValueError(
                 f"test {name!r} gcsPrewarm has unknown field {field!r} "
-                f"(want one of {list(FIELDS)})"
+                f"(want one of {list(REQUIRED) + list(FIELDS)})"
             )
         _, ok, want = FIELDS[field]
         if not ok(value):
             raise ValueError(
                 f"test {name!r} gcsPrewarm.{field} must be {want}, got {value!r}"
             )
+    storage_location(cfg["actorTemplate"], templates_dir)
 
 
-def command(cfg: dict[str, Any], bucket_env: str) -> list[str]:
-    """The gcs-prewarm argv for a validated cfg. bucket defaults to
-    bucket_env (the target cluster's BUCKET_NAME, which the snapshots go
-    to) and prefix to the glutton snapshot prefix."""
-    cfg = {"prefix": GLUTTON_SNAPSHOT_PREFIX, **cfg}
-    cfg.setdefault("bucket", bucket_env)
-    if not cfg["bucket"]:
+def command(
+    cfg: dict[str, Any], bucket_env: str, templates_dir: str = TEMPLATES_DIR
+) -> list[str]:
+    """The gcs-prewarm argv for a validated cfg. The bucket and prefix are
+    the template's storageLocation, with ${BUCKET_NAME} rendered from
+    bucket_env as deploy.sh does, plus the prefix the atelet puts actor
+    snapshots under: atespaces/<atespace>/actors/<uid>. The random uid comes
+    right after that prefix, so the tool's random keys land in the same key
+    range as the real traffic."""
+    location = storage_location(cfg["actorTemplate"], templates_dir)
+    if "${BUCKET_NAME}" in location and not bucket_env:
         raise RuntimeError(
-            "gcsPrewarm has no bucket: set gcsPrewarm.bucket or BUCKET_NAME "
-            "in the target cluster config"
+            f"ActorTemplate {cfg['actorTemplate']!r} storageLocation needs "
+            f"BUCKET_NAME, which the target cluster config does not set"
         )
-    cmd = ["go", "-C", "tools/gcs-prewarm", "run", "."]
-    for field in FIELDS:
+    bucket, _, base = (
+        location.replace("${BUCKET_NAME}", bucket_env)
+        .removeprefix("gs://")
+        .partition("/")
+    )
+    prefix = "/".join(
+        p for p in (base.strip("/"), "atespaces", cfg["atespace"], "actors") if p
+    )
+    cmd = [
+        "go", "-C", "tools/gcs-prewarm", "run", ".",
+        f"--bucket={bucket}",
+        f"--prefix={prefix}",
+    ]
+    for field, (flag, _, _) in FIELDS.items():
         if field not in cfg:
             continue
         value = cfg[field]
@@ -114,7 +160,7 @@ def command(cfg: dict[str, Any], bucket_env: str) -> list[str]:
             value = f"{parse_duration_seconds(str(value))}s"
         elif isinstance(value, bool):
             value = str(value).lower()
-        cmd.append(f"{FIELDS[field][0]}={value}")
+        cmd.append(f"{flag}={value}")
     return cmd
 
 

@@ -29,7 +29,7 @@
 //
 //	go -C tools/gcs-prewarm run . \
 //	  --bucket=substrate-snapshots-... \
-//	  --prefix=benchmark-workloads/glutton/snapshots/benchmark \
+//	  --prefix=<storageLocation path>/atespaces/<atespace>/actors \
 //	  --start-rate=50 --target-rate=800 --double-every=5m --hold=5m
 //
 // 429s during the ramp are expected — they are the signal that GCS is still
