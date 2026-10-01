@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
@@ -39,6 +40,10 @@ const (
 	size10PostgresCPURequest = "80"
 	size10PostgresMemory     = "140Gi"
 )
+
+// postgresPoolSelector selects the nodes of the pool the cordon-control-plane
+// component pins the bundled PostgreSQL to.
+const postgresPoolSelector = "ate.dev/workloadType=ate-postgres"
 
 // postgresPlan says where ateapi's store comes from: the bundled StatefulSet,
 // or something the installer does not deploy. It gates both applying the
@@ -100,6 +105,9 @@ func (e *Env) postgresManifestPath() string {
 // apply of the same objects cannot half-revert them, which a post-apply patch
 // under a different field manager would be exposed to.
 func (e *Env) applyPostgres(ctx context.Context) error {
+	if err := e.requirePostgresPool(ctx); err != nil {
+		return err
+	}
 	manifest, err := e.render(e.postgresManifestPath())
 	if err != nil {
 		return err
@@ -119,6 +127,29 @@ func (e *Env) applyPostgres(ctx context.Context) error {
 		}
 	}
 	return e.Kube.Apply(ctx, objs)
+}
+
+// requirePostgresPool refuses to apply the bundled PostgreSQL under
+// --cordon-control-plane when no node carries the ate-postgres label. The
+// StatefulSet deletes its running pod before creating the replacement, so
+// without the pool the database goes down and the new pod stays Pending.
+func (e *Env) requirePostgresPool(ctx context.Context) error {
+	if !e.Cfg.CordonControlPlane {
+		return nil
+	}
+	nodes, err := e.Kube.Typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: postgresPoolSelector,
+		Limit:         1,
+	})
+	if err != nil {
+		return fmt.Errorf("while listing the %s nodes: %w", postgresPoolSelector, err)
+	}
+	if len(nodes.Items) == 0 {
+		return fmt.Errorf("--cordon-control-plane pins the bundled PostgreSQL to nodes labeled %s, and the cluster has none: "+
+			"create a one-node pool labeled and tainted %s:NoSchedule in the zone of the postgres volume first "+
+			"(see docs/upgrade.md#cordoned-control-plane-postgres-pool)", postgresPoolSelector, postgresPoolSelector)
+	}
+	return nil
 }
 
 // applyPostgresSize10Overrides resizes the bundled PostgreSQL objects in place
