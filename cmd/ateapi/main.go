@@ -396,7 +396,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		slog.String("postgres-connection-string", *postgresConnectionString),
+		slog.Bool("postgres-connection-string-set", *postgresConnectionString != ""),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
