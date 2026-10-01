@@ -270,6 +270,12 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapipb.Control_DrainWorker_FullMethodName: rule(checksOf(func(r *ateapipb.DrainWorkerRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanDrain, r.GetWorker().GetName(), field.NewPath("worker", "name"))
 	})),
+	ateapipb.Control_MarkWorkerAvailable_FullMethodName: rule(checksOf(func(r *ateapipb.MarkWorkerAvailableRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanUpdate, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+	ateapipb.Control_MarkWorkerUnavailable_FullMethodName: rule(checksOf(func(r *ateapipb.MarkWorkerUnavailableRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanUpdate, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
 	ateapipb.Control_ListWorkerActorAssignments_FullMethodName: rule(checksOf(func(r *ateapipb.ListWorkerActorAssignmentsRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanListActorAssignments, r.GetWorker().GetName(), field.NewPath("worker", "name"))
 	})),

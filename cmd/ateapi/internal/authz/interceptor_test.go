@@ -481,6 +481,8 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 	}}}
 	deleteWorker := rpcCall{ateapipb.Control_DeleteWorker_FullMethodName, &ateapipb.DeleteWorkerRequest{Worker: worker}}
 	drainWorker := rpcCall{ateapipb.Control_DrainWorker_FullMethodName, &ateapipb.DrainWorkerRequest{Worker: worker}}
+	markAvailable := rpcCall{ateapipb.Control_MarkWorkerAvailable_FullMethodName, &ateapipb.MarkWorkerAvailableRequest{Worker: worker}}
+	markUnavailable := rpcCall{ateapipb.Control_MarkWorkerUnavailable_FullMethodName, &ateapipb.MarkWorkerUnavailableRequest{Worker: worker}}
 	listAssignments := rpcCall{ateapipb.Control_ListWorkerActorAssignments_FullMethodName, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: worker}}
 
 	tests := []struct {
@@ -534,6 +536,11 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 		{"atespace editor cannot list workers", "editor", listWorkers, codes.PermissionDenied},
 		{"atespace editor cannot get worker", "editor", getWorker, codes.PermissionDenied},
 		{"atespace editor cannot drain worker", "editor", drainWorker, codes.PermissionDenied},
+		{"global owner marks worker available", "global-owner", markAvailable, codes.OK},
+		{"global owner marks worker unavailable", "global-owner", markUnavailable, codes.OK},
+		{"global viewer cannot mark worker available", "global-viewer", markAvailable, codes.PermissionDenied},
+		{"global viewer cannot mark worker unavailable", "global-viewer", markUnavailable, codes.PermissionDenied},
+		{"atespace editor cannot mark worker available", "editor", markAvailable, codes.PermissionDenied},
 	}
 
 	interceptor := UnaryServerInterceptor(authorizer, true)
