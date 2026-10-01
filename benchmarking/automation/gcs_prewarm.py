@@ -18,7 +18,8 @@ key ranges are scaled up before the test's real snapshot traffic starts. A
 bucket sheds write bursts with 429s until its autoscaler splits the loaded
 key ranges, which takes on the order of 20 minutes per doubling.
 
-actorTemplate and atespace are required: together they say where the test's
+The prewarm runs only when the block sets `enabled: true`. An enabled block
+also requires actorTemplate and atespace: together they say where the test's
 actors write their snapshots. Every other field is optional and takes the
 tool's own default (see tools/gcs-prewarm/main.go) when left out.
 """
@@ -97,31 +98,46 @@ def storage_location(template: str, templates_dir: str = TEMPLATES_DIR) -> str:
     return location
 
 
+def enabled(cfg: Any) -> bool:
+    """Whether a test's gcsPrewarm block (None when absent) turns the
+    prewarm on. Anything but an explicit `enabled: true` leaves it off."""
+    return isinstance(cfg, dict) and cfg.get("enabled") is True
+
+
 def validate(name: str, cfg: Any, templates_dir: str = TEMPLATES_DIR) -> None:
-    """Raise ValueError if test `name`'s gcsPrewarm block is malformed or
-    names an ActorTemplate with no gs:// manifest."""
+    """Raise ValueError if test `name`'s gcsPrewarm block is malformed. An
+    enabled block must also name an atespace and an ActorTemplate with a
+    gs:// manifest; a disabled one is only checked for field names and
+    types, so it can be switched off without being filled in."""
     if not isinstance(cfg, dict):
         raise ValueError(f"test {name!r} gcsPrewarm must be a mapping")
+    if "enabled" in cfg and not isinstance(cfg["enabled"], bool):
+        raise ValueError(
+            f"test {name!r} gcsPrewarm.enabled must be true or false, "
+            f"got {cfg['enabled']!r}"
+        )
     for field in REQUIRED:
-        if not _is_name(cfg.get(field)):
+        if (field in cfg or enabled(cfg)) and not _is_name(cfg.get(field)):
             raise ValueError(
-                f"test {name!r} gcsPrewarm.{field} is required and must be a "
-                f"name, got {cfg.get(field)!r}"
+                f"test {name!r} gcsPrewarm.{field} must be a name"
+                f"{' (required when enabled)' if enabled(cfg) else ''}, "
+                f"got {cfg.get(field)!r}"
             )
     for field, value in cfg.items():
-        if field in REQUIRED:
+        if field == "enabled" or field in REQUIRED:
             continue
         if field not in FIELDS:
             raise ValueError(
                 f"test {name!r} gcsPrewarm has unknown field {field!r} "
-                f"(want one of {list(REQUIRED) + list(FIELDS)})"
+                f"(want one of {['enabled', *REQUIRED, *FIELDS]})"
             )
         _, ok, want = FIELDS[field]
         if not ok(value):
             raise ValueError(
                 f"test {name!r} gcsPrewarm.{field} must be {want}, got {value!r}"
             )
-    storage_location(cfg["actorTemplate"], templates_dir)
+    if enabled(cfg):
+        storage_location(cfg["actorTemplate"], templates_dir)
 
 
 def command(

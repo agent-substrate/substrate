@@ -27,9 +27,9 @@ contract). The flow, with the type hooks marked:
         target cluster.
      b. Sweep leftovers, deploy substrate, let the type shape the
         cluster [hook: pre_test], deploy workloads (+ microvm deps when
-        the sandbox class needs them). A gcsPrewarm test warms the
-        snapshot bucket in the background meanwhile, and the test waits
-        for the warm-up to finish.
+        the sandbox class needs them). A test with gcsPrewarm enabled
+        warms the snapshot bucket in the background meanwhile, and the
+        test waits for the warm-up to finish.
      c. Render the type's Job template [hooks: job_tmpl, job_subs],
         submit it, wait, tail logs, delete the Job.
      d. Tear substrate + workloads down again so tests don't pollute
@@ -521,7 +521,7 @@ def main() -> None:
             try:
                 # Started first so its ramp overlaps substrate + workload
                 # setup.
-                if "gcsPrewarm" in test:
+                if gcs_prewarm.enabled(test.get("gcsPrewarm")):
                     prewarm_proc = gcs_prewarm.start(test["gcsPrewarm"])
                 deploy_substrate(test.get("ateArgs", []))
                 TYPES[ttype].pre_test(test)

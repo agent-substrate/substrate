@@ -31,6 +31,7 @@ REPO = Path(__file__).resolve().parents[2]
 TOOL_MAIN = REPO / "tools" / "gcs-prewarm" / "main.go"
 TESTS_YAML = Path(__file__).resolve().parent / "tests.yaml"
 REQUIRED = {"actorTemplate": "web", "atespace": "load"}
+ENABLED = {"enabled": True, **REQUIRED}
 
 
 def write_template(dir_: str, name: str, location: str | None) -> None:
@@ -48,11 +49,11 @@ class TemplatesTestCase(unittest.TestCase):
 
 class ValidateTest(TemplatesTestCase):
     def test_accepts_required_only_and_full(self):
-        gcs_prewarm.validate("t", REQUIRED, self.dir)
+        gcs_prewarm.validate("t", ENABLED, self.dir)
         gcs_prewarm.validate(
             "t",
             {
-                **REQUIRED,
+                **ENABLED,
                 "startRate": 50,
                 "targetRate": 800.5,
                 "doubleEvery": "5m",
@@ -67,26 +68,51 @@ class ValidateTest(TemplatesTestCase):
     def test_rejects(self):
         for cfg in (
             None,
-            {},
-            {"actorTemplate": "web"},
-            {"atespace": "load"},
-            {**REQUIRED, "atespace": ""},
-            {**REQUIRED, "atespace": "a/b"},
-            {**REQUIRED, "actorTemplate": "missing"},
-            {**REQUIRED, "bucket": "b"},
-            {**REQUIRED, "startrate": 50},
-            {**REQUIRED, "startRate": 0},
-            {**REQUIRED, "startRate": True},
-            {**REQUIRED, "targetRate": "800"},
-            {**REQUIRED, "doubleEvery": "0s"},
-            {**REQUIRED, "doubleEvery": "5 minutes"},
-            {**REQUIRED, "hold": "1h30m"},
-            {**REQUIRED, "workers": 0},
-            {**REQUIRED, "objectBytes": 1.5},
-            {**REQUIRED, "cleanup": "false"},
+            {"enabled": True},
+            {"enabled": True, "actorTemplate": "web"},
+            {"enabled": True, "atespace": "load"},
+            {**REQUIRED, "enabled": "true"},
+            {**REQUIRED, "enabled": 1},
+            {"enabled": False, "atespace": "a/b"},
+            {"enabled": False, "bucket": "b"},
+            {"enabled": False, "workers": 0},
+            {**ENABLED, "atespace": ""},
+            {**ENABLED, "atespace": "a/b"},
+            {**ENABLED, "actorTemplate": "missing"},
+            {**ENABLED, "bucket": "b"},
+            {**ENABLED, "startrate": 50},
+            {**ENABLED, "startRate": 0},
+            {**ENABLED, "startRate": True},
+            {**ENABLED, "targetRate": "800"},
+            {**ENABLED, "doubleEvery": "0s"},
+            {**ENABLED, "doubleEvery": "5 minutes"},
+            {**ENABLED, "hold": "1h30m"},
+            {**ENABLED, "workers": 0},
+            {**ENABLED, "objectBytes": 1.5},
+            {**ENABLED, "cleanup": "false"},
         ):
             with self.subTest(cfg=cfg), self.assertRaises(ValueError):
                 gcs_prewarm.validate("t", cfg, self.dir)
+
+    def test_disabled_needs_no_target(self):
+        # Switched off, a block need not name a template or atespace, and
+        # a template that does not exist is not looked up.
+        for cfg in (
+            {},
+            {"enabled": False},
+            {"startRate": 50},
+            {**REQUIRED, "actorTemplate": "missing"},
+            {"enabled": False, "atespace": "load", "hold": "5m"},
+        ):
+            with self.subTest(cfg=cfg):
+                gcs_prewarm.validate("t", cfg, self.dir)
+                self.assertFalse(gcs_prewarm.enabled(cfg))
+
+    def test_enabled(self):
+        self.assertTrue(gcs_prewarm.enabled(ENABLED))
+        for cfg in (None, {}, REQUIRED, {"enabled": False}, {"enabled": "true"}, {"enabled": 1}):
+            with self.subTest(cfg=cfg):
+                self.assertFalse(gcs_prewarm.enabled(cfg))
 
     def test_rejects_template_without_gcs_location(self):
         write_template(self.dir, "local", "file:///tmp/snapshots")
@@ -95,7 +121,7 @@ class ValidateTest(TemplatesTestCase):
             with self.subTest(template=template), self.assertRaisesRegex(
                 ValueError, "gs://"
             ):
-                gcs_prewarm.validate("t", {**REQUIRED, "actorTemplate": template}, self.dir)
+                gcs_prewarm.validate("t", {**ENABLED, "actorTemplate": template}, self.dir)
 
     def test_orchestrator_validates_block(self):
         # The orchestrator validates from the repo root, where the real
@@ -105,11 +131,15 @@ class ValidateTest(TemplatesTestCase):
         self.addCleanup(os.chdir, cwd)
         test = {"name": "t", "type": "locust", "targetCluster": "dev",
                 "file": "f", "duration": "1m", "users": 1}
-        cfg = {"actorTemplate": "sleep", "atespace": "benchmark-workloads"}
+        cfg = {"enabled": True, "actorTemplate": "sleep", "atespace": "benchmark-workloads"}
         orchestrator.validate_and_normalize_tests([{**test, "gcsPrewarm": cfg}])
         with self.assertRaisesRegex(ValueError, "gcsPrewarm.workers"):
             orchestrator.validate_and_normalize_tests(
                 [{**test, "gcsPrewarm": {**cfg, "workers": -1}}]
+            )
+        with self.assertRaisesRegex(ValueError, "gcsPrewarm.enabled"):
+            orchestrator.validate_and_normalize_tests(
+                [{**test, "gcsPrewarm": {**cfg, "enabled": "yes"}}]
             )
 
     def test_checked_in_tests_yaml_is_valid(self):
@@ -123,7 +153,7 @@ class ValidateTest(TemplatesTestCase):
 class CommandTest(TemplatesTestCase):
     def test_required_only(self):
         self.assertEqual(
-            gcs_prewarm.command(REQUIRED, "snap-bucket", self.dir),
+            gcs_prewarm.command(ENABLED, "snap-bucket", self.dir),
             [
                 "go", "-C", "tools/gcs-prewarm", "run", ".",
                 "--bucket=snap-bucket",
@@ -141,7 +171,7 @@ class CommandTest(TemplatesTestCase):
                 "targetRate": 800,
                 "objectBytes": 1024,
                 "workers": 32,
-                **REQUIRED,
+                **ENABLED,
             },
             "snap-bucket",
             self.dir,
