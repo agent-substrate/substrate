@@ -163,10 +163,11 @@ type Config struct {
 	// or size10.
 	ClusterSize string
 
-	// CordonControlPlane pins each control plane workload to its own node
-	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a node pool labeled and
-	// tainted ate.dev/workloadType=ate-control-plane:NoSchedule with one node
-	// per pod plus a spare for rollout surges.
+	// CordonControlPlane keeps the control plane off the worker nodes
+	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a small shared pool
+	// labeled and tainted ate.dev/workloadType=ate-control-plane:NoSchedule,
+	// and a one-node pool labeled and tainted
+	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
 	CordonControlPlane bool
 
 	// ExperimentalUseSDSMint enables per-SNI dynamic cert minting on atenet-egress.

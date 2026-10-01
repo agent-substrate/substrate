@@ -27,8 +27,8 @@ import (
 )
 
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
-// --cordon-control-plane the hostname anti-affinity keeps the pod alone on
-// its node, so a limit would only add CFS throttling on checkpoint and
+// --cordon-control-plane the dedicated ate-postgres pool keeps the pod alone
+// on its node, so a limit would only add CFS throttling on checkpoint and
 // autovacuum bursts. Without that flag the pod shares whatever node fits the
 // request, and the missing limit lets it contend with its neighbors. Memory
 // request == limit keeps eviction ordering equivalent to a Guaranteed pod,

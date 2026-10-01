@@ -299,10 +299,13 @@ func TestSystemOverlayDefaultIsBase(t *testing.T) {
 }
 
 // pinnedWorkloads returns the Deployment and StatefulSet names in a rendered
-// manifest that carry the cordon-control-plane node pinning, and every
-// workload name seen.
-func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
+// manifest that carry the cordon-control-plane node pinning, mapped to the
+// pool each one selects, and every workload name seen. Only the shared pool
+// spreads its replicas, and no pool requires anti-affinity: that would need a
+// node per pod.
+func pinnedWorkloads(t *testing.T, manifest []byte) (pinned map[string]string, all []string) {
 	t.Helper()
+	pinned = map[string]string{}
 	for _, doc := range strings.Split(string(manifest), "\n---\n") {
 		var obj struct {
 			Kind     string `json:"kind"`
@@ -311,10 +314,14 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
 			} `json:"metadata"`
 			Spec struct {
 				Template struct {
+					Metadata struct {
+						Labels map[string]string `json:"labels"`
+					} `json:"metadata"`
 					Spec struct {
-						NodeSelector map[string]string `json:"nodeSelector"`
-						Tolerations  []map[string]any  `json:"tolerations"`
-						Affinity     map[string]any    `json:"affinity"`
+						NodeSelector              map[string]string `json:"nodeSelector"`
+						Tolerations               []map[string]any  `json:"tolerations"`
+						Affinity                  map[string]any    `json:"affinity"`
+						TopologySpreadConstraints []map[string]any  `json:"topologySpreadConstraints"`
 					} `json:"spec"`
 				} `json:"template"`
 			} `json:"spec"`
@@ -327,10 +334,27 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
 		}
 		all = append(all, obj.Metadata.Name)
 		podSpec := obj.Spec.Template.Spec
-		if podSpec.NodeSelector["ate.dev/workloadType"] == "ate-control-plane" &&
-			len(podSpec.Tolerations) > 0 && podSpec.Affinity["podAntiAffinity"] != nil {
-			pinned = append(pinned, obj.Metadata.Name)
+		pool := podSpec.NodeSelector["ate.dev/workloadType"]
+		if pool == "" {
+			continue
 		}
+		if !slices.ContainsFunc(podSpec.Tolerations, func(tol map[string]any) bool {
+			return tol["key"] == "ate.dev/workloadType" && tol["value"] == pool
+		}) {
+			t.Errorf("workload %s selects pool %s but does not tolerate its taint", obj.Metadata.Name, pool)
+		}
+		if podSpec.Affinity["podAntiAffinity"] != nil {
+			t.Errorf("workload %s has pod anti-affinity", obj.Metadata.Name)
+		}
+		if spread := len(podSpec.TopologySpreadConstraints) > 0; spread != (pool == "ate-control-plane") {
+			t.Errorf("workload %s in pool %s: topology spread = %v", obj.Metadata.Name, pool, spread)
+		}
+		// The spread narrows on the app label; without it the workload would
+		// spread against the whole pool instead of its own replicas.
+		if pool == "ate-control-plane" && obj.Spec.Template.Metadata.Labels["app"] == "" {
+			t.Errorf("workload %s has no app label to spread its replicas by", obj.Metadata.Name)
+		}
+		pinned[obj.Metadata.Name] = pool
 	}
 	return pinned, all
 }
@@ -338,7 +362,8 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
 // Under --cordon-control-plane every control plane apply path has to carry the
 // pinning, since each workload reaches the cluster through a different one:
 // the system bundle, the lone redeploy files, the podcert overlay, the
-// postgres file, and the egress variants.
+// postgres file, and the egress variants. postgres gets a pool of its own;
+// every other control plane workload shares one.
 func TestRenderCordonControlPlane(t *testing.T) {
 	root := repoRoot(t)
 	for _, tc := range []struct {
@@ -424,13 +449,17 @@ func TestRenderCordonControlPlane(t *testing.T) {
 				if !slices.Contains(all, name) {
 					t.Errorf("rendered manifest has no workload %s (found %v)", name, all)
 				}
-				if !slices.Contains(pinned, name) {
-					t.Errorf("workload %s is not pinned to the control plane pool", name)
+				want := "ate-control-plane"
+				if name == "postgres" {
+					want = "ate-postgres"
+				}
+				if got := pinned[name]; got != want {
+					t.Errorf("workload %s pinned to pool %q, want %q", name, got, want)
 				}
 			}
-			// The DaemonSet-shaped and demo workloads stay off the pool; only
+			// The DaemonSet-shaped and demo workloads stay off the pools; only
 			// the named control plane workloads are pinned.
-			for _, name := range pinned {
+			for name := range pinned {
 				if !slices.Contains(tc.want, name) {
 					t.Errorf("workload %s is pinned but is not a control plane workload", name)
 				}
@@ -457,7 +486,7 @@ func TestRenderBytesCordonControlPlane(t *testing.T) {
 		t.Fatalf("renderBytes: %v", err)
 	}
 	pinned, _ := pinnedWorkloads(t, rendered)
-	if !slices.Contains(pinned, "atenet-egress") {
+	if pinned["atenet-egress"] != "ate-control-plane" {
 		t.Errorf("atenet-egress is not pinned in the composed extproc manifest (pinned: %v)", pinned)
 	}
 	if !strings.Contains(string(rendered), additionalEgressExtprocCluster) {
