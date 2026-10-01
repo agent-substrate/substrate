@@ -379,6 +379,12 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	tVMRestore := time.Now()
+	// An eager restore has read the whole snapshot into guest memory, and nothing
+	// merges against it afterwards, so drop the staged memory image and evict its
+	// page cache before resuming the VM so guest RAM and snapshot page cache do
+	// not overlap during Resume and wakeup probe gating.
+	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
+	dropActorSnapshotCacheAsync(restoreDir, memMode == ch.MemRestoreEager)
 	if err := client.Resume(ctx); err != nil {
 		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
@@ -482,9 +488,6 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	s.setRunningVM(actorUID, ra)
 
-	// After the last error return, so a failed restore stays retryable.
-	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
-
 	// Publish the guest to GetWorkloadStats, past the last error return above
 	// for the same reason as in coldBootActor. Same client the forwarding above
 	// reads over.
@@ -495,20 +498,15 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	return nil
 }
 
-// maybeDropStagedMemoryImage deletes memory-ranges after an eager restore (it is
-// fully in guest memory and nothing merges against it), unless restoreDir is a
-// preserved snapshot.
+// maybeDropStagedMemoryImage deletes the staged memory-ranges file and
+// already-extracted tar archives after an eager restore (it is fully in guest
+// memory and nothing merges against it), unless restoreDir is a preserved
+// snapshot.
 func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string, preserveRestoreDir bool) {
 	if memMode != ch.MemRestoreEager || preserveRestoreDir {
 		return
 	}
-	staged := filepath.Join(restoreDir, "memory-ranges")
-	if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
-		// Not fatal: it only costs disk until the actor is torn down.
-		slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
-	} else {
-		slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
-	}
+	dropStagedMemoryImage(ctx, restoreDir)
 }
 
 // rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
