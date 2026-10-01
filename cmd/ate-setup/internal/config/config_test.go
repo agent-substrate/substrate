@@ -276,6 +276,10 @@ func TestLoadPreviewGates(t *testing.T) {
 			if !slices.Equal(cfg.PreviewGates, tc.want) {
 				t.Errorf("PreviewGates = %q, want %q", cfg.PreviewGates, tc.want)
 			}
+			got, exported := scriptEnvMap(t, cfg)["ATE_PREVIEW"]
+			if want := strings.Join(tc.want, ","); got != want || exported != (want != "") {
+				t.Errorf("ScriptEnv() ATE_PREVIEW = %q (exported %v), want %q", got, exported, want)
+			}
 		})
 	}
 }

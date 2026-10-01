@@ -122,34 +122,37 @@ jobs:
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
-  # The envoy entry reports the required e2e-test check.
+  #
+  # Each matrix entry is an independent job on a fresh cluster, so the steps
+  # below are written once and run for every dataplane and preview mode. The
+  # envoy entry with preview features off reports the required e2e-test check.
   e2e-test:
-    name: ${{ matrix.dataplane == 'envoy' && 'e2e-test' || format('e2e-test ({0})', matrix.dataplane) }}
+    name: >-
+      ${{ (matrix.dataplane == 'envoy' && matrix.preview == 'off') && 'e2e-test'
+        || format('e2e-test ({0}{1})', matrix.dataplane, matrix.preview == 'on' && ', preview' || '') }}
     runs-on: ubuntu-latest
     # Cluster bring-up, image builds and two sequential lanes; generous, but far
     # short of the six-hour platform default a hung lane would otherwise consume.
     timeout-minutes: 120
-    continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
+    continue-on-error: ${{ matrix.dataplane == 'agentgateway' }} # TODO: Make AgentGateway required once tests show stability
     strategy:
       fail-fast: false
       matrix:
         # AgentGateway runs pre-submit only for release-* branches. Everywhere
         # else it runs post-merge (push to main) and on the weekly schedule.
-        include: >-
+        dataplane: >-
           ${{ fromJSON(
             (
               (github.event_name != 'pull_request' && github.event_name != 'merge_group')
               || startsWith(github.base_ref, 'release-')
               || startsWith(github.event.merge_group.base_ref, 'refs/heads/release-')
             )
-            && '[
-              {"dataplane": "envoy", "experimental": false},
-              {"dataplane": "agentgateway", "experimental": true}
-            ]'
-            || '[
-              {"dataplane": "envoy", "experimental": false}
-            ]'
+            && '["envoy", "agentgateway"]'
+            || '["envoy"]'
           ) }}
+        # "off" is the default install, and proves the suites pass without
+        # preview features; "on" enables every one of them.
+        preview: ['off', 'on']
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # The installer requires a credential provider selection, and deploys the
@@ -157,6 +160,16 @@ jobs:
       # because every ate-setup invocation reads it, including the control
       # plane redeploy in run-microvm-demo-kind.sh.
       ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
+      # Job-wide for the same reason. Empty is an explicit "no preview
+      # features", not an unset value.
+      ATE_PREVIEW: ${{ matrix.preview == 'on' && '*' || '' }}
+      # Tells the suites which preview gates the install enabled, so tests of
+      # a disabled one skip themselves (see internal/e2e/preview.go). Must
+      # match ATE_PREVIEW.
+      E2E_PREVIEW: ${{ matrix.preview == 'on' && '*' || '' }}
+      # Appended to the lane and artifact names: e2e-gvisor runs without
+      # preview features, e2e-gvisor-preview with them.
+      LANE_SUFFIX: ${{ matrix.preview == 'on' && '-preview' || '' }}
       # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts
@@ -164,7 +177,7 @@ jobs:
       # share one copy instead of each storing their own.
       DOCKER_BUILD_FLAGS: >-
         --cache-from type=gha,scope=envoy-dataplane
-        ${{ github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy'
+        ${{ github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off'
           && '--cache-to type=gha,mode=max,scope=envoy-dataplane,ignore-error=true' || '' }}
     steps:
     - name: Checkout
@@ -226,8 +239,10 @@ jobs:
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate (${{ matrix.dataplane }})
       # The dataplane selection applies to both the ingress router and egress
-      # gateway.
-      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }}
+      # gateway. ATE_PREVIEW above selects the preview features.
+      env:
+        ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      run: hack/install-ate-kind.sh --deploy-ate-system
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -258,7 +273,7 @@ jobs:
     - name: Run E2E tests (gVisor)
       env:
         E2E_PARALLELISM: 8
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor.xml
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor${{ env.LANE_SUFFIX }}.xml
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Focus the node on micro-VM
       run: hack/e2e-focus-sandbox-class.sh microvm
@@ -268,7 +283,7 @@ jobs:
       env:
         E2E_SANDBOX_CLASS: microvm
         E2E_PARALLELISM: 8
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm.xml
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm${{ env.LANE_SUFFIX }}.xml
       run: hack/run-e2e-kind.sh -v -args --no-color
     # Every lane must have reported tests; a `-run` filter that stops matching
     # otherwise leaves its lane green and empty. The set comes from the manifest
@@ -280,7 +295,7 @@ jobs:
     - name: Save Go build cache
       # Main only, so PRs restore the latest main build rather than each
       # storing its own copy.
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' }}
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
@@ -291,7 +306,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-results-e2e-${{ matrix.dataplane }}
+        name: test-results-e2e-${{ matrix.dataplane }}${{ env.LANE_SUFFIX }}
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
     - name: Dump diagnostics on failure

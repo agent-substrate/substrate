@@ -80,6 +80,11 @@ func RunTestMain(m *testing.M) int {
 		return 0
 	}
 
+	if err := initPreview(); err != nil {
+		fmt.Println(Colorf("<red>%v</red>\n", err))
+		return 1
+	}
+
 	return runAndCleanup(m)
 }
 

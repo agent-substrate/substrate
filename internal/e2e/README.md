@@ -56,6 +56,20 @@ installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
 gVisor, 10m on micro-VM, where the golden is a cloud-hypervisor cold boot plus
 a checkpoint).
 
+## Preview features
+
+Tests of a preview feature start with `e2e.RequirePreview(t, preview.Gate...)`,
+which skips them unless `E2E_PREVIEW` names that gate. It takes the same
+syntax as `ATE_PREVIEW` and should match what the cluster was installed with:
+
+```shell
+$ E2E_PREVIEW='*' hack/run-e2e-kind.sh -v -args --no-color
+```
+
+Unset or empty means no gates. CI must set it, even if only to empty, so a
+lane that forgets cannot silently skip every preview test; see
+[preview.go](preview.go).
+
 ## After a failure
 
 A suite deletes the namespaces it created only when it passed. A failed run
