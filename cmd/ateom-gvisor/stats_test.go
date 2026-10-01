@@ -27,10 +27,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -200,7 +200,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			if resp != nil {
 				t.Errorf("GetWorkloadStats() returned response %v, want nil", resp)
 			}
-			if got := status.Code(err); got != tc.want {
+			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("GetWorkloadStats() error code = %v, want %v (err: %v)", got, tc.want, err)
 			}
 		})
@@ -378,7 +378,7 @@ func TestGetWorkloadStatsTransition(t *testing.T) {
 	}
 
 	_, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
-	if got := status.Code(err); got != codes.NotFound {
+	if got := apierror.Code(err); got != codes.NotFound {
 		t.Errorf("GetWorkloadStats() during transition: code = %v, want %v (err: %v)", got, codes.NotFound, err)
 	}
 }

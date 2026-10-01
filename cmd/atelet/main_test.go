@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -49,7 +50,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -805,7 +805,7 @@ func TestRPCBoundariesReject(t *testing.T) {
 			t.Errorf("%s accepted an invalid target ateom UID", rpc)
 			return
 		}
-		if code := status.Code(err); code != codes.InvalidArgument {
+		if code := apierror.Code(err); code != codes.InvalidArgument {
 			t.Errorf("%s returned code %v, want InvalidArgument", rpc, code)
 		}
 	}
@@ -1557,7 +1557,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
-		if got := status.Code(err); got != codes.FailedPrecondition {
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 		}
 	})
@@ -1575,7 +1575,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
-		if got := status.Code(err); got != codes.FailedPrecondition {
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 		}
 	})
@@ -1593,7 +1593,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
-		if got := status.Code(err); got != codes.FailedPrecondition {
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 		}
 	})
@@ -1609,7 +1609,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}, map[string]string{resources.DurableDirTarFile: "data"})
 
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
-		if got := status.Code(err); got != codes.FailedPrecondition {
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 		}
 	})
@@ -1627,7 +1627,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
-		if got := status.Code(err); got != codes.FailedPrecondition {
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition for a scope-less manifest", got, err)
 		}
 		if len(store.keys()) != 0 {

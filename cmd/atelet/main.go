@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -472,9 +473,7 @@ func NewService(
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *ateletpb.RunResponse, err error) {
 	if err := validateRunRequest(req); err != nil {
-		// status.Error so the interceptor surfaces InvalidArgument and the
-		// message instead of masking both as Internal.
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorUID := req.GetActorUid()
@@ -482,7 +481,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 
 	sandboxRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	if err != nil {
@@ -525,7 +524,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
@@ -582,7 +581,7 @@ func recordSnapshotSize(ctx context.Context, file string, size int64, templateAt
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
 	if err := validateCheckpointRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorUID := req.GetActorUid()
@@ -648,7 +647,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// cloud-hypervisor's snapshot set, ...) rather than a hardcoded list.
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
 	tAteom := time.Now()
@@ -892,7 +891,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 // local-checkpoints directory, written by an earlier local Checkpoint (pause).
 func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
 	if err := validateUploadPausedCheckpointRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	tStart := time.Now()
@@ -913,7 +912,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 
 	uri, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri())
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
 
@@ -973,7 +972,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 
 	capturedScope := rec.Scope
 	if capturedScope == "" {
-		return rec.SandboxClass, status.Errorf(codes.FailedPrecondition, "local snapshot %q has no scope recorded in its manifest (written by an older atelet); resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
+		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no scope recorded in its manifest (written by an older atelet); resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
 	}
 	desiredScope := ateattr.SnapshotScopeValue(req.GetDesiredScope())
 
@@ -982,7 +981,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 	case capturedScope == ateattr.SnapshotScopeData && desiredScope == ateattr.SnapshotScopeFull:
 		// The control plane rejects this before marking SUSPENDING; reaching
 		// it here means the template changed mid-flight or store state drifted.
-		return rec.SandboxClass, status.Errorf(codes.FailedPrecondition, "pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedScope, desiredScope)
+		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedScope, desiredScope)
 	default: // captured FULL, DATA wanted
 		if err := narrowFullCaptureToData(rec); err != nil {
 			return rec.SandboxClass, err
@@ -1011,7 +1010,7 @@ func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 		if !slices.Contains(rec.SnapshotFiles, resources.DurableDirTarFile) {
 			// No durable-dir volumes were attached at pause: this snapshot
 			// holds no data, and never will — not retryable.
-			return status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", rec.SandboxClass, resources.DurableDirTarFile, ateattr.SnapshotScopeData)
+			return apierror.FailedPrecondition("full %s capture has no %s; the actor has no durable data to upload as %s", rec.SandboxClass, resources.DurableDirTarFile, ateattr.SnapshotScopeData)
 		}
 		rec.SnapshotFiles = []string{resources.DurableDirTarFile}
 		rec.Scope = ateattr.SnapshotScopeData
@@ -1019,13 +1018,13 @@ func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 
 	default:
 		// The manifest's class is unvalidated input from disk/object storage.
-		return status.Errorf(codes.FailedPrecondition, "unknown sandbox class %q in snapshot manifest", rec.SandboxClass)
+		return apierror.FailedPrecondition("unknown sandbox class %q in snapshot manifest", rec.SandboxClass)
 	}
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
 	if err := validateRestoreRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorUID := req.GetActorUid()
@@ -1038,7 +1037,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// work so an invalid request changes nothing.
 	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid sandbox_assets: %v", err)
+		return nil, apierror.InvalidArgument("invalid sandbox_assets: %v", err)
 	}
 
 	// Per-step timing so we can attribute resume latency between the rustfs
@@ -1153,7 +1152,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return nil, fmt.Errorf("while unmarshalling golden sandbox record: %w", err)
 		}
 		if goldenRec.SandboxClass != sandboxRec.SandboxClass {
-			return nil, status.Errorf(codes.FailedPrecondition, "golden snapshot sandbox class %q does not match actor snapshot sandbox class %q", goldenRec.SandboxClass, sandboxRec.SandboxClass)
+			return nil, apierror.FailedPrecondition("golden snapshot sandbox class %q does not match actor snapshot sandbox class %q", goldenRec.SandboxClass, sandboxRec.SandboxClass)
 		}
 	}
 	dManifest = time.Since(tManifest)
@@ -1270,7 +1269,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// all application containers.
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
 	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
@@ -1316,7 +1315,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 // and resets actor directories on the node.
 func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	if err := validateTerminateRequest(req); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
@@ -1340,7 +1339,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
 		Atespace:              req.GetAtespace(),

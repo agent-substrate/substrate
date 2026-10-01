@@ -39,6 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
@@ -53,9 +54,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -388,7 +387,7 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 // validateActorDirs rejects a request whose actor directories are unusable.
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil
 }
@@ -397,7 +396,7 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 // shutdown, so the control plane reschedules the actor onto a live worker.
 func (s *AteomService) rejectIfDraining() error {
 	if s.shuttingDown.Load() {
-		return status.Error(codes.Unavailable, "worker draining: not accepting new workloads")
+		return apierror.Unavailable("worker draining: not accepting new workloads")
 	}
 	return nil
 }

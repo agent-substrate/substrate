@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -38,8 +39,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
@@ -109,7 +108,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -199,7 +198,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		logSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
 			restoreDurationKey, nil, []phase{{phaseTotal, dTotal}})
 	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
@@ -275,10 +274,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// (plus, for merged rootfs, the upper re-materialized from the tar).
 	containers := p.containers
 	if len(containers) == 0 {
-		return status.Error(codes.InvalidArgument, "actor spec has no containers")
+		return apierror.InvalidArgument("actor spec has no containers")
 	}
 	if len(containers) > maxActorContainers {
-		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
 	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
 	if err != nil {

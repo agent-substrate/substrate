@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -44,8 +45,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // runningActor holds the live state for one actor's micro-VM. ateom owns the
@@ -232,7 +231,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 	ctx, cancel := context.WithCancel(ctx)
@@ -376,10 +375,10 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// CreateSandbox + guest networking.
 	containers := p.containers
 	if len(containers) == 0 {
-		return status.Error(codes.InvalidArgument, "actor spec has no containers")
+		return apierror.InvalidArgument("actor spec has no containers")
 	}
 	if len(containers) > maxActorContainers {
-		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
 
 	// ateom builds the CH vm.create itself, so it needs the guest kernel + image
