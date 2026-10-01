@@ -54,7 +54,8 @@ volumes:
     # The trust anchors for the per-SNI leaves the egress gateway mints.
     # Only allowlisted bundle names resolve; this is the one supported today.
     - trustBundle:
-        name: egress-mitm.ate.dev
+        names:
+        - egress-mitm.ate.dev
         path: trust-bundle.pem
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR

@@ -66,8 +66,8 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 			}
 			// The projected name must select the bundle atecontroller
 			// publishes, or actors fail closed on a name atelet rejects.
-			if !strings.HasPrefix(EgressTrustBundleObjectName, source.GetName()+":") {
-				t.Errorf("trustBundle name = %q, want the bundle backing %q", source.GetName(), EgressTrustBundleObjectName)
+			if names := source.GetNames(); len(names) != 1 || !strings.HasPrefix(EgressTrustBundleObjectName, names[0]+":") {
+				t.Errorf("trustBundle name = %q, want just the bundle backing %q", names, EgressTrustBundleObjectName)
 			}
 			if source.GetPath() == "" {
 				t.Error("trustBundle projection has no path")

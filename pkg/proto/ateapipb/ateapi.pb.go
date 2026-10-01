@@ -3930,10 +3930,19 @@ func (x *ActorMetadataItem) GetPath() string {
 // to a PEM file at path. Supported names are allowlisted in atelet.
 type TrustBundleDataSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// One or more named trust bundles to unify and place at the specified path.
+	//
+	// Substrate supports a short list of predefined names:
+	//
+	// * egress-mitm.ate.dev --- The trust anchors for the Substrate egress
+	//   gateway TLS man-in-the-middle interceptor.
+	//
 	// +k8s:required
-	// +k8s:minLength=1
-	// +k8s:maxLength=253
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:minItems=1
+	// +k8s:maxItems=1
+	// +k8s:eachVal=+k8s:minLength=1
+	// +k8s:eachVal=+k8s:maxLength=253
+	Names []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
 	// path must be a clean relative Unix path: at most 16 '/'-separated
 	// segments, none of them empty, '.' or '..', and no NUL byte.
 	//
@@ -3976,11 +3985,11 @@ func (*TrustBundleDataSource) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{45}
 }
 
-func (x *TrustBundleDataSource) GetName() string {
+func (x *TrustBundleDataSource) GetNames() []string {
 	if x != nil {
-		return x.Name
+		return x.Names
 	}
-	return ""
+	return nil
 }
 
 func (x *TrustBundleDataSource) GetPath() string {
@@ -7792,10 +7801,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05items\x18\x01 \x03(\v2\x19.ateapi.ActorMetadataItemR\x05items\"Y\n" +
 	"\x11ActorMetadataItem\x120\n" +
 	"\x05field\x18\x01 \x01(\x0e2\x1a.ateapi.ActorMetadataFieldR\x05field\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"?\n" +
-	"\x15TrustBundleDataSource\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"@\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"M\n" +
+	"\x15TrustBundleDataSource\x12\x14\n" +
+	"\x05names\x18\x03 \x03(\tR\x05names\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x01\x10\x02R\x04name\"@\n" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +

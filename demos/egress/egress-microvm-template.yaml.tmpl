@@ -59,7 +59,8 @@ volumes:
     # The trust anchors for the per-SNI leaves the egress gateway mints.
     # Only allowlisted bundle names resolve; this is the one supported today.
     - trustBundle:
-        name: egress-mitm.ate.dev
+        names:
+        - egress-mitm.ate.dev
         path: trust-bundle.pem
 # Sandbox size: without these the guest boots at ateom's default size
 # (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are

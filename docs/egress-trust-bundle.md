@@ -54,7 +54,8 @@ spec:
       dataSources:
       # The trust anchors for the per-SNI leaves the egress gateway mints.
       - trustBundle:
-          name: egress-mitm.ate.dev
+          names:
+          - egress-mitm.ate.dev
           path: trust-bundle.pem
   containers:
   - name: app

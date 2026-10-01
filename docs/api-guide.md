@@ -220,7 +220,8 @@ spec:
     systemInfo:
       dataSources:
       - trustBundle:
-          name: egress-mitm.ate.dev
+          names:
+          - egress-mitm.ate.dev
           path: ca.pem
   containers:
   - name: main

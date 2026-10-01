@@ -75,7 +75,7 @@ func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolume {
 	return &ateletpb.SystemInfoVolume{
 		DataSources: []*ateletpb.SystemInfoDataSource{
 			{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-				TrustBundle: &ateletpb.TrustBundleDataSource{Name: EgressTrustBundleName, Path: relPath},
+				TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{EgressTrustBundleName}, Path: relPath},
 			}},
 		},
 	}

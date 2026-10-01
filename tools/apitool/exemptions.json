@@ -371,11 +371,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.TrustBundleDataSource.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.UpdateWorkerRequest",
     "message": "message has no doc comment"
   },

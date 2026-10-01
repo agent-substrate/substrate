@@ -1383,10 +1383,19 @@ enum ActorMetadataField {
 // TrustBundleDataSource projects the trust anchors of the named trust bundle
 // to a PEM file at path. Supported names are allowlisted in atelet.
 message TrustBundleDataSource {
+  // One or more named trust bundles to unify and place at the specified path.
+  //
+  // Substrate supports a short list of predefined names:
+  //
+  // * egress-mitm.ate.dev --- The trust anchors for the Substrate egress
+  //   gateway TLS man-in-the-middle interceptor.
+  //
   // +k8s:required
-  // +k8s:minLength=1
-  // +k8s:maxLength=253
-  string name = 1;
+  // +k8s:minItems=1
+  // +k8s:maxItems=1
+  // +k8s:eachVal=+k8s:minLength=1
+  // +k8s:eachVal=+k8s:maxLength=253
+  repeated string names = 3;
 
   // path must be a clean relative Unix path: at most 16 '/'-separated
   // segments, none of them empty, '.' or '..', and no NUL byte.
@@ -1396,6 +1405,9 @@ message TrustBundleDataSource {
   // +k8s:maxLength=255
   // +k8s:customValidation # projected-path rule shared with atelet, see internal/volumepath
   string path = 2;
+
+  reserved 1;
+  reserved "name";
 }
 
 // VolumeMount mounts a named Volume into a container.

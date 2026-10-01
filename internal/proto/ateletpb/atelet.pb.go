@@ -1471,16 +1471,11 @@ func (x *ActorMetadataDataSource) GetItems() []*ActorMetadataItem {
 	return nil
 }
 
-// TrustBundleDataSource projects the trust anchors of a named trust bundle
-// to a file at the given path, relative to the root of the enclosing
-// system-info volume. atelet resolves the name against its supported-bundle
-// allowlist and reads the backing ClusterTrustBundle through its informer at
-// write time, sanitizing kubelet-style; an unsupported name or missing
-// bundle fails the actor start.
+// TrustBundleDataSource corresponds to TrustBundleDataSource in ateapi.proto
 type TrustBundleDataSource struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Names         []string               `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1522,11 +1517,11 @@ func (x *TrustBundleDataSource) GetPath() string {
 	return ""
 }
 
-func (x *TrustBundleDataSource) GetName() string {
+func (x *TrustBundleDataSource) GetNames() []string {
 	if x != nil {
-		return x.Name
+		return x.Names
 	}
-	return ""
+	return nil
 }
 
 type SystemInfoDataSource struct {
@@ -3120,10 +3115,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05field\x18\x01 \x01(\x0e2\x1a.atelet.ActorMetadataFieldR\x05field\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"J\n" +
 	"\x17ActorMetadataDataSource\x12/\n" +
-	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"?\n" +
+	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"M\n" +
 	"\x15TrustBundleDataSource\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xb3\x01\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
+	"\x05names\x18\x03 \x03(\tR\x05namesJ\x04\b\x02\x10\x03R\x04name\"\xb3\x01\n" +
 	"\x14SystemInfoDataSource\x12H\n" +
 	"\x0eactor_metadata\x18\x01 \x01(\v2\x1f.atelet.ActorMetadataDataSourceH\x00R\ractorMetadata\x12B\n" +
 	"\ftrust_bundle\x18\x02 \x01(\v2\x1d.atelet.TrustBundleDataSourceH\x00R\vtrustBundleB\r\n" +
