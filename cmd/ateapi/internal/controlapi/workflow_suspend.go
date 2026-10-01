@@ -166,9 +166,8 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 
 // commitSnapshotScope returns the scope a commit (suspend) snapshot is taken
 // with. Golden actors always commit Full regardless of the template's
-// onCommit: the golden snapshot is the base an OnGolden data resume is
-// combined with at restore, so it must carry the guest memory and filesystem
-// — a data-only golden would leave nothing to restore the guest from.
+// onCommit: new actors borrow the golden snapshot and resume it Full, so it
+// must carry the guest memory and filesystem.
 func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotContentScope {
 	if atespace == resources.GoldenActorAtespace {
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL

@@ -581,9 +581,9 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	}
 }
 
-// TestCommitSnapshotScope verifies golden actors always commit Full — the
-// golden snapshot is the base an OnGolden data resume combines into, so the
-// template's onCommit must not thin it down to a data-only capture.
+// TestCommitSnapshotScope verifies golden actors always commit Full — new
+// actors resume the golden snapshot Full, so the template's onCommit must not
+// thin it down to a data-only capture.
 func TestCommitSnapshotScope(t *testing.T) {
 	tmpl := func(onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
 		return &ateapipb.ActorTemplate{

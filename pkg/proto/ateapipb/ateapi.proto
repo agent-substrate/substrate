@@ -1022,6 +1022,11 @@ message SandboxConfig {
   string config_name = 2;
 }
 
+// SnapshotConfig selects what actor snapshots capture and where they are
+// stored. A FULL snapshot resumes from its own content. A DATA snapshot
+// resumes by starting the containers afresh from the OCI image, with the
+// durable-dir volumes populated from the snapshot.
+//
 // +k8s:customValidation # on_commit must be a subset of on_pause
 message SnapshotConfig {
   // on_pause defines the scope of the snapshot captured when an actor
@@ -1042,13 +1047,6 @@ message SnapshotConfig {
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope on_commit = 2;
 
-  // on_resume selects, per snapshot situation, what supplies the guest state
-  // at resume. Defaults to the per-field defaults documented on
-  // OnResumeConfig when unset on create.
-  //
-  // +k8s:required
-  OnResumeConfig on_resume = 3;
-
   // storage_location is the base object-storage URI snapshots of actors on
   // this version are stored under. Required.
   //
@@ -1056,33 +1054,6 @@ message SnapshotConfig {
   // +k8s:maxLength=1024
   // +k8s:customValidation # Validate URI
   string storage_location = 4;
-}
-
-// ResumeSource selects what supplies the guest state when an actor is resumed
-// from one of the snapshot situations named by OnResumeConfig's fields.
-enum ResumeSource {
-  RESUME_SOURCE_UNSPECIFIED = 0;
-  // Starts the actor's containers afresh from the OCI image, with the
-  // durable-dir volumes pre-populated from the snapshot.
-  RESUME_SOURCE_COLD_BOOT = 1;
-  // Restores with the version's golden snapshot and the actor's own
-  // durable data.
-  RESUME_SOURCE_GOLDEN = 2;
-  // Keep this in sync with OnResumeConfig.from_data's maximum.
-}
-
-// OnResumeConfig selects, per snapshot situation, what supplies the guest
-// state at resume. Each field names what is being resumed FROM; the value
-// names the boot source. Full snapshots that are still valid always restore
-// from their own content and are not configurable here.
-message OnResumeConfig {
-  // from_data applies when the resume uses a DATA-scope snapshot (from
-  // on_pause or on_commit). Defaults to COLD_BOOT when unset.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the ResumeSource enum
-  ResumeSource from_data = 1;
 }
 
 // Container is a single application container of an ActorTemplate.
