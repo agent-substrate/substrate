@@ -14,33 +14,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Serves or builds the website in site/. See site/README.md.
+# Serves, builds, or tests the website in site/. See site/README.md.
 #
-#   hack/site.sh serve   live-reloading dev server
-#   hack/site.sh build   production build into site/public, as CI runs it
+#   hack/site.sh serve          live-reloading dev server
+#   hack/site.sh build          production build into site/public, as CI runs it
+#   hack/site.sh release-data   write site/data/release.json (serve and build
+#                               run this first)
+#   hack/site.sh test           build against site/testdata and check the
+#                               rendered templates
 #
 # Needs Hugo extended and Go; build also needs npm, for PostCSS. Set HUGO to
-# use a hugo binary that is not on PATH.
+# use a hugo binary that is not on PATH, and SITE_REF to the git ref the site
+# is built from (release builds set it to the tag).
 
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-cd "${ROOT}/site"
+cd "${ROOT}"
 
 HUGO="${HUGO:-hugo}"
+SITE_REF="${SITE_REF:-HEAD}"
+export HUGO
+
+# Lists the docs added since the previous full release so the sidebar can mark
+# them new.
+release_data() {
+  go run ./tools/site-release-data --ref "${SITE_REF}" --out site/data/release.json
+}
 
 case "${1:-}" in
+  release-data)
+    release_data
+    ;;
   serve)
     shift
+    release_data
+    cd site
     exec "${HUGO}" server "$@"
     ;;
   build)
     shift
+    release_data
+    cd site
     npm ci
     exec "${HUGO}" build --environment production --minify "$@"
     ;;
+  test)
+    exec hack/test-site-templates.sh
+    ;;
   *)
-    echo "usage: $0 serve|build [hugo flags...]" >&2
+    echo "usage: $0 serve|build|release-data|test [hugo flags...]" >&2
     exit 2
     ;;
 esac

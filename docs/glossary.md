@@ -5,6 +5,16 @@ This document defines the core terms used across Agent Substrate.
 For how the pieces fit together, see the [Architecture](architecture.md) and
 [API Guide](api-guide.md).
 
+## Naming & Prefix
+
+- **ATE vs. Agent Substrate**: **Agent Substrate** is the name of the
+  overall platform and runtime, while **`ate`** (originally *Agent Task /
+  Execution Engine*) is the internal prefix used across Kubernetes namespaces
+  (`ate-system`), control-plane binaries (`ate-api-server`, `atecontroller`),
+  node and pod daemons (`atelet`, `ateom`), networking components (`atenet`,
+  `atunnel`), HTTP routing headers (`ate-target-actor`), and the `kubectl-ate`
+  CLI plugin.
+
 ## Resources (declarative)
 
 - **ActorTemplate** (ate API resource): the definition of an actor "class":

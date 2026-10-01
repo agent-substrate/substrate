@@ -25,6 +25,7 @@ limitations under the License.
           <p class="title">
             {{- with .Params.card_icon }}<i class="{{ . }} entry-icon" aria-hidden="true"></i>{{ end -}}
             <span>{{ .LinkTitle }}</span>
+            {{- partial "page-pills.html" (dict "page" . "new" false) }}
           </p>
           {{- with .Params.estimated_time }}
           <span class="entry-time">⏱️ {{ . }}</span>

@@ -1,0 +1,68 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Returns the terms defined in docs/glossary.md as a slice of dicts:
+  term  the term as written in bold
+  id    its anchor on the glossary page
+  html  its definition, rendered, with links pointing at site pages
+
+A term is a top-level bullet of the form "- **Term** (optional note): text",
+continued by lines indented two spaces. Indented sub-bullets and anything else
+end it. Returns nothing when no page renders docs/glossary.md. Call as:
+  partialCached "glossary-terms.html" . "glossary"
+*/ -}}
+
+{{- $terms := slice -}}
+{{- with where site.Pages "Params.repo_source" "docs/glossary.md" -}}
+  {{- $glossaryURL := (index . 0).RelPermalink -}}
+  {{- $doc := partialCached "repo-doc.html" "docs/glossary.md" "docs/glossary.md" -}}
+  {{- $entries := slice -}}
+  {{- $cur := dict -}}
+  {{- range split $doc.body "\n" -}}
+    {{- $line := . -}}
+    {{- with findRESubmatch `^- \*\*(.+?)\*\*(?: \([^)]*\))?:\s*(.*)$` $line 1 -}}
+      {{- if $cur.term }}{{ $entries = $entries | append $cur }}{{ end -}}
+      {{- $m := index . 0 -}}
+      {{- $cur = dict "term" (index $m 1) "md" (index $m 2) -}}
+    {{- else -}}
+      {{- if and $cur.term (findRE `^  [^ \-]` $line 1) -}}
+        {{- $cur = merge $cur (dict "md" (printf "%s %s" $cur.md (strings.TrimSpace $line))) -}}
+      {{- else if $cur.term -}}
+        {{- $entries = $entries | append $cur -}}
+        {{- $cur = dict -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $cur.term }}{{ $entries = $entries | append $cur }}{{ end -}}
+  {{- if not $entries -}}
+    {{- errorf "glossary-terms: docs/glossary.md: no terms found; terms must be top-level bullets like \"- **Term**: definition\"" -}}
+  {{- end -}}
+
+  {{- $seen := dict -}}
+  {{- range $entries -}}
+    {{- $id := urlize .term -}}
+    {{- if index $seen $id -}}
+      {{- errorf "glossary-terms: docs/glossary.md: duplicate term %q" .term -}}
+    {{- end -}}
+    {{- $seen = merge $seen (dict $id true) -}}
+    {{/* Fragment links refer to sections of the glossary itself. */ -}}
+    {{- $md := replaceRE `\]\(#` (printf "](%s#" $glossaryURL) .md -}}
+    {{- $md = partial "rewrite-repo-links.html" (dict "content" $md "dir" "docs") -}}
+    {{- $terms = $terms | append (dict "term" .term "id" $id "html" (string ($md | markdownify))) -}}
+  {{- end -}}
+{{- end -}}
+{{- return $terms -}}

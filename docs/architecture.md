@@ -1,6 +1,10 @@
+---
+status: planned
+status_note: >
+  Much of this architecture is aspirational and not yet implemented. See the
+  [roadmap](roadmap.md) for what ships next.
+---
 # Agent Substrate Architecture
-
-NOTE: Much of this architecture is aspirational, and is not yet implemented!
 
 ## Overview
 
