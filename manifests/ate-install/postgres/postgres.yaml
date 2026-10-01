@@ -127,10 +127,7 @@ spec:
           runAsUser: 70
         env:
         - name: POSTGRES_USER
-          valueFrom:
-            secretKeyRef:
-              name: postgres-admin
-              key: POSTGRES_USER
+          value: postgres
         command:
         - /bin/sh
         - /etc/postgresql/reload-tls.sh
@@ -170,10 +167,7 @@ spec:
         - name: POSTGRES_DB
           value: atepg
         - name: POSTGRES_USER
-          valueFrom:
-            secretKeyRef:
-              name: postgres-admin
-              key: POSTGRES_USER
+          value: postgres
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
