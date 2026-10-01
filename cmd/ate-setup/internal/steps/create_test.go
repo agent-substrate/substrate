@@ -164,30 +164,34 @@ func TestNewCAPoolSecretData(t *testing.T) {
 }
 
 func TestNewJWTPoolSecretData(t *testing.T) {
-	data, err := newJWTPoolSecretData()
-	if err != nil {
-		t.Fatalf("newJWTPoolSecretData() error = %v", err)
-	}
-	if diff := cmp.Diff([]string{"pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
-		t.Errorf("secret keys differ (-want +got):\n%s", diff)
-	}
+	for _, alg := range []string{"ES256", "RS256"} {
+		t.Run(alg, func(t *testing.T) {
+			data, err := newJWTPoolSecretData(alg)
+			if err != nil {
+				t.Fatalf("newJWTPoolSecretData() error = %v", err)
+			}
+			if diff := cmp.Diff([]string{"pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
+				t.Errorf("secret keys differ (-want +got):\n%s", diff)
+			}
 
-	pool, err := localjwtauthority.Unmarshal(data["pool"])
-	if err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	if len(pool.Authorities) != 1 {
-		t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
-	}
-	authority := pool.Authorities[0]
-	if authority.Algorithm != "RS256" {
-		t.Errorf("Algorithm = %q, want RS256", authority.Algorithm)
-	}
-	thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
-	if err != nil {
-		t.Fatalf("Thumbprint() error = %v", err)
-	}
-	if authority.ID != thumbprint || pool.ActiveForSigning != thumbprint {
-		t.Errorf("key ID %q, active %q; want both to be the thumbprint %q", authority.ID, pool.ActiveForSigning, thumbprint)
+			pool, err := localjwtauthority.Unmarshal(data["pool"])
+			if err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if len(pool.Authorities) != 1 {
+				t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
+			}
+			authority := pool.Authorities[0]
+			if authority.Algorithm != alg {
+				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
+			}
+			thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+			if err != nil {
+				t.Fatalf("Thumbprint() error = %v", err)
+			}
+			if authority.ID != thumbprint || pool.ActiveForSigning != thumbprint {
+				t.Errorf("key ID %q, active %q; want both to be the thumbprint %q", authority.ID, pool.ActiveForSigning, thumbprint)
+			}
+		})
 	}
 }

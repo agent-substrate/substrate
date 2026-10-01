@@ -40,8 +40,8 @@ func TestNewJWTPoolSecretWithFlagDefaults(t *testing.T) {
 		t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
 	}
 	authority := pool.Authorities[0]
-	if authority.Algorithm != "RS256" {
-		t.Errorf("Algorithm = %q, want RS256", authority.Algorithm)
+	if authority.Algorithm != "ES256" {
+		t.Errorf("Algorithm = %q, want ES256", authority.Algorithm)
 	}
 	thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
 	if err != nil {
@@ -53,7 +53,7 @@ func TestNewJWTPoolSecretWithFlagDefaults(t *testing.T) {
 }
 
 func TestNewJWTPoolSecretExplicitKey(t *testing.T) {
-	secret, keyID, err := newJWTPoolSecret("ate-system", "actor-id-jwt-pool", "ES256", "1")
+	secret, keyID, err := newJWTPoolSecret("ate-system", "actor-id-jwt-pool", "RS256", "1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +61,8 @@ func TestNewJWTPoolSecretExplicitKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keyID != "1" || pool.ActiveForSigning != "1" || pool.Authorities[0].Algorithm != "ES256" {
-		t.Errorf("got key %q, active %q, algorithm %q; want 1, 1, ES256", keyID, pool.ActiveForSigning, pool.Authorities[0].Algorithm)
+	if keyID != "1" || pool.ActiveForSigning != "1" || pool.Authorities[0].Algorithm != "RS256" {
+		t.Errorf("got key %q, active %q, algorithm %q; want 1, 1, RS256", keyID, pool.ActiveForSigning, pool.Authorities[0].Algorithm)
 	}
 }
 
