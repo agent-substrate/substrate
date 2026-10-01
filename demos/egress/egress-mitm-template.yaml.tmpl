@@ -42,11 +42,17 @@ containers:
   # makes the anchor set exactly the gateway CA, so a successful HTTPS fetch
   # proves the projected bundle validated the minted leaf. Under sdsmint the
   # public roots are useless anyway: every origin is fronted by the gateway.
+  # Since this template is used to test both passthrough and MITM policies
+  # it will use both system and ATE bundles.
+  # For deployments with MITM only policies, add
+  #
+  # - name: SSL_CERT_DIR
+  #   value: /run/ate
+  #
+  # to the "env" section to only use ATE bundle.
   env:
   - name: SSL_CERT_FILE
     value: /run/ate/trust-bundle.pem
-  - name: SSL_CERT_DIR
-    value: /run/ate
   volumeMounts:
   # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info
