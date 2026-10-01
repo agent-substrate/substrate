@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -134,25 +133,36 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 	t.Logf("denied on the decrypted request: %s", body)
 }
 
-// TestActorEgressHTTPSByHostnamePassthrough: the gateway acts as TCP proxy fetching
-// allowed SNI.
+// TestActorEgressHTTPSByHostnamePassthrough: one actor with both kinds of
+// rule. example.com is intercepted and verifies against the projected gateway
+// CA; example.edu is relayed unread and verifies against the public roots;
+// example.org matches neither and is denied.
 func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 	if !egressMITM() {
 		t.Skip("requires the same configuration as sdsmint")
 	}
-	if !e2e.CurrentAtenetDataplane().SupportsTLSPassthroughEgressPolicy() {
+	dataplane := e2e.CurrentAtenetDataplane()
+	if !dataplane.SupportsTLSPassthroughEgressPolicy() {
 		t.Skip("TODO: AgentGateway must enforce substrateEgress for TLS passthrough")
 	}
 	ctx := context.Background()
-	router, actorRef := hostnamePolicyActor(t, ctx)
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-passthrough", egressFixture(),
+		e2e.EgressAllowHTTPS("example.com"), e2e.EgressAllowPassthrough("example.edu"))
+	router := mustRouterClient(t, ctx)
+	t.Cleanup(func() { router.Close() })
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
 
-	for _, url := range []string{"https://example.com/", "https://example.org/"} {
-		status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
-		if status != http.StatusBadGateway || !strings.Contains(string(body), "request failed") {
-			t.Fatalf("fetch of %s returned HTTP %d, want a failed fetch (502) from a tunnel closed before the handshake; body: %s", url, status, body)
+	for _, url := range []string{"https://example.com/", "https://example.edu/"} {
+		status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, reached)
+		if status != http.StatusOK {
+			t.Fatalf("fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
 		}
 	}
-	t.Log("both tunnels closed before the handshake")
+	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.org/", notTransient)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
+	}
 }
 
 // fetchThroughEgressActorUntil is fetchThroughEgressActor with the caller

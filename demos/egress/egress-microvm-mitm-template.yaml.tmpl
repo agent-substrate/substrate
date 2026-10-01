@@ -18,7 +18,7 @@
 # projection is worth proving on both.
 #
 # Kept in step with egress-microvm-template.yaml.tmpl; the deltas
-# are the names, the projected trust bundle, and the two SSL_CERT_* variables.
+# are the names, the projected trust bundle, and SSL_CERT_FILE.
 
 metadata:
   atespace: ate-demo-egress-microvm-mitm
@@ -31,20 +31,13 @@ containers:
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
   # The demo fetches with a stock net/http client, so its roots come from
-  # crypto/x509's system pool — which on Unix reads both of these.
-  #
-  # SSL_CERT_FILE alone is not enough to make the projected bundle the whole
-  # story: it replaces the default cert FILE list, but the default cert
-  # DIRECTORY list is still scanned, and the base image keeps its public
-  # roots in /etc/ssl/certs. Pointing SSL_CERT_DIR at the projection too
-  # makes the anchor set exactly the gateway CA, so a successful HTTPS fetch
-  # proves the projected bundle validated the minted leaf. Under sdsmint the
-  # public roots are useless anyway: every origin is fronted by the gateway.
+  # crypto/x509's system pool. SSL_CERT_FILE replaces the default cert file
+  # with the projected bundle; the default cert directories, where the base
+  # image keeps its public roots, are still read. The actor needs both: the
+  # gateway CA for intercepted TLS, the public roots for tls_passthrough.
   env:
   - name: SSL_CERT_FILE
     value: /run/ate/trust-bundle.pem
-  - name: SSL_CERT_DIR
-    value: /run/ate
   volumeMounts:
   # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info
