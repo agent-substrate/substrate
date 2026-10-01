@@ -7260,7 +7260,7 @@ func Validate_TrustBundleDataSource(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 1).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 8).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -7274,16 +7274,20 @@ func Validate_TrustBundleDataSource(
 			if e := validate.MinItems(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
 				errs = append(errs, e...)
 			}
-			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
 					return validate.MinLength(ctx, op, fldPath, obj, oldObj, 1)
 				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}
-			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
 					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253)
 				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
