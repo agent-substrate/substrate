@@ -6,6 +6,16 @@ This guide explains how to configure Substrate resources to deploy high-density,
 
 The `WorkerPool` defines the pool of physical "warm" compute capacity. It manages a fleet of standby pods (herders) that are ready to receive and execute actor states.
 
+Worker registration requires a controller ownership chain from the Pod through
+its ReplicaSet and the pool's Deployment to the WorkerPool, with matching UIDs
+and all resources in the same namespace. The `ate.dev/worker-pool` label alone
+does not establish membership. Pods that fail this check are not registered;
+previously registered workers are marked draining.
+
+Restrict Kubernetes write access in worker namespaces to trusted principals.
+Owner references are mutable metadata, so ownership checks do not authenticate
+the creator of a pod or protect against a principal that can forge those references.
+
 ### Specification (`WorkerPoolSpec`)
 
 | Field | Type | Description |

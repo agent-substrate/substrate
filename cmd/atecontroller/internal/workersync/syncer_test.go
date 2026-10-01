@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -37,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/fake"
+	appsv1client "k8s.io/client-go/kubernetes/typed/apps/v1"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 )
@@ -58,6 +60,8 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 			Namespace: ns,
 			UID:       types.UID(uid),
 			Labels:    map[string]string{workerPodLabel: poolName},
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(
+				workerReplicaSet(workerPool(ns, poolName, "", nil)), appsv1.SchemeGroupVersion.WithKind("ReplicaSet"))},
 		},
 		Spec: corev1.PodSpec{
 			NodeName:   "node1",
@@ -83,8 +87,34 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 
 func workerPool(ns, name, sandboxClass string, labels map[string]string) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID(ns + "/" + name), Labels: labels},
 		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: atev1alpha1.SandboxClass(sandboxClass)},
+	}
+}
+
+func workerDeployment(pool *atev1alpha1.WorkerPool) *appsv1.Deployment {
+	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: pool.Name, Namespace: pool.Namespace, UID: types.UID(string(pool.UID) + "-deployment"),
+		OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(pool, atev1alpha1.GroupVersion.WithKind("WorkerPool"))},
+	}}
+}
+
+func workerReplicaSet(pool *atev1alpha1.WorkerPool) *appsv1.ReplicaSet {
+	return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Name: pool.Name + "-rs", Namespace: pool.Namespace, UID: types.UID(string(pool.UID) + "-rs"),
+		OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(workerDeployment(pool), appsv1.SchemeGroupVersion.WithKind("Deployment"))},
+	}}
+}
+
+func seedPoolOwners(t *testing.T, apps appsv1client.AppsV1Interface, pools ...*atev1alpha1.WorkerPool) {
+	t.Helper()
+	for _, pool := range pools {
+		if _, err := apps.Deployments(pool.Namespace).Create(t.Context(), workerDeployment(pool), metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := apps.ReplicaSets(pool.Namespace).Create(t.Context(), workerReplicaSet(pool), metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -125,12 +155,13 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
+	seedPoolOwners(t, fakeK8s.AppsV1(), initPools...)
 	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
 	workerPoolInformer, _ := newWorkerPoolInformer(t, initPools...)
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s, workerInformer, workerPoolInformer).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -146,10 +177,11 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
+	seedPoolOwners(t, fakeK8s.AppsV1(), initPools...)
 	_, workerInformer := WorkerPodInformer(fakeK8s)
 	workerPoolInformer, poolIndexer := newWorkerPoolInformer(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s, workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -668,6 +700,7 @@ func TestSyncer_RequeueOnMissingWorkerPool(t *testing.T) {
 	if err := poolIndexer.Add(workerPool(ns, poolName, "gvisor", nil)); err != nil {
 		t.Fatalf("adding pool: %v", err)
 	}
+	seedPoolOwners(t, s.apps, workerPool(ns, poolName, "gvisor", nil))
 	mustReconcile(t, ctx, s, key)
 
 	if got := api.get(testPodUID).GetSandboxClass(); got != "gvisor" {
@@ -797,7 +830,7 @@ func TestSyncer_TerminalPod_AlreadyGoneOrReplaced(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			s, pods, _ := setupReconcileTest(t, newFakeControl())
+			s, pods, _ := setupReconcileTest(t, newFakeControl(), workerPool(ns, poolName, "gvisor", nil))
 
 			//nolint:staticcheck // NewSimpleClientset is the fake the syncer's pod client takes.
 			fakeK8s := fake.NewSimpleClientset()

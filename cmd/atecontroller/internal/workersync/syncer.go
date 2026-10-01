@@ -28,10 +28,13 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
+	appsv1client "k8s.io/client-go/kubernetes/typed/apps/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -42,9 +45,8 @@ import (
 // ordering is preserved.
 const syncerWorkerCount = 2
 
-// workerPodLabel names the WorkerPool a worker pod belongs to. Its presence is
-// also what marks a pod as a worker pod at all, so it doubles as the selector
-// the pod informer is narrowed by.
+// workerPodLabel identifies candidate worker pods for the informer. Membership
+// in the named pool also requires a matching controller ownership chain.
 const workerPodLabel = "ate.dev/worker-pool"
 
 // workerPoolIndex maps a WorkerPool namespace/name to the worker Pods labeled
@@ -100,6 +102,7 @@ func (k workerKey) logAttrs() []any {
 type WorkerPoolSyncer struct {
 	client             ateapipb.ControlClient
 	pods               corev1client.PodsGetter
+	apps               appsv1client.AppsV1Interface
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
@@ -111,12 +114,13 @@ type WorkerPoolSyncer struct {
 	listCap     time.Duration
 }
 
-// NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
-// worker pods that have reached a terminal phase.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+// NewWorkerPoolSyncer creates a new WorkerPoolSyncer. kube is used to verify pod
+// ownership and delete worker pods that have reached a terminal phase.
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, kube kubernetes.Interface, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
-		pods:               pods,
+		pods:               kube.CoreV1(),
+		apps:               kube.AppsV1(),
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
@@ -276,6 +280,15 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
 	}
+	pool, err := s.workerPoolForPod(ctx, pod)
+	if err != nil {
+		return err
+	}
+	if pool == nil {
+		// Stop scheduling a previously registered pod whose ownership no longer
+		// matches. It is not ours to delete, even if it is terminal.
+		return s.markWorkerDraining(ctx, key)
+	}
 	// Checked before eligibility for the same reason: a terminal pod is never
 	// Ready, so the eligibility gate would leave its Worker, and the Actors bound
 	// to it, registered for as long as the pod object lingers.
@@ -288,7 +301,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// restarting is not Ready, but its Actors are already lost.
 		return s.raiseEpoch(ctx, key, pod)
 	}
-	return s.createOrUpdateWorker(ctx, key, pod)
+	return s.createOrUpdateWorker(ctx, key, pod, pool)
 }
 
 // ateomContainer is the name of the worker pod's ateom container.
@@ -330,20 +343,61 @@ func (s *WorkerPoolSyncer) raiseEpoch(ctx context.Context, key workerKey, pod *c
 	return err
 }
 
-func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
+// workerPoolForPod resolves Pod -> ReplicaSet -> Deployment -> WorkerPool.
+// Names and labels only locate candidates; controller references and UIDs must
+// match at every step. All lookups stay in the pod's namespace.
+func (s *WorkerPoolSyncer) workerPoolForPod(ctx context.Context, pod *corev1.Pod) (*atev1alpha1.WorkerPool, error) {
 	poolName := pod.Labels[workerPodLabel]
-	poolObject, exists, err := s.workerPoolInformer.GetIndexer().GetByKey(key.namespace + "/" + poolName)
+	if poolName == "" {
+		return nil, nil
+	}
+	poolObject, exists, err := s.workerPoolInformer.GetIndexer().GetByKey(pod.Namespace + "/" + poolName)
 	if err != nil {
-		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
+		return nil, fmt.Errorf("getting WorkerPool %s/%s: %w", pod.Namespace, poolName, err)
 	}
 	if !exists {
-		return fmt.Errorf("getting WorkerPool %s/%s: not found", key.namespace, poolName)
+		return nil, fmt.Errorf("getting WorkerPool %s/%s: not found", pod.Namespace, poolName)
 	}
 	pool, ok := poolObject.(*atev1alpha1.WorkerPool)
 	if !ok {
-		return fmt.Errorf("getting WorkerPool %s/%s: unexpected object type %T", key.namespace, poolName, poolObject)
+		return nil, fmt.Errorf("getting WorkerPool %s/%s: unexpected object type %T", pod.Namespace, poolName, poolObject)
 	}
+	rsRef := metav1.GetControllerOf(pod)
+	if rsRef == nil || rsRef.APIVersion != appsv1.SchemeGroupVersion.String() || rsRef.Kind != "ReplicaSet" || rsRef.Name == "" || rsRef.UID == "" {
+		return nil, nil
+	}
+	rs, err := s.apps.ReplicaSets(pod.Namespace).Get(ctx, rsRef.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting ReplicaSet %s/%s: %w", pod.Namespace, rsRef.Name, err)
+	}
+	if rs.UID != rsRef.UID {
+		return nil, nil
+	}
+	depRef := metav1.GetControllerOf(rs)
+	if depRef == nil || depRef.APIVersion != appsv1.SchemeGroupVersion.String() || depRef.Kind != "Deployment" || depRef.Name != pool.Name || depRef.UID == "" {
+		return nil, nil
+	}
+	dep, err := s.apps.Deployments(pod.Namespace).Get(ctx, depRef.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting Deployment %s/%s: %w", pod.Namespace, depRef.Name, err)
+	}
+	if dep.UID != depRef.UID {
+		return nil, nil
+	}
+	poolRef := metav1.GetControllerOf(dep)
+	if poolRef == nil || poolRef.APIVersion != atev1alpha1.GroupVersion.String() || poolRef.Kind != "WorkerPool" || poolRef.Name != pool.Name || poolRef.UID != pool.UID || pool.UID == "" {
+		return nil, nil
+	}
+	return pool, nil
+}
 
+func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod, pool *atev1alpha1.WorkerPool) error {
 	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
 	if status.Code(err) == codes.NotFound {
 		slog.InfoContext(ctx, "Syncer: registering worker", key.logAttrs()...)
@@ -352,7 +406,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			// workerKey.workerName for where the name comes from.
 			Metadata:        &ateapipb.ResourceMetadata{Name: key.workerName()},
 			WorkerNamespace: pod.Namespace,
-			WorkerPool:      poolName,
+			WorkerPool:      pool.Name,
 			WorkerPod:       pod.Name,
 			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
