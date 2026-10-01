@@ -36,3 +36,8 @@ func ociBundlePath(actorDirs *ateompb.ActorDirs, containerName string) string {
 func rootfsUpperDir(actorDirs *ateompb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "rootfs-upper")
 }
+
+// localCheckpointsDir is where atelet stores local (pause) snapshots.
+func localCheckpointsDir(actorDirs *ateompb.ActorDirs) string {
+	return filepath.Join(actorDirs.GetRootDir(), "local-checkpoint")
+}

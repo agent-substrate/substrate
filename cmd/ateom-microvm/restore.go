@@ -390,6 +390,14 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	tVMRestore := time.Now()
+	if memMode == ch.MemRestoreEager {
+		// An eager restore has read the whole snapshot into guest memory, and nothing
+		// merges against it afterwards, so drop the staged memory image and evict its
+		// page cache before resuming the VM so guest RAM and snapshot page cache do
+		// not overlap during Resume and wakeup probe gating.
+		dropStagedMemoryImage(ctx, p.actorDirs, restoreDir)
+	}
+	dropActorSnapshotCacheAsync(p.actorDirs, memMode == ch.MemRestoreEager, restoreDir)
 	if err := client.Resume(ctx); err != nil {
 		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
@@ -468,21 +476,6 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			{phaseWakeupProbe, dWakeupProbe},
 			{phaseTotal, dTotal},
 		})
-
-	// An eager restore has read the whole snapshot into guest memory, and nothing
-	// merges against it afterwards, so the staged copy is dead weight from here on —
-	// a second ~160MiB per running actor on top of the checkpoint it will write.
-	// Drop the memory image but keep the directory: atelet re-stages it wholesale
-	// before any later restore, and the small files beside it stay cheap to keep.
-	if memMode == ch.MemRestoreEager {
-		staged := filepath.Join(restoreDir, "memory-ranges")
-		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
-			// Not fatal: it only costs disk until the actor is torn down.
-			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
-		} else {
-			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
-		}
-	}
 
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd,
