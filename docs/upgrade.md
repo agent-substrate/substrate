@@ -350,6 +350,11 @@ is fine: a snapshot written on either version restores on either
 version. The roll converges because step 5 takes old workers out of
 service node by node, not because the scheduler prefers the new pool.
 
+A release that changes the OCI spec atelet builds is the exception.
+`runsc restore` refuses a snapshot whose checkpoint-time spec differs,
+so re-take gVisor golden snapshots after such a release and recreate
+gVisor actors suspended before it.
+
 ### 5. Roll each node
 
 Repeat for every node, one at a time. On a single-node cluster this
