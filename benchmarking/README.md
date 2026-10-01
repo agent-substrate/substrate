@@ -13,6 +13,12 @@ scenario ladder, read [observability.md](observability.md).
 > [!IMPORTANT]
 > Source the environment configuration file (e.g., `source .ate-dev-env.sh`)
 > first so `PROJECT_ID`, `BUCKET_NAME`, etc. are set.
+>
+> **For Local Kind Clusters**: Set `KO_DOCKER_REPO` to the local registry so images are pulled without remote cloud credentials:
+> ```bash
+> export KO_DOCKER_REPO="localhost:5001"
+> export BUCKET_NAME="ate-snapshots"
+> ```
 
 Note that deploying the benchmarks does not run them. You must visit Locust's
 web UI to start a test.
@@ -271,6 +277,44 @@ disk all fail before any actor is created. Built-in variants are checked by
   think gap excluded.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
   lifecycle latencies.
+
+### External Volume Storage Benchmark (`glutton_storage`)
+
+The `glutton_storage` benchmark evaluates Substrate External Volume lifecycle performance (CSI volume dynamic provisioning, worker node attachment, sandbox mounting, and direct write I/O durability) under concurrent user load and oversubscription.
+
+#### Storage Configuration Knobs
+
+The `glutton-storage` template is deployed only when a StorageClass is set,
+because it needs a CSI driver that not every cluster has.
+
+* `--volume-pool`: Filestore volume pool resource name,
+  `projects/<project>/locations/<location>/volumePools/<name>`. `deploy.sh`
+  creates the `filestore-volumepool` StorageClass for the pool and deploys
+  `glutton-storage` on it. Can also be set with the `VOLUME_POOL` env var (for
+  example in `.ate-dev-env.sh`) or `volumePool` in `tests.yaml`. The pool must
+  already exist and have available volumes, and the cluster needs the
+  Filestore CSI driver.
+* `--storage-class-name`: StorageClass for the external volume (default
+  `filestore-volumepool` when a volume pool is set; otherwise, e.g.
+  `csi-nfs-sc` on kind). Can also be set with the `STORAGE_CLASS_NAME` env var
+  or `storageClassName` in `tests.yaml`.
+
+Example:
+
+```bash
+benchmarking/deploy_locust.sh --deploy \
+  --volume-pool projects/my-project/locations/us-west1/volumePools/my-pool
+```
+
+#### Storage Reported Metrics
+
+* `CreateAtespace`: Latency to ensure the benchmark atespace exists.
+* `CreateActor`: Latency to create actor CRDs with external volume templates.
+* `ResumeActorColdStart`: First resume latency, including direct CSI volume dynamic provisioning (`CreateVolume`), worker node attachment (`ControllerPublishVolume`), and sandbox mounting.
+* `ResumeActor`: Warm volume re-attachment and sandbox mount latency.
+* `GluttonWriteDisk`: HTTP/1.1 write I/O latency to `/mnt/storage` with `f.Sync()` disk durability flush.
+* `SuspendActor`: Actor suspend latency including sandbox filesystem unmount and CSI volume detachment (`ControllerUnpublishVolume`).
+* `DeleteActor`: Actor deletion and CSI volume destruction (`DeleteVolume`).
 
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
