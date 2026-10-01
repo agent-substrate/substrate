@@ -33,7 +33,6 @@ import (
 	"google.golang.org/protobuf/reflect/protorange"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -230,9 +229,12 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatal(err)
 		}
 		actorRef := resources.ActorRefFromActor(actor)
-		policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-			Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
-		}}}
+		policy := &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+			Rules: []*ateapipb.EgressRule{{
+				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+			}},
+		}
 
 		created, err := s.CreateEgressPolicy(ctx, actorRef, policy)
 		if err != nil {
@@ -240,9 +242,6 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		if md := created.GetMetadata(); md.GetName() != "default" || md.GetAtespace() != testAtespace || md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
 			t.Fatalf("created metadata = %v", md)
-		}
-		if policy.GetMetadata() != nil {
-			t.Fatalf("input metadata = %v; want nil", policy.GetMetadata())
 		}
 		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); !errors.Is(err, store.ErrAlreadyExists) {
 			t.Fatalf("duplicate create error = %v, want ErrAlreadyExists", err)
@@ -263,7 +262,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		updated, err := s.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(created), func(policy *ateapipb.EgressPolicy) error {
 			policy.Metadata.Atespace = "other"
 			policy.Metadata.Name = "other"
-			policy.Rules = []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
+			policy.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
 			return nil
 		})
 		if err != nil || updated.GetMetadata().GetAtespace() != testAtespace || updated.GetMetadata().GetName() != "default" || updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
@@ -287,7 +286,9 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 		create := func() *ateapipb.EgressPolicy {
-			created, err := s.CreateEgressPolicy(ctx, actorRef, &ateapipb.EgressPolicy{})
+			created, err := s.CreateEgressPolicy(ctx, actorRef, &ateapipb.EgressPolicy{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+			})
 			if err != nil {
 				t.Fatalf("CreateEgressPolicy failed: %v", err)
 			}
@@ -341,7 +342,9 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		ctx := context.Background()
 		mustCreateAtespace(t, s, testAtespace)
 		actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
-		policy := &ateapipb.EgressPolicy{}
+		policy := &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+		}
 		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Fatalf("policy without Actor error = %v, want ErrFailedPrecondition", err)
 		}
@@ -3164,8 +3167,9 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		ref := resources.ActorRefFromActor(actor)
 		created, err := s.CreateEgressPolicy(ctx, ref, withUnknownField(&ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 			Rules: []*ateapipb.EgressRule{withUnknownField(&ateapipb.EgressRule{
-				Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
+				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
 			})},
 		}))
 		if err != nil {

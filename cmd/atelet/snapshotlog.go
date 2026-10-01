@@ -19,6 +19,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // snapshotLogAttrs renders what recordPhases measures as a per-actor record. The
@@ -30,7 +32,13 @@ import (
 // the values are seconds and not the nanoseconds slog.Duration writes: that
 // instrument declares unit s. Identity stays out of snapshotOp so no edit here
 // can route it into a datapoint.
-func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey string, phases []phase) []slog.Attr {
+//
+// err is the operation's outcome. The record is written on the way out of a
+// failed operation too, so that its completed phases are not lost; error.type
+// (the gRPC code, as on the ateapi instruments) marks it so a reader does not
+// average a timed-out download in with the successful ones. Absence means
+// success, as on the instruments.
+func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey string, err error, phases []phase) []slog.Attr {
 	attrs := ateattr.ActorLogAttrs(a)
 
 	// Borrow the metric's dimensions rather than rebuild them: op.attrs already
@@ -46,6 +54,17 @@ func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey s
 			continue
 		}
 		attrs = append(attrs, slog.String(string(kv.Key), kv.Value.String()))
+	}
+
+	if err != nil {
+		// Only an error that came back over gRPC carries a status; atelet's
+		// own failures are plain errors, and the ones worth telling apart are
+		// the context ones (a timed-out download, a cancelled restore).
+		code := status.Code(err)
+		if code == codes.Unknown {
+			code = status.FromContextError(err).Code()
+		}
+		attrs = append(attrs, slog.String(string(ateattr.ErrorTypeKey), code.String()))
 	}
 
 	// There is no ate.snapshot.phase key: on a datapoint it names the one step

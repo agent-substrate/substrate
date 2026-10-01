@@ -59,8 +59,12 @@ func mapCredentialProviderError(err error) error {
 //
 // Once injection is actually attempted (TLS leg, provider present), any failure
 // to produce the credential the policy required fails closed.
-func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, leg string, effects *ateapipb.EgressRuleEffects) ([]*corev3.HeaderValueOption, error) {
-	injections := effects.GetInjectStaticHeaders()
+//
+// This gateway cannot mint actor JWTs yet, so on the MITM leg a rule that asks
+// for one is denied. Actor JWTs don't come from the credential provider, so
+// that holds with no provider configured.
+func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, leg string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
+	injections := effects.GetReplaceHeaders()
 	if len(injections) == 0 {
 		return nil, nil
 	}
@@ -69,6 +73,14 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		slog.WarnContext(ctx, "egress: skipping credential injection on a non-TLS leg; the request proceeds without the credential",
 			slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("leg", leg))
 		return nil, nil
+	}
+	// TODO(identity): mint actor JWTs through Control.MintActorJWT.
+	for _, inj := range injections {
+		if inj.GetActorJwt() != nil {
+			slog.ErrorContext(ctx, "egress denied: this gateway cannot inject actor JWTs yet",
+				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("header", inj.GetHeader()))
+			return nil, extproc.NewReqError(envoy_type.StatusCode_NotImplemented, deniedBody)
+		}
 	}
 	if h.provider == nil {
 		slog.WarnContext(ctx, "egress: skipping credential injection because no credential provider is configured; the request proceeds without the credential",

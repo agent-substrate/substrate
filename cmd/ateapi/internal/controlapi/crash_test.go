@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -633,8 +634,8 @@ func (otlpSinkExporter) Export(_ context.Context, records []sdklog.Record) error
 			timestamp: r.Timestamp(),
 			attrs:     map[string]string{},
 		}
-		r.WalkAttributes(func(kv otellog.KeyValue) bool {
-			e.attrs[kv.Key] = kv.Value.String()
+		r.WalkAttributes(func(kv attribute.KeyValue) bool {
+			e.attrs[string(kv.Key)] = kv.Value.String()
 			return true
 		})
 		otlpSink = append(otlpSink, e)

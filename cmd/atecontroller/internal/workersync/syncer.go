@@ -270,10 +270,51 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		return s.markWorkerDraining(ctx, key)
 	}
 	if !isWorkerEligible(pod) {
-		// The pod has no IP or is not Ready yet; a later update event re-enqueues it.
-		return nil
+		// The pod has no IP or is not Ready yet; a later update event re-enqueues
+		// it. A registered Worker still takes a raised epoch: an ateom that is
+		// restarting is not Ready, but its Actors are already lost.
+		return s.raiseEpoch(ctx, key, pod)
 	}
 	return s.createOrUpdateWorker(ctx, key, pod)
+}
+
+// ateomContainer is the name of the worker pod's ateom container.
+const ateomContainer = "ateom"
+
+// podEpoch counts the runs of the pod's ateom container: 1 for its first run
+// and one more for each restart. 0 until kubelet reports the container.
+func podEpoch(pod *corev1.Pod) int64 {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == ateomContainer {
+			return int64(cs.RestartCount) + 1
+		}
+	}
+	return 0
+}
+
+// raiseEpoch writes the pod's epoch to its registered Worker if it is higher
+// than the one recorded there. A pod that is not registered is left to
+// createOrUpdateWorker.
+func (s *WorkerPoolSyncer) raiseEpoch(ctx context.Context, key workerKey, pod *corev1.Pod) error {
+	epoch := podEpoch(pod)
+	if epoch == 0 {
+		return nil
+	}
+	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
+	if status.Code(err) == codes.NotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("getting worker: %w", err)
+	}
+	if epoch <= w.GetEpoch() {
+		return nil
+	}
+	slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
+		append(key.logAttrs(), slog.Int64("epoch", epoch))...)
+	w.Epoch = epoch
+	_, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})
+	return err
 }
 
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
@@ -305,6 +346,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			NodeName:        pod.Spec.NodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
+			Epoch:           podEpoch(pod),
 			// Capacity is the Worker's to report, not the syncer's to infer
 			// from the pod: it is what the ateom can actually supply. Until
 			// that report lands, CreateWorker's reified ceiling holds the
@@ -322,13 +364,19 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		return fmt.Errorf("getting worker: %w", err)
 	}
 
-	// UpdateWorker replaces the whole resource, so the one mutable field is
+	// UpdateWorker replaces the whole resource, so the mutable fields are
 	// edited onto the Worker as it was read and the rest is sent back unchanged
 	// — anything else altered here, including a field cleared by omission, is
 	// rejected as INVALID_ARGUMENT. Everything else on a Worker is immutable
 	// after create, so drift there cannot be repaired by an update; it takes a
 	// new pod, which arrives under a new key.
 	var changed bool
+	if epoch := podEpoch(pod); epoch > w.GetEpoch() {
+		slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
+			append(key.logAttrs(), slog.Int64("epoch", epoch))...)
+		w.Epoch = epoch
+		changed = true
+	}
 	if !maps.Equal(w.GetLabels(), pool.GetLabels()) {
 		slog.InfoContext(ctx, "Syncer: updating worker (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()

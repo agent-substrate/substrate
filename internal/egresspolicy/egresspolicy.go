@@ -13,8 +13,11 @@
 // limitations under the License.
 
 // Package egresspolicy evaluates an Actor's EgressPolicy against a
-// destination. ateapi validates patterns and CIDRs with the same parsers the
-// gateway matches with, so the two cannot drift.
+// destination. ateapi validates patterns with the same parser the gateway
+// matches with, so the two cannot drift.
+//
+// Requests are decided here; TLS connections are decided by the dataplane
+// against SNIRules. tls_passthrough rules match nothing for now.
 //
 // The package is pure: no I/O, no logging.
 package egresspolicy
@@ -24,6 +27,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -32,18 +36,19 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// Destination is what a request or connection is going to, as far as the leg
-// evaluating it can tell. A request the gateway can read has the Hostname it
-// named, when that is a DNS name, and the IP the actor dialed, when the leg
-// knows it; a connection has only IP and Port. A rule that needs a field the
-// leg cannot supply never matches there.
+// Destination is what a request is going to, as far as the leg evaluating it
+// can tell: the Hostname it named, or the IP when it named a literal, and the
+// port the actor dialed.
 type Destination struct {
 	// Hostname is the normalized DNS name: lowercase ASCII, no trailing dot.
 	// Empty when the destination was not named by a hostname.
 	Hostname string
-	// IP is the address that will be dialed, when known. Zero when unknown.
+	// IP is the address named instead of a hostname, when it was. Only the
+	// "*" pattern matches it.
 	IP netip.Addr
-	// Port is the destination port, when known. Zero when unknown.
+	// Port is the port the actor dialed, when the leg knows it. Zero when it
+	// does not, in which case a rule's ports are not enforced. A port in a
+	// request's authority is not this.
 	Port uint16
 }
 
@@ -51,61 +56,99 @@ type Destination struct {
 type Decision struct {
 	// Allowed reports whether some rule authorized the destination.
 	Allowed bool
-	// RuleIndex is the index of the first matching rule in the policy, or -1
-	// when nothing matched.
+	// RuleIndex is the index of the deciding rule in the policy, or -1 when
+	// nothing matched.
 	RuleIndex int
-	// Effects are the effects of the matching rule, when it is a hostname
-	// rule that declares any. Nil otherwise.
-	Effects *ateapipb.EgressRuleEffects
-	// ByName reports that a hostname rule matched: the destination was
-	// authorized on its name, so the name is what to dial.
-	ByName bool
+	// Effects are the effects of the deciding rule, when it declares any.
+	// Nil otherwise.
+	Effects *ateapipb.HttpRuleEffects
 }
 
-// Policy is an EgressPolicy with its patterns and CIDRs parsed once, ready
-// to be evaluated many times.
+// Policy is an EgressPolicy with its patterns and ports parsed once, ready to
+// be evaluated many times.
 type Policy struct {
 	rules []compiledRule
 }
 
+type protocol int
+
+const (
+	protocolHTTP protocol = iota + 1
+	protocolHTTPS
+	protocolTLSPassthrough
+)
+
 type compiledRule struct {
-	hostnames []HostnamePattern
-	effects   *ateapipb.EgressRuleEffects
-	cidrs     []netip.Prefix
-	all       bool
+	protocol protocol
+	patterns []HostnamePattern
+	// ports the rule names; anyPort when it names all of them.
+	ports   []uint16
+	anyPort bool
+	effects *ateapipb.HttpRuleEffects
 }
 
-// Compile parses every pattern and CIDR in policy. ateapi validates with the
-// same parsers, so nothing should fail here; an entry that does (an older
+// Ports read for an http or https rule that names none. ateapi fills these
+// in before storing a policy; the gateway repeats them so an unset field
+// can only ever narrow a rule, never widen it.
+const (
+	defaultHTTPPort  uint16 = 80
+	defaultHTTPSPort uint16 = 443
+)
+
+// Compile parses every pattern and port in policy. ateapi validates the
+// same way, so nothing should fail here; an entry that does (an older
 // ateapi accepted it) is dropped and reported, which fails closed because it
 // only narrows an allow rule. The Policy is always usable.
 func Compile(policy *ateapipb.EgressPolicy) (*Policy, []error) {
 	var errs []error
 	compiled := &Policy{}
 	for i, rule := range policy.GetRules() {
-		var cr compiledRule
+		var (
+			cr          compiledRule
+			member      string
+			raw         []string
+			ports       *ateapipb.Ports
+			defaultPort uint16
+		)
 		switch {
-		case rule.GetHostnames() != nil:
-			for _, raw := range rule.GetHostnames().GetPatterns() {
-				pattern, err := ParseHostnamePattern(raw)
-				if err != nil {
-					errs = append(errs, fmt.Errorf("rules[%d].hostnames: %w", i, err))
-					continue
-				}
-				cr.hostnames = append(cr.hostnames, pattern)
+		case rule.GetHttp() != nil:
+			cr.protocol, cr.effects = protocolHTTP, rule.GetHttp().GetEffects()
+			member = "http"
+			raw, ports, defaultPort = rule.GetHttp().GetHostnames(), rule.GetHttp().GetPorts(), defaultHTTPPort
+		case rule.GetHttps() != nil:
+			cr.protocol, cr.effects = protocolHTTPS, rule.GetHttps().GetEffects()
+			member = "https"
+			raw, ports, defaultPort = rule.GetHttps().GetHostnames(), rule.GetHttps().GetPorts(), defaultHTTPSPort
+		case rule.GetTlsPassthrough() != nil:
+			cr.protocol = protocolTLSPassthrough
+			member = "tls_passthrough"
+			raw, ports = rule.GetTlsPassthrough().GetHostnames(), rule.GetTlsPassthrough().GetPorts()
+		default:
+			compiled.rules = append(compiled.rules, cr)
+			continue
+		}
+		for _, entry := range raw {
+			pattern, err := ParseHostnamePattern(entry)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("rules[%d].%s.hostnames: %w", i, member, err))
+				continue
 			}
-			cr.effects = rule.GetHostnames().GetEffects()
-		case rule.GetCidrs() != nil:
-			for _, raw := range rule.GetCidrs().GetCidrs() {
-				cidr, err := ParseCIDR(raw)
-				if err != nil {
-					errs = append(errs, fmt.Errorf("rules[%d].cidrs: %w", i, err))
-					continue
-				}
-				cr.cidrs = append(cr.cidrs, cidr)
+			cr.patterns = append(cr.patterns, pattern)
+		}
+		switch {
+		case ports == nil && defaultPort == 0:
+			errs = append(errs, fmt.Errorf("rules[%d].%s.ports: required", i, member))
+		case ports == nil:
+			cr.ports = []uint16{defaultPort}
+		case ports.GetAll() != nil:
+			cr.anyPort = true
+		}
+		for _, n := range ports.GetNumbers() {
+			if n < 1 || n > 65535 {
+				errs = append(errs, fmt.Errorf("rules[%d].%s.ports.numbers: %d is not a port number", i, member, n))
+				continue
 			}
-		case rule.GetAll() != nil:
-			cr.all = true
+			cr.ports = append(cr.ports, uint16(n))
 		}
 		compiled.rules = append(compiled.rules, cr)
 	}
@@ -116,64 +159,149 @@ func Compile(policy *ateapipb.EgressPolicy) (*Policy, []error) {
 // A policy with no rules can authorize nothing.
 func (p *Policy) RuleCount() int { return len(p.rules) }
 
-// HasHostnameRules reports whether any rule can match a hostname. A decision
-// point that sees only an address needs this before refusing a connection
-// whose requests might still be allowed by name.
-func (p *Policy) HasHostnameRules() bool {
+func (r compiledRule) matchesPort(port uint16) bool {
+	return r.anyPort || slices.Contains(r.ports, port)
+}
+
+// SNIMode is how a TLS connection is handled when an SNIRule matches. Values
+// must match cmd/dataplane/envoy/dynamic-modules/egress-policy.
+type SNIMode string
+
+// SNIModeMITM terminates TLS and decides each request inside.
+const SNIModeMITM SNIMode = "mitm"
+
+// SNIRule is an SNI pattern and the mode applied when it matches first.
+type SNIRule struct {
+	Pattern string
+	Mode    SNIMode
+}
+
+// SNIRules returns the https rules for port, most specific first: exact names
+// before wildcards, then named ports before all ports. Ties keep policy order.
+// tls_passthrough rules are left out so their names are denied, not
+// intercepted.
+func (p *Policy) SNIRules(port uint16) []SNIRule {
+	type ranked struct {
+		rule SNIRule
+		rank matchRank
+	}
+	var entries []ranked
 	for _, rule := range p.rules {
-		if len(rule.hostnames) > 0 {
-			return true
+		if rule.protocol != protocolHTTPS || !rule.matchesPort(port) {
+			continue
+		}
+		for _, pattern := range rule.patterns {
+			entries = append(entries, ranked{
+				rule: SNIRule{Pattern: pattern.String(), Mode: SNIModeMITM},
+				rank: matchRank{name: pattern.rank(), port: rule.portRank()},
+			})
 		}
 	}
-	return false
-}
-
-// Evaluate walks the rules in order and returns the first that matches dest.
-// Only that rule's effects apply; a request is denied when no rule matches.
-func (p *Policy) Evaluate(dest Destination) Decision {
-	for i, rule := range p.rules {
+	slices.SortStableFunc(entries, func(a, b ranked) int {
 		switch {
-		case rule.all:
-			return Decision{Allowed: true, RuleIndex: i}
-		case len(rule.hostnames) > 0:
-			if dest.Hostname == "" {
-				continue
-			}
-			for _, pattern := range rule.hostnames {
-				if pattern.Matches(dest.Hostname) {
-					return Decision{Allowed: true, RuleIndex: i, Effects: rule.effects, ByName: true}
-				}
-			}
-		case len(rule.cidrs) > 0:
-			if !dest.IP.IsValid() {
-				continue
-			}
-			ip := dest.IP.Unmap()
-			for _, cidr := range rule.cidrs {
-				if cidr.Contains(ip) {
-					return Decision{Allowed: true, RuleIndex: i}
-				}
-			}
+		case a.rank.beats(b.rank):
+			return -1
+		case b.rank.beats(a.rank):
+			return 1
 		}
+		return 0
+	})
+	rules := make([]SNIRule, len(entries))
+	for i, e := range entries {
+		rules[i] = e.rule
 	}
-	return Decision{RuleIndex: -1}
+	return rules
 }
 
-// HostnamePattern is one parsed HostnameRule pattern: an exact name, or a
-// wildcard standing in for the whole leftmost label.
+// EvaluateRequest decides one request the gateway can read, on the name or
+// address in its authority and the port the actor dialed. decrypted selects
+// the https rules, for a request the gateway terminated TLS for; otherwise
+// the http rules apply. A tls_passthrough rule never decides a request.
+func (p *Policy) EvaluateRequest(dest Destination, decrypted bool) Decision {
+	want := protocolHTTP
+	if decrypted {
+		want = protocolHTTPS
+	}
+	best, bestRank := Decision{RuleIndex: -1}, matchRank{}
+	for i, rule := range p.rules {
+		if rule.protocol != want || (dest.Port != 0 && !rule.matchesPort(dest.Port)) {
+			continue
+		}
+		name, ok := rule.matchName(dest)
+		if !ok {
+			continue
+		}
+		rank := matchRank{name: name, port: rule.portRank()}
+		if best.RuleIndex == -1 || rank.beats(bestRank) {
+			best, bestRank = Decision{Allowed: true, RuleIndex: i, Effects: rule.effects}, rank
+		}
+	}
+	return best
+}
+
+// matchName reports whether any pattern matches dest, and how specific the
+// best one is. A destination named by an IP literal is matched by "*" alone.
+func (r compiledRule) matchName(dest Destination) (int, bool) {
+	best, found := 0, false
+	for _, pattern := range r.patterns {
+		if !pattern.Matches(dest.Hostname) && !(pattern.any && dest.IP.IsValid()) {
+			continue
+		}
+		if rank := pattern.rank(); !found || rank < best {
+			best, found = rank, true
+		}
+	}
+	return best, found
+}
+
+// Pattern ranks, most specific first. The API only distinguishes a pattern
+// with a wildcard from one without; "*" ranks below a labeled wildcard so the
+// two never tie.
+const (
+	rankExact = iota
+	rankWildcard
+	rankAny
+)
+
+// portRank is 0 for a rule that names its ports and 1 for all of them.
+func (r compiledRule) portRank() int {
+	if r.anyPort {
+		return 1
+	}
+	return 0
+}
+
+// matchRank orders matches as the API describes: the name first, then the
+// port, lower is more specific. Rules that tie keep policy order.
+type matchRank struct{ name, port int }
+
+func (m matchRank) beats(o matchRank) bool {
+	if m.name != o.name {
+		return m.name < o.name
+	}
+	return m.port < o.port
+}
+
+// HostnamePattern is one parsed host or SNI pattern: an exact name, a
+// wildcard standing in for the whole leftmost label, or "*" for every name
+// and every address.
 type HostnamePattern struct {
 	// name is the exact name, or the suffix after "*." for a wildcard.
 	name     string
 	wildcard bool
+	any      bool
 	// dotSuffix is "." + name, built once so Matches does not allocate per call.
 	dotSuffix string
 }
 
-// ParseHostnamePattern parses a HostnameRule pattern. A pattern is a lowercase
+// ParseHostnamePattern parses a host or SNI pattern. A pattern is a lowercase
 // DNS-1123 subdomain, optionally prefixed with "*." to match exactly one
-// non-empty leftmost label. IP literals, ports, URLs, trailing dots, and any
-// other placement of "*" are rejected.
+// non-empty leftmost label, or "*" alone to match every name. IP literals,
+// ports, URLs, trailing dots, and any other placement of "*" are rejected.
 func ParseHostnamePattern(raw string) (HostnamePattern, error) {
+	if raw == "*" {
+		return HostnamePattern{any: true}, nil
+	}
 	name, wildcard := strings.CutPrefix(raw, "*.")
 	if !isHostname(name) {
 		return HostnamePattern{}, fmt.Errorf("%q is not a valid hostname pattern", raw)
@@ -187,7 +315,10 @@ func ParseHostnamePattern(raw string) (HostnamePattern, error) {
 
 // String returns the pattern in the form it was written.
 func (p HostnamePattern) String() string {
-	if p.wildcard {
+	switch {
+	case p.any:
+		return "*"
+	case p.wildcard:
 		return "*." + p.name
 	}
 	return p.name
@@ -195,32 +326,29 @@ func (p HostnamePattern) String() string {
 
 // Matches reports whether hostname, already normalized as by
 // NormalizeAuthority, matches the pattern. "*.example.com" matches
-// "api.example.com" but neither "example.com" nor "a.b.example.com".
+// "api.example.com" but neither "example.com" nor "a.b.example.com"; "*"
+// matches every name.
 func (p HostnamePattern) Matches(hostname string) bool {
-	if !p.wildcard {
+	switch {
+	case hostname == "":
+		return false
+	case p.any:
+		return true
+	case !p.wildcard:
 		return hostname == p.name
 	}
 	label, found := strings.CutSuffix(hostname, p.dotSuffix)
 	return found && label != "" && !strings.Contains(label, ".")
 }
 
-// ParseCIDR parses one CIDRRule entry. Only the canonical form is
-// accepted: no leading zeros, no bits set beyond the prefix length, IPv6 in
-// RFC 5952 lowercase compressed notation, and no IPv4-mapped IPv6 addresses.
-func ParseCIDR(raw string) (netip.Prefix, error) {
-	cidr, err := netip.ParsePrefix(raw)
-	if err != nil {
-		return netip.Prefix{}, fmt.Errorf("%q is not a CIDR", raw)
+func (p HostnamePattern) rank() int {
+	switch {
+	case p.any:
+		return rankAny
+	case p.wildcard:
+		return rankWildcard
 	}
-	// Evaluate matches unmapped addresses, so a mapped CIDR could never match
-	// anything; refuse it rather than accept a rule that silently does nothing.
-	if cidr.Addr().Is4In6() {
-		return netip.Prefix{}, fmt.Errorf("%q is an IPv4-mapped IPv6 CIDR", raw)
-	}
-	if cidr != cidr.Masked() || cidr.String() != raw {
-		return netip.Prefix{}, fmt.Errorf("%q is not in canonical form (%s)", raw, cidr.Masked())
-	}
-	return cidr, nil
+	return rankExact
 }
 
 // NormalizeAuthority turns an :authority or Host value into a Destination:

@@ -14,10 +14,8 @@
 
 // Package egress implements the ext_proc handler for outbound actor traffic.
 // It authenticates the actor behind an egress CONNECT and authorizes what goes
-// through the tunnel against the actor's EgressPolicy. A request the gateway
-// can read is decided the way the API says: the rules in order, over the Host
-// it named and the address the actor dialed, first match wins. What the
-// gateway cannot read is decided at the CONNECT, by the address alone.
+// through the tunnel against the actor's EgressPolicy. The dataplane decides
+// TLS at the ClientHello using the SNI rules returned on CONNECT.
 //
 // Identity comes from the actor certificate presented in the mTLS handshake,
 // never from a request header. On the inner legs it arrives as filter state
@@ -32,9 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -131,16 +127,11 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 }
 
 // handleConnect authenticates the actor behind an egress CONNECT from the
-// certificate atunnel presented, and decides the policy's address rules
-// against the original destination. Nothing the actor can write contributes
-// to the identity.
+// certificate atunnel presented. Nothing the actor can write contributes to
+// the identity.
 //
-// Three outcomes: an address rule allows the destination, so the tunnel opens
-// and the destination goes back as dynamic metadata for the passthrough chain
-// to dial; no address rule allows it but the policy has hostname rules, so the
-// tunnel opens with nothing to dial and only a request a name rule allows can
-// go through; neither, so the CONNECT is refused here, where there is still a
-// response.
+// It returns the SNI rules for the dialed port. Actors without policy rules
+// are refused here.
 func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	// Sanity check that we were called on the Egress listener filter chain with
 	// a CONNECT.
@@ -181,41 +172,35 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
 
-	// This also warms the cache for the requests inside the tunnel. dest has
-	// no hostname, so only cidrs and all rules can match here.
+	// This also warms the cache for the requests inside the tunnel, and
+	// refuses an actor whose policy could allow nothing.
 	policy, err := h.lookupPolicy(ctx, leg, ref)
 	if err != nil {
 		return extproc.Result{}, err
 	}
-	decision := policy.Evaluate(dest)
-	attrs := []any{
-		slog.Any("actor", ref),
-		slog.String("leg", leg),
-		slog.String("destination", md.Host),
-		slog.Int("rule", decision.RuleIndex),
-	}
-	switch {
-	case decision.Allowed:
-		slog.InfoContext(ctx, "egress tunnel opened: an address rule allows the destination", attrs...)
-		res := allow()
-		res.DynamicMetadata = passthroughDestination(dest)
-		return res, nil
-	case leg == extproc.EgressFilterChainName && policy.HasHostnameRules():
-		// Only the Envoy gateway has request legs behind this one. A dataplane
-		// that calls out for the CONNECT alone sends no chain name and is
-		// refused below.
-		slog.InfoContext(ctx, "egress tunnel opened: no address rule allows the destination, requests inside it are decided one by one", attrs...)
-		return allow(), nil
-	default:
-		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs...)
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
-	}
+	rules := policy.SNIRules(dest.Port)
+	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
+		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
+	res := allow()
+	res.DynamicMetadata = connectMetadata(rules)
+	return res, nil
 }
 
-// passthroughDestination is the dynamic metadata naming the one address the
-// passthrough chain may dial, as IP:port.
-func passthroughDestination(dest egresspolicy.Destination) *structpb.Struct {
-	return metadataAnswer(extproc.EgressPassthroughDestinationKey, net.JoinHostPort(dest.IP.String(), strconv.Itoa(int(dest.Port))))
+// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace.
+// An empty list denies all TLS.
+func connectMetadata(rules []egresspolicy.SNIRule) *structpb.Struct {
+	values := make([]*structpb.Value, len(rules))
+	for i, rule := range rules {
+		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressSNIRulePatternKey: structpb.NewStringValue(rule.Pattern),
+			extproc.EgressSNIRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
+		}})
+	}
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+		}}),
+	}}
 }
 
 // metadataAnswer is a one-entry answer in the egress metadata namespace.

@@ -86,8 +86,13 @@ func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, e
 	return p.rewrite(ctx, manifest)
 }
 
-// pin returns the reference to install an image by: its tag, and the digest
+// Pin returns the reference to install an image by: its tag, and the digest
 // that tag currently names.
+//
+// Rewriting a manifest pins every ko:// reference it finds. Pin is also for an
+// image the manifests do not name by ko:// reference because ko does not build
+// it, such as envoy-dataplane: a release publishes that under the same
+// repository and tag as the rest, so it is found the same way.
 //
 // The digest is not decoration. An ActorTemplate's container image, an image
 // volume's reference, and a SandboxConfig's pauseImage each carry the CEL rule
@@ -96,7 +101,7 @@ func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, e
 // plane deployments for free: an install that cannot shift under a tag someone
 // moves later. Keeping the tag alongside the digest is ko's own output shape,
 // and leaves the reference legible in `kubectl get`.
-func (p *Prebuilt) pin(ctx context.Context, image string) (string, error) {
+func (p *Prebuilt) Pin(ctx context.Context, image string) (string, error) {
 	tagged := p.src.Repo + "/" + image + ":" + p.src.Tag
 	// A tag that already carries one is pinned as it stands. Looking it up
 	// would only append the same digest a second time, and the reference the
@@ -138,7 +143,7 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 			unknown[string(match)] = true
 			return match
 		}
-		ref, err := p.pin(ctx, image)
+		ref, err := p.Pin(ctx, image)
 		if err != nil {
 			unpinned[image] = err
 			return match

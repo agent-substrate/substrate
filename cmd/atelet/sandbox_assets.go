@@ -490,7 +490,30 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	if rec.PauseImage == "" {
 		return nil, fmt.Errorf("sandbox record/manifest has no pauseImage")
 	}
+	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
+		return nil, fmt.Errorf("sandbox record/manifest has invalid snapshotFiles: %w", err)
+	}
 	return rec, nil
+}
+
+// validateSnapshotFiles requires each name to be a distinct plain file name in
+// the checkpoint directory, other than the manifest atelet writes beside them.
+// Actual file access must still use os.Root so symlinks cannot escape that
+// directory.
+func validateSnapshotFiles(files []string) error {
+	seen := make(map[string]bool, len(files))
+	for i, name := range files {
+		switch {
+		case name != filepath.Base(name) || !filepath.IsLocal(name) || name == ".":
+			return fmt.Errorf("snapshotFiles[%d] %q is not a file name in the checkpoint directory", i, name)
+		case name == sandboxManifestName:
+			return fmt.Errorf("snapshotFiles[%d] %q is reserved for the snapshot manifest", i, name)
+		case seen[name]:
+			return fmt.Errorf("snapshotFiles[%d] %q is duplicated", i, name)
+		}
+		seen[name] = true
+	}
+	return nil
 }
 
 func wrapFileSystemErr(msg string, err error) error {

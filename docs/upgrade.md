@@ -255,6 +255,11 @@ worker eviction path, loses no state, and resumes on demand. If they
 roll, wait for `READY` to equal `DESIRED` again on every serving pool
 (`kubectl get workerpools -A`) before step 4.
 
+The move of the node state root from `/var/lib/ateom-gvisor` to
+`/var/lib/ate` is such a release. A worker that lands on a node whose
+atelet still uses the old path reaches it only once step 5 moves that node.
+The old directory can be deleted afterwards.
+
 ### 3. Prepare the new dataplane
 
 The dataplane roll starts with the new atelet DaemonSet, from the

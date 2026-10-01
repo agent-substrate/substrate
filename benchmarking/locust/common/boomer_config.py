@@ -66,6 +66,8 @@ _FLAGS = {
     "--sweperf-template": str,
     "--sweperf-total-steps": int,
     "--sweperf-num-cycles": int,
+    "--sweperf-poll-interval-ms": int,
+    "--agentsession-think-scale": float,
 }
 
 
@@ -141,6 +143,7 @@ def init_boomer_config() -> None:
     from locust.argument_parser import LocustArgumentParser
     from locust.env import Environment
 
+    from common.agentsession_config import add_agentsession_arguments  # noqa: F401
     from common.durdir_config import add_durdir_arguments
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments

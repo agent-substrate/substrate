@@ -127,9 +127,21 @@ func TestApply(t *testing.T) {
 		in:   &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
 		want: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
 	}, {
-		name: "egress policy has no defaults",
-		in:   &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}},
-		want: &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}},
+		name: "egress policy defaults http and https ports only",
+		in: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
+			{Http: &ateapipb.HTTPRule{Hostnames: []string{"a.example.com"}}},
+			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"b.example.com"}}},
+			{Http: &ateapipb.HTTPRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"d.example.com"}}},
+			{},
+		}},
+		want: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
+			{Http: &ateapipb.HTTPRule{Hostnames: []string{"a.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
+			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"b.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+			{Http: &ateapipb.HTTPRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"d.example.com"}}},
+			{},
+		}},
 	}, {
 		name: "tag has no defaults",
 		in:   &ateapipb.Tag{Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED},

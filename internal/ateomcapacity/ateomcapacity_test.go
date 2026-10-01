@@ -25,8 +25,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
 // testActors stands in for the ateom's own ceiling, which is a flag in
@@ -38,11 +37,13 @@ func TestFromFiles(t *testing.T) {
 		name   string
 		cpu    string
 		memory string
-		want   *ateapipb.Resources
+		want   *ateletpb.WorkerResources
 	}{
-		{name: "limits set", cpu: "2000", memory: "4294967296", want: resources.CPUMemory(2000, 4294967296)},
-		{name: "unparseable is none", cpu: "2Gi", memory: "", want: nil},
-		{name: "negative is none", cpu: "-1", memory: "-1", want: nil},
+		{name: "limits set", cpu: "2000", memory: "4294967296", want: &ateletpb.WorkerResources{Actors: testActors, Resources: &ateletpb.Resources{
+			Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
+		}}},
+		{name: "unparseable is none", cpu: "2Gi", memory: "", want: &ateletpb.WorkerResources{Actors: testActors}},
+		{name: "negative is none", cpu: "-1", memory: "-1", want: &ateletpb.WorkerResources{Actors: testActors}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -54,11 +55,8 @@ func TestFromFiles(t *testing.T) {
 			}
 
 			got := fromDir(dir, testActors).GetCapacity()
-			if got.GetActors() != testActors {
-				t.Errorf("actors = %d, want %d", got.GetActors(), testActors)
-			}
-			if diff := cmp.Diff(tc.want, got.GetResources(), protocmp.Transform()); diff != "" {
-				t.Errorf("reported resources mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("reported capacity mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -66,11 +64,9 @@ func TestFromFiles(t *testing.T) {
 
 func TestFromFilesMissing(t *testing.T) {
 	got := fromDir(t.TempDir(), testActors).GetCapacity()
-	if got.GetResources() != nil {
-		t.Errorf("unset environment reported %v, want no compute", got.GetResources())
-	}
-	if got.GetActors() != testActors {
-		t.Errorf("actors = %d, want %d", got.GetActors(), testActors)
+	want := &ateletpb.WorkerResources{Actors: testActors}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("unset environment capacity mismatch (-want +got):\n%s", diff)
 	}
 }
 
