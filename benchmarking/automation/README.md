@@ -58,7 +58,9 @@ suspend-heavy test can end up measuring GCS scaling instead of substrate.
 A `tests.yaml` entry with a `gcsPrewarm` block that sets `enabled: true` runs
 [tools/gcs-prewarm](../../tools/gcs-prewarm/main.go) in the background while
 substrate and workloads deploy, then holds the test until the warm-up has
-finished. The block's fields are documented at the top of `tests.yaml`. The
+finished. It always warms the target cluster's `BUCKET_NAME` bucket, under the
+test's ActorTemplate snapshot path, so a test can't point it anywhere else.
+The block's fields are documented at the top of `tests.yaml`. The
 orchestrator's Workload Identity principal needs object create and delete
 on the bucket.
 

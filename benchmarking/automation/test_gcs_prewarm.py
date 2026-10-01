@@ -114,12 +114,18 @@ class ValidateTest(TemplatesTestCase):
             with self.subTest(cfg=cfg):
                 self.assertFalse(gcs_prewarm.enabled(cfg))
 
-    def test_rejects_template_without_gcs_location(self):
-        write_template(self.dir, "local", "file:///tmp/snapshots")
-        write_template(self.dir, "none", None)
-        for template in ("local", "none"):
+    def test_rejects_template_outside_environment_bucket(self):
+        # The bucket must come from the target cluster config: a template
+        # that names its own bucket would tie the test to one environment.
+        for template, location in (
+            ("local", "file:///tmp/snapshots"),
+            ("none", None),
+            ("fixed", "gs://fixed-bucket/workloads/fixed/"),
+            ("suffixed", "gs://${BUCKET_NAME}-other/workloads/"),
+        ):
+            write_template(self.dir, template, location)
             with self.subTest(template=template), self.assertRaisesRegex(
-                ValueError, "gs://"
+                ValueError, "target cluster's bucket"
             ):
                 gcs_prewarm.validate("t", {**ENABLED, "actorTemplate": template}, self.dir)
 
@@ -190,16 +196,15 @@ class CommandTest(TemplatesTestCase):
         )
 
     def test_location_shapes(self):
-        for location, bucket, prefix in (
-            ("gs://fixed-bucket/a/b", "fixed-bucket", "a/b/atespaces/load/actors"),
-            ("gs://fixed-bucket/", "fixed-bucket", "atespaces/load/actors"),
-            ("gs://fixed-bucket", "fixed-bucket", "atespaces/load/actors"),
+        for location, prefix in (
+            ("gs://${BUCKET_NAME}/a/b", "a/b/atespaces/load/actors"),
+            ("gs://${BUCKET_NAME}/", "atespaces/load/actors"),
+            ("gs://${BUCKET_NAME}", "atespaces/load/actors"),
         ):
             with self.subTest(location=location):
                 write_template(self.dir, "web", location)
-                # A literal bucket needs no BUCKET_NAME.
-                cmd = gcs_prewarm.command(REQUIRED, "", self.dir)
-                self.assertEqual(cmd[5:7], [f"--bucket={bucket}", f"--prefix={prefix}"])
+                cmd = gcs_prewarm.command(REQUIRED, "env-bucket", self.dir)
+                self.assertEqual(cmd[5:7], ["--bucket=env-bucket", f"--prefix={prefix}"])
 
     def test_no_bucket(self):
         with self.assertRaisesRegex(RuntimeError, "BUCKET_NAME"):

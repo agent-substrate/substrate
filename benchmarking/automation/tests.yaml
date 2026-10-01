@@ -59,9 +59,10 @@
 #                    actorTemplate  Required when enabled. The benchmark ActorTemplate
 #                                   whose snapshots the test writes, i.e.
 #                                   benchmarking/workloads/manifests/<name>-template.yaml.tmpl.
-#                                   Its storageLocation (BUCKET_NAME rendered
-#                                   from the target cluster config) gives the
-#                                   bucket and base prefix.
+#                                   Its storageLocation must be
+#                                   gs://${BUCKET_NAME}/<path>: the bucket
+#                                   always comes from the target cluster
+#                                   config, and <path> is the base prefix.
 #                    atespace       Required when enabled. The atespace the test creates
 #                                   its actors in (boomer's --atespace for
 #                                   glutton, "benchmark-workloads" for the

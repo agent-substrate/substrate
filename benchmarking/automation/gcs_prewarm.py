@@ -38,6 +38,10 @@ from util import parse_duration_seconds
 # from, one <name>-template.yaml.tmpl each, relative to the repo root.
 TEMPLATES_DIR = "benchmarking/workloads/manifests"
 
+# The bucket comes from the target cluster config, never from tests.yaml or
+# a template, so a test runs unchanged against any cluster.
+BUCKET_PREFIX = "gs://${BUCKET_NAME}"
+
 
 def _is_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -83,17 +87,18 @@ DURATION_FIELDS = ("doubleEvery", "hold")
 def storage_location(template: str, templates_dir: str = TEMPLATES_DIR) -> str:
     """The unrendered snapshotConfig.storageLocation of benchmark
     ActorTemplate `template`, read from its manifest rather than the cluster
-    because the prewarm starts before the template is deployed."""
+    because the prewarm starts before the template is deployed. It must be
+    in the target cluster's bucket: gs://${BUCKET_NAME}[/path]."""
     path = Path(templates_dir) / f"{template}-template.yaml.tmpl"
     if not path.exists():
         raise ValueError(f"no ActorTemplate manifest for {template!r} at {path}")
     location = (yaml.safe_load(path.read_text()).get("snapshotConfig") or {}).get(
         "storageLocation", ""
     )
-    if not location.startswith("gs://"):
+    if location != BUCKET_PREFIX and not location.startswith(BUCKET_PREFIX + "/"):
         raise ValueError(
-            f"ActorTemplate {template!r} storageLocation {location!r} is not a "
-            f"gs:// location"
+            f"ActorTemplate {template!r} storageLocation {location!r} is not in "
+            f"the target cluster's bucket ({BUCKET_PREFIX}/...)"
         )
     return location
 
@@ -143,29 +148,23 @@ def validate(name: str, cfg: Any, templates_dir: str = TEMPLATES_DIR) -> None:
 def command(
     cfg: dict[str, Any], bucket_env: str, templates_dir: str = TEMPLATES_DIR
 ) -> list[str]:
-    """The gcs-prewarm argv for a validated cfg. The bucket and prefix are
-    the template's storageLocation, with ${BUCKET_NAME} rendered from
-    bucket_env as deploy.sh does, plus the prefix the atelet puts actor
-    snapshots under: atespaces/<atespace>/actors/<uid>. The random uid comes
-    right after that prefix, so the tool's random keys land in the same key
-    range as the real traffic."""
-    location = storage_location(cfg["actorTemplate"], templates_dir)
-    if "${BUCKET_NAME}" in location and not bucket_env:
-        raise RuntimeError(
-            f"ActorTemplate {cfg['actorTemplate']!r} storageLocation needs "
-            f"BUCKET_NAME, which the target cluster config does not set"
-        )
-    bucket, _, base = (
-        location.replace("${BUCKET_NAME}", bucket_env)
-        .removeprefix("gs://")
-        .partition("/")
+    """The gcs-prewarm argv for a validated cfg. The bucket is bucket_env,
+    the target cluster's BUCKET_NAME, as deploy.sh renders it into the
+    template. The prefix is the storageLocation path plus the prefix the
+    atelet puts actor snapshots under: atespaces/<atespace>/actors/<uid>.
+    The random uid comes right after that prefix, so the tool's random keys
+    land in the same key range as the real traffic."""
+    base = storage_location(cfg["actorTemplate"], templates_dir).removeprefix(
+        BUCKET_PREFIX
     )
+    if not bucket_env:
+        raise RuntimeError("the target cluster config does not set BUCKET_NAME")
     prefix = "/".join(
         p for p in (base.strip("/"), "atespaces", cfg["atespace"], "actors") if p
     )
     cmd = [
         "go", "-C", "tools/gcs-prewarm", "run", ".",
-        f"--bucket={bucket}",
+        f"--bucket={bucket_env}",
         f"--prefix={prefix}",
     ]
     for field, (flag, _, _) in FIELDS.items():
