@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -50,7 +51,6 @@ const (
 	userClass     = "GluttonStorageUser"
 	templateName  = "glutton-storage"
 	templateNS    = "benchmark-workloads"
-	actorDomain   = "actors.resources.substrate.ate.dev"
 	writeDiskPath = "/writedisk"
 	pingPath      = "/ping"
 
@@ -115,7 +115,6 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonStorageUser, error
 		actorName:   "sb-st-" + uuid.NewString(),
 		firstResume: true,
 	}
-	u.hostHeader = u.actorName + "." + u.cfg.Atespace + "." + actorDomain
 	bmetrics.UpdateUsers(userClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
 		bmetrics.UpdateUsers(userClass, -1)
@@ -152,7 +151,6 @@ func (r *taskRuntime) dynamicWait() time.Duration {
 type gluttonStorageUser struct {
 	cfg          *userclass.Config
 	actorName    string
-	hostHeader   string
 	firstResume  bool
 	actorRunning bool
 	epoch        int64
@@ -275,7 +273,7 @@ func (u *gluttonStorageUser) writeDisk(ctx context.Context) {
 		bmetrics.RecordFailure("http", "GluttonWriteDisk", userClass, 0, err.Error())
 		return
 	}
-	httpReq.Host = u.hostHeader
+	httpReq.Header.Set(atenet.TargetActorHeader, u.cfg.Atespace+"/"+u.actorName)
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 

@@ -15,13 +15,20 @@
 package storage
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestElapsedFromMD(t *testing.T) {
@@ -70,5 +77,42 @@ func TestMsFloat(t *testing.T) {
 	got := msFloat(d)
 	if got != 1.5 {
 		t.Errorf("msFloat(1500us) = %v, want 1.5", got)
+	}
+}
+
+func TestWriteDiskRoutesByTargetActorHeader(t *testing.T) {
+	type seen struct{ path, target string }
+	reqs := make(chan seen, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqs <- seen{path: r.URL.Path, target: r.Header.Get(atenet.TargetActorHeader)}
+		body, err := proto.Marshal(&gluttonpb.WriteDiskResponse{})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	u := &gluttonStorageUser{
+		cfg: &userclass.Config{
+			Atespace:   "benchmark",
+			RouterURL:  srv.URL,
+			HTTPClient: srv.Client(),
+			Tracer:     noop.NewTracerProvider().Tracer("test"),
+		},
+		actorName: "sb-st-test",
+	}
+	u.writeDisk(context.Background())
+
+	got := <-reqs
+	if got.path != writeDiskPath {
+		t.Errorf("path = %q, want %q", got.path, writeDiskPath)
+	}
+	if want := "benchmark/sb-st-test"; got.target != want {
+		t.Errorf("%s = %q, want %q", atenet.TargetActorHeader, got.target, want)
+	}
+	if _, err := atenet.ParseTargetActor(got.target); err != nil {
+		t.Errorf("router would reject the header: %v", err)
 	}
 }
