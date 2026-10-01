@@ -86,6 +86,12 @@ type taskRuntime struct {
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
 func (r *taskRuntime) iterate() {
+	// Every return path sleeps the wait window, so a failing startUser or
+	// resume cannot loop on boomer's zero-delay re-entry and flood ateapi.
+	defer func() {
+		time.Sleep(r.dynamicWait())
+	}()
+
 	gid := goroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
@@ -98,6 +104,9 @@ func (r *taskRuntime) iterate() {
 		val, _ = r.users.LoadOrStore(gid, u)
 	}
 	user := val.(*gluttonStorageUser)
+	if user.crashed {
+		return
+	}
 
 	ctx := context.Background()
 	if !user.resume(ctx) {
@@ -105,8 +114,6 @@ func (r *taskRuntime) iterate() {
 	}
 	user.writeDisk(ctx)
 	user.suspend(ctx)
-
-	time.Sleep(r.dynamicWait())
 }
 
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonStorageUser, error) {
@@ -153,6 +160,7 @@ type gluttonStorageUser struct {
 	actorName    string
 	firstResume  bool
 	actorRunning bool
+	crashed      bool
 	epoch        int64
 }
 
@@ -203,11 +211,34 @@ func (u *gluttonStorageUser) resume(ctx context.Context) bool {
 		return err
 	})
 	if err != nil {
+		if isActorCrashed(err) {
+			u.crashed = true
+			bmetrics.RecordFailure("actor", "CrashCount", userClass, 0, "actor entered ACTOR_STATE_CRASHED")
+			slog.Warn("glutton storage actor crashed; will stop sending requests",
+				slog.String("actor", u.actorName),
+				slog.String("err", err.Error()))
+		}
 		return false
 	}
 	u.firstResume = false
 	u.actorRunning = true
 	return true
+}
+
+// isActorCrashed reports whether a ResumeActor error means the actor is in
+// ACTOR_STATE_CRASHED and no further resume can succeed.
+func isActorCrashed(err error) bool {
+	s, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch s.Code() {
+	case codes.Aborted:
+		return strings.Contains(s.Message(), "crashed")
+	case codes.FailedPrecondition:
+		return strings.Contains(s.Message(), "got: ACTOR_STATE_CRASHED")
+	}
+	return false
 }
 
 func (u *gluttonStorageUser) suspend(ctx context.Context) {

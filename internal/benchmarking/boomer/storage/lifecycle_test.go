@@ -16,6 +16,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,7 +28,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -77,6 +80,42 @@ func TestMsFloat(t *testing.T) {
 	got := msFloat(d)
 	if got != 1.5 {
 		t.Errorf("msFloat(1500us) = %v, want 1.5", got)
+	}
+}
+
+func TestIsActorCrashed(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"aborted crashed", status.Error(codes.Aborted, "actor benchmark/a crashed"), true},
+		{"precondition crashed", status.Error(codes.FailedPrecondition,
+			"AssignWorker prerequisite not met for Actor: benchmark/a (got: ACTOR_STATE_CRASHED, want ACTOR_STATE_SUSPENDED or ACTOR_STATE_PAUSED)"), true},
+		{"aborted conflict", status.Error(codes.Aborted, "concurrent update conflict"), false},
+		{"precondition running", status.Error(codes.FailedPrecondition, "got: ACTOR_STATE_RUNNING"), false},
+		{"internal restore", status.Error(codes.Internal, "while running `runsc restore`: exit status 128"), false},
+		{"not grpc", errors.New("crashed"), false},
+	}
+	for _, tc := range cases {
+		if got := isActorCrashed(tc.err); got != tc.want {
+			t.Errorf("%s: isActorCrashed() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestIterateSkipsCrashedActorAndStillWaits(t *testing.T) {
+	const wait = 20 * time.Millisecond
+	// A nil APIStub panics if iterate issues any RPC for the crashed actor.
+	rt := &taskRuntime{cfg: &userclass.Config{
+		Dyn: dynconfig.NewHolder(dynconfig.Config{MinWait: wait, MaxWait: wait}),
+	}}
+	rt.users.Store(goroutineID(), &gluttonStorageUser{cfg: rt.cfg, actorName: "a", crashed: true})
+
+	start := time.Now()
+	rt.iterate()
+	if elapsed := time.Since(start); elapsed < wait {
+		t.Errorf("iterate returned after %v, want at least the %v wait", elapsed, wait)
 	}
 }
 
