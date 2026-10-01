@@ -94,7 +94,8 @@ func containsWorker(workers []*ateapipb.Worker, name string) bool {
 }
 
 // TestCreateAndGetWorker registers a Worker and reads it back, checking that
-// the server assigns the metadata and the ACTIVE status a new Worker starts in.
+// the server assigns the metadata and the UNAVAILABLE status a new Worker
+// starts in.
 func TestCreateAndGetWorker(t *testing.T) {
 	ns := namespaceForTest("ns-worker-create-get")
 	tc := setupTest(t, ns)
@@ -104,7 +105,7 @@ func TestCreateAndGetWorker(t *testing.T) {
 
 	want := newTestWorker(ns)
 	want.Metadata.Version = 1
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
 	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("CreateWorker response mismatch (-want +got):\n%s", diff)
 	}
@@ -153,8 +154,9 @@ func TestListWorkers(t *testing.T) {
 		{
 			Metadata: &ateapipb.ResourceMetadata{
 				Name: podUID,
-				// Two writes: the registration, then the capacity report.
-				Version: 2,
+				// Three writes: the registration, marking it available, then
+				// the capacity report.
+				Version: 3,
 			},
 			WorkerNamespace: ns,
 			WorkerPool:      "pool1",
@@ -241,7 +243,7 @@ func TestUpdateWorker(t *testing.T) {
 	want := newTestWorker(ns)
 	want.Metadata.Version = 2
 	want.Labels = map[string]string{"tier": "batch"}
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
 	if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("UpdateWorker response mismatch (-want +got):\n%s", diff)
 	}
@@ -256,7 +258,7 @@ func TestDrainWorker(t *testing.T) {
 	defer tc.cleanup()
 
 	registerWorker(t, tc, ns)
-	waitForWorkerAvailable(t, tc, testWorkerName)
+	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
 
 	drained, err := tc.client.DrainWorker(context.Background(), &ateapipb.DrainWorkerRequest{Worker: workerRef(testWorkerName)})
 	if err != nil {
@@ -271,6 +273,41 @@ func TestDrainWorker(t *testing.T) {
 	}
 
 	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_DRAINING)
+}
+
+// TestMarkWorkerAvailability moves a Worker between ACTIVE and UNAVAILABLE, and
+// checks each state reaches the worker cache the scheduler places actors from.
+func TestMarkWorkerAvailability(t *testing.T) {
+	ns := namespaceForTest("ns-worker-availability")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	registerWorker(t, tc, ns)
+	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+
+	available, err := tc.client.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef(testWorkerName)})
+	if err != nil {
+		t.Fatalf("MarkWorkerAvailable failed: %v", err)
+	}
+	want := newTestWorker(ns)
+	want.Metadata.Version = 2
+	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	if diff := cmp.Diff(want, available, protocmp.Transform(), ignoreServerMetadata); diff != "" {
+		t.Errorf("MarkWorkerAvailable response mismatch (-want +got):\n%s", diff)
+	}
+	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+
+	unavailable, err := tc.client.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(testWorkerName)})
+	if err != nil {
+		t.Fatalf("MarkWorkerUnavailable failed: %v", err)
+	}
+	want.Metadata.Version = 3
+	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
+	if diff := cmp.Diff(want, unavailable, protocmp.Transform(), ignoreServerMetadata); diff != "" {
+		t.Errorf("MarkWorkerUnavailable response mismatch (-want +got):\n%s", diff)
+	}
+	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
 }
 
 // TestDeleteWorker deregisters a Worker and checks it is gone. The delete

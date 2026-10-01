@@ -100,7 +100,8 @@ service Control {
   // Get a Worker.
   rpc GetWorker(GetWorkerRequest) returns (Worker) {}
 
-  // Register a Worker. Called once its Pod is Ready and has an IP.
+  // Register a Worker. Called once its Pod has an IP. A Worker is registered
+  // UNAVAILABLE and takes no Actors until MarkWorkerAvailable.
   rpc CreateWorker(CreateWorkerRequest) returns (Worker) {}
 
   // Update observed pool state on a Worker.
@@ -114,6 +115,20 @@ service Control {
   // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
   // Returns ABORTED if another write lands on the Worker first; retry.
   rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
+
+  // Mark an UNAVAILABLE Worker ACTIVE so the scheduler places Actors on it.
+  // Idempotent. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED
+  // if another write lands on the Worker first; retry.
+  //
+  // Every Actor placed after this call is stamped with the Worker's epoch as
+  // it stands then, so a caller raises epoch for a restarted ateom first.
+  rpc MarkWorkerAvailable(MarkWorkerAvailableRequest) returns (Worker) {}
+
+  // Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
+  // it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
+  // alone. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED if
+  // another write lands on the Worker first; retry.
+  rpc MarkWorkerUnavailable(MarkWorkerUnavailableRequest) returns (Worker) {}
 
   // List the Actors hosted by a given Worker.
   rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
@@ -1979,6 +1994,24 @@ message DrainWorkerRequest {
   ObjectRef worker = 1;
 }
 
+// MarkWorkerAvailableRequest names the Worker to mark ACTIVE.
+message MarkWorkerAvailableRequest {
+  // The Worker to mark ACTIVE.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+}
+
+// MarkWorkerUnavailableRequest names the Worker to mark UNAVAILABLE.
+message MarkWorkerUnavailableRequest {
+  // The Worker to mark UNAVAILABLE.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+}
+
 // List actors with pagination. Provides "soft" guarantees: actors may be
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
@@ -2096,8 +2129,9 @@ message Worker {
   int64 epoch = 12;
 
   // Output-only server-managed state. Absent from Create/Update request
-  // payloads; whatever a request carries here is ignored. DrainWorker is the
-  // only way a client moves state, and the assignments are the scheduler's.
+  // payloads; whatever a request carries here is ignored. A client moves
+  // state only through DrainWorker, MarkWorkerAvailable and
+  // MarkWorkerUnavailable, and the assignments are the scheduler's.
   //
   // +k8s:optional
   WorkerStatus status = 11;
@@ -2107,15 +2141,19 @@ enum WorkerState {
   WORKER_STATE_UNSPECIFIED = 0;
   // Ready; schedulable.
   WORKER_STATE_ACTIVE = 1;
-  // Pod terminating. Not schedulable.
+  // Pod terminating. Not schedulable. Final: a draining Worker never becomes
+  // active or unavailable again.
   WORKER_STATE_DRAINING = 2;
+  // Registered but not Ready, or its ateom restarting. Not schedulable. Every
+  // Worker starts here until MarkWorkerAvailable.
+  WORKER_STATE_UNAVAILABLE = 3;
   // Keep this in sync with WorkerStatus.state's maximum.
 }
 
 message WorkerStatus {
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the WorkerState enum
+  // +k8s:maximum=3 # keep this in sync with the WorkerState enum
   WorkerState state = 1;
 
   // The total resource capacity of the Worker.

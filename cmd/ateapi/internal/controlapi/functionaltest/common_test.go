@@ -662,6 +662,12 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	}); err != nil {
 		t.Fatalf("failed to register worker: %v", err)
 	}
+	// As the syncer does once the pod is Ready.
+	if _, err := tc.client.MarkWorkerAvailable(context.Background(), &ateapipb.MarkWorkerAvailableRequest{
+		Worker: &ateapipb.ObjectRef{Name: string(createdPod.UID)},
+	}); err != nil {
+		t.Fatalf("failed to mark worker available: %v", err)
+	}
 	reportWorkerCapacity(t, tc, string(createdPod.UID), 1)
 
 	// Wait for the worker to appear in worker cache.
