@@ -15,10 +15,11 @@
 # Cluster-wide SandboxConfig for the micro-VM (kata + cloud-hypervisor) sandbox
 # class. Unlike sandboxconfig-gvisor.yaml (applied unconditionally by
 # hack/install-ate.sh --deploy-ate-system), this is opt-in: apply via
-# hack/install-microvm-deps.sh --install after staging the asset set
-# (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh). Every microvm
-# ActorTemplate names it explicitly (configName: microvm), so a missing/stale
-# config fails loudly at template creation.
+# hack/install-microvm-deps.sh --install (or `go run ./cmd/ate-setup deploy
+# microvm-deps`), which assembles the asset set, stages it to the cluster's
+# object store, and applies this manifest. Every microvm ActorTemplate names it
+# explicitly (configName: microvm), so a missing/stale config fails loudly at
+# template creation.
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
 # are FETCHED at runtime from the cluster object store bucket ${BUCKET_NAME}
@@ -26,10 +27,10 @@
 # image. ateom boots cloud-hypervisor itself and gives the actor an overlay
 # rootfs (virtio-fs RO lower + guest-tmpfs upper), so it fetches virtiofsd too.
 #
-# The per-arch sha256 values below are the asset sets produced by
-# hack/microvm-assets/assemble.sh; atelet selects the block matching the node's
-# architecture, and each cluster's bucket holds that arch's binaries at these
-# paths (staged by hack/install-microvm-deps.sh --install).
+# The per-arch sha256 values below are the asset sets assembled by
+# cmd/ate-setup/internal/steps/microvm.go; atelet selects the block matching
+# the node's architecture, and each cluster's bucket holds that arch's binaries
+# at these paths (staged by hack/install-microvm-deps.sh --install).
 
 apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
@@ -55,7 +56,7 @@ spec:
       kata-image:
         url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
         sha256: "7e3bdd500eb92de17c377bd84f8ed57e50d6bb68c7ec08c88f5e1916cd49f30d"
-    # amd64 assets are kata 4.1.0 (assemble.sh ARCH=amd64).
+    # amd64 assets are kata 4.1.0 (ARCH=amd64).
     amd64:
       cloud-hypervisor:
         url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
