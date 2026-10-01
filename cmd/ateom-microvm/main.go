@@ -24,7 +24,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -50,6 +49,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -60,24 +60,24 @@ import (
 )
 
 var (
-	podUID        = flag.String("pod-uid", "", "The UID of the current pod")
-	chBinary      = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	kataDebug     = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
-	vmmMemReserve = flag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
-	showVersion   = flag.Bool("version", false, "Print version and exit.")
-	logLevelFlag  = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	podUID        = pflag.String("pod-uid", "", "The UID of the current pod")
+	chBinary      = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	kataDebug     = pflag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
+	vmmMemReserve = pflag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
+	showVersion   = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag  = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
-	otlpRelaySocket = flag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
+	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	tunnelConfig = ateomtunnel.RegisterFlags(flag.CommandLine)
+	tunnelConfig = ateomtunnel.RegisterFlags(pflag.CommandLine)
 
-	readinessListenAddress = flag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
-	maxActors              = flag.Int("max-actors", 1000, "How many actors this worker will host at once")
+	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
+	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
 )
 
 func main() {
-	flag.Parse()
+	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
 		return
