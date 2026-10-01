@@ -465,6 +465,8 @@ When an `ActorTemplate` is created:
 3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.
 4. It deletes the golden actor and records the tag reference in the template status.
 
+For gVisor, a FULL checkpoint requires every application container to still be running. An application that exits during warm-up, even with exit code 0, fails the golden build. The template's `status.goldenSnapshotStatus.errorMessage` includes the container name and its exit code when available; no golden tag is published. This check also applies to ordinary FULL actor snapshots. Use a `wakeupProbe` to indicate application readiness; a running process alone does not establish readiness.
+
 `CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field. Deleting the template collects its golden tag and any unfinished golden actor.
 
 ### Resumption Lifecycle
