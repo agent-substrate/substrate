@@ -90,6 +90,8 @@ that already names a manifest is used as written, and is not looked up.
 | `deploy apiserver` | `--deploy-ate-apiserver` |
 | `deploy ate-controller` | (no shell equivalent) |
 | `deploy atenet` | `--deploy-atenet` |
+| `deploy podcertificate-controller` | (no shell equivalent) |
+| `deploy sandboxconfig` | (no shell equivalent) |
 | `deploy postgres` | (no shell equivalent) |
 
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the

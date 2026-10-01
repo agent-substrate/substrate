@@ -192,6 +192,16 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		markSkipped(ctx, "actor suspended cleanly before the pod went away")
 		return nil
 	}
+	return w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a worker whose pod is gone", crashMessageWorkerPodGone)
+}
+
+// crashBoundActor moves an Actor that lost its sandbox on the Worker to
+// ACTOR_STATE_CRASHED and clears its pointers at the Worker. crashMsg is
+// recorded in the Actor's status. The Actor's assignment row in the worker is
+// left for the caller to release.
+// A concurrent write to the Actor fails this as ABORTED.
+func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.Worker, actorRef resources.ActorRef, actor *ateapipb.Actor, logMsg, crashMsg string) error {
+	name := worker.GetMetadata().GetName()
 	opName := ateattr.OperationUnknown
 	switch actor.GetStatus().GetState() {
 	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
@@ -209,18 +219,18 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName)
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "Releasing actor from a worker whose pod is gone",
+	slog.LogAttrs(ctx, slog.LevelInfo, logMsg,
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
 			slog.String("worker", name))...)
-	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, crashMessageWorkerPodGone)
+			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
 		}
 		toUpdate.Status.WorkerAssignment = nil
-		// Local in-progress checkpoint dies with the worker: it lived on the node
-		// that went away. The external in-progress checkpoint is kept so delete
-		// or revert can delete it.
+		// Local in-progress checkpoint dies with the sandbox that was writing
+		// it. The external in-progress checkpoint is kept so delete or revert
+		// can delete it.
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		return nil
 	})

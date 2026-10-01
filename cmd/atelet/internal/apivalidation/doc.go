@@ -13,9 +13,7 @@
 // limitations under the License.
 
 // Package apivalidation holds the declarative validation generated for the
-// atelet RPC surface. It is a separate package, unlike controlapi where the
-// generated code lives with the handlers, because atelet's handlers live in
-// package main.
+// atelet RPC surface.
 //
 // Kubernetes codegen tools required this to be in doc.go, no other name will
 // work.

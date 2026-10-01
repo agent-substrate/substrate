@@ -50,6 +50,17 @@ service Glutton {
   // Tells the glutton to send network traffic to a peer glutton.
   // messages will be sent on regular intervals separated by delay_ms.
   rpc Gossip(GossipRequest) returns (GossipResponse) {}
+
+  // Tells glutton to spin CPU for a wall-clock duration, hashing in a
+  // tight loop across the requested number of goroutines. Models
+  // compute-bound work such as compiling or running a test suite.
+  rpc BurnCPU(BurnCPURequest) returns (BurnCPUResponse) {}
+
+  // Carries caller-supplied bytes over the wire into the glutton, which
+  // writes them to a file under its data dir. Unlike WriteDisk, the bytes
+  // cross the network, so the request models a download (git clone,
+  // dependency fetch) arriving through the actor's ingress path.
+  rpc Ingest(IngestRequest) returns (IngestResponse) {}
 }
 
 enum WriteMode {
@@ -168,4 +179,37 @@ message GossipResponse {}
 message Peer {
   string host = 1;
   int32 delay_ms = 2;
+}
+
+message BurnCPURequest {
+  // Wall-clock time to keep burning, in milliseconds.
+  int64 duration_ms = 1;
+
+  // Number of goroutines burning concurrently; values < 1 read as 1.
+  int32 parallelism = 2;
+}
+
+message BurnCPUResponse {
+  // Total hash iterations completed across all goroutines, so the burn
+  // is observable and cannot be optimized away.
+  int64 iterations = 1;
+}
+
+message IngestRequest {
+  // name of the file the payload is written to
+  string key = 1;
+
+  // the bytes to write, carried in the request body over the network
+  bytes payload = 2;
+
+  // append to the file instead of truncating it
+  bool append = 3;
+}
+
+message IngestResponse {
+  // size of the file after the write
+  int64 size = 1;
+
+  // sha256 of the payload as received, so the caller can verify transport
+  bytes sha256 = 2;
 }

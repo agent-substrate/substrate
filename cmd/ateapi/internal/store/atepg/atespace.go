@@ -30,7 +30,7 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	name := atespace.GetMetadata().GetName()
 
 	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
-	dbAtespace.Metadata = newCreateMetadata("", name)
+	setCreateMetadata(dbAtespace.Metadata)
 
 	protoBytes, err := proto.Marshal(dbAtespace)
 	if err != nil {
@@ -100,8 +100,8 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("scanning atespace row: %w", err)
 		}
 		a := &ateapipb.Atespace{}
-		if err := unmarshalStored(protoBytes, a); err != nil {
-			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("unmarshaling atespace: %w", err)
+		if err := unmarshalRow(protoBytes, a, "atespace", name); err != nil {
+			return store.ListResponse[*ateapipb.Atespace]{}, err
 		}
 		result = append(result, a)
 		names = append(names, name)
