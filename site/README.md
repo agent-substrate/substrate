@@ -53,6 +53,49 @@ To publish another doc:
 2. Add a stub page under `content/docs/` with `repo_source` set to its path
    from the repository root.
 
+## Doc status and new docs
+
+A doc can declare its status in its own front matter:
+
+```yaml
+---
+status: deprecated          # or: experimental, planned
+status_note: >              # optional; replaces the default banner text
+  Replaced by the [Egress guide](egress.md).
+---
+```
+
+The page shows a banner under the title, and the sidebar and section cards
+show a pill. Relative links in `status_note` are rewritten like links in the
+doc. Any other `status` value fails the build. Front matter on the stub page
+overrides the doc's.
+
+The sidebar marks a page "New" when its `repo_source` was added since the
+latest full release tag (`vX.Y.Z`). `make site-release-data` (run by
+`make site-serve` and `make site-build`) works this out from git and writes
+`data/release.json`.
+
+`make site-test` builds the site against `testdata/` and checks the rendered
+templates.
+
+## Glossary hover cards
+
+On doc pages, the first mention of each glossary term gets a hover card with
+its definition and a link to the term on the glossary page. Terms and
+definitions come only from `docs/glossary.md`: each term is a top-level
+bullet like
+
+```markdown
+- **Term** (optional note): definition, continued on lines
+  indented two spaces.
+```
+
+The build fails if the doc has no terms in that shape, repeats a term, or a
+term's bold label can't be found on the rendered glossary page. A mention
+matches the term's exact casing first, then any casing, plus an optional
+plural "s". `assets/js/glossary.js` holds the matching and has no terms of
+its own.
+
 ## Theme
 
 `assets/scss/_variables_project.scss` sets the palette, taken from the logo.

@@ -16,11 +16,10 @@ limitations under the License.
 {{- $body := .RawContent -}}
 
 {{/* 1. Expand default {{% include-file %}} using .Params.repo_source */ -}}
-{{- if .Params.repo_source -}}
-  {{- $res := resources.Get (path.Join "repo" .Params.repo_source) -}}
-  {{- if $res -}}
-    {{- $inc := replaceRE `\A(?s:\s*(?:<!--.*?-->\s*)*)# [^\n]*\n+` "" $res.Content 1 -}}
-    {{- $body = replaceRE `\{\{[<%]\s*include-file\s*[>%]\}\}` $inc $body -}}
+{{- with .Params.repo_source -}}
+  {{- $doc := partialCached "repo-doc.html" . . -}}
+  {{- if $doc.found -}}
+    {{- $body = replaceRE `\{\{[<%]\s*include-file\s*[>%]\}\}` $doc.body $body -}}
   {{- end -}}
 {{- end -}}
 
@@ -29,9 +28,9 @@ limitations under the License.
   {{- $fullMatch := index . 0 -}}
   {{- $file := index . 1 -}}
   {{- $args := index . 2 -}}
-  {{- $res := resources.Get (path.Join "repo" $file) -}}
-  {{- if $res -}}
-    {{- $inc := replaceRE `\A(?s:\s*(?:<!--.*?-->\s*)*)# [^\n]*\n+` "" $res.Content 1 -}}
+  {{- $doc := partialCached "repo-doc.html" $file $file -}}
+  {{- if $doc.found -}}
+    {{- $inc := $doc.body -}}
     {{- if strings.Contains $args "shift_headings" -}}
       {{- $inc = replaceRE `(?m)^(#{2,5}) ` "#$1 " $inc -}}
     {{- end -}}
@@ -39,21 +38,21 @@ limitations under the License.
   {{- end -}}
 {{- end -}}
 
-{{/* 3. Replace HTML figure diagram on Overview with clean Markdown diagram */ -}}
-{{- $diagramMD := "```mermaid\nflowchart LR\n  CP[\"Agent Substrate Control & Data Plane\\n(ate-api-server + atenet · Atespace Registry)\"] -->|\"assigns & wakes\"| Atelet[\"atelet (Node Supervisor DaemonSet)\\nstreams GCS/S3 snapshots (<500ms)\"]\n  Atelet -->|\"gRPC to pod\"| Worker[\"Pre-Warmed Worker Pod (WorkerPool)\\nateom + gVisor / Kata microVM hosting Actor\"]\n```" -}}
-{{- $body = replaceRE `(?s)<figure class="as-diagram-card.*?</figure>` $diagramMD $body -}}
-
-{{/* 4. Convert HTML code-tab wrappers into clean Markdown headings */ -}}
+{{/* 3. Convert HTML code-tab wrappers into clean Markdown headings */ -}}
 {{- $body = replaceRE `<div class="code-tabs">\s*` "" $body -}}
 {{- $body = replaceRE `<div class="code-tab"\s+data-tab="([^"]+)"[^>]*>\s*` "#### $1\n\n" $body -}}
 {{- $body = replaceRE `(?m)^</div>\s*$` "" $body -}}
 
-{{/* 5. Strip any remaining Hugo shortcodes and clean up excessive blank lines */ -}}
+{{/* 4. Strip any remaining Hugo shortcodes and clean up excessive blank lines */ -}}
 {{- $body = replaceRE `\{\{[<%]\s*/?alert[^}%>]*[>%]\}\}` "" $body -}}
 {{- $body = replaceRE `\n{3,}` "\n\n" (strings.TrimSpace $body) -}}
 
 {{- $header := printf "# %s\n\n" .Title -}}
 {{- with .Params.description -}}
   {{- $header = printf "%s> %s\n\n" $header (strings.TrimSpace .) -}}
+{{- end -}}
+{{- $params := partialCached "page-params.html" . .Path -}}
+{{- with $params.status -}}
+  {{- $header = printf "%s> **Status: %s.** %s\n\n" $header (title .) (partial "status-text.html" $params) -}}
 {{- end -}}
 {{- printf "%s%s\n" $header $body -}}

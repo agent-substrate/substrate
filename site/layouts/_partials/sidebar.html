@@ -32,6 +32,7 @@ limitations under the License.
       {{- $active := eq $.RelPermalink .RelPermalink -}}
       <a href="{{ .RelPermalink }}" class="as-sb__link{{ if $active }} is-active{{ end }}"{{ if $active }} aria-current="page"{{ end }}>
         <span>{{ .LinkTitle }}</span>
+        {{- partial "page-pills.html" (dict "page" . "new" true) }}
       </a>
       {{- end }}
     </div>

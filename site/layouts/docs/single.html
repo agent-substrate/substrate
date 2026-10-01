@@ -15,18 +15,17 @@ limitations under the License.
 */ -}}
 {{ define "main" -}}
 <div class="td-content as-prose">
+  {{- $params := partialCached "page-params.html" . .Path -}}
+  {{- with $params.status }}
+  <div class="as-status-banner as-status-banner--{{ . }}" role="note">
+    <i class="fa-solid {{ index (dict "experimental" "fa-flask" "deprecated" "fa-triangle-exclamation" "planned" "fa-compass-drafting") . }}" aria-hidden="true"></i>
+    <p><strong>{{ title . }}.</strong> {{ partial "rewrite-repo-links.html" (dict "content" (partial "status-text.html" $params) "dir" (path.Dir ($.Params.repo_source | default ""))) | markdownify }}</p>
+  </div>
+  {{- end }}
   <div class="as-doc-header">
     <h1>{{ .Title }}</h1>
     {{ with .Params.description }}<p class="as-doc-lead">{{ . | markdownify }}</p>{{ end }}
     <div class="as-doc-meta">
-      {{- $status := .Params.status -}}
-      {{- if and (not $status) (in .Content "Much of this architecture is aspirational") -}}
-        {{- $status = "Partially implemented" -}}
-      {{- end -}}
-      {{- with $status }}
-      <span class="as-doc-status"><span class="as-doc-status__dot"></span>{{ . }}</span>
-      <span class="as-doc-meta__sep">·</span>
-      {{- end }}
       {{- with .Params.estimated_time }}
       <span class="as-doc-time">⏱️ {{ . }}</span>
       <span class="as-doc-meta__sep">·</span>
@@ -40,11 +39,18 @@ limitations under the License.
     </div>
   </div>
   <div class="as-doc-body">
-    {{- $content := .Content -}}
+    {{- $content := string .Content -}}
     {{- if eq .Params.repo_source "docs/glossary.md" -}}
-      {{- range slice "ActorTemplate" "WorkerPool" "SandboxConfig" "Atespace" "Actor" "Worker" "ate-api-server" "atecontroller" "atelet" "ateom" "atenet" "podcertcontroller" "kubectl-ate" "Suspend" "Pause" "Resume" -}}
-        {{- $id := lower . -}}
-        {{- $content = replace $content (printf "<strong>%s</strong>" .) (printf `<strong id="%s">%s</strong>` $id .) -}}
+      {{/* Anchor each term from docs/glossary.md on its bold label, which
+           Goldmark renders at the start of the term's list item. */ -}}
+      {{- range partialCached "glossary-terms.html" . "glossary" -}}
+        {{- $label := replaceRE `([\\.+*?()|\[\]{}^$])` `\${1}` .term -}}
+        {{- $pattern := printf `(<li>\s*(?:<p>)?)<strong>%s</strong>` $label -}}
+        {{- $anchored := replaceRE $pattern (printf `${1}<strong id="%s">%s</strong>` .id .term) $content 1 -}}
+        {{- if eq $anchored $content -}}
+          {{- errorf "glossary: term %q from docs/glossary.md: label not found on the glossary page" .term -}}
+        {{- end -}}
+        {{- $content = $anchored -}}
       {{- end -}}
     {{- end -}}
     {{ $content | safeHTML }}

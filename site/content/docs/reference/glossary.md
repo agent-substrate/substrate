@@ -11,8 +11,3 @@ description: >
 ---
 
 {{% include-file %}}
-
-## Naming & Prefix {#ate}
-
-- **ATE vs. Agent Substrate**: **Agent Substrate** is the name of the overall platform and runtime, while **`ate`** (originally *Agent Task / Execution Engine*) is the internal prefix used across Kubernetes namespaces (`ate-system`), control-plane binaries (`ate-api-server`, `atecontroller`), node and pod daemons (`atelet`, `ateom`), networking components (`atenet`, `atunnel`), HTTP routing headers (`ate-target-actor`), and the `kubectl-ate` CLI plugin.
-

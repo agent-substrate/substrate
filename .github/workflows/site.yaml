@@ -20,12 +20,16 @@ on:
     paths:
       - 'site/**'
       - 'docs/**'
+      - 'tools/site-release-data/**'
+      - 'hack/test-site-templates.sh'
       - '.github/workflows/site.yaml'
   push:
     branches: [main]
     paths:
       - 'site/**'
       - 'docs/**'
+      - 'tools/site-release-data/**'
+      - 'hack/test-site-templates.sh'
       - '.github/workflows/site.yaml'
   workflow_dispatch:
 permissions:
@@ -43,10 +47,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        # site-release-data needs the latest release tag and its history.
+        fetch-depth: 0
     - name: Setup Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version-file: 'site/go.mod'
+        # The root module, for tools/site-release-data. Hugo fetches Docsy
+        # with the same Go.
+        go-version-file: 'go.mod'
         cache: false
     - name: Setup Node
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -67,6 +76,11 @@ jobs:
     - name: Install PostCSS
       working-directory: site
       run: npm ci
+    - name: Generate release data
+      run: make site-release-data
+    - name: Test templates
+      if: github.event_name == 'pull_request'
+      run: hack/test-site-templates.sh
     - name: Configure Pages
       id: pages
       if: github.event_name != 'pull_request'
