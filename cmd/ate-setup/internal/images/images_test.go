@@ -112,7 +112,9 @@ func TestComponentsCoverTheManifests(t *testing.T) {
 			" in images.Components: %v\n"+
 			"add the missing entries to images.Components, or remove the stale ones; "+
 			"an entry still carrying a ko:// prefix is a reference that does not name "+
-			"its package by the full import path %s/...",
+			"its package by the full import path %s/...\n"+
+			"a new control-plane component also needs its own `ate-setup deploy` "+
+			"subcommand and a place in the upgrade order in docs/upgrade.md",
 			strings.Join(installTrees, "/ and "), found, want, images.ModulePath)
 	}
 }

@@ -34,6 +34,7 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Internal proto (atelet / ateom) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
+| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `pkg/`; see `internal/plugins/README.md` |
 
 See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 
@@ -45,6 +46,7 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Binaries**: `make build` (builds images and `kubectl-ate`) or `make build-atectl`
 - **Images**: `make build-images` (uses ko to build container images)
 - **Demos**: `make build-demos`
+- **Release images**: `make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` (every image a pre-built install needs, all tagged `TAG`, including the docker-built `envoy-dataplane`; `make build-envoy-dataplane` builds only that one)
 
 ### Testing and Verification
 - **Run Unit Tests**: `make test`

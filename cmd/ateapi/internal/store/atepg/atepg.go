@@ -26,9 +26,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -55,6 +57,7 @@ type Persistence struct {
 	// and the partition-maintenance loop.
 	watchPool             *pgxpool.Pool
 	ownsWatchPool         bool
+	policyManager         *authz.PolicyManager
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
@@ -260,6 +263,12 @@ func (p *Persistence) Pool() *pgxpool.Pool {
 	return p.pool
 }
 
+// SetPolicyManager configures the authorization policy manager used to clean up
+// OpenFGA tuples in the same transaction as resource deletions.
+func (p *Persistence) SetPolicyManager(pm *authz.PolicyManager) {
+	p.policyManager = pm
+}
+
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
 // run either directly against the pool or inside an in-flight transaction.
 type querier interface {
@@ -280,17 +289,13 @@ func unmarshalStored(b []byte, m proto.Message) error {
 	return nil
 }
 
-// TODO: EOL this in favor of setCreateMetadata
-func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
-	now := timestamppb.Now()
-	return &ateapipb.ResourceMetadata{
-		Atespace:   atespace,
-		Name:       name,
-		Uid:        uuid.NewString(),
-		Version:    1,
-		CreateTime: now,
-		UpdateTime: now,
+// unmarshalRow is unmarshalStored for a row in a listing. A listing fails as a
+// whole on one bad row, so the error names the row.
+func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
+	if err := unmarshalStored(b, m); err != nil {
+		return fmt.Errorf("unmarshaling %s %s: %w", kind, strings.Join(id, "/"), err)
 	}
+	return nil
 }
 
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
@@ -298,14 +303,6 @@ func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
-}
-
-// TODO: EOL this in favor of setUpdateMetadata
-func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
-	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
-	metadata.Version++
-	metadata.UpdateTime = timestamppb.Now()
-	return metadata
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database

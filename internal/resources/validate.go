@@ -20,13 +20,42 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// ToGRPCStatusError turns validation errors into the InvalidArgument error an
+// RPC handler responds with. Callers check len(errs) > 0 first.
+func ToGRPCStatusError(errs field.ErrorList) error {
+	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
+
+// DeepEqual compares two values of any type, using proto.Equal if both are
+// proto messages, and reflect.DeepEqual otherwise. Declarative validation's
+// generated code reaches it through each generating package's ateDeepEqual.
+func DeepEqual[T any](a, b T) bool {
+	asProto := func(x any) proto.Message {
+		pm, ok := x.(proto.Message)
+		if !ok {
+			return nil
+		}
+		return pm
+	}
+
+	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
+		return proto.Equal(pa, pb)
+	}
+	return reflect.DeepEqual(a, b)
+}
 
 // ValidateResourceName checks that a string conforms to Agent Substrate's
 // rules for a resource name, which is a subset of the rules for an RFC-1123
@@ -238,4 +267,32 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 		}
 	}
 	return nil
+}
+
+// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
+var cpuLimitMax = resource.MustParse("1k")
+
+// ValidateLimit validates one resource limit entry at fldPath: only cpu and
+// memory are supported, the quantity must be greater than zero, and the cpu
+// limit must be less than 1000 cores. An empty quantity is left to the
+// required tag.
+func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
+	if name != ResourceCPU && name != ResourceMemory {
+		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
+	}
+	if quantity == "" {
+		return nil
+	}
+	q, err := resource.ParseQuantity(quantity)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath.Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
+	}
+	var errs field.ErrorList
+	if q.Sign() <= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
+	}
+	if name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be less than 1000 cores"))
+	}
+	return errs
 }

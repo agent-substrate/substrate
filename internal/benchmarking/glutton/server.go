@@ -102,6 +102,8 @@ func newMux(svc *Service) *http.ServeMux {
 	mux.HandleFunc(ReadDiskRoute, protoRoute("ReadDisk", svc.ReadDisk))
 	mux.HandleFunc(WriteRAMRoute, protoRoute("WriteRAM", svc.WriteRAM))
 	mux.HandleFunc(ReadRAMRoute, protoRoute("ReadRAM", svc.ReadRAM))
+	mux.HandleFunc(BurnCPURoute, protoRoute("BurnCPU", svc.BurnCPU))
+	mux.HandleFunc(IngestRoute, protoRoute("Ingest", svc.Ingest))
 	return mux
 }
 

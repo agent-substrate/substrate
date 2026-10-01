@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -39,6 +41,12 @@ func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *atel
 	_, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// Reject malformed requests here rather than forwarding them for the
+	// control plane to reject after a round trip. After authentication, so an
+	// unauthenticated caller learns nothing but Unauthenticated.
+	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// TODO(identity): Check that we believe that this ateom is running the
@@ -106,18 +114,38 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 	if err != nil {
 		return nil, err
 	}
-	// Forwarded as reported: the worker speaks the vocabulary the control plane
-	// records, so there is nothing to translate.
+	// Reject malformed requests here rather than forwarding them for the
+	// control plane to reject after a round trip. After authentication, so an
+	// unauthenticated caller learns nothing but Unauthenticated.
+	if errs := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
 	if _, err := s.workers.SetWorkerCapacity(ctx, &ateapipb.SetWorkerCapacityRequest{
 		// Workers are global-scoped and named by their pod UID.
 		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity: req.GetCapacity(),
+		Capacity: toWorkerResources(req.GetCapacity()),
 	}); err != nil {
 		return nil, err
 	}
 	slog.InfoContext(ctx, "Recorded worker capacity",
 		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()))
 	return &ateletpb.SetWorkerCapacityResponse{}, nil
+}
+
+// toWorkerResources converts atelet's WorkerResources to the control plane's,
+// which it mirrors field for field.
+func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
+	if in == nil {
+		return nil
+	}
+	out := &ateapipb.WorkerResources{Actors: in.GetActors()}
+	if r := in.GetResources(); r != nil {
+		out.Resources = &ateapipb.Resources{}
+		for _, l := range r.GetLimits() {
+			out.Resources.Limits = append(out.Resources.Limits, &ateapipb.Limits{Name: l.GetName(), Quantity: l.GetQuantity()})
+		}
+	}
+	return out
 }
 
 // RequestActorSuspend forwards a worker's request to suspend an actor it hosts
@@ -136,6 +164,12 @@ func (s *ateomSupportServer) RequestActorSuspend(ctx context.Context, req *atele
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// Reject malformed requests here rather than forwarding them for the
+	// control plane to reject after a round trip. After authentication, so an
+	// unauthenticated caller learns nothing but Unauthenticated.
+	if errs := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	if _, err := s.workers.RequestActorSuspend(ctx, &ateapipb.RequestActorSuspendRequest{
 		// Workers are global-scoped and named by their pod UID.

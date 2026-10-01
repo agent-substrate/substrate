@@ -26,9 +26,17 @@ permissions:
 jobs:
   govulncheck:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The root module, then each module kept apart from it.
+        work-dir:
+          - .
+          - internal/plugins/gcp-secret-manager
     steps:
       - id: govulncheck
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
           go-version-file: go.mod
           go-package: ./...
+          work-dir: ${{ matrix.work-dir }}
