@@ -313,6 +313,12 @@ func TestApplies(t *testing.T) {
 			want:        false,
 		},
 		{
+			name:        "skips unavailable worker",
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)),
+			constraints: Constraints{SandboxClass: "gvisor"},
+			want:        false,
+		},
+		{
 			name:        "skips unspecified worker",
 			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			constraints: Constraints{SandboxClass: "gvisor"},

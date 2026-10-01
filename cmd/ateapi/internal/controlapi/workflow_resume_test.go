@@ -765,6 +765,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 	}
 	activeStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}}
 	drainingStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapipb.WorkerResources{Actors: 1}}
+	unavailableStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapipb.WorkerResources{Actors: 1}}
 
 	tests := []struct {
 		name string
@@ -799,6 +800,15 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
 			wantCrashMessage: "resume failed: " + crashMessageWorkerDraining,
 			wantAssignment:   ownAssignment,
+		},
+		{
+			name:           "leaves actor and worker untouched when worker is unavailable",
+			workerStatus:   unavailableStatus,
+			sandboxClass:   "gvisor",
+			assignment:     ownAssignment,
+			wantCode:       codes.Unavailable,
+			wantActorState: ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			wantAssignment: ownAssignment,
 		},
 		{
 			name:             "crashes actor and leaves worker untouched when assigned to another actor",

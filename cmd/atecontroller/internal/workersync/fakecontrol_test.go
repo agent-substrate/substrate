@@ -33,8 +33,9 @@ import (
 //
 // It reproduces the behavior the syncer is written against and nothing more:
 // server-assigned uid and version, the uid+version precondition every update
-// carries, the NOT_FOUND / ALREADY_EXISTS / ABORTED codes, a DrainWorker that
-// is idempotent down to leaving the version alone, and paged ListWorkers.
+// carries, the NOT_FOUND / ALREADY_EXISTS / ABORTED codes, Workers born
+// UNAVAILABLE, state RPCs that are idempotent down to leaving the version
+// alone, and paged ListWorkers.
 //
 // Request validation is not mirrored — that is the server's own contract, and
 // duplicating it here would only test the copy. A test that needs a rejection
@@ -48,6 +49,9 @@ type fakeControl struct {
 	mu      sync.Mutex
 	workers map[string]*ateapipb.Worker
 	uidSeq  int
+	// history holds every Worker written, in order, so a test can check the
+	// states in between the ones it reads back.
+	history []*ateapipb.Worker
 
 	// createHook, when set, decides CreateWorker's outcome: a non-nil error is
 	// returned and nothing is registered.
@@ -103,8 +107,24 @@ func (f *fakeControl) putLocked(w *ateapipb.Worker) *ateapipb.Worker {
 	if stored.GetStatus() == nil {
 		stored.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
 	}
-	f.workers[stored.GetMetadata().GetName()] = stored
+	f.storeLocked(stored)
 	return proto.Clone(stored).(*ateapipb.Worker)
+}
+
+// storeLocked writes w and records it in the write history.
+func (f *fakeControl) storeLocked(w *ateapipb.Worker) {
+	f.workers[w.GetMetadata().GetName()] = w
+	f.history = append(f.history, proto.Clone(w).(*ateapipb.Worker))
+}
+
+// writes returns every Worker written since the history was last taken, in
+// order, and clears it.
+func (f *fakeControl) writes() []*ateapipb.Worker {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	history := f.history
+	f.history = nil
+	return history
 }
 
 func (f *fakeControl) setCreateHook(hook func(*ateapipb.Worker) error) {
@@ -157,10 +177,9 @@ func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerR
 	if _, ok := f.workers[name]; ok {
 		return nil, status.Errorf(codes.AlreadyExists, "Worker %s already exists", name)
 	}
-	// status is output-only: a Worker is registered only once its pod has an
-	// IP, so ACTIVE is the only state it can be born in.
+	// status is output-only: every Worker is born UNAVAILABLE.
 	created := proto.Clone(in.GetWorker()).(*ateapipb.Worker)
-	created.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	created.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
 	return f.putLocked(created), nil
 }
 
@@ -210,7 +229,7 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 	}
 
 	updated.Metadata.Version++
-	f.workers[md.GetName()] = updated
+	f.storeLocked(updated)
 	return proto.Clone(updated).(*ateapipb.Worker), nil
 }
 
@@ -243,8 +262,39 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 	drained := proto.Clone(stored).(*ateapipb.Worker)
 	drained.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 	drained.Metadata.Version++
-	f.workers[name] = drained
+	f.storeLocked(drained)
 	return proto.Clone(drained).(*ateapipb.Worker), nil
+}
+
+func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapipb.MarkWorkerAvailableRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+	return f.markWorker(in.GetWorker().GetName(), ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+}
+
+func (f *fakeControl) MarkWorkerUnavailable(_ context.Context, in *ateapipb.MarkWorkerUnavailableRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+	return f.markWorker(in.GetWorker().GetName(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+}
+
+// markWorker moves a Worker between ACTIVE and UNAVAILABLE as the Mark RPCs
+// do: idempotent down to leaving the version alone, with DRAINING final.
+func (f *fakeControl) markWorker(name string, state ateapipb.WorkerState) (*ateapipb.Worker, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	stored, ok := f.workers[name]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+	}
+	switch stored.GetStatus().GetState() {
+	case state:
+		return proto.Clone(stored).(*ateapipb.Worker), nil
+	case ateapipb.WorkerState_WORKER_STATE_DRAINING:
+		return nil, status.Errorf(codes.FailedPrecondition, "Worker %s is draining", name)
+	}
+	marked := proto.Clone(stored).(*ateapipb.Worker)
+	marked.Status.State = state
+	marked.Metadata.Version++
+	f.storeLocked(marked)
+	return proto.Clone(marked).(*ateapipb.Worker), nil
 }
 
 func (f *fakeControl) ListWorkers(_ context.Context, in *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {

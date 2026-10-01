@@ -344,7 +344,8 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 // validateAssignedWorker checks a RESUMING actor's persisted assignment
 // against the current worker record. Every invalid outcome crashes the actor:
 // a RESUMING actor whose worker vanished, drained, was reassigned, or is no
-// longer eligible can never make progress on its own.
+// longer eligible can never make progress on its own. A worker that is only
+// unavailable is reported as UNAVAILABLE for the caller to retry.
 func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (*ateapipb.Worker, error) {
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
@@ -376,6 +377,11 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 			return nil, cerr
 		}
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef.String())
+	}
+	// An unavailable worker may come back with its Actors intact. If its ateom
+	// restarted instead, the raised epoch has this Actor crashed for it.
+	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+		return nil, status.Errorf(codes.Unavailable, "worker %s assigned to actor %s is unavailable", worker.GetMetadata().GetName(), actorRef)
 	}
 	// Verify the worker is still hosting this Actor.
 	hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
