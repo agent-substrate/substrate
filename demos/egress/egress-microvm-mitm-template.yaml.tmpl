@@ -38,13 +38,11 @@ containers:
   # DIRECTORY list is still scanned, and the base image keeps its public
   # roots in /etc/ssl/certs. Pointing SSL_CERT_DIR at the projection too
   # makes the anchor set exactly the gateway CA, so a successful HTTPS fetch
-  # proves the projected bundle validated the minted leaf. Under sdsmint the
-  # public roots are useless anyway: every origin is fronted by the gateway.
+  # proves the projected bundle validated the minted leaf. When both passthrough
+  # TLS and MITM policies are configured both public and ATE roots are needed.
   env:
   - name: SSL_CERT_FILE
     value: /run/ate/trust-bundle.pem
-  - name: SSL_CERT_DIR
-    value: /run/ate
   volumeMounts:
   # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info
