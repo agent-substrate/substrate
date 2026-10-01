@@ -90,8 +90,8 @@ func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageS
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
 		tag := &ateapipb.Tag{}
-		if err := unmarshalStored(protoBytes, tag); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling tag: %w", err)
+		if err := unmarshalRow(protoBytes, tag, "tag", atespace, name); err != nil {
+			return nil, "", err
 		}
 		result = append(result, tag)
 		names = append(names, name)
@@ -136,8 +136,8 @@ func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTo
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
 		tag := &ateapipb.Tag{}
-		if err := unmarshalStored(protoBytes, tag); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling tag: %w", err)
+		if err := unmarshalRow(protoBytes, tag, "tag", k.atespace, k.name); err != nil {
+			return nil, "", err
 		}
 		result = append(result, tag)
 		keys = append(keys, k)
@@ -158,7 +158,7 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 	atespace := tag.GetMetadata().GetAtespace()
 	name := tag.GetMetadata().GetName()
 	dbTag := proto.CloneOf(tag)
-	dbTag.Metadata = newCreateMetadata(atespace, name)
+	setCreateMetadata(dbTag.Metadata)
 	protoBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
@@ -232,15 +232,17 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 		return nil, err
 	}
 	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.Tag)
+	oldMeta := proto.CloneOf(dbTag.Metadata)
 	if err := mutate(dbTag); err != nil {
 		return nil, err
 	}
+	// TODO: this should be done through DV and removed from here
 	if err := validateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
 		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
+	setUpdateMetadata(dbTag.Metadata, oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {

@@ -87,9 +87,9 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 	// The tap and atunnel share a namespace; the guest owns the other end.
 	session, err := ateomnet.ServeSandbox(ctx, ateomnet.SandboxNetworkConfig{
 		ActorUID:   uid,
-		EgressPort: s.atunnelEgressPort,
+		EgressPort: s.tunnel.EgressPort,
 		DNSPort:    atunnel.DNSPort,
-	}, s.atunnelEgress, s.dnsRelay)
+	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()
 		delete(s.actors, uid)

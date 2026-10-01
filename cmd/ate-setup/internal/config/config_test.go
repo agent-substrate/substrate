@@ -43,7 +43,6 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
-		"ATE_API_POSTGRES_CONNECTION_STRING",
 		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING",
 		"ATE_API_POSTGRES_OWNER_ROLE",
 		"ATE_API_POSTGRES_POOL_MAX_CONNS",
@@ -147,7 +146,7 @@ func TestLoadClusterSize(t *testing.T) {
 		{
 			name:     "explicit connection string is untouched",
 			opts:     Options{ClusterSize: ClusterSizeSize10},
-			env:      map[string]string{"ATE_API_POSTGRES_CONNECTION_STRING": "postgresql://someone@db.example:5432/atepg"},
+			env:      map[string]string{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": "postgresql://someone@db.example:5432/atepg"},
 			wantSize: ClusterSizeSize10,
 		},
 	} {
@@ -224,12 +223,10 @@ func TestLoadFlagsBeatEnvironment(t *testing.T) {
 	}
 }
 
-// The old connection remains the owner connection when a separate read/write
-// login is added, and serves both pools until then.
-func TestLoadPostgresConnectionStringOverride(t *testing.T) {
+func TestLoadPostgresConnectionStrings(t *testing.T) {
 	loadEnv(t)
 	const dsn = "postgresql://someone@db.example:5432/atepg?sslmode=disable"
-	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", dsn)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", dsn)
 
 	cfg, err := Load(Options{})
 	if err != nil {
@@ -239,13 +236,13 @@ func TestLoadPostgresConnectionStringOverride(t *testing.T) {
 		t.Errorf("PostgreSQL connections = %q, %q, want %q for both", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
 	}
 
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "readwrite-dsn")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
 	cfg, err = Load(Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != dsn {
-		t.Errorf("separate PostgreSQL connections = %q, %q, want readwrite-dsn and %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
+	if cfg.PostgresReadWriteConnectionString != dsn || cfg.PostgresOwnerConnectionString != "owner-dsn" {
+		t.Errorf("separate PostgreSQL connections = %q, %q, want %q and owner-dsn", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
 	}
 }
 
@@ -264,18 +261,6 @@ func TestLoadPostgresIdentityOverrides(t *testing.T) {
 	}
 	if !cfg.PostgresReadWriteRoleSet || !cfg.PostgresOwnerRoleSet {
 		t.Fatalf("PostgreSQL role overrides not marked as explicit: %+v", cfg)
-	}
-}
-
-func TestLoadPostgresOwnerWithoutReadWrite(t *testing.T) {
-	loadEnv(t)
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
-	cfg, err := Load(Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.PostgresReadWriteConnectionString != "owner-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" {
-		t.Errorf("owner-only PostgreSQL connections = %q, %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString)
 	}
 }
 

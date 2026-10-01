@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"regexp"
 	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
@@ -112,9 +111,6 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 			}
 		}
 	}
-	log.Infof("POSTGRES_READ_WRITE_CONNECTION_STRING: %s", redactDSN(readWriteDSN))
-	log.Infof("POSTGRES_OWNER_CONNECTION_STRING: %s", redactDSN(ownerDSN))
-
 	configVars := cloudSQLEnvVars(cloudsql)
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
@@ -150,16 +146,13 @@ func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]str
 }
 
 // recordedConnectionStrings reads the credentials paired with an adopted Cloud
-// SQL instance. The old single connection key is accepted for existing installs.
+// SQL instance.
 func (e *Env) recordedConnectionStrings(ctx context.Context) (string, string, error) {
 	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 	if err != nil || secret == nil {
 		return "", "", err
 	}
 	readWriteDSN := string(secret.Data["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"])
-	if readWriteDSN == "" {
-		readWriteDSN = string(secret.Data["ATE_API_POSTGRES_CONNECTION_STRING"])
-	}
 	ownerDSN := string(secret.Data["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"])
 	if ownerDSN == "" {
 		ownerDSN = readWriteDSN
@@ -184,19 +177,6 @@ func (e *Env) applyPostgresServerCA(ctx context.Context) error {
 	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresServerCA, map[string]string{
 		"server-ca.pem": string(pem),
 	})
-}
-
-var (
-	// dsnURIPassword matches the password in a URI userinfo section.
-	dsnURIPassword = regexp.MustCompile(`(://[^:/@]*):[^@]*@`)
-	// dsnKeywordPassword matches a keyword/value or query parameter password.
-	dsnKeywordPassword = regexp.MustCompile(`(password=)[^ &]*`)
-)
-
-// redactDSN masks any password before the connection string is logged.
-func redactDSN(dsn string) string {
-	redacted := dsnURIPassword.ReplaceAllString(dsn, "$1:***@")
-	return dsnKeywordPassword.ReplaceAllString(redacted, "$1***")
 }
 
 // EnsureEnvVarsSafeStandalone guards `ate-setup create api-server-env-vars` on

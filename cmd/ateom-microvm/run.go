@@ -244,7 +244,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 	defer release()
 
-	if err := s.deactivateActorNetworking(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
+	if err := s.tunnel.Deactivate(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
 
@@ -390,7 +390,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("ateom-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
 	rr := s.resolveRuntime(paths)
-	egress, err := s.prepareActorEgress(ctx, p.actorRef.Atespace, p.actorRef.Name, p.actorUID, p.egressGateway)
+	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
 	if err != nil {
 		return err
 	}
@@ -402,7 +402,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if cleanupErr := s.deactivateActorNetworking(cleanupCtx, p.attribution()); cleanupErr != nil {
+			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -587,7 +587,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		slog.Duration("since_boot", time.Since(tBooted)))
 
 	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
-	if err := s.activateActorNetworking(p.attribution(), egress); err != nil {
+	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
@@ -804,6 +804,9 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		initParams(agentInit)
 	if kparams != "" {
 		cmdline += " " + kparams
+	}
+	if runtime.GOARCH == "amd64" {
+		cmdline += " clocksource=kvm-clock"
 	}
 	serial := &ch.ConsoleConfig{Mode: "Off"}
 	if debug {

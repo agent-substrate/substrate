@@ -30,6 +30,10 @@ const (
 	ActorVethGateway = "169.254.17.1"
 	ActorVethIP      = "169.254.17.2"
 
+	// ActorHTTPUpstream is the in-sandbox HTTP endpoint atunnel proxies actor
+	// ingress to.
+	ActorHTTPUpstream = "http://" + ActorVethIP + ":80"
+
 	// hostVethLocalAddress is the gateway interface's IP address and prefix length.
 	hostVethLocalAddress = "169.254.17.1/30"
 	// actorVethLocalAddress is the actor interface's IP address and prefix length.

@@ -25,48 +25,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 )
 
-// The DSN is logged on every install, and for an external database it can
-// carry a password.
-func TestRedactDSN(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		dsn  string
-		want string
-	}{
-		{
-			name: "URI userinfo password",
-			dsn:  "postgresql://ate:hunter2@db.example.com:5432/atepg?sslmode=require",
-			want: "postgresql://ate:***@db.example.com:5432/atepg?sslmode=require",
-		},
-		{
-			name: "keyword/value password",
-			dsn:  "user=ate password=hunter2 host=db.example.com",
-			want: "user=ate password=*** host=db.example.com",
-		},
-		{
-			name: "query parameter password",
-			dsn:  "postgresql://db.example.com/atepg?password=hunter2&sslmode=require",
-			want: "postgresql://db.example.com/atepg?password=***&sslmode=require",
-		},
-		{
-			name: "passwordless DSN is unchanged",
-			dsn:  "user=ate@p.iam host=127.0.0.1 port=5432 dbname=atepg sslmode=disable",
-			want: "user=ate@p.iam host=127.0.0.1 port=5432 dbname=atepg sslmode=disable",
-		},
-		{
-			name: "the default in-cluster DSN is unchanged",
-			dsn:  config.DefaultPostgresConnectionString,
-			want: config.DefaultPostgresConnectionString,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := redactDSN(tc.dsn); got != tc.want {
-				t.Errorf("redactDSN() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 // The digest exists to turn an envFrom change into a rollout, so what matters
 // is that it moves when a value does and holds still otherwise.
 func TestEnvHash(t *testing.T) {
@@ -307,7 +265,7 @@ func TestRecordedConnectionStrings(t *testing.T) {
 		data  map[string][]byte
 		owner string
 	}{
-		{"legacy single DSN", map[string][]byte{"ATE_API_POSTGRES_CONNECTION_STRING": []byte("legacy")}, "legacy"},
+		{"one DSN", map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("readwrite")}, "readwrite"},
 		{"separate DSNs", map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("readwrite"), "ATE_API_POSTGRES_OWNER_CONNECTION_STRING": []byte("owner")}, "owner"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

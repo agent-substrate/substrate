@@ -337,8 +337,8 @@ func Load(opts Options) (*Config, error) {
 	cloudsqlInstance, cloudsqlInstanceSet := env["ATE_API_POSTGRES_CLOUDSQL_INSTANCE"]
 
 	kubeconfig, kubeconfigEnv := loadKubeconfig(opts.Kubeconfig, env["KUBECONFIG"])
-	ownerConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"], env["ATE_API_POSTGRES_CONNECTION_STRING"])
-	readWriteConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"], ownerConnectionString)
+	readWriteConnectionString := env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"]
+	ownerConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"], readWriteConnectionString)
 
 	cfg := &Config{
 		Root:                              root,

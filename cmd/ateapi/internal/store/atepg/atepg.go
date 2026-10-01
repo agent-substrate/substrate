@@ -117,45 +117,56 @@ var _ store.Interface = (*Persistence)(nil)
 // PostgreSQL connection. Callers can retry this error before startup.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
+// ConnectConfig configures the PostgreSQL pools used by Persistence.
+type ConnectConfig struct {
+	ReadWriteDSN    string
+	OwnerDSN        string
+	ReadWriteRole   string
+	OwnerRole       string
+	Schema          string
+	MaxConnLifetime time.Duration
+	PoolMaxConns    int32
+}
+
 // Connect opens read/write and owner pools. It creates the schema and applies migrations.
-func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRole, schema string, maxConnLifetime time.Duration, poolMaxConns int32) (*Persistence, error) {
-	if schema == "" {
+func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
+	if config.Schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
-	if readWriteRole == "" {
+	if config.ReadWriteRole == "" {
 		return nil, fmt.Errorf("PostgreSQL read/write role must not be empty")
 	}
-	if ownerRole == "" {
+	if config.OwnerRole == "" {
 		return nil, fmt.Errorf("PostgreSQL owner role must not be empty")
 	}
-	if maxConnLifetime < 0 {
+	if config.MaxConnLifetime < 0 {
 		return nil, fmt.Errorf("PostgreSQL maximum connection lifetime must not be negative")
 	}
-	if poolMaxConns < 0 {
+	if config.PoolMaxConns < 0 {
 		return nil, fmt.Errorf("PostgreSQL pool maximum connections must not be negative")
 	}
-	readWriteSource, ownerSource, err := connectionStringSources(readWriteDSN, ownerDSN)
+	readWriteSource, ownerSource, err := connectionStringSources(config.ReadWriteDSN, config.OwnerDSN)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := poolConfig(readWriteSource, readWriteRole, maxConnLifetime)
+	readWriteConfig, err := poolConfig(readWriteSource, config.ReadWriteRole, config.MaxConnLifetime)
 	if err != nil {
 		return nil, err
 	}
-	if poolMaxConns > 0 {
-		cfg.MaxConns = poolMaxConns
+	if config.PoolMaxConns > 0 {
+		readWriteConfig.MaxConns = config.PoolMaxConns
 	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	ownerCfg, err := poolConfig(ownerSource, ownerRole, maxConnLifetime)
+	readWriteConfig.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{config.Schema}.Sanitize()
+	ownerConfig, err := poolConfig(ownerSource, config.OwnerRole, config.MaxConnLifetime)
 	if err != nil {
 		return nil, fmt.Errorf("parse PostgreSQL owner connection string: %w", err)
 	}
-	ownerCfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	ownerCfg.MaxConns = ownerPoolMaxConns
-	ownerCfg.MinConns = 0
-	ownerCfg.MinIdleConns = 0
+	ownerConfig.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{config.Schema}.Sanitize()
+	ownerConfig.MaxConns = ownerPoolMaxConns
+	ownerConfig.MinConns = 0
+	ownerConfig.MinIdleConns = 0
 
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	pool, err := pgxpool.NewWithConfig(ctx, readWriteConfig)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
@@ -164,7 +175,7 @@ func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRo
 		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
 	}
 
-	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerCfg)
+	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerConfig)
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("open PostgreSQL owner pool: %w", err)
@@ -174,13 +185,13 @@ func Connect(ctx context.Context, readWriteDSN, ownerDSN, readWriteRole, ownerRo
 		pool.Close()
 		return nil, fmt.Errorf("%w: ping PostgreSQL owner connection: %w", ErrUnavailable, err)
 	}
-	if err := createSchema(ctx, ownerPool, schema); err != nil {
+	if err := createSchema(ctx, ownerPool, config.Schema); err != nil {
 		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
 
-	watchCfg := cfg.Copy()
+	watchCfg := readWriteConfig.Copy()
 	watchCfg.MaxConns = watchPoolMaxConns
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
@@ -228,7 +239,7 @@ func newConnectionStringSource(value string) (connectionStringSource, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("PostgreSQL connection string file path %q must be absolute", path)
 	}
-	source := func() (string, error) {
+	return func() (string, error) {
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("reading PostgreSQL connection string file %q: %w", path, err)
@@ -238,8 +249,7 @@ func newConnectionStringSource(value string) (connectionStringSource, error) {
 			return "", fmt.Errorf("PostgreSQL connection string file %q is empty", path)
 		}
 		return dsn, nil
-	}
-	return source, nil
+	}, nil
 }
 
 func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error {
@@ -269,14 +279,6 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 
 // poolConfig parses a connection source into a pool configuration whose user,
 // password and TLS material are refreshed for every new connection.
-//
-// pgx resolves sslcert, sslkey and sslrootcert once, when the connection
-// string is parsed, and pins the result for the life of the pool. The paths in
-// use here are projected pod certificates that the kubelet replaces about
-// every day, so a long-lived process would keep presenting the client
-// certificate it started with, and keep trusting only the CAs it started with,
-// until connections started failing. Re-parsing in BeforeConnect costs one
-// small file read per new connection and picks up every rotation.
 func poolConfig(source connectionStringSource, role string, maxConnLifetime time.Duration) (*pgxpool.Config, error) {
 	if role == "" {
 		return nil, fmt.Errorf("PostgreSQL role must not be empty")
@@ -319,12 +321,6 @@ func poolConfig(source connectionStringSource, role string, maxConnLifetime time
 	return cfg, nil
 }
 
-// sameConnectionIdentity reports whether fresh still points at the endpoint the
-// pool was built for. Only the endpoint is fenced: host, port, database and the
-// fallback hosts and ports. The user is not part of it. A rotation that issues
-// a new user each cycle, and keeps the previous one able to log in until the
-// cycle after, needs new connections to dial as the incoming user while older
-// connections finish on the outgoing one.
 func sameConnectionIdentity(current, fresh *pgx.ConnConfig) bool {
 	if current.Host != fresh.Host || current.Port != fresh.Port || current.Database != fresh.Database {
 		return false
@@ -426,17 +422,13 @@ func unmarshalStored(b []byte, m proto.Message) error {
 	return nil
 }
 
-// TODO: EOL this in favor of setCreateMetadata
-func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
-	now := timestamppb.Now()
-	return &ateapipb.ResourceMetadata{
-		Atespace:   atespace,
-		Name:       name,
-		Uid:        uuid.NewString(),
-		Version:    1,
-		CreateTime: now,
-		UpdateTime: now,
+// unmarshalRow is unmarshalStored for a row in a listing. A listing fails as a
+// whole on one bad row, so the error names the row.
+func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
+	if err := unmarshalStored(b, m); err != nil {
+		return fmt.Errorf("unmarshaling %s %s: %w", kind, strings.Join(id, "/"), err)
 	}
+	return nil
 }
 
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
@@ -444,14 +436,6 @@ func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
-}
-
-// TODO: EOL this in favor of setUpdateMetadata
-func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
-	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
-	metadata.Version++
-	metadata.UpdateTime = timestamppb.Now()
-	return metadata
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database

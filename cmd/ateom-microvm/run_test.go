@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -180,6 +181,9 @@ func TestBuildVMConfigConsole(t *testing.T) {
 	}
 	if !strings.Contains(cfg.Payload.Cmdline, "console=hvc0") {
 		t.Errorf("cmdline = %q, want console=hvc0", cfg.Payload.Cmdline)
+	}
+	if runtime.GOARCH == "amd64" && !strings.Contains(cfg.Payload.Cmdline, "clocksource=kvm-clock") {
+		t.Errorf("amd64 cmdline = %q, want clocksource=kvm-clock", cfg.Payload.Cmdline)
 	}
 	if strings.Contains(cfg.Payload.Cmdline, "earlycon") {
 		t.Errorf("cmdline = %q, must not pay for earlycon outside debug mode", cfg.Payload.Cmdline)

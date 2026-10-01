@@ -146,11 +146,29 @@ func TestConnectRequiresRoles(t *testing.T) {
 		{name: "owner", readWriteRole: "readwrite", want: "owner role must not be empty"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Connect(t.Context(), "unused", "unused", tc.readWriteRole, tc.ownerRole, "substrate", 0, 0)
+			_, err := Connect(t.Context(), ConnectConfig{
+				ReadWriteDSN:  "unused",
+				OwnerDSN:      "unused",
+				ReadWriteRole: tc.readWriteRole,
+				OwnerRole:     tc.ownerRole,
+				Schema:        "substrate",
+			})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Connect error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestConnectRequiresOwnerConnectionString(t *testing.T) {
+	_, err := Connect(t.Context(), ConnectConfig{
+		ReadWriteDSN:  "unused",
+		ReadWriteRole: "runtime",
+		OwnerRole:     "owner",
+		Schema:        "substrate",
+	})
+	if err == nil || !strings.Contains(err.Error(), "owner connection string must not be empty") {
+		t.Fatalf("Connect error = %v, want missing-owner error", err)
 	}
 }
 
@@ -410,7 +428,13 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", dsn, "atepg", "atepg", schema, 0, 0)
+	persistence, err := Connect(ctx, ConnectConfig{
+		ReadWriteDSN:  dsn + "&search_path=public",
+		OwnerDSN:      dsn,
+		ReadWriteRole: "atepg",
+		OwnerRole:     "atepg",
+		Schema:        schema,
+	})
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -537,7 +561,14 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	ddlPath := filepath.Join(t.TempDir(), "ddl-dsn")
 	writeConnectionString(t, runtimePath, runtimeDSN)
 	writeConnectionString(t, ddlPath, ddlDSN)
-	p, err := Connect(ctx, "@file:"+runtimePath, "@file:"+ddlPath, runtimeRole, ddlRole, schema, 0, 20)
+	p, err := Connect(ctx, ConnectConfig{
+		ReadWriteDSN:  "@file:" + runtimePath,
+		OwnerDSN:      "@file:" + ddlPath,
+		ReadWriteRole: runtimeRole,
+		OwnerRole:     ddlRole,
+		Schema:        schema,
+		PoolMaxConns:  20,
+	})
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
