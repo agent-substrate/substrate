@@ -154,15 +154,13 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 	secret, err := s.client.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			// On a grant narrowed by label the caller is not entitled to know
-			// which Secrets exist: it has not been admitted to this Secret,
-			// only to Secrets that carry the labels. NotFound would separate
-			// "absent" from "present but not yours", and a caller could walk a
-			// list of names and learn the contents of the namespace. Refuse
-			// both the same way. A grant that is not narrowed by label has
-			// already been admitted to every Secret here, so NotFound tells it
-			// nothing new.
-			if s.nsAuth != nil && !s.nsAuth.AllowedUnconditionally(atespace, ref.Namespace) {
+			// A restricted grant must not let a caller tell "absent" from
+			// "present but not admitted" by walking names, so a missing
+			// Secret is refused the same way as one that fails the label
+			// check below. Asking with nil labels answers exactly that: is
+			// atespace admitted to every Secret in this namespace regardless
+			// of labels?
+			if s.nsAuth != nil && !s.nsAuth.AllowedSecret(atespace, ref.Namespace, nil) {
 				return nil, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secret %s/%s", atespace, ref.Namespace, ref.Name)
 			}
 			return nil, status.Errorf(codes.NotFound, "secret %s/%s not found", ref.Namespace, ref.Name)
@@ -173,11 +171,9 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 		return nil, status.Errorf(codes.Unavailable, "reading secret %s/%s: %v", ref.Namespace, ref.Name, err)
 	}
 
-	// A grant narrowed by label can only be settled with the Secret in hand. It
-	// is read and discarded here, never returned. This refusal and the NotFound
-	// above give the same code and the same message, so a caller learns nothing
-	// from the difference between a Secret that is absent and one whose labels
-	// do not match.
+	// Step 3: the Secret is in hand, so a grant narrowed by label can finally
+	// be settled. This refusal and the NotFound above give the same code and
+	// message, so a caller learns nothing from the difference.
 	if s.nsAuth != nil && !s.nsAuth.AllowedSecret(atespace, ref.Namespace, secret.GetLabels()) {
 		slog.WarnContext(ctx, "credential request denied: secret does not match the grant",
 			slog.String("atespace", atespace),
@@ -194,10 +190,13 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 	return &credproviderpb.FetchSecretResponse{OpaqueBytes: value}, nil
 }
 
-// authorize enforces the policy as far as it can without reading anything: it
-// derives the atespace from the attested actor SPIFFE ID and denies unless the
-// URI's namespace is granted. The returned atespace is used once the Secret
-// has been fetched, to check whether it satisfies a grant narrowed by label.
+// authorize covers the first two of three authorization steps, before
+// anything is read from Kubernetes:
+//  1. is the caller a real actor at all (its SPIFFE ID parses)
+//  2. is its atespace granted this namespace
+//
+// The third step, checking the fetched Secret itself against a label-narrowed
+// grant, is NamespaceAuthorizer.AllowedSecret, called once the Secret is read.
 func (s *Server) authorize(ctx context.Context, actorSpiffeID, namespace string) (string, error) {
 	if s.nsAuth == nil {
 		return "", nil

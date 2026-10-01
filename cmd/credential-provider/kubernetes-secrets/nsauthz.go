@@ -161,25 +161,10 @@ func (a *NamespaceAuthorizer) Allowed(atespace, namespace string) bool {
 	return len(set[namespace]) > 0
 }
 
-// AllowedUnconditionally reports whether atespace may resolve every Secret in
-// namespace without inspecting the Secret itself: true when some grant there
-// carries no label selector. Callers use this to decide whether a Secret that
-// turns out not to exist may be reported as NotFound, or must be masked the
-// same as one whose labels do not match a restricted grant.
-func (a *NamespaceAuthorizer) AllowedUnconditionally(atespace, namespace string) bool {
-	for _, g := range a.allowed[atespace][namespace] {
-		if len(g.labels) == 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// AllowedSecret reports whether a fetched Secret satisfies some grant for
-// atespace/namespace: a grant without a label selector admits every Secret, and
-// a grant with one admits a Secret carrying every one of its labels. Every
-// label in a grant's selector must be present with the same value; the Secret
-// may carry others.
+// AllowedSecret reports whether atespace may resolve a Secret with these
+// labels in namespace. A grant without a label selector admits every Secret,
+// including one that does not exist: pass nil labels to ask that question
+// before reading anything from Kubernetes.
 func (a *NamespaceAuthorizer) AllowedSecret(atespace, namespace string, labels map[string]string) bool {
 	for _, g := range a.allowed[atespace][namespace] {
 		if len(g.labels) == 0 {

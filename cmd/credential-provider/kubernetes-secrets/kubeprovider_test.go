@@ -371,7 +371,7 @@ func TestLoadNamespaceAuthorizerSecretNarrowing(t *testing.T) {
 		t.Fatalf("LoadNamespaceAuthorizer: %v", err)
 	}
 	// team-a narrows by label, so only the Secret's labels can settle it.
-	if authz.AllowedUnconditionally("team-a", "ns1") {
+	if authz.AllowedSecret("team-a", "ns1", nil) {
 		t.Error("policy with a selector: got unconditionally allowed, want narrowed")
 	}
 	if !authz.AllowedSecret("team-a", "ns1", map[string]string{"example.com/credential": "true"}) {
@@ -381,7 +381,7 @@ func TestLoadNamespaceAuthorizerSecretNarrowing(t *testing.T) {
 		t.Error("unlabeled secret: got permitted, want refused")
 	}
 	// team-b narrows by nothing, so the grant stays namespace-wide.
-	if !authz.AllowedUnconditionally("team-b", "ns2") {
+	if !authz.AllowedSecret("team-b", "ns2", nil) {
 		t.Error("policy without narrowing: got narrowed, want unconditionally allowed")
 	}
 }
@@ -437,7 +437,7 @@ func TestNamespaceAuthorizerPoliciesAreOred(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newNamespaceAuthorizer: %v", err)
 		}
-		if got := a.AllowedUnconditionally("team-a", "ns1"); !got {
+		if got := a.AllowedSecret("team-a", "ns1", nil); !got {
 			t.Error("got narrowed, want unconditionally allowed: the unrestricted policy still stands")
 		}
 	})
