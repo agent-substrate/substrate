@@ -292,9 +292,9 @@ func TestBundledPostgresIdentityConfiguration(t *testing.T) {
 	for _, want := range []string{
 		"('substrate_owner', false",
 		"('substrate_readwrite', false",
-		"('substrate_admin_user', true, 'substrate-admin')",
+		"('substrate_owner_user', true, 'substrate-owner')",
 		"('substrate_readwrite_user', true, 'substrate-readwrite')",
-		"GRANT substrate_owner TO substrate_admin_user",
+		"GRANT substrate_owner TO substrate_owner_user",
 		"GRANT substrate_readwrite TO substrate_readwrite_user",
 		"CREATE SCHEMA substrate AUTHORIZATION substrate_owner",
 	} {
@@ -317,9 +317,8 @@ func TestBundledPostgresAdminSecretValidation(t *testing.T) {
 		data map[string][]byte
 		want bool
 	}{
-		{name: "complete", data: map[string][]byte{"POSTGRES_USER": []byte("postgres"), "POSTGRES_PASSWORD": []byte("secret")}},
-		{name: "wrong user", data: map[string][]byte{"POSTGRES_USER": []byte("admin"), "POSTGRES_PASSWORD": []byte("secret")}, want: true},
-		{name: "missing password", data: map[string][]byte{"POSTGRES_USER": []byte("postgres")}, want: true},
+		{name: "complete", data: map[string][]byte{"POSTGRES_PASSWORD": []byte("secret")}},
+		{name: "missing password", data: map[string][]byte{}, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, &corev1.Secret{
@@ -347,7 +346,6 @@ func TestBundledPostgresManifestUsesPasswordAuthentication(t *testing.T) {
 		"hostssl all postgres all reject",
 		"hostssl atepg all all scram-sha-256 clientcert=verify-ca",
 		"name: postgres-admin",
-		"key: POSTGRES_USER",
 		"key: POSTGRES_PASSWORD",
 	} {
 		if !strings.Contains(text, want) {

@@ -33,8 +33,8 @@ import (
 )
 
 const (
-	bundledPostgresOwnerUser         = "substrate_admin_user"
-	bundledPostgresOwnerPassword     = "substrate-admin"
+	bundledPostgresOwnerUser         = "substrate_owner_user"
+	bundledPostgresOwnerPassword     = "substrate-owner"
 	bundledPostgresReadWriteUser     = "substrate_readwrite_user"
 	bundledPostgresReadWritePassword = "substrate-readwrite"
 	postgresTLSParams                = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
@@ -65,11 +65,11 @@ func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
 	}
 	if secret == nil {
 		return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresAdmin, map[string]string{
-			"POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": rand.Text(),
+			"POSTGRES_PASSWORD": rand.Text(),
 		})
 	}
-	if string(secret.Data["POSTGRES_USER"]) != "postgres" || len(secret.Data["POSTGRES_PASSWORD"]) == 0 {
-		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER=postgres and a non-empty POSTGRES_PASSWORD", e.Namespace(), SecretPostgresAdmin)
+	if len(secret.Data["POSTGRES_PASSWORD"]) == 0 {
+		return fmt.Errorf("secret %s/%s must contain a non-empty POSTGRES_PASSWORD", e.Namespace(), SecretPostgresAdmin)
 	}
 	return nil
 }
@@ -78,17 +78,9 @@ func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
 // starts. Administrator credentials stay inside the PostgreSQL pod.
 func (e *Env) setupBundledPostgres(ctx context.Context) error {
 	log.Step("setup_bundled_postgres")
-	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretPostgresAdmin)
-	if err != nil {
-		return err
-	}
-	if secret == nil || len(secret.Data["POSTGRES_USER"]) == 0 {
-		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER", e.Namespace(), SecretPostgresAdmin)
-	}
-
 	var stdout, stderr bytes.Buffer
-	err = e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", []string{
-		"psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1", "--username", string(secret.Data["POSTGRES_USER"]), "--dbname", "atepg",
+	err := e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", []string{
+		"psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1", "--username", "postgres", "--dbname", "atepg",
 	}, strings.NewReader("BEGIN;\n"+postgressetup.SQL()+"\nCOMMIT;\n"), &stdout, &stderr)
 	if err != nil {
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {

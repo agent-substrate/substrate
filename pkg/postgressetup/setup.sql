@@ -23,7 +23,7 @@ BEGIN
     FOR managed IN SELECT * FROM (VALUES
         ('substrate_owner', false, NULL::text),
         ('substrate_readwrite', false, NULL::text),
-        ('substrate_admin_user', true, 'substrate-admin'),
+        ('substrate_owner_user', true, 'substrate-owner'),
         ('substrate_readwrite_user', true, 'substrate-readwrite')
     ) AS roles(name, can_login, password) LOOP
         SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolinherit
@@ -44,7 +44,7 @@ BEGIN
         END IF;
     END LOOP;
 
-    GRANT substrate_owner TO substrate_admin_user;
+    GRANT substrate_owner TO substrate_owner_user;
     GRANT substrate_readwrite TO substrate_readwrite_user;
 
     SELECT pg_get_userbyid(nspowner) INTO schema_owner FROM pg_namespace WHERE nspname = 'substrate';
