@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,10 +33,10 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/statusz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
@@ -71,6 +72,7 @@ const minResyncInterval = 250 * time.Millisecond
 var (
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	statusPort           = pflag.Int("status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status).")
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
@@ -97,7 +99,9 @@ var (
 )
 
 func main() {
+	startedAt := time.Now()
 	pflag.Parse()
+	statusEnvSources := captureStatusEnvSources(pflag.CommandLine)
 	if *showVersion {
 		fmt.Println(version.String())
 		return
@@ -201,6 +205,7 @@ func main() {
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
+	readiness := &serverboot.Readiness{}
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
@@ -297,18 +302,11 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
-	unaryInterceptors := []grpc.UnaryServerInterceptor{
-		apiauthn.UnaryServerInterceptor(authCfg),
-		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-		ateinterceptors.ServerUnaryInterceptor,
-	}
+	rpcFailures := newRPCFailureRecorder(time.Now)
+	var authorization grpc.UnaryServerInterceptor
 	if *experimentalEnableAuthz {
-		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
+		authorization = authz.UnaryServerInterceptor(authorizer)
 	}
-	unaryInterceptors = append(unaryInterceptors,
-		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-	)
-
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -319,7 +317,11 @@ func main() {
 			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
-		grpc.ChainUnaryInterceptor(unaryInterceptors...),
+		grpc.ChainUnaryInterceptor(unaryServerInterceptors(
+			apiauthn.UnaryServerInterceptor(authCfg),
+			rpcFailures,
+			authorization,
+		)...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
 		),
@@ -328,19 +330,69 @@ func main() {
 	ateapipb.RegisterControlServer(mux, controlSrv)
 	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
 
-	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
 		Addr:          *metricsListenAddr,
 		Readiness:     readiness,
 		EnableHealthz: true,
 	})
 
+	poolReader := func() (statusz.PoolCounts, statusz.PoolCounts) {
+		pools := persistence.PoolSnapshots()
+		return statusz.PoolCounts{
+			AcquiredConns: pools.Operational.AcquiredConns,
+			IdleConns:     pools.Operational.IdleConns,
+			MaxConns:      pools.Operational.MaxConns,
+		}, statusz.PoolCounts{
+			AcquiredConns: pools.Watch.AcquiredConns,
+			IdleConns:     pools.Watch.IdleConns,
+			MaxConns:      pools.Watch.MaxConns,
+		}
+	}
+	statusMux := http.NewServeMux()
+	statusMux.Handle("/statusz", statusz.NewHandler(statusz.Config{
+		Build:     statusz.Build{Version: version.Version, Revision: version.Commit},
+		StartedAt: startedAt,
+		Listeners: statusz.Listeners{
+			GRPC:    *listenAddr,
+			Metrics: *metricsListenAddr,
+			Status:  statusListenAddress(*statusPort),
+		},
+		Drain: statusz.Drain{
+			Delay:   drainDelay.String(),
+			Timeout: drainTimeout.String(),
+		},
+		Flags: projectStatusFlags(pflag.CommandLine, statusEnvSources),
+	}, workerCache.Workers, readiness.Ready, poolReader, rpcFailures.Failures, time.Now))
+	statusHTTP, err := startStatusHTTPServer(*statusPort, statusMux, net.Listen)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to start status HTTP server", err)
+	}
+	if statusHTTP != nil {
+		go func() {
+			if err, ok := <-statusHTTP.unexpectedErrors; ok {
+				slog.ErrorContext(ctx, "Status HTTP server exited unexpectedly", slog.Any("err", err))
+			}
+		}()
+	}
+
 	drainDone := drainOnShutdown(shutdownCtx, mux, readiness)
+	var statusShutdownDone <-chan statusShutdownResult
+	if statusHTTP != nil {
+		statusShutdownDone = shutdownStatusAfter(drainDone, statusHTTP.server, statusShutdownTimeout)
+	}
 
 	if err := mux.Serve(lis); err != nil {
 		serverboot.Fatal(ctx, "Failed to serve", err)
 	}
 	<-drainDone
+	if statusShutdownDone != nil {
+		result := <-statusShutdownDone
+		if result.Forced {
+			slog.WarnContext(ctx, "Status HTTP shutdown deadline exceeded; forced close", slog.Any("err", result.Err))
+		} else if result.Err != nil {
+			slog.ErrorContext(ctx, "Failed to shut down status HTTP server", slog.Any("err", result.Err))
+		}
+	}
 	slog.InfoContext(ctx, "Shutdown complete")
 }
 

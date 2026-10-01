@@ -86,21 +86,19 @@ func newPolicyCache(client ateapipb.ControlClient, ttl time.Duration) *policyCac
 // get returns the actor's compiled policy, fetching when there is no live
 // entry, or errNoPolicy. Fetch errors are never cached.
 func (c *policyCache) get(ctx context.Context, ref resources.ActorRef) (*egresspolicy.Policy, error) {
-	if c.ttl > 0 {
-		c.mu.Lock()
-		entry, ok := c.entries[ref]
-		c.mu.Unlock()
-		if ok && c.now().Before(entry.expires) {
-			if entry.policy == nil {
-				return nil, errNoPolicy
-			}
-			return entry.policy, nil
+	if policy, ok := c.cached(ref); ok {
+		if policy == nil {
+			return nil, errNoPolicy
 		}
+		return policy, nil
 	}
 
 	// The fetch outlives the caller: the leader of a flight going away must
 	// not fail the callers that joined it.
 	ch := c.flight.DoChan(ref.String(), func() (any, error) {
+		if policy, ok := c.cached(ref); ok {
+			return policy, nil
+		}
 		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyFetchTimeout)
 		defer cancel()
 		return c.fetch(fetchCtx, ref)
@@ -118,6 +116,19 @@ func (c *policyCache) get(ctx context.Context, ref resources.ActorRef) (*egressp
 		}
 		return policy, nil
 	}
+}
+
+func (c *policyCache) cached(ref resources.ActorRef) (*egresspolicy.Policy, bool) {
+	if c.ttl <= 0 {
+		return nil, false
+	}
+	c.mu.Lock()
+	entry, ok := c.entries[ref]
+	c.mu.Unlock()
+	if !ok || !c.now().Before(entry.expires) {
+		return nil, false
+	}
+	return entry.policy, true
 }
 
 // fetch loads and compiles one actor's policy and stores the result. A nil
