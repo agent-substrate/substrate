@@ -118,12 +118,13 @@ type Server struct {
 
 	client kubernetes.Interface
 	// nsAuth restricts which namespaces an atespace may resolve secrets from.
-	// Nil disables authorization (dev only): every URI namespace is allowed.
+	// Nil disables authorization; this only happens in tests, since main
+	// always requires --namespace-policy-file and loads one.
 	nsAuth *NamespaceAuthorizer
 }
 
 // NewServer builds a Kubernetes-backed credential provider. nsAuth enforces the
-// atespace→namespace policy; pass nil to disable authorization (dev only).
+// atespace→namespace policy; pass nil to disable authorization (tests only).
 func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer) *Server {
 	return &Server{client: client, nsAuth: nsAuth}
 }
@@ -154,16 +155,13 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 	secret, err := s.client.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			// A restricted grant must not let a caller tell "absent" from
-			// "present but not admitted" by walking names, so a missing
-			// Secret is refused the same way as one that fails the label
-			// check below. Asking with nil labels answers exactly that: is
-			// atespace admitted to every Secret in this namespace regardless
-			// of labels?
-			if s.nsAuth != nil && !s.nsAuth.AllowedSecret(atespace, ref.Namespace, nil) {
-				return nil, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secret %s/%s", atespace, ref.Namespace, ref.Name)
+			if s.nsAuth == nil {
+				return nil, status.Errorf(codes.NotFound, "secret %s/%s not found", ref.Namespace, ref.Name)
 			}
-			return nil, status.Errorf(codes.NotFound, "secret %s/%s not found", ref.Namespace, ref.Name)
+			// Authorization is enforced, so a missing Secret must look the
+			// same as one that fails the label check below: otherwise a
+			// caller could walk a list of names and learn what exists here.
+			return nil, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secret %s/%s", atespace, ref.Namespace, ref.Name)
 		}
 		if k8serrors.IsForbidden(err) {
 			return nil, status.Errorf(codes.PermissionDenied, "not permitted to read secret %s/%s", ref.Namespace, ref.Name)

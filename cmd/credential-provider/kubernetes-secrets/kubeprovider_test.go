@@ -518,9 +518,10 @@ func TestFetchSecretLabelGrantHidesExistence(t *testing.T) {
 	}
 }
 
-// A grant that is not narrowed by label has been admitted to every name in the
-// namespace, so NotFound tells it nothing it could not already establish.
-func TestFetchSecretUnnarrowedGrantStillReportsNotFound(t *testing.T) {
+// Once authorization is enforced, a missing Secret must look the same as one
+// that fails the label check: PermissionDenied either way, even for a grant
+// that is not narrowed by label. Only a disabled authorizer reports NotFound.
+func TestFetchSecretMissingSecretIsPermissionDeniedWhenEnforced(t *testing.T) {
 	authz, err := newNamespaceAuthorizer(namespacePolicyFile{Policies: []atespaceNamespacePolicy{
 		{Atespace: "team-a", AllowedNamespaces: []string{"ns1"}},
 	}})
@@ -531,7 +532,7 @@ func TestFetchSecretUnnarrowedGrantStillReportsNotFound(t *testing.T) {
 	if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/no-such-secret/token",
 		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
-	}); status.Code(err) != codes.NotFound {
-		t.Fatalf("code = %v, want NotFound", status.Code(err))
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
 	}
 }
