@@ -63,6 +63,11 @@ Custom `KO_DOCKER_REPO` values are preserved; they do not change which repositor
 `bootstrap` creates. Existing `.ate-dev-env.sh` files must be updated manually
 to use the new defaults, then images must be rebuilt and redeployed.
 
+To delete the repository and its images, run `./hack/teardown.sh --delete-repository`.
+Set `PROJECT_ID`, `GCE_REGION`, and `ARTIFACT_REGISTRY_REPOSITORY` (default:
+`ate-images`) to match the repository created during setup. `--all` also deletes
+the repository; use `--all --keep-repository` if it is shared or still needed.
+
 ## Global Flags
 
 These flags can be passed to the root command and apply to all subcommands:

@@ -195,6 +195,9 @@ If you need to delete the resources created by the setup script, you can use the
 ./hack/teardown.sh --all
 ```
 
+This also deletes the Artifact Registry repository and its images. Use
+`--all --keep-repository` to retain a shared repository.
+
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 
 #### Tearing down local `kind` resources
