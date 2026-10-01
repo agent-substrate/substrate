@@ -3827,11 +3827,15 @@ type TrustBundleDataSource struct {
 	// * egress-mitm.ate.dev --- The trust anchors for the Substrate egress
 	//   gateway TLS man-in-the-middle interceptor.
 	//
+	// * system-roots.ate.dev --- A selection of well-known public CA root certificates,
+	//   built into Substrate
+	//
 	// +k8s:required
 	// +k8s:minItems=1
-	// +k8s:maxItems=1
+	// +k8s:maxItems=8
 	// +k8s:eachVal=+k8s:minLength=1
 	// +k8s:eachVal=+k8s:maxLength=253
+	// +k8s:listType=set
 	Names []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
 	// path must be a clean relative Unix path: at most 16 '/'-separated
 	// segments, none of them empty, '.' or '..', and no NUL byte.
