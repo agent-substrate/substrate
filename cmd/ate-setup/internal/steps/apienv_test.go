@@ -307,7 +307,7 @@ func TestRecordedConnectionStrings(t *testing.T) {
 		data  map[string][]byte
 		owner string
 	}{
-		{"legacy single DSN", map[string][]byte{"ATE_API_POSTGRES_CONNECTION_STRING": []byte("legacy")}, "legacy"},
+		{"one DSN", map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("readwrite")}, "readwrite"},
 		{"separate DSNs", map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("readwrite"), "ATE_API_POSTGRES_OWNER_CONNECTION_STRING": []byte("owner")}, "owner"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

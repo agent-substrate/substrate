@@ -150,16 +150,13 @@ func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]str
 }
 
 // recordedConnectionStrings reads the credentials paired with an adopted Cloud
-// SQL instance. The old single connection key is accepted for existing installs.
+// SQL instance.
 func (e *Env) recordedConnectionStrings(ctx context.Context) (string, string, error) {
 	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 	if err != nil || secret == nil {
 		return "", "", err
 	}
 	readWriteDSN := string(secret.Data["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"])
-	if readWriteDSN == "" {
-		readWriteDSN = string(secret.Data["ATE_API_POSTGRES_CONNECTION_STRING"])
-	}
 	ownerDSN := string(secret.Data["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"])
 	if ownerDSN == "" {
 		ownerDSN = readWriteDSN
