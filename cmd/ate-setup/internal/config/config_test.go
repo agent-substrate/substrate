@@ -38,6 +38,7 @@ func loadEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("NO_DEV_ENV", "1")
 	for _, name := range []string{
+		"ACTOR_JWT_ALGORITHM",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
@@ -379,6 +380,38 @@ func TestLoadExpectedJWTIssuer(t *testing.T) {
 	}
 	if cfg.ExpectedJWTIssuer != issuer {
 		t.Errorf("ExpectedJWTIssuer = %q, want %q", cfg.ExpectedJWTIssuer, issuer)
+	}
+}
+
+func TestLoadActorJWTAlgorithm(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		env     string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", env: "", want: "ES256"},
+		{name: "RS256", env: "RS256", want: "RS256"},
+		{name: "unsupported", env: "HS256", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ACTOR_JWT_ALGORITHM", tt.env)
+
+			cfg, err := Load(Options{})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() with ACTOR_JWT_ALGORITHM=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ActorJWTAlgorithm != tt.want {
+				t.Errorf("ActorJWTAlgorithm = %q, want %q", cfg.ActorJWTAlgorithm, tt.want)
+			}
+		})
 	}
 }
 

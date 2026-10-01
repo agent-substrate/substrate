@@ -259,17 +259,17 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 		return nil
 	}
 
-	data, err := newJWTPoolSecretData()
+	data, err := newJWTPoolSecretData(e.Cfg.ActorJWTAlgorithm)
 	if err != nil {
 		return fmt.Errorf("while building the JWT pool for %s/%s: %w", namespace, name, err)
 	}
 	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, data)
 }
 
-// newJWTPoolSecretData generates a pool with one active RS256 authority, keyed
-// by its thumbprint.
-func newJWTPoolSecretData() (map[string][]byte, error) {
-	authority, err := localjwtauthority.GenerateAuthority("RS256", "")
+// newJWTPoolSecretData generates a pool with one active authority for
+// algorithm, keyed by its thumbprint.
+func newJWTPoolSecretData(algorithm string) (map[string][]byte, error) {
+	authority, err := localjwtauthority.GenerateAuthority(algorithm, "")
 	if err != nil {
 		return nil, fmt.Errorf("while generating the JWT authority: %w", err)
 	}
