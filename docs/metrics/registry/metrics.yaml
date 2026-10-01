@@ -566,7 +566,7 @@ groups:
             - id: final
               stability: development
               value: final
-              brief: The last sample of an activation, taken in the checkpoint before the workload is torn down.
+              brief: The last sample of an activation, written when a checkpoint or a terminate ends it.
       - id: ate.stats.memory.usage
         stability: development
         type: int
@@ -592,10 +592,10 @@ groups:
         type: double
         brief: The CPU time used since the activation began, in seconds.
         note: >
-          Logs only. Restarts at zero with each ate.actor.epoch. The lifetime
-          figure is the sum over the epochs of the highest value in each. The
-          unit is that of the instrument ate.actor.stats.cpu.time, thus one
-          query serves both signals.
+          Logs only. Restarts at zero with each ate.actor.epoch and never
+          decreases within one. The lifetime figure is the sum over the epochs
+          of the highest value in each. The unit is that of the instrument
+          ate.actor.stats.cpu.time, thus one query serves both signals.
         examples: [1.5]
 
   - id: registry.ate.deviation
@@ -937,11 +937,19 @@ groups:
     stability: development
     brief: The total CPU time in seconds of the actors that are in operation.
     note: >
-      This is a usual counter. The other three stats instruments use a callback.
-      atelet adds the increase of each actor to this counter. Thus the value
-      always increases. If a template leaves the node, its series keeps its last
-      value. It does not disappear. This is the behaviour that a rate() query
-      needs.
+      This is a usual counter. The other three stats instruments use a
+      callback. atelet adds the increase of each activation to this counter.
+      Thus the value always increases. If a template leaves the node, its
+      series keeps its last value. It does not disappear. This is the
+      behaviour that a rate() query needs.
+
+      It does not count usage twice. It can count less: the end of an
+      activation after the last sample atelet read of it, which is up to one
+      poll interval plus one ateom sample interval plus the sweep's own time
+      (up to 45s on a micro-VM); the time around an atelet restart; and, in a
+      micro-VM restored from a snapshot, a container's use before its first
+      successful reading. A node clock that steps back across an atelet
+      restart can count one activation in full a second time.
     annotations:
       substrate:
         emitted_by: [atelet]

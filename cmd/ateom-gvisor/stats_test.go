@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -92,7 +93,7 @@ func setHostedActor(s *AteomService, attribution *resources.ActorAttribution) {
 	defer s.actorsMu.Unlock()
 	s.actors = map[string]*hostedActor{}
 	if attribution != nil {
-		s.actors[attribution.UID] = &hostedActor{attribution: *attribution}
+		s.actors[attribution.UID] = &hostedActor{attribution: *attribution, usage: testActivation()}
 	}
 }
 
@@ -239,7 +240,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 	setHostedActor(s, &testActor)
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -267,7 +268,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
 	}
@@ -299,7 +300,7 @@ func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 	s := newStatsService(t, nil) // no cgroup directory: a poll landing mid-boot
 	setHostedActor(s, &testActor)
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() mid-boot: error = %v, want nil", err)
 	}
@@ -336,8 +337,8 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 		want []*ateompb.WorkloadStatsSample
 	}{
 		// Resumed on another template under the same UID: the numbers belong
-		// to the new activation, so they are withheld and it is pending.
-		{name: "re-hosted on another template", to: &otherTemplate, want: []*ateompb.WorkloadStatsSample{pendingFor(otherTemplate)}},
+		// to the new activation, which starts with its own initial reading.
+		{name: "re-hosted on another template", to: &otherTemplate, want: nil},
 		// Gone, or replaced by an actor this read did not snapshot.
 		{name: "to another actor", to: &otherActor, want: nil},
 		{name: "to available", to: nil, want: nil},
@@ -352,15 +353,18 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 				return cgroupstats.Read(dir)
 			}
 
-			got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
-			if err != nil {
-				t.Fatalf("GetActiveWorkloadStats() during transition: error = %v, want nil", err)
-			}
-			for _, sample := range got.GetSamples() {
+			samples := s.sweepUsage(context.Background())
+			for _, sample := range samples {
 				sample.ObservedAtUnixNano = 0
 			}
-			if diff := cmp.Diff(tc.want, got.GetSamples(), protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("GetActiveWorkloadStats() during transition mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(tc.want, samples, protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("sweepUsage() during transition mismatch (-want +got):\n%s", diff)
+			}
+			// Nothing read for the old activation is served for the new one.
+			if tc.to != nil {
+				if latest := s.lookupActor(tc.to.UID).usage.Latest(); latest != nil {
+					t.Errorf("new activation serves %v, want nothing until its own sample", latest)
+				}
 			}
 		})
 	}
@@ -393,12 +397,12 @@ func TestGetActiveWorkloadStatsSeveralActors(t *testing.T) {
 
 	s.actorsMu.Lock()
 	s.actors = map[string]*hostedActor{
-		testActor.UID: {attribution: testActor},
-		second.UID:    {attribution: second},
+		testActor.UID: {attribution: testActor, usage: testActivation()},
+		second.UID:    {attribution: second, usage: testActivation()},
 	}
 	s.actorsMu.Unlock()
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -425,13 +429,13 @@ func TestGetActiveWorkloadStatsOneBooting(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 	s.actorsMu.Lock()
 	s.actors = map[string]*hostedActor{
-		testActor.UID: {attribution: testActor},
+		testActor.UID: {attribution: testActor, usage: testActivation()},
 		// No cgroup leaf: accepted, but runsc has not created it yet.
-		booting.UID: {attribution: booting},
+		booting.UID: {attribution: booting, usage: testActivation()},
 	}
 	s.actorsMu.Unlock()
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -462,12 +466,12 @@ func TestGetActiveWorkloadStatsOneUnreadable(t *testing.T) {
 	}
 	s.actorsMu.Lock()
 	s.actors = map[string]*hostedActor{
-		testActor.UID: {attribution: testActor},
-		broken.UID:    {attribution: broken},
+		testActor.UID: {attribution: testActor, usage: testActivation()},
+		broken.UID:    {attribution: broken, usage: testActivation()},
 	}
 	s.actorsMu.Unlock()
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -480,4 +484,20 @@ func TestGetActiveWorkloadStatsOneUnreadable(t *testing.T) {
 			t.Errorf("actor %q measured = %v, want %v", sample.GetActorUid(), measured, want)
 		}
 	}
+}
+
+// testActivation is a running actor's activation: its initial reading is done,
+// so the sweep samples it. It starts at the unix epoch, so a sample's epoch is
+// zero and the expected samples here need not name it; the epoch has tests of
+// its own.
+func testActivation() *ateomstats.Activation {
+	a := ateomstats.NewActivation(time.Unix(0, 0), false)
+	a.Initial(nil, nil)
+	return a
+}
+
+// sweepAndList runs one sampler sweep, then the discovery read that serves it.
+func sweepAndList(s *AteomService) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+	s.sweepUsage(context.Background())
+	return s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 }

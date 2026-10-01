@@ -101,27 +101,26 @@ type AteomClient interface {
 	// "booting" distinguishable from "not here" at all, and it means a workload
 	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error)
-	// GetActiveWorkloadStats samples whatever this ateom is currently
-	// executing, without asserting an identity. It is the discovery read for a
+	// GetActiveWorkloadStats reports every actor this ateom hosts, without
+	// asserting an identity. It is the discovery read for a
 	// scraper that enumerates ateoms and holds no worker-to-actor mapping;
 	// GetWorkloadStats above is the verified read for a caller that must be
 	// answered about a specific actor.
 	//
-	// Every state a blind caller can find is a normal answer here, never an
-	// error: an "available" ateom answers an empty samples list, and a workload
-	// with nothing to measure YET (a poll landing in a boot or a restore)
-	// appears as a sample carrying its attribution with
-	// source = STATS_SOURCE_UNSPECIFIED -- "not measured", per the sample's own
-	// contract -- so even a workload that dies during boot is attributable, not
-	// anonymous. Error codes are reserved for real failures reading a sandbox
-	// that should be measurable. This is deliberately unlike GetWorkloadStats,
-	// whose caller asserts knowledge the codes then answer.
+	// It serves each actor's latest sample from the ateom's own sampling timer,
+	// so a poll reads no sandbox and has no error path: an "available" ateom
+	// answers an empty samples list, and a workload with nothing measured yet
+	// (a boot, a restore, or a guest the last sweep did not reach) appears as a
+	// sample carrying its attribution with source = STATS_SOURCE_UNSPECIFIED --
+	// "not measured", per the sample's own contract -- so even a workload that
+	// dies during boot is attributable, not anonymous. A sample is about one
+	// sampling interval old. This is deliberately unlike GetWorkloadStats, whose
+	// caller asserts knowledge the codes then answer.
 	//
 	// Consumers MUST attribute each sample solely from the identity echoed
 	// inside it, never from a mapping they hold: without an asserted uid, the
 	// response is the only statement of who was measured. Like GetWorkloadStats
-	// it is a pure read, safe on a timer, and does not touch the lifecycle
-	// mutex.
+	// it is safe on a timer and does not touch the lifecycle mutex.
 	GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error)
 	// TerminateWorkload stops and deletes container workloads and cleans up
 	// network and bundle overlays on ateom.
@@ -256,27 +255,26 @@ type AteomServer interface {
 	// "booting" distinguishable from "not here" at all, and it means a workload
 	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error)
-	// GetActiveWorkloadStats samples whatever this ateom is currently
-	// executing, without asserting an identity. It is the discovery read for a
+	// GetActiveWorkloadStats reports every actor this ateom hosts, without
+	// asserting an identity. It is the discovery read for a
 	// scraper that enumerates ateoms and holds no worker-to-actor mapping;
 	// GetWorkloadStats above is the verified read for a caller that must be
 	// answered about a specific actor.
 	//
-	// Every state a blind caller can find is a normal answer here, never an
-	// error: an "available" ateom answers an empty samples list, and a workload
-	// with nothing to measure YET (a poll landing in a boot or a restore)
-	// appears as a sample carrying its attribution with
-	// source = STATS_SOURCE_UNSPECIFIED -- "not measured", per the sample's own
-	// contract -- so even a workload that dies during boot is attributable, not
-	// anonymous. Error codes are reserved for real failures reading a sandbox
-	// that should be measurable. This is deliberately unlike GetWorkloadStats,
-	// whose caller asserts knowledge the codes then answer.
+	// It serves each actor's latest sample from the ateom's own sampling timer,
+	// so a poll reads no sandbox and has no error path: an "available" ateom
+	// answers an empty samples list, and a workload with nothing measured yet
+	// (a boot, a restore, or a guest the last sweep did not reach) appears as a
+	// sample carrying its attribution with source = STATS_SOURCE_UNSPECIFIED --
+	// "not measured", per the sample's own contract -- so even a workload that
+	// dies during boot is attributable, not anonymous. A sample is about one
+	// sampling interval old. This is deliberately unlike GetWorkloadStats, whose
+	// caller asserts knowledge the codes then answer.
 	//
 	// Consumers MUST attribute each sample solely from the identity echoed
 	// inside it, never from a mapping they hold: without an asserted uid, the
 	// response is the only statement of who was measured. Like GetWorkloadStats
-	// it is a pure read, safe on a timer, and does not touch the lifecycle
-	// mutex.
+	// it is safe on a timer and does not touch the lifecycle mutex.
 	GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error)
 	// TerminateWorkload stops and deletes container workloads and cleans up
 	// network and bundle overlays on ateom.

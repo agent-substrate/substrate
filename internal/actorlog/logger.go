@@ -75,7 +75,7 @@ const (
 
 // LabelsKey returns the label group's spelling for this environment. Every
 // emitter of the actor-identity label group (container logs, lifecycle
-// events, usage events) must pick its key here, so they all promote into
+// events) must pick its key here, so they all promote into
 // Cloud Logging the same way -- and so going vendor-neutral later means
 // changing one function.
 func LabelsKey(isOnGCE bool) string {

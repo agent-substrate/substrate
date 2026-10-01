@@ -108,7 +108,15 @@ groups:
     note: >
       The ateom that runs the actor writes one record per actor on a timer,
       plus an initial and a final record per activation. ate.stats.kind tells
-      them apart.
+      them apart. The records of an activation are written in that order: the
+      initial one, then the periodic ones, then the final one. Each is dated
+      when its sample was read, thus a final record that repeats an older
+      sample can carry an earlier timestamp than the records before it. The
+      initial record is absent when the first reading fails; the final record
+      is written when a checkpoint or a terminate ends the activation
+      successfully, and is absent when it ends otherwise, as by a crash. Thus
+      take the highest ate.stats.cpu.time per ate.actor.uid and
+      ate.actor.epoch rather than wait for the final record.
 
       The timestamp is when the measurement was read. The measurements are
       absent, not zero, while the actor is not measurable: the source is
@@ -125,7 +133,7 @@ groups:
     annotations:
       substrate:
         emitted_by: [ateom-gvisor, ateom-microvm]
-        code_anchor: internal/actorevent/actorevent.go
+        code_anchor: internal/ateomstats/usage.go
         cuj: How much CPU and memory does this actor use, and since when?
     attributes:
       - ref: ate.atespace

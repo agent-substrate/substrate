@@ -45,6 +45,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -85,6 +86,7 @@ var (
 	egressGatewayTrustBundle    = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 	readinessListenAddress      = flag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
 	maxActors                   = flag.Int("max-actors", 1000, "How many actors this worker will host at once")
+	usageSampleInterval         = flag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 )
 
 const (
@@ -120,6 +122,9 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
+	}
+	if *usageSampleInterval <= 0 {
+		return fmt.Errorf("--usage-sample-interval must be positive, got %v", *usageSampleInterval)
 	}
 
 	const serviceName = "ateom-microvm"
@@ -250,6 +255,15 @@ func do(ctx context.Context) error {
 
 	ateomService := NewService(*podUID, *chBinary, *kataDebug, *vmmMemReserve, *maxActors, dnsRelay, actorLogger, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle, *ateletIdentity)
 	ateomService.actorCgroups = actorCgroups
+	// The controller sets both from the downward API.
+	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
+	if pool.Namespace == "" || pool.Name == "" {
+		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
+	}
+	usageStdout := ateomstats.NewStdoutHandler(logWriter)
+	defer usageStdout.Close()
+	ateomService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
+	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateomService.sweepUsage(ctx) })()
 
 	atunnelIngress, err := atunnel.NewServer(atunnel.Config{
 		CredentialBundlePath: *workerCredentialBundle,
@@ -413,7 +427,9 @@ type AteomService struct {
 	// actorLogger forwards the actor container's stdout/stderr to the worker pod's
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
 	// with ateom-gvisor).
-	actorLogger    *actorlog.ActorLogger
+	actorLogger *actorlog.ActorLogger
+	// usage writes the usage records. Nil writes none.
+	usage          *ateomstats.UsageEmitter
 	atunnelIngress *atunnel.Server
 	atunnelEgress  *atunnel.Egress
 

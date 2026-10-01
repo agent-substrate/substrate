@@ -81,6 +81,7 @@ var (
 	egressGatewayTrustBundle    = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 	readinessListenAddress      = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
 	maxActors                   = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
+	usageSampleInterval         = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -134,6 +135,9 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
+	}
+	if *usageSampleInterval <= 0 {
+		return fmt.Errorf("--usage-sample-interval must be positive, got %v", *usageSampleInterval)
 	}
 
 	const serviceName = "ateom-gvisor"
@@ -242,6 +246,15 @@ func do(ctx context.Context) error {
 
 	// Construct the service first so atunnel can use its namespace dialer.
 	ateomService := NewService(dnsRelay, actorLogger, *maxActors, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle, *ateletIdentity)
+	// The controller sets both from the downward API.
+	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
+	if pool.Namespace == "" || pool.Name == "" {
+		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
+	}
+	usageStdout := ateomstats.NewStdoutHandler(syncedWriter)
+	defer usageStdout.Close()
+	ateomService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
+	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateomService.sweepUsage(ctx) })()
 
 	atunnelIngress, atunnelEgress, atunnelEgressPort, err := runAtunnel(ctx, upstream)
 	if err != nil {
@@ -374,7 +387,9 @@ type AteomService struct {
 	draining  int
 	maxActors int
 
-	actorLogger    *actorlog.ActorLogger
+	actorLogger *actorlog.ActorLogger
+	// usage writes the usage records. Nil writes none.
+	usage          *ateomstats.UsageEmitter
 	atunnelIngress *atunnel.Server
 	atunnelEgress  *atunnel.Egress
 
@@ -646,7 +661,8 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, req.GetActorDirs()); err != nil {
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
+	if err != nil {
 		return nil, err
 	}
 	rcmd := &runsc{
@@ -724,6 +740,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
+	s.recordInitial(ctx, hosted)
 
 	return &ateompb.RunWorkloadResponse{}, nil
 }
@@ -750,6 +767,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
+	// Read before the snapshot: a Full checkpoint stops the sandbox, and its
+	// cgroup with it. The final record waits for the checkpoint to succeed.
+	hosted := s.lookupActor(req.GetActorUid())
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
+	}
 
 	// Contract with atelet:
 	//
@@ -823,6 +846,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
+	if hosted != nil {
+		s.recordFinal(ctx, hosted)
+	}
 
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
 }
@@ -937,7 +963,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.hostActor(ctx, attribution, req.GetActorDirs()); err != nil {
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
+	if err != nil {
 		return nil, err
 	}
 	rcmd := &runsc{
@@ -1046,6 +1073,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
+	s.recordInitial(ctx, hosted)
 
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
@@ -1110,11 +1138,18 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
+	hosted := s.lookupActor(attribution.UID)
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
+	}
 	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
+	if hosted != nil {
+		s.recordFinal(ctx, hosted)
+	}
 
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }

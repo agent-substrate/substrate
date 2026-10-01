@@ -263,7 +263,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient, logSink)
+			startStatsPoller(ctx, interval, statsInst, k8sClient)
 		}
 	}
 
