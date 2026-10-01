@@ -5,6 +5,10 @@ which opens a CONNECT tunnel to the egress gateway. Egress gateway applies polic
 
 DNS-over-TCP, UDP and other traffic is filtered by nftables and never reaches the gateway.
 
+This applies to an actor's own telemetry too: an OpenTelemetry SDK inside the actor
+cannot reach the collector until the actor has an `http` egress rule for it. See
+[Actor telemetry needs an egress policy](observability.md#actor-telemetry-needs-an-egress-policy).
+
 ## TCP
 
 | Port | Traffic | Behavior | Path | What the actor sees when refused |

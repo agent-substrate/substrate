@@ -422,6 +422,44 @@ For verified ateom sources, the relay forwards each request verbatim rather than
 
 Verbatim forwarding is restricted to known ateom sources and refuses anything else with `PermissionDenied`. Actor telemetry is what that excludes: actors share a hostname (`actor`) and an interior IP, so their series merge unless identity is injected from outside the actor ([#761](https://github.com/agent-substrate/substrate/issues/761)) — a rewrite, which will be implemented as an explicit rewriting path alongside this forwarder.
 
+### Actor telemetry needs an egress policy
+
+An actor's own OpenTelemetry SDK does not use the relay. It dials the collector over the network like any other outbound connection, and that connection is subject to the actor egress lockdown described in [Network Egress](network-egress.md): every actor TCP connection is redirected into `atunnel` and carried to the egress gateway, which refuses anything the actor's `EgressPolicy` does not allow. An actor with no policy, or a policy with no matching rule, cannot reach the collector at all. The SDK sees `Unavailable: connection reset by peer` on each export, and the gateway logs `egress denied: actor has no egress policy`.
+
+To let an actor export, give it an `http` rule naming the collector's Service and the OTLP ports. It must be an `http` rule, not `https`: the OTLP/gRPC exporter speaks cleartext HTTP/2 (h2c) on `4317`, and the OTLP/HTTP exporter speaks cleartext HTTP/1.1 on `4318`, which is exactly what an `http` rule admits. On Kind the collector is `opentelemetry-collector.otel-system.svc`; on GKE with the managed collector it is `opentelemetry-collector.gke-managed-otel.svc.cluster.local`. Whatever the name, it has to match the host the actor's `OTEL_EXPORTER_OTLP_ENDPOINT` names, because the rule is matched on the request authority.
+
+```bash
+# Kind
+kubectl ate create egress-policy <actor-name> -a <atespace> -f - <<'EOF'
+rules:
+- http:
+    hostnames: ["opentelemetry-collector.otel-system.svc"]
+    ports:
+      numbers: [4317, 4318]
+EOF
+
+# GKE, with the managed OpenTelemetry collector
+kubectl ate create egress-policy <actor-name> -a <atespace> -f - <<'EOF'
+rules:
+- http:
+    hostnames: ["opentelemetry-collector.gke-managed-otel.svc.cluster.local"]
+    ports:
+      numbers: [4317, 4318]
+EOF
+```
+
+An actor that already has a policy for other destinations keeps those rules and gains this one: `kubectl ate update egress-policy` replaces the whole rule list, so include the existing rules in the manifest. `kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml` prints the current one.
+
+Three things to know when applying this:
+
+* **It is per actor.** The policy is a resource under the actor, and nothing applies one by default today. Every actor that exports telemetry needs its own, created after the actor and before, or shortly after, it is resumed. A template-level default policy is proposed in [#1558](https://github.com/agent-substrate/substrate/pull/1558); the underlying ask is [#1430](https://github.com/agent-substrate/substrate/issues/1430).
+* **A running actor recovers slowly.** If the policy is created while the actor is already exporting and failing, the SDK's gRPC client is in reconnect backoff and the gateway caches the missing policy for `--egress-policy-cache-ttl` (10s by default). Expect the first successful export 45s to two minutes after the policy appears. An actor whose policy exists before it starts has no such delay.
+* **The collector sees the gateway, not the actor.** The TCP connection to the collector comes from the egress gateway pod, so a collector that enriches by source IP (the `k8sattributes` processor, which the GKE managed collector runs) labels the actor's spans and metrics with the gateway's `k8s.pod.name`, `k8s.deployment.name=atenet-egress`, and `k8s.namespace.name`. The actor's `service.name` and anything it puts in `OTEL_RESOURCE_ATTRIBUTES` survive. Set the actor's identity there yourself if you need it on the backend; the relay-based path that will do this for actors is tracked in [#853](https://github.com/agent-substrate/substrate/issues/853) and [#761](https://github.com/agent-substrate/substrate/issues/761).
+
+**Logs written to stdout and stderr need none of this.** ateom reads a container's output stream inside the worker pod and writes it to the pod's own stdout, which is where [`kubectl ate logs`](#active-actor-inspection-via-cli) and a node log agent pick it up. That path never leaves the sandbox over the network, so it is untouched by the egress lockdown and works for an actor with no policy at all. The policy is only for telemetry an SDK inside the actor pushes itself: traces, metrics, and OTLP logs if `OTEL_LOGS_EXPORTER=otlp` is set in the actor.
+
+Substrate puts no OTLP configuration into an actor container. Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the ActorTemplate's container `env`; without it the SDK defaults to `localhost:4317`, where nothing listens inside the sandbox, and every export is dropped with no error at the collector.
+
 ---
 
 ## 5. Dashboards
