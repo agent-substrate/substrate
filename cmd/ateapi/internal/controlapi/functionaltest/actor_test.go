@@ -2812,7 +2812,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-1",
 				WorkerPodUid:    podUID,
-				WorkerPodIp:     "127.0.0.1",
+				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
 			},
 		},
@@ -2843,7 +2843,7 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		WorkerPodUid:    podUID,
-		Ip:              "127.0.0.1",
+		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
 		SandboxClass:    "gvisor",
 		Labels:          map[string]string{poolLabelKey: ns},
@@ -4141,7 +4141,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -4393,7 +4393,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {

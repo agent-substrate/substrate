@@ -8152,14 +8152,14 @@ func Validate_Worker(
 		errs = append(errs, fn(fldPath.Child("node_name"), &obj.NodeName, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.Worker.Ip
+	{ // field ateapipb.Worker.Ips
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *string,
+			obj, oldObj []string,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -8169,7 +8169,11 @@ func Validate_Worker(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 2).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -8177,16 +8181,16 @@ func Validate_Worker(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_Worker_Ip(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_Worker_Ips(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.Worker) *string {
-				return &oldObj.Ip
+			func(oldObj *ateapipb.Worker) []string {
+				return oldObj.Ips
 			})
-		errs = append(errs, fn(fldPath.Child("ip"), &obj.Ip, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("ips"), obj.Ips, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.Worker.SandboxClass
@@ -8519,20 +8523,24 @@ func Validate_WorkerAssignment(
 		errs = append(errs, fn(fldPath.Child("worker_pod_uid"), &obj.WorkerPodUid, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.WorkerAssignment.WorkerPodIp
+	{ // field ateapipb.WorkerAssignment.WorkerPodIps
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *string,
+			obj, oldObj []string,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 2).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -8540,16 +8548,16 @@ func Validate_WorkerAssignment(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_WorkerAssignment_WorkerPodIp(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_WorkerAssignment_WorkerPodIps(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.WorkerAssignment) *string {
-				return &oldObj.WorkerPodIp
+			func(oldObj *ateapipb.WorkerAssignment) []string {
+				return oldObj.WorkerPodIps
 			})
-		errs = append(errs, fn(fldPath.Child("worker_pod_ip"), &obj.WorkerPodIp, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("worker_pod_ips"), obj.WorkerPodIps, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.WorkerAssignment.NodeName

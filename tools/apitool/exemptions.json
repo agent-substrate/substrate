@@ -396,11 +396,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Worker.ip",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Worker.node_name",
     "message": "field has no doc comment"
   },

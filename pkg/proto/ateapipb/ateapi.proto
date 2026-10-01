@@ -749,7 +749,7 @@ message ActorCrash {
 // WorkerAssignment points at the Worker currently hosting an Actor.
 //
 // This is a denormalized snapshot, not merely a reference: atenet reads
-// worker_pod_ip on the request-routing path and must not need a second lookup,
+// worker_pod_ips on the request-routing path and must not need a second lookup,
 // and kubectl-ate displays the pod name. The copies stay valid for the life of
 // the assignment because a Worker's identity fields are immutable.
 //
@@ -790,11 +790,13 @@ message WorkerAssignment {
   // +k8s:format=k8s-uuid
   string worker_pod_uid = 4;
 
-  // worker_pod_ip is the IP of worker_pod.
+  // worker_pod_ips are the IPs of worker_pod, copied from Worker.ips.
   //
   // +k8s:required
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
   // +k8s:customValidation # until `format=k8s-ip` is supported
-  string worker_pod_ip = 5;
+  repeated string worker_pod_ips = 5;
 
   // node_name is the Kubernetes node hosting worker_pod.
   //
@@ -2050,10 +2052,15 @@ message Worker {
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string node_name = 6;
+  // ips are the worker pod's IPs, at most one per IP family, in the order
+  // Kubernetes reports them; the first is in the cluster's primary family.
+  //
   // +k8s:required
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
   // +k8s:customValidation # until `format=k8s-ip` is supported
   // +k8s:immutable
-  string ip = 7;
+  repeated string ips = 7;
 
   // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
   // CRD's own vocabulary, so it is only bounded, not validated.

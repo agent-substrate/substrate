@@ -121,13 +121,26 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.NodeName = "NODE_NAME" })),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker", "node_name"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		name: "missing ip",
-		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ip = "" })),
-		want: field.ErrorList{field.Required(field.NewPath("worker", "ip"), "")},
+		name: "valid dual-stack ips",
+		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ips = []string{"fd00::1", "10.1.2.3"} })),
+	}, {
+		name: "missing ips",
+		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ips = nil })),
+		want: field.ErrorList{field.Required(field.NewPath("worker", "ips"), "")},
 	}, {
 		name: "invalid ip",
-		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ip = "not-an-ip" })),
-		want: field.ErrorList{field.Invalid(field.NewPath("worker", "ip"), nil, "").WithOrigin("format=ip-strict")},
+		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ips = []string{"not-an-ip"} })),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "ips").Index(0), nil, "").WithOrigin("format=ip-strict")},
+	}, {
+		name: "two ips in one family",
+		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ips = []string{"10.1.2.3", "10.1.2.4"} })),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "ips").Index(1), nil, "")},
+	}, {
+		name: "too many ips",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			w.Ips = []string{"10.1.2.3", "fd00::1", "10.1.2.4"}
+		})),
+		want: field.ErrorList{field.TooMany(field.NewPath("worker", "ips"), 3, 2).WithOrigin("maxItems")},
 	}, {
 		name: "sandbox_class too long",
 		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.SandboxClass = strings.Repeat("x", 64) })),
@@ -320,7 +333,7 @@ func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
 		WorkerPod:       "worker-pod-1",
 		WorkerPodUid:    name,
 		NodeName:        "node-1",
-		Ip:              "10.1.2.3",
+		Ips:             []string{"10.1.2.3"},
 		SandboxClass:    "gvisor",
 	}
 	for _, m := range mods {

@@ -58,7 +58,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 				WorkerPool:      "pool",
 				WorkerPod:       "pod",
 				WorkerPodUid:    "uid",
-				WorkerPodIp:     "1.2.3.4",
+				WorkerPodIps:    []string{"1.2.3.4"},
 			},
 			InProgressSnapshotUri: "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot",
 		},

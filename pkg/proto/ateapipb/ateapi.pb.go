@@ -1976,7 +1976,7 @@ func (x *ActorCrash) GetCrashTime() *timestamppb.Timestamp {
 // WorkerAssignment points at the Worker currently hosting an Actor.
 //
 // This is a denormalized snapshot, not merely a reference: atenet reads
-// worker_pod_ip on the request-routing path and must not need a second lookup,
+// worker_pod_ips on the request-routing path and must not need a second lookup,
 // and kubectl-ate displays the pod name. The copies stay valid for the life of
 // the assignment because a Worker's identity fields are immutable.
 //
@@ -2013,11 +2013,13 @@ type WorkerAssignment struct {
 	// +k8s:required
 	// +k8s:format=k8s-uuid
 	WorkerPodUid string `protobuf:"bytes,4,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
-	// worker_pod_ip is the IP of worker_pod.
+	// worker_pod_ips are the IPs of worker_pod, copied from Worker.ips.
 	//
 	// +k8s:required
+	// +k8s:maxItems=2
+	// +k8s:listType=atomic
 	// +k8s:customValidation # until `format=k8s-ip` is supported
-	WorkerPodIp string `protobuf:"bytes,5,opt,name=worker_pod_ip,json=workerPodIp,proto3" json:"worker_pod_ip,omitempty"`
+	WorkerPodIps []string `protobuf:"bytes,5,rep,name=worker_pod_ips,json=workerPodIps,proto3" json:"worker_pod_ips,omitempty"`
 	// node_name is the Kubernetes node hosting worker_pod.
 	//
 	// +k8s:required
@@ -2098,11 +2100,11 @@ func (x *WorkerAssignment) GetWorkerPodUid() string {
 	return ""
 }
 
-func (x *WorkerAssignment) GetWorkerPodIp() string {
+func (x *WorkerAssignment) GetWorkerPodIps() []string {
 	if x != nil {
-		return x.WorkerPodIp
+		return x.WorkerPodIps
 	}
-	return ""
+	return nil
 }
 
 func (x *WorkerAssignment) GetNodeName() string {
@@ -6807,10 +6809,15 @@ type Worker struct {
 	// +k8s:format=k8s-long-name
 	// +k8s:immutable
 	NodeName string `protobuf:"bytes,6,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	// ips are the worker pod's IPs, at most one per IP family, in the order
+	// Kubernetes reports them; the first is in the cluster's primary family.
+	//
 	// +k8s:required
+	// +k8s:maxItems=2
+	// +k8s:listType=atomic
 	// +k8s:customValidation # until `format=k8s-ip` is supported
 	// +k8s:immutable
-	Ip string `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
+	Ips []string `protobuf:"bytes,7,rep,name=ips,proto3" json:"ips,omitempty"`
 	// sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
 	// CRD's own vocabulary, so it is only bounded, not validated.
 	//
@@ -6923,11 +6930,11 @@ func (x *Worker) GetNodeName() string {
 	return ""
 }
 
-func (x *Worker) GetIp() string {
+func (x *Worker) GetIps() []string {
 	if x != nil {
-		return x.Ip
+		return x.Ips
 	}
-	return ""
+	return nil
 }
 
 func (x *Worker) GetSandboxClass() string {
@@ -7677,7 +7684,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xb2\x02\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xb4\x02\n" +
 	"\x10WorkerAssignment\x12)\n" +
 	"\x06worker\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -7685,8 +7692,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"workerPool\x12\x1d\n" +
 	"\n" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
-	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
-	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\x12\x1b\n" +
+	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12$\n" +
+	"\x0eworker_pod_ips\x18\x05 \x03(\tR\fworkerPodIps\x12\x1b\n" +
 	"\tnode_name\x18\a \x01(\tR\bnodeName\x12!\n" +
 	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\"\x9a\x01\n" +
 	"\tTagStatus\x124\n" +
@@ -7927,7 +7934,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"c\n" +
 	"\x12ListActorsResponse\x12%\n" +
 	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd4\x03\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd6\x03\n" +
 	"\x06Worker\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12)\n" +
 	"\x10worker_namespace\x18\x02 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -7936,8 +7943,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"worker_pod\x18\x04 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x05 \x01(\tR\fworkerPodUid\x12\x1b\n" +
-	"\tnode_name\x18\x06 \x01(\tR\bnodeName\x12\x0e\n" +
-	"\x02ip\x18\a \x01(\tR\x02ip\x12#\n" +
+	"\tnode_name\x18\x06 \x01(\tR\bnodeName\x12\x10\n" +
+	"\x03ips\x18\a \x03(\tR\x03ips\x12#\n" +
 	"\rsandbox_class\x18\b \x01(\tR\fsandboxClass\x122\n" +
 	"\x06labels\x18\t \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12\x14\n" +
 	"\x05epoch\x18\f \x01(\x03R\x05epoch\x12,\n" +

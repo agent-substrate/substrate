@@ -607,7 +607,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 					WorkerPool:      "pool1",
 					WorkerPod:       "wpod",
 					WorkerPodUid:    "uid",
-					WorkerPodIp:     "1.2.3.4",
+					WorkerPodIps:    []string{"1.2.3.4"},
 				}
 			})
 

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -96,7 +97,7 @@ func registeredWorker(ns, poolName, podName, uid, ip string) *ateapipb.Worker {
 		WorkerPool:      poolName,
 		WorkerPod:       podName,
 		WorkerPodUid:    uid,
-		Ip:              ip,
+		Ips:             []string{ip},
 		NodeName:        "node1",
 	}
 }
@@ -216,8 +217,8 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	}
 
 	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
-	if got.GetIp() != "127.0.0.1" {
-		t.Errorf("worker ip = %q, want 127.0.0.1", got.GetIp())
+	if want := []string{"127.0.0.1"}; !slices.Equal(got.GetIps(), want) {
+		t.Errorf("worker ips = %q, want %q", got.GetIps(), want)
 	}
 	if got.GetSandboxClass() != "gvisor" {
 		t.Errorf("worker sandbox class = %q, want gvisor", got.GetSandboxClass())
@@ -537,6 +538,24 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 	}
 }
 
+// A dual-stack pod registers every IP Kubernetes reports, in order.
+func TestSyncer_CreateWorker_DualStack(t *testing.T) {
+	ctx := context.Background()
+
+	ns, podName, poolName := "ns-syncer-dual-stack", "worker-unit-dual-stack", "pool-dual-stack"
+
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	pod := workerPod(ns, podName, poolName, testPodUID, "fd00::1")
+	pod.Status.PodIPs = append(pod.Status.PodIPs, corev1.PodIP{IP: "10.0.0.1"})
+	key := seedPod(t, pods, pod)
+
+	mustReconcile(t, ctx, s, key)
+	if got, want := api.get(testPodUID).GetIps(), []string{"fd00::1", "10.0.0.1"}; !slices.Equal(got, want) {
+		t.Fatalf("worker ips = %q, want %q", got, want)
+	}
+}
+
 // A concurrent write between the syncer's read and its update loses the version
 // precondition. The key requeues, and the retry must re-read rather than replay
 // its stale copy — which is what lets the concurrent change and the syncer's own
@@ -551,8 +570,8 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"))
 
 	mustReconcile(t, ctx, s, key)
-	if got := api.get(testPodUID).GetIp(); got != "10.0.0.1" {
-		t.Fatalf("worker ip = %q, want 10.0.0.1", got)
+	if got, want := api.get(testPodUID).GetIps(), []string{"10.0.0.1"}; !slices.Equal(got, want) {
+		t.Fatalf("worker ips = %q, want %q", got, want)
 	}
 
 	// Change a mutable worker field on the pool, so the next reconcile has an
@@ -860,8 +879,8 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	if got == nil {
 		t.Fatal("the recreated pod's worker was not registered")
 	}
-	if got.GetIp() != "10.0.0.8" {
-		t.Errorf("worker ip = %q, want 10.0.0.8", got.GetIp())
+	if want := []string{"10.0.0.8"}; !slices.Equal(got.GetIps(), want) {
+		t.Errorf("worker ips = %q, want %q", got.GetIps(), want)
 	}
 	if got.GetWorkerPodUid() != otherPodUID {
 		t.Errorf("worker pod uid = %q, want %q", got.GetWorkerPodUid(), otherPodUID)
