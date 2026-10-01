@@ -435,9 +435,6 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("%s %q is invalid: %s", flag, namespace, strings.Join(errs, ", "))
 		}
 	}
-	if cfg.Namespace == cfg.PodcertNamespace {
-		return fmt.Errorf("--namespace and --podcert-namespace must differ")
-	}
 	if err := cfg.Images.Validate(); err != nil {
 		return err
 	}

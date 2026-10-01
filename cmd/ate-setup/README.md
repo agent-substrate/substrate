@@ -23,7 +23,8 @@ go run ./cmd/ate-setup --kind --namespace substrate-demo \
 
 Specify both flags again for component redeploys or teardown. CRDs and signer
 trust bundles are cluster-scoped; separate installations cannot coexist in one
-cluster.
+cluster. The two namespaces may also be the same when the pod-certificate
+controller runs alongside the control plane.
 
 ## Installing a release
 

@@ -138,10 +138,16 @@ func TestLoadNamespaces(t *testing.T) {
 	if env["ATE_NAMESPACE"] != "flag-system" || env["ATE_PODCERT_NAMESPACE"] != "flag-cert" {
 		t.Errorf("script namespaces = %q, %q", env["ATE_NAMESPACE"], env["ATE_PODCERT_NAMESPACE"])
 	}
+	shared, err := Load(Options{Namespace: "shared", PodcertNamespace: "shared"})
+	if err != nil {
+		t.Fatalf("Load() with shared namespace: %v", err)
+	}
+	if shared.Namespace != "shared" || shared.PodcertNamespace != "shared" {
+		t.Errorf("shared namespaces = %q, %q", shared.Namespace, shared.PodcertNamespace)
+	}
 	for _, opts := range []Options{
 		{Namespace: "UPPER"},
 		{PodcertNamespace: "invalid.namespace"},
-		{Namespace: "shared", PodcertNamespace: "shared"},
 	} {
 		if _, err := Load(opts); err == nil {
 			t.Errorf("Load(%+v) accepted invalid namespaces", opts)
