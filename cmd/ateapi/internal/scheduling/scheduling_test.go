@@ -211,6 +211,36 @@ func TestSchedule(t *testing.T) {
 			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 0)},
 		},
 		{
+			// A record that cannot be read cannot be trusted not to be full.
+			name: "a worker whose recorded capacity will not parse has no room",
+			fleet: fleet{
+				worker("w-garbled", "gvisor", "node-a", tierTwo, withMaxActors(4),
+					withCapacityStrings("cpu", "4", "memory", "lots")),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 0)},
+		},
+		{
+			// Fractional binary quantities take the slow path through
+			// resource.ParseQuantity; the comparison is exact all the same.
+			name: "capacity reported off the int64 fast path still places exactly",
+			fleet: fleet{
+				worker("w-frac", "gvisor", "node-a", tierTwo, withMaxActors(4),
+					withCapacityStrings("memory", "3.5Gi"),
+					assignedFor("demo", "other", resources.CPUMemory(0, 2<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(0, 1536<<20)},
+			wantPod:     "w-frac",
+		},
+		{
+			name: "capacity reported off the int64 fast path still comes up short",
+			fleet: fleet{
+				worker("w-frac", "gvisor", "node-a", tierTwo, withMaxActors(4),
+					withCapacityStrings("memory", "3.5Gi"),
+					assignedFor("demo", "other", resources.CPUMemory(0, 2<<30))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(0, 1536<<20+1)},
+		},
+		{
 			name: "what the residents left over is still placeable",
 			fleet: fleet{
 				worker("w-half", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
@@ -395,6 +425,21 @@ func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 			w.Status.Capacity = &ateapipb.WorkerResources{}
 		}
 		w.Status.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
+	}
+}
+
+// withCapacityStrings reports capacity in whatever form the strings take, for
+// quantities CPUMemory would canonicalize away.
+func withCapacityStrings(pairs ...string) func(*ateapipb.Worker) {
+	return func(w *ateapipb.Worker) {
+		if w.Status.Capacity == nil {
+			w.Status.Capacity = &ateapipb.WorkerResources{}
+		}
+		w.Status.Capacity.Resources = &ateapipb.Resources{}
+		for i := 0; i < len(pairs); i += 2 {
+			w.Status.Capacity.Resources.Limits = append(w.Status.Capacity.Resources.Limits,
+				&ateapipb.Limits{Name: pairs[i], Quantity: pairs[i+1]})
+		}
 	}
 }
 

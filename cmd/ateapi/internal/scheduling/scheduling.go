@@ -103,9 +103,16 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return nil, fmt.Errorf("while listing workers: %w", err)
 	}
 
+	// One check for the whole pass: it parses the actor's size once, not once
+	// per worker, and remembers every worker quantity string it has read.
+	check, err := resources.NewRoomCheck(constraints.Limits)
+	if err != nil {
+		return nil, fmt.Errorf("while reading the actor's resource limits: %w", err)
+	}
+
 	var candidates []*ateapipb.Worker
 	for _, worker := range workers {
-		if s.Applies(worker, constraints) && s.HasRoom(worker, constraints) {
+		if s.Applies(worker, constraints) && hasRoomWithCheck(worker, check) {
 			candidates = append(candidates, worker)
 		}
 	}
@@ -138,13 +145,23 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 }
 
 // HasRoom reports whether what the worker has left admits one more actor of
-// this size. A dimension the worker does not report is unconstrained, so
-// placement is never blocked by missing data.
+// this size. A worker reports every dimension it has, so one it does not
+// report is none of it, and an actor asking for that dimension does not fit.
 //
 // A worker whose recorded capacity or allocation will not parse is treated as
 // having no room: it is the only answer that cannot overcommit a worker whose
 // true occupancy is unreadable.
 func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bool {
+	check, err := resources.NewRoomCheck(constraints.Limits)
+	if err != nil {
+		return false
+	}
+	return hasRoomWithCheck(worker, check)
+}
+
+// hasRoomWithCheck is HasRoom for a check already built, so Schedule can ask
+// it of every worker without parsing the actor's size again for each.
+func hasRoomWithCheck(worker *ateapipb.Worker, check *resources.RoomCheck) bool {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 
@@ -154,21 +171,5 @@ func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
-	want, err := resources.ParseQuantities(constraints.Limits)
-	if err != nil || len(want) == 0 {
-		return err == nil
-	}
-	free, err := resources.ParseQuantities(capacity.GetResources())
-	if err != nil {
-		return false
-	}
-	if free == nil {
-		free = resources.Quantities{}
-	}
-	allocated, err := resources.ParseQuantities(used.GetResources())
-	if err != nil {
-		return false
-	}
-	free.Sub(allocated)
-	return free.Covers(want)
+	return check.Admits(capacity.GetResources(), used.GetResources())
 }
