@@ -277,8 +277,10 @@ component name as the scope (`"atelet"`, `"ateapi"`, `"atecontroller"`):
 
 The meter provider itself is set up once per binary by
 `serverboot.InitMetrics` (Prometheus reader plus OTLP push),
-`serverboot.InitMetricsPushOnly` (OTLP push only; atecontroller), or
-`serverboot.InitMetricsPushOnlyVia` (OTLP push over the atelet relay; ateom).
+`serverboot.InitMetricsBridged` (OTLP push with a foreign Prometheus registry
+bridged onto it, or that registry alone under `OTEL_METRICS_EXPORTER=none`;
+atecontroller), or `serverboot.InitMetricsPushOnlyVia` (OTLP push only, over
+the atelet relay when given one; ateom).
 A new component calls one of these and defers `ShutdownProvider`; a new package
 inside an existing component adds nothing there.
 

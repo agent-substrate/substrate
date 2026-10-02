@@ -170,7 +170,6 @@ func TestScopeLogValue(t *testing.T) {
 	}{
 		{ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateattr.SnapshotScopeFull},
 		{ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateattr.SnapshotScopeData},
-		{ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, ateattr.SnapshotScopeDataOnGolden},
 		{ateompb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, ateattr.SnapshotScopeUnknown},
 		{ateompb.SnapshotScope(99), ateattr.SnapshotScopeUnknown},
 	}

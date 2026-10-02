@@ -110,8 +110,8 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 						}},
 					}},
 					{TrustBundle: &ateapipb.TrustBundleDataSource{
-						Name: "egress-mitm.ate.dev",
-						Path: "trust-bundle.pem",
+						Names: []string{"egress-mitm.ate.dev"},
+						Path:  "trust-bundle.pem",
 					}},
 				},
 			},

@@ -1,10 +1,10 @@
 # Enabling man-in-the-middle (MITM) interception for Actor Egress policy
 
-Under an sdsmint install, the egress gateway terminates the TLS connections an
-actor's `https` rules allow and re-originates them. The certificate the actor
-sees is then not the origin's: it is a per-SNI leaf the gateway minted, which
-chains to the gateway's own CA and to no public root. An actor that validates
-against only the public roots rejects it, and every such request fails with a
+The egress gateway terminates the TLS connections an actor's `https` rules
+allow and re-originates them. The certificate the actor sees is then not the
+origin's: it is a per-SNI leaf the gateway minted, which chains to the
+gateway's own CA and to no public root. An actor that validates against only
+the public roots rejects it, and every such request fails with a
 certificate error.
 
 Connections a `tls_passthrough` rule allows are not terminated. The actor sees
@@ -14,6 +14,12 @@ public roots.
 
 This guide covers how to project the gateway's CA into an actor's filesystem
 and how to add it to the actor's trust store without losing the public roots.
+
+Substrate discovers the ClusterTrustBundle API at startup, preferring
+`certificates.k8s.io/v1` and using `certificates.k8s.io/v1beta1` only when
+the stable resource is not served. The API must be enabled on the cluster;
+discovery errors stop startup rather than trigger a fallback. Trust-bundle
+reads, writes, and watches use the discovered version.
 
 ## DNS and egress policy
 
@@ -27,14 +33,9 @@ connections are captured by atunnel and refused in that configuration.
 
 ## When you need this
 
-You need it when **all** of the following hold:
-
-* The cluster runs the sdsmint egress gateway (`hack/install-ate.sh
-  --deploy-atenet --experimental-use-sdsmint`).
-* The actor makes **HTTPS** (or any TLS) requests.
-
-On an install without sdsmint the bundle does not exist, and an actor that
-declares it does not start (see [Operational notes](#operational-notes)).
+You need it when the actor makes **HTTPS** (or any TLS) requests: the egress
+gateway terminates them with a leaf it mints from its CA, which chains to no
+public root.
 
 ## Project the bundle
 
@@ -53,7 +54,8 @@ spec:
       dataSources:
       # The trust anchors for the per-SNI leaves the egress gateway mints.
       - trustBundle:
-          name: egress-mitm.ate.dev
+          names:
+          - egress-mitm.ate.dev
           path: trust-bundle.pem
   containers:
   - name: app
@@ -150,11 +152,11 @@ second ties the image to one cluster's CA and breaks on rotation.
 
 ## Verify
 
-`demos/egress/egress-mitm-template.yaml.tmpl` is a complete working template
-that does exactly this. Deploy it against an sdsmint install:
+`demos/egress/egress-template.yaml.tmpl` is a complete working template that
+does exactly this. Deploy it:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-egress-mitm
+./hack/install-ate.sh --deploy-demo-egress
 ```
 
 Then drive an actor's egress at an HTTPS URL an `https` rule allows and
@@ -185,9 +187,8 @@ once by the resume step and once by gRPC:
 while creating workload from spec: rpc error: code = Internal desc = while populating system-info volume "system-info": system-info projection "trust-bundle.pem": trust bundle "egress-mitm.ate.dev": ClusterTrustBundle "egress-mitm.ate.dev:mitm:primary-bundle" not found
 ```
 
-That is the common case: projecting `egress-mitm.ate.dev` on an install without
-`--experimental-use-sdsmint`, where nothing creates the `egress-mitm-ca-pool`
-Secret the bundle derives from. `system-info` is the volume's `name` from your
+That is the common case: projecting `egress-mitm.ate.dev` on an install where
+nothing has created the `egress-mitm-ca-pool` Secret the bundle derives from. `system-info` is the volume's `name` from your
 template and `trust-bundle.pem` its `path`, so those two vary with what you
 wrote. The other failure modes differ only in the innermost clause:
 

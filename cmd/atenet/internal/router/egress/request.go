@@ -29,7 +29,7 @@ import (
 )
 
 // handleRequest authorizes one request the gateway can read: cleartext HTTP,
-// or HTTPS the sdsmint gateway terminated. It runs per request, because the
+// or HTTPS the gateway terminated. It runs per request, because the
 // Host can change between requests on one connection.
 //
 // The request is decided on the Host it named and the port the actor dialed,

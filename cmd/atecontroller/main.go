@@ -31,7 +31,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
-	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
@@ -122,10 +121,9 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry, which the manager serves on a port nothing scrapes.
-	// Bridging it as a Producer puts them on the OTLP path instead.
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
-		prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+	// own Prometheus registry, which the manager serves. On the OTLP path the
+	// bridged queue histograms are padded so the Telemetry API accepts idle ones.
+	mp, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}

@@ -314,10 +314,6 @@ groups:
               stability: development
               value: data
               brief: Only the data of the actor.
-            - id: data_on_golden
-              stability: development
-              value: data_on_golden
-              brief: The data of the actor with the golden guest state. This occurs on a restore only.
             - id: unknown
               stability: development
               value: unknown
@@ -476,7 +472,10 @@ groups:
             - id: unavailable
               stability: development
               value: unavailable
-              brief: A dependency was not available.
+              brief: >
+                The request got an Unavailable status, or a 503 without a gRPC
+                cause. For example, a full parking lot, a denied egress
+                request, or a failed policy or credential lookup.
             - id: rate_limited
               stability: development
               value: rate_limited

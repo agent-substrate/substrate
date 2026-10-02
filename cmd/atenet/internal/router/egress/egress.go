@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -132,8 +131,8 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 // certificate atunnel presented. Nothing the actor can write contributes to
 // the identity.
 //
-// It returns the SNI rules for the dialed port. Actors without policy rules
-// are refused here.
+// It returns the SNI rules for the dialed port, and the port itself for the
+// passthrough chain. Actors without policy rules are refused here.
 func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	// Sanity check that we were called on the Egress listener filter chain with
 	// a CONNECT.
@@ -189,7 +188,8 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 }
 
 // connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
-// the dialed destination for EgressMetadataNamespace.
+// the dialed port for EgressMetadataNamespace. The port is always set: without
+// it the passthrough chain falls back to its configured port instead of closing.
 func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
@@ -200,7 +200,7 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule
 	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
 		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressPassthroughDestinationKey: structpb.NewStringValue(net.JoinHostPort(dest.IP.String(), strconv.Itoa(int(dest.Port)))),
+			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
 		}}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),

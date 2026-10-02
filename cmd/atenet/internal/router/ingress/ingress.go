@@ -120,7 +120,12 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		Resume:           string(resumeOutcome),
 	}
 
-	workerIP := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp()
+	// The first IP is in the cluster's primary IP family.
+	// TODO: choose the IP family that matches the dataplane's own address.
+	var workerIP string
+	if ips := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); len(ips) > 0 {
+		workerIP = ips[0]
+	}
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
 		slog.String("state", actor.GetStatus().GetState().String()),

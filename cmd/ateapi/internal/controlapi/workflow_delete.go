@@ -70,7 +70,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	}
 
 	var atletTerminatedErr, volumesDetachedErr error
-	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); err != nil {
+	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
 		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
 		errs = append(errs, atletTerminatedErr)
 	}
@@ -120,8 +120,8 @@ func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resourc
 	return actor, nil
 }
 
-// ensureAteletTerminated calls atelet to terminate the workload.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+// ensureAteletTerminated calls atelet to terminate the workload for opName.
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, opName string) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
@@ -202,7 +202,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
 			return nil
 		}
-		return fmt.Errorf("while terminating actor on atelet: %w", err)
+		return handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
 	}
 
 	return nil

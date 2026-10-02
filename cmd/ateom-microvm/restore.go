@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -38,8 +39,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
@@ -97,10 +96,6 @@ func newReseedNonce() ([]byte, error) {
 //     (restoreFullScope).
 //   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
 //     cold-boot the actor, which starts its containers afresh from the OCI image.
-//   - DATA_ON_GOLDEN: atelet staged a combined set into restore_dir — the
-//     guest files (memory + VM state) from the template's golden snapshot plus
-//     the durable-dir tar from the actor's own snapshot — so this restores
-//     exactly like FULL: the golden guest resumes over the actor's data.
 //
 // Contract with atelet: the snapshot's files have been downloaded to
 // ActorDirs.restore_dir, and the durable-dir volume directories re-created (empty).
@@ -109,7 +104,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -175,12 +170,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	switch scope := req.GetScope(); scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		// DATA_ON_GOLDEN: the restore dir holds the golden snapshot's guest
-		// files, and the untar above re-materialized the ACTOR's durable-dir
-		// data, so resuming the golden guest picks up the actor's data through
-		// the durable virtio-fs share.
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		if err := s.restoreFullScope(ctx, p, scope, restoreDir, tStart); err != nil {
 			return nil, err
 		}
@@ -199,7 +189,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		logSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
 			restoreDurationKey, nil, []phase{{phaseTotal, dTotal}})
 	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
@@ -275,10 +265,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// (plus, for merged rootfs, the upper re-materialized from the tar).
 	containers := p.containers
 	if len(containers) == 0 {
-		return status.Error(codes.InvalidArgument, "actor spec has no containers")
+		return apierror.InvalidArgument("actor spec has no containers")
 	}
 	if len(containers) > maxActorContainers {
-		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
 	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
 	if err != nil {

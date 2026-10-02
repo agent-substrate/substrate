@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,8 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
 // Workload kinds accepted by RolloutStatus.
@@ -36,14 +36,6 @@ const (
 	KindDaemonSet   = "daemonset"
 	KindStatefulSet = "statefulset"
 )
-
-// clusterTrustBundleGVK identifies the certificates.k8s.io ClusterTrustBundle
-// the podcertificate controller publishes.
-var clusterTrustBundleGVK = schema.GroupVersionKind{
-	Group:   "certificates.k8s.io",
-	Version: "v1beta1",
-	Kind:    "ClusterTrustBundle",
-}
 
 // RolloutStatus blocks until a workload has finished rolling out, replacing
 // `kubectl rollout status <kind>/<name> -n <ns> --timeout=<t>`. The readiness
@@ -248,7 +240,12 @@ func (c *Client) WaitClusterTrustBundles(ctx context.Context, names []string, ti
 		}
 		var lastErr error
 		err := poll(ctx, remaining, func(ctx context.Context) (bool, error) {
-			ok, err := c.Exists(ctx, clusterTrustBundleGVK, "", name)
+			gv, err := clustertrustbundle.Discover(c.Typed.Discovery())
+			if err != nil {
+				lastErr = err
+				return false, nil
+			}
+			ok, err := c.Exists(ctx, gv.WithKind("ClusterTrustBundle"), "", name)
 			if err != nil {
 				lastErr = err
 				return false, nil

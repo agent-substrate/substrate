@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"time"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -353,7 +354,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			WorkerNamespace: pod.Namespace,
 			WorkerPool:      poolName,
 			WorkerPod:       pod.Name,
-			Ip:              pod.Status.PodIP,
+			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
@@ -404,13 +405,13 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
 			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.SandboxClass)))...)
 	}
-	if w.GetIp() != pod.Status.PodIP {
+	if ips := podIPs(pod); !slices.Equal(w.GetIps(), ips) {
 		// TODO: I don't think this is possible, but handling this case so we can
 		// log it just in case we can reproduce it. It is logged rather than
-		// repaired because ip is immutable on a registered Worker: writing the
+		// repaired because ips is immutable on a registered Worker: writing the
 		// pod's value back would be rejected rather than applied.
-		slog.WarnContext(ctx, "Syncer: registered worker IP disagrees with its pod",
-			append(key.logAttrs(), slog.String("registered", w.GetIp()), slog.String("pod_ip", pod.Status.PodIP))...)
+		slog.WarnContext(ctx, "Syncer: registered worker IPs disagree with its pod",
+			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
 	}
 	if !changed {
 		return nil
@@ -424,7 +425,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
-	if pod.Status.PodIP == "" {
+	if len(pod.Status.PodIPs) == 0 {
 		return false
 	}
 	for _, condition := range pod.Status.Conditions {
@@ -467,6 +468,16 @@ func (s *WorkerPoolSyncer) deleteTerminalPod(ctx context.Context, key workerKey,
 		return fmt.Errorf("deleting terminal pod: %w", err)
 	}
 	return nil
+}
+
+// podIPs returns the pod's IP addresses, one per IP family, in the order
+// Kubernetes reports them.
+func podIPs(pod *corev1.Pod) []string {
+	ips := make([]string, 0, len(pod.Status.PodIPs))
+	for _, ip := range pod.Status.PodIPs {
+		ips = append(ips, ip.IP)
+	}
+	return ips
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler

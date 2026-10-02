@@ -14,7 +14,8 @@
 
 # Worker pool for the egress demo. The ActorTemplate is a substrate resource,
 # not a CRD: it lives in egress-template.yaml.tmpl and is created through the
-# ate API with `kubectl ate create actor-template`.
+# ate API with `kubectl ate create actor-template`. The template also trusts
+# the egress gateway CA, which mints the per-SNI leaf the actor sees.
 
 apiVersion: v1
 kind: Namespace

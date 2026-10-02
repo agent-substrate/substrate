@@ -205,8 +205,8 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 // state. Nil-safe, and omits the pool, snapshot-kind and snapshot-scope labels
 // until they are known so a failure before the assign/restore steps never emits
 // an empty-string series. snapshotKind is empty for suspend/pause, which do not
-// restore; snapshotScope applies to all three and is what separates a restore
-// combined with the template's golden state from a plain one of the same kind.
+// restore; snapshotScope applies to all three and separates a full restore
+// from a data-only one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{

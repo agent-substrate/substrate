@@ -43,8 +43,9 @@ import (
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
-// watchPoolMaxConns sizes the dedicated outbox watch pool, leaving headroom
-// so a transiently slow poll can never gate another watcher.
+// watchPoolMaxConns sizes the dedicated watch pool: one connection for the
+// WatchWorkers poller, one for the maintenance loop, and one of headroom so a
+// transiently slow poll can never gate a maintenance pass.
 const (
 	watchPoolMaxConns = 3
 	watchPoolMinConns = 1
@@ -55,9 +56,8 @@ const (
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the read/write WatchWorkers pollers. ownerPool is
-	// borrowed during startup for schema migrations, then serves outbox
-	// partition maintenance for the life of the process.
+	// watchPool serves WatchWorkers pollers and expired-lease cleanup.
+	// ownerPool applies migrations and maintains outbox partitions.
 	watchPool             *pgxpool.Pool
 	ownerPool             *pgxpool.Pool
 	ownsWatchPool         bool
@@ -302,14 +302,14 @@ func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Poo
 	}
 	go func() {
 		defer close(p.maintenanceDone)
-		p.outboxMaintenance(maintenanceCtx)
+		p.maintenance(maintenanceCtx)
 	}()
 	return p, nil
 }
 
-// Close stops the outbox maintenance loop and waits for it to exit,
-// then closes the auxiliary pools if Connect created them. It does not close
-// the main pool, which the caller owns.
+// Close stops the maintenance loop and waits for it to exit,
+// then closes the auxiliary pools if Connect created them. It does not close the
+// main pool, which the caller owns.
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
@@ -430,4 +430,37 @@ func pgErrConstraint(err error) string {
 		return pgErr.ConstraintName
 	}
 	return ""
+}
+
+const (
+	// Paces the maintenance loop (outbox partitions and expired leases).
+	maintenanceInterval = time.Minute
+
+	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
+	// which would permanently starve partition creation. Stalls abort and retry.
+	maintenancePassTimeout = 5 * time.Minute
+)
+
+// Maintains worker_outbox partitions and reaps expired leases on a fixed
+// timer. The two are independent: a failure in one still lets the other run.
+func (p *Persistence) maintenance(ctx context.Context) {
+	ticker := time.NewTicker(maintenanceInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		passCtx, cancel := context.WithTimeout(ctx, maintenancePassTimeout)
+		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
+		}
+		if deleted, err := p.cleanupExpiredLeases(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "expired lease cleanup failed", slog.Int64("deleted", deleted), slog.Any("err", err))
+		} else if deleted > 0 {
+			slog.InfoContext(ctx, "removed expired PostgreSQL leases", slog.Int64("deleted", deleted))
+		}
+		cancel()
+	}
 }

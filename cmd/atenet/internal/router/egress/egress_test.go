@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/url"
 	"path"
 	"slices"
@@ -324,15 +325,15 @@ func TestHandleRequestHeadersAllowsVerifiedActor(t *testing.T) {
 	if res.Target != "" {
 		t.Errorf("target = %q, want %q", res.Target, "")
 	}
-	if got := passthroughDestinationOf(res); got != "93.184.216.34:80" {
-		t.Errorf("passthrough destination = %q, want %q", got, "93.184.216.34:80")
+	if got := dialedPortOf(res); got != "80" {
+		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
 }
 
-// passthroughDestinationOf reads the address a CONNECT decision handed back
-// for the passthrough chain, or "" when it handed back none.
-func passthroughDestinationOf(res extproc.Result) string {
-	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressPassthroughDestinationKey].GetStringValue()
+// dialedPortOf reads the port a CONNECT decision handed back for the
+// passthrough chain.
+func dialedPortOf(res extproc.Result) string {
+	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressDialedPortKey].GetStringValue()
 }
 
 // The CONNECT opens for any policy with rules and returns the https and
@@ -395,8 +396,9 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 			}
-			if got := passthroughDestinationOf(res); got != md.Host {
-				t.Errorf("passthrough destination = %q, want %q", got, md.Host)
+			_, wantPort, _ := net.SplitHostPort(md.Host)
+			if got := dialedPortOf(res); got != wantPort {
+				t.Errorf("dialed port = %q, want %q", got, wantPort)
 			}
 			if got := sniRulesOf(t, res); !slices.Equal(got, tc.want) {
 				t.Errorf("SNI rules = %v, want %v", got, tc.want)
@@ -439,8 +441,8 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 	}
-	if got := passthroughDestinationOf(res); got != "93.184.216.34:80" {
-		t.Errorf("passthrough destination = %q, want %q", got, "93.184.216.34:80")
+	if got := dialedPortOf(res); got != "80" {
+		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
 	h = New(&egressMockClient{actor: runningActor()}, ca.roots(), 0, nil, "")
 	_, err = h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))

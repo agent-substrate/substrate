@@ -20,7 +20,10 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
@@ -216,5 +219,55 @@ func TestBundledPostgresManifestExists(t *testing.T) {
 	stray := filepath.Join(cfg.Root, "manifests", "ate-install", "postgres.yaml")
 	if _, err := os.Stat(stray); err == nil {
 		t.Errorf("%s exists; the bundle render would apply it even for external databases", stray)
+	}
+}
+
+func labeledNode(name string, labels map[string]string) runtime.Object {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+}
+
+// Under --cordon-control-plane the StatefulSet's rolling update deletes the
+// running postgres before its replacement schedules, so a cluster with no
+// ate-postgres node must be refused before anything is applied.
+func TestRequirePostgresPool(t *testing.T) {
+	controlPlane := labeledNode("cp-1", map[string]string{"ate.dev/workloadType": "ate-control-plane"})
+	postgres := labeledNode("pg-1", map[string]string{"ate.dev/workloadType": "ate-postgres"})
+	for _, tc := range []struct {
+		name    string
+		cordon  bool
+		nodes   []runtime.Object
+		wantErr bool
+	}{
+		{name: "not cordoned", nodes: []runtime.Object{controlPlane}},
+		{name: "cordoned with a postgres node", cordon: true, nodes: []runtime.Object{controlPlane, postgres}},
+		{name: "cordoned without a postgres node", cordon: true, nodes: []runtime.Object{controlPlane}, wantErr: true},
+		{name: "cordoned with no nodes", cordon: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{
+				Cfg:  &config.Config{CordonControlPlane: tc.cordon},
+				Kube: fakeKube(t, tc.nodes...),
+			}
+			err := e.requirePostgresPool(t.Context())
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("requirePostgresPool() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "docs/upgrade.md") {
+				t.Errorf("requirePostgresPool() error = %q, want it to point at docs/upgrade.md", err)
+			}
+		})
+	}
+}
+
+// applyPostgres is the path both `deploy ate-system` and `deploy postgres`
+// take to the StatefulSet, so the pool check has to sit in front of it.
+func TestApplyPostgresRequiresPostgresPool(t *testing.T) {
+	e := &Env{
+		Cfg:  &config.Config{Root: repoRoot(t), CordonControlPlane: true},
+		Kube: fakeKube(t),
+	}
+	err := e.applyPostgres(t.Context())
+	if err == nil || !strings.Contains(err.Error(), postgresPoolSelector) {
+		t.Fatalf("applyPostgres() error = %v, want the missing %s pool", err, postgresPoolSelector)
 	}
 }

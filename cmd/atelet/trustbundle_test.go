@@ -26,9 +26,9 @@ import (
 	"testing"
 	"time"
 
-	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	certsv1 "k8s.io/api/certificates/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
+	certlisters "k8s.io/client-go/listers/certificates/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -51,7 +51,7 @@ func testCertPEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-func ctbLister(t *testing.T, bundles ...*certsv1beta1.ClusterTrustBundle) certlisters.ClusterTrustBundleLister {
+func ctbLister(t *testing.T, bundles ...*certsv1.ClusterTrustBundle) certlisters.ClusterTrustBundleLister {
 	t.Helper()
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
 	for _, b := range bundles {
@@ -71,11 +71,11 @@ func TestRawTrustBundle(t *testing.T) {
 
 	t.Run("resolves the allowlisted name through the mapped object, unsanitized", func(t *testing.T) {
 		raw := "garbage\n" + string(certPEM)
-		lister := ctbLister(t, &certsv1beta1.ClusterTrustBundle{
+		lister := ctbLister(t, &certsv1.ClusterTrustBundle{
 			ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName},
-			Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: raw},
+			Spec:       certsv1.ClusterTrustBundleSpec{TrustBundle: raw},
 		})
-		objectName, got, err := rawTrustBundle(lister, EgressTrustBundleName)
+		objectName, got, err := rawTrustBundle(lister.Get, EgressTrustBundleName)
 		if err != nil {
 			t.Fatalf("rawTrustBundle: %v", err)
 		}
@@ -90,18 +90,18 @@ func TestRawTrustBundle(t *testing.T) {
 	t.Run("unsupported bundle name fails naming it and the allowlist", func(t *testing.T) {
 		// The lister has the bundle; the allowlist must still reject it —
 		// supported names are a substrate decision, not a cluster lookup.
-		lister := ctbLister(t, &certsv1beta1.ClusterTrustBundle{
+		lister := ctbLister(t, &certsv1.ClusterTrustBundle{
 			ObjectMeta: metav1.ObjectMeta{Name: "my-own-bundle"},
-			Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: string(certPEM)},
+			Spec:       certsv1.ClusterTrustBundleSpec{TrustBundle: string(certPEM)},
 		})
-		_, _, err := rawTrustBundle(lister, "my-own-bundle")
+		_, _, err := rawTrustBundle(lister.Get, "my-own-bundle")
 		if err == nil || !strings.Contains(err.Error(), `"my-own-bundle"`) || !strings.Contains(err.Error(), "not supported") || !strings.Contains(err.Error(), EgressTrustBundleName) {
 			t.Errorf("error = %v, want unsupported-name error listing the allowlist", err)
 		}
 	})
 
 	t.Run("missing bundle fails naming it", func(t *testing.T) {
-		_, _, err := rawTrustBundle(ctbLister(t), EgressTrustBundleName)
+		_, _, err := rawTrustBundle(ctbLister(t).Get, EgressTrustBundleName)
 		if err == nil || !strings.Contains(err.Error(), egressTrustBundleObjectName) || !strings.Contains(err.Error(), "not found") {
 			t.Errorf("error = %v, want not-found naming the backing object", err)
 		}

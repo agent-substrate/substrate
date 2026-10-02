@@ -327,13 +327,38 @@ func TestValidateActorUpdate(t *testing.T) {
 	}, {
 		"set valid actor.status.worker_assignment, IPv4",
 		validInput(withStatus()),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "1.2.3.4" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"1.2.3.4"} }))),
 		nil,
 	}, {
 		"set valid actor.status.worker_assignment, IPv6",
 		validInput(withStatus()),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "1234::5678" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"1234::5678"} }))),
 		nil,
+	}, {
+		"set valid actor.status.worker_assignment, dual-stack",
+		validInput(withStatus()),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerPodIps = []string{"1234::5678", "1.2.3.4"}
+		}))),
+		nil,
+	}, {
+		"invalid actor.status.worker_assignment.worker_pod_ips: two IPv6",
+		validInput(withStatus()),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerPodIps = []string{"1234::5678", "1234::9"}
+		}))),
+		field.ErrorList{
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(1), nil, ""),
+		},
+	}, {
+		"invalid actor.status.worker_assignment.worker_pod_ips: too many",
+		validInput(withStatus()),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerPodIps = []string{"1.2.3.4", "1234::5678", "1.2.3.5"}
+		}))),
+		field.ErrorList{
+			field.TooMany(field.NewPath("status", "worker_assignment", "worker_pod_ips"), 3, 2).WithOrigin("maxItems"),
+		},
 	}, {
 		"clear actor.status.worker_assignment",
 		validInput(withStatus(withWorkerAssignment())),
@@ -354,7 +379,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pool"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_uid"), ""),
-			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ip"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ips"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "node_name"), ""),
 		},
 	}, {
@@ -366,7 +391,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			wa.WorkerPool = "invalid pool"
 			wa.WorkerPod = "invalid pod"
 			wa.WorkerPodUid = "invalid UUID"
-			wa.WorkerPodIp = "invalid IP"
+			wa.WorkerPodIps = []string{"invalid IP"}
 			wa.NodeName = "invalid node"
 		}))),
 		field.ErrorList{
@@ -376,24 +401,24 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pool"), nil, "").WithOrigin("format=k8s-long-name"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod"), nil, "").WithOrigin("format=k8s-long-name"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid"),
-			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(0), nil, "").WithOrigin("format=ip-strict"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "node_name"), nil, "").WithOrigin("format=k8s-long-name"),
 		},
 	}, {
 		// because we have manual IP format validation, let's be sure
-		"invalid actor.status.worker_assignment_worker_pod_ip: leading 0s",
+		"invalid actor.status.worker_assignment.worker_pod_ips: leading 0s",
 		validInput(),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "001.002.003.004" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"001.002.003.004"} }))),
 		field.ErrorList{
-			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(0), nil, "").WithOrigin("format=ip-strict"),
 		},
 	}, {
 		// because we have manual IP format validation, let's be sure
-		"invalid actor.status.worker_assignment_worker_pod_ip: non-canonical",
+		"invalid actor.status.worker_assignment.worker_pod_ips: non-canonical",
 		validInput(),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "0012::0034" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"0012::0034"} }))),
 		field.ErrorList{
-			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(0), nil, "").WithOrigin("format=ip-strict"),
 		},
 	}, {
 		"valid actor.status.in_progress_snapshot_uri",
@@ -989,7 +1014,7 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 			WorkerPool:      "pool",
 			WorkerPod:       "pod",
 			WorkerPodUid:    "12345678-1234-1234-1234-123456789abc",
-			WorkerPodIp:     "1.2.3.4",
+			WorkerPodIps:    []string{"1.2.3.4"},
 			NodeName:        "node1",
 		}
 		for _, m := range mods {

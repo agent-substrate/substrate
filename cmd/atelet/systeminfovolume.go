@@ -31,9 +31,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volumepath"
-	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	certsv1 "k8s.io/api/certificates/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/util/wait"
-	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -77,7 +77,7 @@ type registeredActor struct {
 // systemInfoVolumeRefresher writes system-info volumes when an actor starts
 // and refreshes them as needed.
 type systemInfoVolumeRefresher struct {
-	lister    certlisters.ClusterTrustBundleLister
+	getBundle func(string) (*certsv1.ClusterTrustBundle, error)
 	hasSynced cache.InformerSynced
 
 	// queue carries bundle names from informer events to the run loop.
@@ -91,11 +91,11 @@ type systemInfoVolumeRefresher struct {
 }
 
 // newSystemInfoVolumeRefresher subscribes to ClusterTrustBundle events.
-func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, informer cache.SharedIndexInformer) *systemInfoVolumeRefresher {
+func newSystemInfoVolumeRefresher(getBundle func(string) (*certsv1.ClusterTrustBundle, error), informer cache.SharedIndexInformer) *systemInfoVolumeRefresher {
 	r := &systemInfoVolumeRefresher{
-		lister: lister,
-		queue:  workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		actors: map[string]*registeredActor{},
+		getBundle: getBundle,
+		queue:     workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		actors:    map[string]*registeredActor{},
 	}
 	if informer != nil {
 		informer.AddEventHandler(r.eventHandler())
@@ -160,7 +160,7 @@ func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID
 		switch dataSource := dataSourceAny.GetDataSource().(type) {
 		case *ateletpb.SystemInfoDataSource_TrustBundle:
 			tb := dataSource.TrustBundle
-			objectName, raw, err := rawTrustBundle(r.lister, tb.GetName())
+			objectName, raw, err := rawTrustBundle(r.getBundle, tb.GetNames()[0])
 			if err != nil {
 				return nil, nil, fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
 			}
@@ -169,7 +169,7 @@ func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID
 				return nil, nil, fmt.Errorf("system-info projection %q: unusable ClusterTrustBundle %q: %w", tb.GetPath(), objectName, err)
 			}
 			payload[tb.GetPath()] = pemBundle
-			bundleHashes[tb.GetName()] = trustBundleHash(raw)
+			bundleHashes[tb.GetNames()[0]] = trustBundleHash(raw)
 		case *ateletpb.SystemInfoDataSource_ActorMetadata:
 			for _, item := range dataSource.ActorMetadata.GetItems() {
 				var value string
@@ -267,11 +267,11 @@ func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 		if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 			obj = d.Obj
 		}
-		ctb, ok := obj.(*certsv1beta1.ClusterTrustBundle)
-		if !ok {
+		ctb, err := meta.Accessor(obj)
+		if err != nil {
 			return
 		}
-		for _, name := range bundleNamesFor(ctb.Name) {
+		for _, name := range bundleNamesFor(ctb.GetName()) {
 			r.queue.Add(name)
 		}
 	}
@@ -319,7 +319,7 @@ func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleNam
 	if len(targets) == 0 {
 		return nil
 	}
-	_, raw, err := rawTrustBundle(r.lister, bundleName)
+	_, raw, err := rawTrustBundle(r.getBundle, bundleName)
 	if err != nil {
 		slog.WarnContext(ctx, "Trust bundle unreadable; projected files keep their last contents", slog.String("bundle", bundleName), slog.Any("err", err))
 		return nil
@@ -355,7 +355,7 @@ func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleNam
 // projectsBundle reports whether the volume spec projects the named bundle.
 func projectsBundle(si *ateletpb.SystemInfoVolume, bundleName string) bool {
 	for _, ds := range si.GetDataSources() {
-		if tb := ds.GetTrustBundle(); tb != nil && tb.GetName() == bundleName {
+		if tb := ds.GetTrustBundle(); tb != nil && tb.GetNames()[0] == bundleName {
 			return true
 		}
 	}

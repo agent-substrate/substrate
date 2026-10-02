@@ -23,12 +23,13 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
@@ -36,7 +37,7 @@ import (
 
 type SignerImpl interface {
 	SignerName() string
-	DesiredClusterTrustBundles() ([]*certsv1beta1.ClusterTrustBundle, error)
+	DesiredClusterTrustBundles() ([]*certsv1.ClusterTrustBundle, error)
 	MakeCert(context.Context, *certsv1beta1.PodCertificateRequest) error
 }
 
@@ -48,9 +49,9 @@ type Hasher interface {
 type Controller struct {
 	clock clock.PassiveClock
 
-	kc        kubernetes.Interface
-	pcrClient *podcertificate.Client
-	pcrQueue  workqueue.TypedRateLimitingInterface[string]
+	trustBundles *clustertrustbundle.Client
+	pcrClient    *podcertificate.Client
+	pcrQueue     workqueue.TypedRateLimitingInterface[string]
 
 	hasher Hasher
 
@@ -58,14 +59,14 @@ type Controller struct {
 }
 
 // New creates a new Controller.
-func New(clock clock.PassiveClock, handler SignerImpl, kc kubernetes.Interface, hasher Hasher, pcrClient *podcertificate.Client) *Controller {
+func New(clock clock.PassiveClock, handler SignerImpl, hasher Hasher, pcrClient *podcertificate.Client, trustBundles *clustertrustbundle.Client) *Controller {
 	sc := &Controller{
-		clock:     clock,
-		kc:        kc,
-		pcrClient: pcrClient,
-		pcrQueue:  workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		handler:   handler,
-		hasher:    hasher,
+		clock:        clock,
+		trustBundles: trustBundles,
+		pcrClient:    pcrClient,
+		pcrQueue:     workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		handler:      handler,
+		hasher:       hasher,
 	}
 
 	sc.pcrClient.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -216,9 +217,9 @@ func (c *Controller) ensureBundles(ctx context.Context) {
 	}
 
 	for _, wantCTB := range wantCTBs {
-		ctb, err := c.kc.CertificatesV1beta1().ClusterTrustBundles().Get(ctx, wantCTB.ObjectMeta.Name, metav1.GetOptions{})
+		ctb, err := c.trustBundles.Get(ctx, wantCTB.ObjectMeta.Name, metav1.GetOptions{})
 		if k8serrors.IsNotFound(err) {
-			_, err = c.kc.CertificatesV1beta1().ClusterTrustBundles().Create(ctx, wantCTB, metav1.CreateOptions{})
+			_, err = c.trustBundles.Create(ctx, wantCTB, metav1.CreateOptions{})
 			if err != nil {
 				slog.ErrorContext(ctx, "Error while creating ClusterTrustBundle",
 					slog.String("err", err.Error()),
@@ -245,7 +246,7 @@ func (c *Controller) ensureBundles(ctx context.Context) {
 		ctb.ObjectMeta.Labels = wantCTB.Labels
 		ctb.Spec.TrustBundle = wantCTB.Spec.TrustBundle
 
-		_, err = c.kc.CertificatesV1beta1().ClusterTrustBundles().Update(ctx, ctb, metav1.UpdateOptions{})
+		_, err = c.trustBundles.Update(ctx, ctb, metav1.UpdateOptions{})
 		if err != nil {
 			slog.ErrorContext(ctx, "Error while updating ClusterTrustBundle",
 				slog.String("err", err.Error()),

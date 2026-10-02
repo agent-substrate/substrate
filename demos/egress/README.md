@@ -45,11 +45,11 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
   certificate against the ATE API and rejects it unless the certified **UID** matches a real,
   `RUNNING` actor.
 5. **Policy authorization.** What goes through the tunnel is checked against the Actor's
-  `EgressPolicy`. A request the gateway can read (cleartext HTTP, or TLS the sdsmint gateway
-  terminates) is decided per request: the rules in order, over its `Host` and the address the
-  Actor dialed, first match wins, and the request is sent to what that rule checked. TLS the
-  plain gateway does not terminate, and opaque TCP, are allowed by address only, at the
-  `CONNECT`. An Actor with no policy gets no tunnel at all.
+  `EgressPolicy`. A request the gateway can read (cleartext HTTP, or TLS it terminates) is
+  decided per request: the rules in order, over its `Host` and the address the Actor dialed,
+  first match wins, and the request is sent to what that rule checked. TLS to a name no `https`
+  rule covers is closed at the ClientHello (`tls_passthrough` rules are not supported yet). An
+  Actor with no policy gets no tunnel at all.
 
 ## Choose a dataplane
 
@@ -71,7 +71,6 @@ ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
 | Actor authentication | Co-located atenet `ext_proc` | Built-in `substrateEgress` policy |
 | Configuration | Envoy bootstrap in `atenet-egress.yaml` | Static agentgateway ConfigMap overlay |
 | Access log | Text beginning with `[egress]`, including actor SAN | Structured log including `substrate.connect.authority` |
-| MITM mode | Supported with `--experimental-use-sdsmint` | Supported with `--experimental-use-sdsmint` |
 
 The experimental additional egress `ext_proc` service currently requires Envoy; the installer
 rejects that option with agentgateway rather than silently omitting it.

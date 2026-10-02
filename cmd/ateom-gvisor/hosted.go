@@ -22,9 +22,7 @@ import (
 	"log/slog"
 	"net"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -51,7 +49,7 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 	if old, ok := s.actors[attribution.UID]; ok {
 		stale = old.network
 	} else if len(s.actors)+s.draining >= s.maxActors {
-		return nil, nil, status.Errorf(codes.ResourceExhausted, "worker is full: %d actors", s.maxActors)
+		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
 	hosted := &hostedActor{attribution: attribution}
 	s.actors[attribution.UID] = hosted

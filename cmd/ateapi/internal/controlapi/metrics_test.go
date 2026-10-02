@@ -246,7 +246,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
-		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeDataOnGolden)...)
+		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeData)...)
 
 	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
 	assertAttrKeys(t, dp,
@@ -267,10 +267,10 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	if ns, _ := attrString(dp, ateattr.WorkerPoolNamespaceKey); ns != "ate-workers" {
 		t.Errorf("worker pool namespace = %q, want %q", ns, "ate-workers")
 	}
-	// Kind and scope are independent: a data_on_golden restore of the actor's
+	// Kind and scope are independent: a data restore of the actor's
 	// own latest snapshot must stay distinguishable from one of a local snapshot.
-	if scope, _ := attrString(dp, ateattr.SnapshotScopeKey); scope != ateattr.SnapshotScopeDataOnGolden {
-		t.Errorf("snapshot scope = %q, want %q", scope, ateattr.SnapshotScopeDataOnGolden)
+	if scope, _ := attrString(dp, ateattr.SnapshotScopeKey); scope != ateattr.SnapshotScopeData {
+		t.Errorf("snapshot scope = %q, want %q", scope, ateattr.SnapshotScopeData)
 	}
 	if kind, _ := attrString(dp, ateattr.SnapshotKindKey); kind != ateattr.SnapshotKindLatest {
 		t.Errorf("snapshot kind = %q, want %q", kind, ateattr.SnapshotKindLatest)

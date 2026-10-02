@@ -16,10 +16,12 @@ package apivalidation
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -58,4 +60,28 @@ func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, f
 // Presence and uniqueness of names are enforced by tags.
 func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Limits) field.ErrorList {
 	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
+}
+
+// validateDualStackIPs checks that each entry is a valid, canonical IP and
+// that the list holds at most one IPv4 and one IPv6 address, matching the
+// Kubernetes rule for pod IPs. Presence and length are enforced by tags.
+func validateDualStackIPs(fldPath *field.Path, ips []string) field.ErrorList {
+	var errs field.ErrorList
+	var seen4, seen6 bool
+	for i, ip := range ips {
+		idxPath := fldPath.Index(i)
+		if ipErrs := validation.IsValidIP(idxPath, ip); len(ipErrs) > 0 {
+			errs = append(errs, ipErrs...)
+			continue
+		}
+		seen := &seen6
+		if netip.MustParseAddr(ip).Is4() {
+			seen = &seen4
+		}
+		if *seen {
+			errs = append(errs, field.Invalid(idxPath, ip, "must not contain more than one address per IP family"))
+		}
+		*seen = true
+	}
+	return errs
 }

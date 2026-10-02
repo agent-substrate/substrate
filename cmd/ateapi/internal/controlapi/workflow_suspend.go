@@ -166,9 +166,8 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 
 // commitSnapshotScope returns the scope a commit (suspend) snapshot is taken
 // with. Golden actors always commit Full regardless of the template's
-// onCommit: the golden snapshot is the base an OnGolden data resume is
-// combined with at restore, so it must carry the guest memory and filesystem
-// — a data-only golden would leave nothing to restore the guest from.
+// onCommit: new actors borrow the golden snapshot and resume it Full, so it
+// must carry the guest memory and filesystem.
 func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotContentScope {
 	if atespace == resources.GoldenActorAtespace {
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
@@ -252,12 +251,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("Checkpoint", err)); cerr != nil {
-			return wireSnapshotScope, cerr
-		}
-		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }
@@ -306,12 +300,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 
 	if _, err = client.UploadPausedCheckpoint(ctx, req); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("UploadPausedCheckpoint", err)); cerr != nil {
-			return wireSnapshotScope, cerr
-		}
-		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }

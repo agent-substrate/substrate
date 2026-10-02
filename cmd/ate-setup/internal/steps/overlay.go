@@ -129,11 +129,8 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	return e.renderResolve(ctx, e.Cfg.Manifest("atenet-router.yaml"))
 }
 
-// atenetEgressManifestPath returns the egress manifest path based on configuration.
+// atenetEgressManifestPath returns the envoy egress gateway manifest.
 func (e *Env) atenetEgressManifestPath() string {
-	if e.Cfg.ExperimentalUseSDSMint {
-		return e.Cfg.Manifest("atenet-egress-with-sdsmint.yaml")
-	}
 	return e.Cfg.Manifest("atenet-egress.yaml")
 }
 
@@ -148,9 +145,6 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 		}
 		if injection {
 			return nil, fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
-		}
-		if e.Cfg.ExperimentalUseSDSMint {
-			return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress-mitm"))
 		}
 		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress"))
 	}
@@ -195,13 +189,8 @@ func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 
 // patchAtenetEgressInject splices the credential-provider flags into the egress
 // sidecar over the #ATE_EGRESS_INJECT_FLAGS marker. It takes the manifest bytes
-// rather than reading the file so it can run after the general patch. Mirrors
-// hack/experimental-egress-credential-injection.sh; the two must stay in sync.
+// rather than reading the file so it can run after the general patch.
 func (e *Env) patchAtenetEgressInject(raw []byte) ([]byte, error) {
-	if !e.Cfg.ExperimentalUseSDSMint {
-		return nil, fmt.Errorf("--experimental-egress-credential-injection requires --experimental-use-sdsmint")
-	}
-
 	name := e.Cfg.CredentialProviderName
 	if name == "" {
 		name = "ate-secret://k8s.io"
@@ -250,9 +239,6 @@ func emitEgressInjectFlags(name, address, serverName string) string {
 }
 
 func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
-	if !e.Cfg.ExperimentalUseSDSMint {
-		return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --experimental-use-sdsmint")
-	}
 	raw, err := os.ReadFile(e.atenetEgressManifestPath())
 	if err != nil {
 		return nil, fmt.Errorf("reading egress manifest: %w", err)

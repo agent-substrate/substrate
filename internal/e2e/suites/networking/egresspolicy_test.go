@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -29,21 +28,16 @@ import (
 
 // The EgressPolicy half of egress: the other TestActorEgress* tests give their
 // actors an allow-everything policy and prove traffic flows; these give theirs
-// a narrow one and prove what does not. A request either gateway can read is
+// a narrow one and prove what does not. A request the gateway can read is
 // decided per request on its Host, by the http rules in the clear and the
-// https rules once decrypted. Opaque TCP, and TLS on the plain gateway, are
-// decided at the CONNECT by the tls_passthrough rules, which the gateway can
-// only match through "*" until it reads the ClientHello.
-
-// egressMITM reports whether the suite runs against the sdsmint gateway.
-func egressMITM() bool { return os.Getenv("E2E_EGRESS_MITM") != "" }
+// https rules once decrypted.
 
 // notTransient stops the retry loop on anything but the 503 a request sees
 // while the actor's route is still propagating; a denial is a final answer.
 func notTransient(status int, _ []byte) bool { return status != http.StatusServiceUnavailable }
 
 // reached stops the retry loop only on success. A lane expecting the fetch to
-// work sees more transients than the 503 above (the sdsmint leaf fails
+// work sees more transients than the 503 above (the minted leaf fails
 // verification until kubelet has propagated the CA pool, public origins
 // hiccup), all of them 502s the actor cannot tell from a denial.
 func reached(status int, _ []byte) bool { return status == http.StatusOK }
@@ -58,7 +52,7 @@ func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 	target := e2e.DeployServerPod(t, ctx, origin)
 	allowed := fmt.Sprintf("%s.%s.svc.cluster.local", origin.Name, target.Namespace)
 
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-policy", egressFixture(), e2e.EgressAllowHTTP(allowed))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-policy", e2e.EgressFixture(), e2e.EgressAllowHTTP(allowed))
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -83,7 +77,7 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 	dataplane := e2e.CurrentAtenetDataplane()
 	target := e2e.DeployServerPod(t, ctx, egressHTTPTarget())
 
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-nopolicy", egressFixture())
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-nopolicy", e2e.EgressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -105,7 +99,7 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 // example.com and nothing else, and waits until it is routable.
 func hostnamePolicyActor(t *testing.T, ctx context.Context) (*e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", egressFixture(), e2e.EgressAllowHTTPS("example.com"), e2e.EgressAllowPassthrough("example.edu"))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", e2e.EgressFixture(), e2e.EgressAllowHTTPS("example.com"), e2e.EgressAllowPassthrough("example.edu"))
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -119,12 +113,9 @@ func isMitmCert(body string) bool {
 	return !strings.Contains(body, "O=Google Trust Services")
 }
 
-// TestActorEgressHTTPSByHostnameMITM: sdsmint terminates the TLS and decides
+// TestActorEgressHTTPSByHostnameMITM: the gateway terminates the TLS and decides
 // each request by name: example.com 200, example.org 403.
 func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
-	if !egressMITM() {
-		t.Skip("covers the sdsmint gateway; set E2E_EGRESS_MITM")
-	}
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 	router, actorRef := hostnamePolicyActor(t, ctx)
@@ -146,9 +137,6 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 // TestActorEgressHTTPSByHostnamePassthrough: the gateway acts as TCP proxy fetching
 // allowed SNI.
 func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
-	if !egressMITM() {
-		t.Skip("needs the same configuration as sdsmint; set E2E_EGRESS_MITM")
-	}
 	if !e2e.CurrentAtenetDataplane().SupportsTLSPassthroughEgressPolicy() {
 		t.Skip("TODO: AgentGateway must enforce substrateEgress for TLS passthrough")
 	}

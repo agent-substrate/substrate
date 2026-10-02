@@ -54,11 +54,10 @@ const (
 	// leg answers in. Envoy only keeps it when the outer ext_proc filter lists
 	// it under metadata_options.receiving_namespaces; the manifest tests check.
 	EgressMetadataNamespace = "dev.ate.egress"
-	// EgressPassthroughDestinationKey, under EgressMetadataNamespace, is the
-	// original destination as IP:port, present only when an address rule
-	// allowed it. The outer chain copies it into the ORIGINAL_DST filter state;
-	// absent, a TLS or opaque connection has no upstream and is closed.
-	EgressPassthroughDestinationKey = "passthrough_destination"
+	// EgressDialedPortKey, under EgressMetadataNamespace, is the port the
+	// actor dialed, set on every allowed CONNECT. The outer chain copies it
+	// into UpstreamDynamicPortFilterStateKey for the passthrough chain.
+	EgressDialedPortKey = "dialed_port"
 	// EgressPolicyMetadataNamespace holds the SNI rules returned on CONNECT.
 	// The outer chain copies it as JSON into filter state of the same name for
 	// the egress-policy module: {"rules": [{"pattern": ..., "mode": ...}]},
@@ -72,7 +71,7 @@ const (
 	EgressSNIRuleModeKey    = "mode"
 
 	// EgressFilterChainFilterStateKey holds the egress-policy module's verdict:
-	// the filter chain name the sdsmint manifest's matcher selects on.
+	// the filter chain name the egress manifest's matcher selects on.
 	EgressFilterChainFilterStateKey = "dev.ate.egress.filter_chain"
 	// EgressFilterChainMITM: TLS terminated on EgressTLSMITMFilterChainName.
 	EgressFilterChainMITM = "mitm"
@@ -116,17 +115,21 @@ const (
 // 404 on the actor DNS name parse.
 const FilterChainNameAttribute = "xds.filter_chain_name"
 
-// EgressPassthroughDestinationFormat is the access-log and set_filter_state
-// format string that reads EgressPassthroughDestinationKey back out.
-const EgressPassthroughDestinationFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":" + EgressPassthroughDestinationKey + ")%"
+// EgressDialedPortFormat is the set_filter_state format string that reads
+// EgressDialedPortKey back out.
+const EgressDialedPortFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":" + EgressDialedPortKey + ")%"
+
+// UpstreamDynamicPortFilterStateKey is Envoy's filter-state key for the port a
+// dynamic forward proxy dials, read before it falls back to its configured
+// port. The outer CONNECT chain sets it from EgressDialedPortKey.
+const UpstreamDynamicPortFilterStateKey = "envoy.upstream.dynamic_port"
 
 // EgressPolicyMetadataFormat renders EgressPolicyMetadataNamespace as JSON.
 const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
 
 // OriginalDstFilterStateKey is Envoy's filter-state key for the address an
-// ORIGINAL_DST cluster dials. The outer CONNECT chain sets it from
-// EgressPassthroughDestinationKey; the request legs read it as the address the
-// actor dialed, and their by-address routes dial it.
+// ORIGINAL_DST cluster dials. The gateway never writes it and dials only by
+// name; the request legs read it as an attribute.
 const OriginalDstFilterStateKey = "envoy.network.transport_socket.original_dst_address"
 
 // OriginalDstIPAttribute and OriginalDstPortAttribute are the CEL expressions

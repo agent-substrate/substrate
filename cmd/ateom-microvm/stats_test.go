@@ -28,11 +28,11 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/actorlock"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -405,7 +405,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			if resp != nil {
 				t.Errorf("GetWorkloadStats() returned response %v, want nil", resp)
 			}
-			if got := status.Code(err); got != tc.want {
+			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("GetWorkloadStats() error code = %v, want %v (err: %v)", got, tc.want, err)
 			}
 		})
@@ -599,7 +599,7 @@ func TestGetWorkloadStatsTransition(t *testing.T) {
 	agent.onCall = func() { unhostTestActor(s, testActor.UID) }
 
 	_, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
-	if got := status.Code(err); got != codes.NotFound {
+	if got := apierror.Code(err); got != codes.NotFound {
 		t.Errorf("GetWorkloadStats() during transition: code = %v, want %v (err: %v)", got, codes.NotFound, err)
 	}
 }
@@ -615,7 +615,7 @@ func TestGetActiveWorkloadStatsStaleTarget(t *testing.T) {
 	hostTestActor(s, testActor, &guestStatsTarget{actorUID: "uid-b", agent: agent, workloadIDs: []string{"app_ovl"}})
 
 	_, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
-	if got := status.Code(err); got != codes.Internal {
+	if got := apierror.Code(err); got != codes.Internal {
 		t.Errorf("GetActiveWorkloadStats() with stale target: code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
 }

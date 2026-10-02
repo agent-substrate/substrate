@@ -61,7 +61,7 @@ func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capac
 		WorkerPod:       "worker-pod-1",
 		WorkerPodUid:    testWorkerName,
 		NodeName:        nodeName,
-		Ip:              "10.1.2.3",
+		Ips:             []string{"10.1.2.3"},
 		SandboxClass:    "gvisor",
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity},
 	})

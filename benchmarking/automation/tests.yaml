@@ -35,6 +35,12 @@
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
+#   workerMemory   Optional (default unset: the worker pods have no requests
+#                  or limits). Memory request and limit on each WorkerPool
+#                  pod. Use it to fix how many workers share a node: one per
+#                  node needs more than half the node's allocatable memory.
+#                  The limit is also the memory the worker reports as its
+#                  actor capacity.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
@@ -43,8 +49,7 @@
 #                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
-#                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]
-#                  or ["--experimental-use-sdsmint"]).
+#                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
 #
 # ---- type: locust -----------------------------------------------------------
 #
@@ -568,6 +573,21 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  - name: spawn_smoke_10_actors
+    type: locust
+    description: "Spawn benchmark smoke: 10 actors created with concurrency 2"
+    targetCluster: dev
+    file: /app/tests/spawn.py,/app/shapes/spawn_shape.py
+    duration: 5m
+    users: 1
+    workerCount: 10
+    flags:
+      - "--total-actors"
+      - "10"
+      - "--spawn-concurrency"
+      - "2"
+      - "--actor-deadline"
+      - "120"
   - name: ingress_routercap_envoy_2cpu
     description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 2 CPUs"
     type: nighthawk-ingress
