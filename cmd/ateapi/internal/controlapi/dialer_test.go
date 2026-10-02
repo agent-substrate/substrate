@@ -360,6 +360,45 @@ func TestDialForAteletOnNode(t *testing.T) {
 		}
 	})
 
+	t.Run("redials when the atelet pod's IP changes", func(t *testing.T) {
+		idx := newTestAteletIndexer(t, ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"))
+		d := NewAteletDialer(idx, installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
+			WithDialCredentials(func(string) (credentials.TransportCredentials, error) {
+				return insecure.NewCredentials(), nil
+			}))
+
+		old, err := d.DialForAteletOnNode("node1")
+		if err != nil {
+			t.Fatalf("DialForAteletOnNode: %v", err)
+		}
+
+		// Same pod UID, new IP, as after a node restart.
+		if err := idx.Update(ateletPod("atelet-1", "uid-1", "node1", "10.0.0.9")); err != nil {
+			t.Fatalf("updating pod in indexer: %v", err)
+		}
+		fresh, err := d.DialForAteletOnNode("node1")
+		if err != nil {
+			t.Fatalf("DialForAteletOnNode after IP change: %v", err)
+		}
+		t.Cleanup(func() { fresh.Close() })
+
+		if fresh == old {
+			t.Fatal("DialForAteletOnNode returned the stale connection after the IP changed")
+		}
+		if got, want := fresh.Target(), "10.0.0.9:8085"; got != want {
+			t.Errorf("dial target = %q, want %q", got, want)
+		}
+		if got := old.GetState(); got != connectivity.Shutdown {
+			t.Errorf("stale conn state = %v, want %v", got, connectivity.Shutdown)
+		}
+		if d.ateletConns.Len() != 1 {
+			t.Errorf("cache holds %d conns, want 1", d.ateletConns.Len())
+		}
+		if again, err := d.DialForAteletOnNode("node1"); err != nil || again != fresh {
+			t.Errorf("DialForAteletOnNode = %v, %v, want the new cached connection", again, err)
+		}
+	})
+
 	t.Run("closes conns evicted from the cache", func(t *testing.T) {
 		d := NewAteletDialer(newTestAteletIndexer(t,
 			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),

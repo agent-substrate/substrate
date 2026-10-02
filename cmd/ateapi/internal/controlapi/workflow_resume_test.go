@@ -1114,7 +1114,7 @@ func wireTestAssignment() *ateapipb.WorkerAssignment {
 
 // newWireCaptureWorkflow builds an ActorWorkflow whose atelet dialer resolves
 // to an in-process capturing fake. The dialer's conn cache is pre-warmed with
-// a bufconn-backed connection keyed by the atelet pod's UID, so
+// a bufconn-backed connection for the atelet pod's UID and IP, so
 // DialForAteletOnNode returns it without dialing the pod IP.
 func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet) {
 	t.Helper()
@@ -1144,9 +1144,10 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	ateletPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: installdefaults.SystemNamespace, Name: "atelet-1", UID: "atelet-uid"},
 		Spec:       corev1.PodSpec{NodeName: "node-1"},
+		Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}}},
 	}
 	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
-	dialer.ateletConns.Add("atelet-uid", conn)
+	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
 
 	lister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor"},
