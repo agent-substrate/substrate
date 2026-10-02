@@ -40,13 +40,16 @@ type Authorizer struct {
 	// AccessPolicy, cannot be revoked through the API, and lose access once
 	// the server runs without them in its configuration.
 	bootstrapOwners map[string]struct{}
+
+	// actorJWTMinter is set by WithActorJWTMinter.
+	actorJWTMinter string
 }
 
 // Check verifies that the principal in ctx has relation on object.
 // Structural hierarchy links (such as global:root as parent_global of every
-// atespace) and the caller's bootstrap owner grant, if any, are injected as
-// OpenFGA ContextualTuples at evaluation time rather than persisted in the
-// tuple table.
+// atespace) and the caller's server-configured grants (bootstrap owner, actor
+// JWT minter), if any, are injected as OpenFGA ContextualTuples at evaluation
+// time rather than persisted in the tuple table.
 func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	if IsBypassed(ctx) {
 		return nil
@@ -59,7 +62,17 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 		return status.Error(codes.Unauthenticated, "unauthenticated: missing principal in context")
 	}
 	user := formatUser(p.ID)
-	allowed, err := a.checkRaw(ctx, user, relation, object)
+	var grants []*openfgav1.TupleKey
+	// Only a certificate-authenticated caller qualifies: a bearer token's
+	// subject is chosen by its issuer and could spell the SPIFFE ID.
+	if a.actorJWTMinter != "" && p.Kind == principal.KindMTLS && p.ID == a.actorJWTMinter {
+		grants = append(grants, &openfgav1.TupleKey{
+			User:     user,
+			Relation: RelationActorJWTMinter,
+			Object:   GlobalRootObject,
+		})
+	}
+	allowed, err := a.checkRaw(ctx, user, relation, object, grants...)
 	if err != nil {
 		return err
 	}
@@ -69,8 +82,8 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	return nil
 }
 
-func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string) (bool, error) {
-	tuples := contextualTuples(object)
+func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string, grants ...*openfgav1.TupleKey) (bool, error) {
+	tuples := append(contextualTuples(object), grants...)
 	// A Check only evaluates the caller, so only the caller's own bootstrap
 	// grant can affect the result.
 	if _, ok := a.bootstrapOwners[user]; ok {

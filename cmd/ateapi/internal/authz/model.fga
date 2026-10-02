@@ -45,6 +45,11 @@ type global
     define can_get_access_policy: viewer
     define can_update_access_policy: owner
 
+    # --- Actor Identity ---
+    # The egress gateway, granted from ateapi's configuration rather than an AccessPolicy.
+    define actor_jwt_minter: [user]
+    define can_mint_actor_jwt: actor_jwt_minter
+
 type atespace
   relations
     define parent_global: [global]
