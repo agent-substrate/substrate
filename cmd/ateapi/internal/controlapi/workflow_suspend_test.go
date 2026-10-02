@@ -22,6 +22,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -405,11 +406,12 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 // errObjectStore stands in for object storage being unreachable.
 var errObjectStore = errors.New("object storage is unavailable")
 
-// TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure verifies a suspend
-// that dies collecting the snapshot it replaced leaves the actor exactly where a
-// retry picks it up — SUSPENDING, still naming the snapshot it was replacing —
-// and that the retry then finishes the suspend.
-func TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure(t *testing.T) {
+// TestEnsureSuspendedFinalized_CommitsDespiteObjectStoreFailure verifies that
+// failing to collect the snapshot a suspend replaced does not fail the
+// suspend. The worker is already released by then, so aborting would leave the
+// actor SUSPENDING with no way to resume; it commits SUSPENDED on the new
+// snapshot instead and leaves the replaced one in storage.
+func TestEnsureSuspendedFinalized_CommitsDespiteObjectStoreFailure(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
@@ -434,31 +436,70 @@ func TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure(t *testing.T) {
 	})
 
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil); !errors.Is(err, errObjectStore) {
-		t.Fatalf("ensureSuspendedFinalized = %v, want an error wrapping %v", err, errObjectStore)
-	}
-	stuck, err := persistence.GetActor(ctx, actorRef)
-	if err != nil {
-		t.Fatalf("GetActor: %v", err)
-	}
-	if got := stuck.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
-		t.Errorf("state after the failure = %v, want SUSPENDING (retryable)", got)
-	}
-	if got := stuck.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != previous.String() {
-		t.Errorf("actor snapshot uri after the failure = %q, want the replaced %q", got, previous)
-	}
-
-	objects.OnDelete = nil
 	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil)
 	if err != nil {
-		t.Fatalf("retried ensureSuspendedFinalized: %v", err)
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state = %v, want SUSPENDED", got)
 	}
 	if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != fresh.String() {
-		t.Errorf("actor snapshot uri after the retry = %q, want %q", got, fresh)
+		t.Errorf("actor snapshot uri = %q, want the one this suspend wrote, %q", got, fresh)
 	}
-	if got := objects.Snapshot(t, previous); len(got) != 0 {
-		t.Errorf("replaced external snapshot still holds %v, want it collected by the retry", got)
+	if got := stored.GetStatus().GetInProgressSnapshotUri(); got != "" {
+		t.Errorf("InProgressSnapshotUri = %q, want cleared", got)
 	}
+	if len(objects.Snapshot(t, previous)) == 0 {
+		t.Error("replaced external snapshot was collected despite every delete failing")
+	}
+	if len(objects.Snapshot(t, fresh)) == 0 {
+		t.Error("the external snapshot this suspend wrote was collected")
+	}
+}
+
+// TestEnsureSuspendedFinalized_KeepsReplacedSnapshotOnConflict verifies that a
+// commit lost to a concurrent update releases nothing: the actor record still
+// names its old snapshot, so collecting it would leave the actor pointing at
+// deleted objects.
+func TestEnsureSuspendedFinalized_KeepsReplacedSnapshotOnConflict(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	objects := objectstoretest.New()
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	})
+
+	previous := mustActorSnapshotURI(t, template, actor, "old")
+	fresh := mustActorSnapshotURI(t, template, actor, "2026-01-01t00-00-00z-new")
+	objects.PutSnapshot(t, previous, "manifest.json")
+	objects.PutSnapshot(t, fresh, "manifest.json")
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.InProgressSnapshotUri = fresh.String()
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
+	})
+
+	w := &ActorWorkflow{store: &conflictingUpdateStore{Interface: persistence}, objectStore: objects}
+	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil); status.Code(err) != codes.Aborted {
+		t.Fatalf("ensureSuspendedFinalized = %v, want code Aborted", err)
+	}
+	if len(objects.Snapshot(t, previous)) == 0 {
+		t.Error("replaced external snapshot was collected though the commit lost")
+	}
+}
+
+// conflictingUpdateStore fails every actor update with a version conflict, as
+// if another writer always got there first.
+type conflictingUpdateStore struct {
+	store.Interface
+}
+
+func (conflictingUpdateStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	return nil, store.ErrVersionConflict
 }
 
 func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
@@ -540,9 +581,9 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	}
 }
 
-// TestCommitSnapshotScope verifies golden actors always commit Full — the
-// golden snapshot is the base an OnGolden data resume combines into, so the
-// template's onCommit must not thin it down to a data-only capture.
+// TestCommitSnapshotScope verifies golden actors always commit Full — new
+// actors resume the golden snapshot Full, so the template's onCommit must not
+// thin it down to a data-only capture.
 func TestCommitSnapshotScope(t *testing.T) {
 	tmpl := func(onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
 		return &ateapipb.ActorTemplate{

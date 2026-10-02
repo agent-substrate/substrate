@@ -18,8 +18,6 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
-import "pkg/proto/ateapipb/ateapi.proto";
-
 // AteomSupport provides callouts for ateom.
 //
 // Called by individual ateom pods over a local connection, authenticated with
@@ -48,9 +46,54 @@ service AteomSupport {
 }
 
 message SetWorkerCapacityRequest {
-  // What the worker can supply, in the same vocabulary the control plane
-  // records and an ActorTemplate asks in.
-  ateapi.WorkerResources capacity = 1;
+  // What the worker can supply. atelet converts it to the control plane's
+  // WorkerResources when forwarding.
+  //
+  // +k8s:required
+  WorkerResources capacity = 1;
+}
+
+// WorkerResources is what a worker can supply. It mirrors the control plane's
+// WorkerResources and is validated by the same rules.
+message WorkerResources {
+  // Resources are matched by name against actors' resources for placement.
+  //
+  // +k8s:optional
+  Resources resources = 1;
+
+  // A count of Actors. Workers can use this to limit the number of Actors
+  // that can be placed on them, constraining costs not captured in the
+  // resources above.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int32 actors = 2;
+}
+
+message Resources {
+  // limits is the maximum amount of compute resources allowed. Only "cpu"
+  // and "memory" are supported, each at most once, and each quantity must be
+  // greater than zero; the cpu limit must be less than 1000 cores.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=2
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
+  repeated Limits limits = 1;
+}
+
+// +k8s:customValidation # names, quantity parse/positivity, cpu bound
+message Limits {
+  // +k8s:required
+  // +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
+  string name = 1;
+
+  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
+  // "2Gi").
+  //
+  // +k8s:required
+  // +k8s:maxLength=32 # the Limits hook requires a parseable quantity
+  string quantity = 2;
 }
 
 message SetWorkerCapacityResponse {
@@ -60,11 +103,20 @@ message RequestActorSuspendRequest {
   // The actor the calling worker is hosting. atelet forwards this to the
   // control plane, which serves it only if the actor is assigned to the worker
   // the caller's certificate names.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name, as for MintActorCertificate.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
 }
 
@@ -73,15 +125,27 @@ message RequestActorSuspendResponse {
 
 message MintActorCertificateRequest {
   // The actor for which the certificate should be issued.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_atespace = 3;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 4;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 5;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
+  //
+  // +k8s:required
+  // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
   bytes certificate_signing_request = 1;
 }
 
@@ -237,15 +301,12 @@ message ActorMetadataDataSource {
   repeated ActorMetadataItem items = 1;
 }
 
-// TrustBundleDataSource projects the trust anchors of a named trust bundle
-// to a file at the given path, relative to the root of the enclosing
-// system-info volume. atelet resolves the name against its supported-bundle
-// allowlist and reads the backing ClusterTrustBundle through its informer at
-// write time, sanitizing kubelet-style; an unsupported name or missing
-// bundle fails the actor start.
+// TrustBundleDataSource corresponds to TrustBundleDataSource in ateapi.proto
 message TrustBundleDataSource {
   string path = 1;
-  string name = 2;
+  repeated string names = 3;
+  reserved 2;
+  reserved "name";
 }
 
 message SystemInfoDataSource {
@@ -371,13 +432,6 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
-  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
-  // (memory + full filesystem delta) combined with the snapshot's durable
-  // data. Never valid for Checkpoint — snapshots only ever capture FULL or
-  // DATA; whether a snapshot restores from its own content or on the golden
-  // is decided by the control plane from the template's onResume
-  // configuration.
-  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 // ExternalRestoreConfiguration is an external snapshot a restore reads.
@@ -421,6 +475,10 @@ message CheckpointResponse {
   // The files the snapshot consists of, as relative names in the snapshot
   // directory, reported by ateom.
   repeated string snapshot_files = 1;
+
+  // The subset of snapshot_files that restores the actor at DATA scope on
+  // its own, reported by ateom. Empty when the capture holds no durable data.
+  repeated string data_snapshot_files = 2;
 }
 
 message UploadPausedCheckpointRequest {
@@ -441,8 +499,8 @@ message UploadPausedCheckpointRequest {
 
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
   // When it differs from captured_scope, atelet converts where possible (a
-  // FULL capture to a DATA upload by selecting the durable-dir tar) and
-  // rejects otherwise.
+  // FULL capture to a DATA upload of data_snapshot_files) and rejects
+  // otherwise.
   SnapshotScope desired_scope = 8;
 
   // The files of the local snapshot, as recorded when the pause captured it.
@@ -450,15 +508,20 @@ message UploadPausedCheckpointRequest {
   repeated string snapshot_files = 9;
 
   // The scope the pause checkpoint captured (FULL or DATA), as recorded on
-  // the actor's LocalSnapshot. With desired_scope and snapshot_files it
-  // determines the files the upload writes, including on a retry after the
-  // local snapshot was pruned.
+  // the actor's LocalSnapshot. With desired_scope, snapshot_files and
+  // data_snapshot_files it determines the files the upload writes, including
+  // on a retry after the local snapshot was pruned.
   SnapshotScope captured_scope = 10;
 
   // The sandbox class the pause checkpoint was captured with (e.g.
-  // "gvisor"), from the ActorTemplate's sandbox_config. It decides whether a
-  // FULL capture can be uploaded as DATA and labels the upload metrics.
+  // "gvisor"), from the ActorTemplate's sandbox_config. It labels the upload
+  // metrics.
   string sandbox_class = 11;
+
+  // The subset of snapshot_files that restores the actor at DATA scope, as
+  // recorded on the actor's LocalSnapshot. A FULL capture uploaded as DATA
+  // writes exactly these files; empty means it has no durable data.
+  repeated string data_snapshot_files = 12;
 }
 
 message UploadPausedCheckpointResponse {
@@ -490,12 +553,6 @@ message RestoreRequest {
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
 
-  // The base guest state (memory + rootfs delta) combined with `config`'s
-  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
-  // field rather than part of the `config` oneof: the actor's snapshot may
-  // be local (a pause checkpoint) while the base is always external.
-  ExternalRestoreConfiguration base_config = 12;
-
   // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 13;
 
@@ -514,13 +571,10 @@ message RestoreRequest {
   // was taken.
   repeated string snapshot_files = 17;
 
-  // The files of the golden snapshot. Set only with base_config.
-  repeated string golden_snapshot_files = 18;
-
   // True when the snapshot referenced by `config` is owned in the golden
   // atespace: a golden snapshot, including the golden tag an actor created
   // from it reads until its first suspend. Used only to label metrics.
-  bool from_golden_snapshot = 19;
+  bool from_golden_snapshot = 18;
 }
 
 message RestoreResponse {

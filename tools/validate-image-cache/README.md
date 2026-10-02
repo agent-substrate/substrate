@@ -18,10 +18,13 @@ whiteouts, oversized layer counts, ...).
 
 - Application-default credentials with read access to the registry
   (`gcloud auth application-default login`). gcr.io / pkg.dev registries are
-  authenticated with the GCP env authenticator, the same mechanism atelet
-  uses. Note that a repo readable by *your user* (e.g. via a
-  `domain:google.com` grant) is not necessarily readable by a *service
-  account* — validate with the identity that production will use.
+  authenticated with them; other registries are pulled anonymously. This is
+  *not* how atelet authenticates — it borrows its node's kubelet credential
+  provider plugin, which does not exist on a developer's machine — so a
+  corpus that validates here can still fail to pull on a node. Note also
+  that a repo readable by *your user* (e.g. via a `domain:google.com` grant)
+  is not necessarily readable by a *service account* — validate with the
+  identity that production will use.
 - Disk: unpacked layers are 2–3× their compressed size. The tool bounds
   usage by asking the cache's own eviction engine to reclaim space when the
   cache volume's free space drops below `--min-free-gb`, but give it room

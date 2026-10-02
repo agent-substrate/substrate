@@ -50,6 +50,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -76,10 +77,11 @@ var (
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	experimentalEnableAuthz  = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
 
-	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
-	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
+	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
+	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -170,14 +172,20 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
 	defer persistence.Close()
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
-	}
-	defer fgaServer.Close()
+	var authorizer *authz.Authorizer
+	if *experimentalEnableAuthz {
+		fgaServer, err := authz.NewOpenFGAServer(pool)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+		}
+		defer fgaServer.Close()
 
-	if _, _, err := authz.EnsureStoreAndModel(shutdownCtx, pool, fgaServer); err != nil {
-		serverboot.Fatal(ctx, "Failed to initialize OpenFGA store and model", err)
+		var policyManager *authz.PolicyManager
+		authorizer, policyManager, err = authz.New(shutdownCtx, pool, fgaServer)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
+		}
+		persistence.SetPolicyManager(policyManager)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -264,7 +272,7 @@ func main() {
 		storageClassLister,
 		ateletDialer,
 		instruments,
-		*egressGatewayAddress,
+		*defaultEgressGatewayAddress,
 		volPlugins,
 		objectStore,
 		resolvedActorJWTIssuer,
@@ -276,6 +284,10 @@ func main() {
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
+	// Crash the Actors lost when a Worker's ateom restarts.
+	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
+	workerAssignmentReconciler.Start(shutdownCtx)
+
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
 	if err != nil {
@@ -285,6 +297,18 @@ func main() {
 	if err := apiauthn.ValidateServerConfig(authCfg); err != nil {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
+
+	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		apiauthn.UnaryServerInterceptor(authCfg),
+		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
+		ateinterceptors.ServerUnaryInterceptor,
+	}
+	if *experimentalEnableAuthz {
+		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
+	}
+	unaryInterceptors = append(unaryInterceptors,
+		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+	)
 
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
@@ -296,12 +320,7 @@ func main() {
 			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
-		grpc.ChainUnaryInterceptor(
-			apiauthn.UnaryServerInterceptor(authCfg),
-			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-			ateinterceptors.ServerUnaryInterceptor,
-			ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		),
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
 		),
@@ -368,6 +387,9 @@ func loadFlagsFromEnv() {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
+	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
+		*experimentalEnableAuthz = (v == "true" || v == "1")
+	}
 }
 
 func logFlagValues(ctx context.Context) {
@@ -375,8 +397,9 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		slog.String("postgres-connection-string", *postgresConnectionString),
+		postgresConnectionAttr(*postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
@@ -414,6 +437,31 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 		}
 		return objectstore.NewGCS(client), nil
 	}
+}
+
+// postgresConnectionAttr describes the connection string for the startup log
+// without echoing it. The bundled and Cloud SQL IAM setups use passwordless
+// strings, but an external database DSN can carry a password, and the raw
+// value would otherwise be written to the log on every restart. Only the
+// parsed, non-secret parts are logged; a string that does not parse is
+// reported as invalid and connectStore surfaces the actual error.
+func postgresConnectionAttr(connString string) slog.Attr {
+	const key = "postgres-connection-string"
+	if connString == "" {
+		return slog.String(key, "")
+	}
+	cfg, err := pgconn.ParseConfig(connString)
+	if err != nil {
+		return slog.String(key, "<invalid pg connection string>")
+	}
+	return slog.Group(key,
+		slog.String("host", cfg.Host),
+		slog.Int("port", int(cfg.Port)),
+		slog.String("database", cfg.Database),
+		slog.String("user", cfg.User),
+		slog.Bool("password-set", cfg.Password != ""),
+		slog.Bool("tls", cfg.TLSConfig != nil),
+	)
 }
 
 // connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if

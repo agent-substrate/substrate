@@ -47,12 +47,6 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
-	// Restore-only: restore the ActorTemplate's golden snapshot's guest state
-	// (memory + full filesystem delta) combined with the snapshot's durable
-	// data. Never valid for CheckpointWorkload — snapshots only ever capture
-	// FULL or DATA; the control plane selects this scope at restore per the
-	// template's onResume configuration.
-	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3
 )
 
 // Enum value maps for SnapshotScope.
@@ -61,13 +55,11 @@ var (
 		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
 		1: "SNAPSHOT_SCOPE_FULL",
 		2: "SNAPSHOT_SCOPE_DATA",
-		3: "SNAPSHOT_SCOPE_DATA_ON_GOLDEN",
 	}
 	SnapshotScope_value = map[string]int32{
-		"SNAPSHOT_SCOPE_UNSPECIFIED":    0,
-		"SNAPSHOT_SCOPE_FULL":           1,
-		"SNAPSHOT_SCOPE_DATA":           2,
-		"SNAPSHOT_SCOPE_DATA_ON_GOLDEN": 3,
+		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
+		"SNAPSHOT_SCOPE_FULL":        1,
+		"SNAPSHOT_SCOPE_DATA":        2,
 	}
 )
 
@@ -1288,8 +1280,11 @@ type CheckpointWorkloadResponse struct {
 	// (relative names) for atelet to ship to object storage. Each runtime reports
 	// its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
 	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// data_snapshot_files is the subset of snapshot_files that restores the
+	// actor at DATA scope on its own. Empty when the capture holds no durable data.
+	DataSnapshotFiles []string `protobuf:"bytes,2,rep,name=data_snapshot_files,json=dataSnapshotFiles,proto3" json:"data_snapshot_files,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CheckpointWorkloadResponse) Reset() {
@@ -1329,6 +1324,13 @@ func (x *CheckpointWorkloadResponse) GetSnapshotFiles() []string {
 	return nil
 }
 
+func (x *CheckpointWorkloadResponse) GetDataSnapshotFiles() []string {
+	if x != nil {
+		return x.DataSnapshotFiles
+	}
+	return nil
+}
+
 type RestoreWorkloadRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
 	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
@@ -1348,10 +1350,6 @@ type RestoreWorkloadRequest struct {
 	Scope SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
-	// The object storage URI of the ActorTemplate's golden snapshot.
-	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
-	// snapshot_uri contract (field 8).
-	GoldenSnapshotUri string `protobuf:"bytes,13,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. Used to
 	// (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
 	// FULL micro-VM restore the size baked into the snapshot is authoritative and
@@ -1468,13 +1466,6 @@ func (x *RestoreWorkloadRequest) GetEgressGateway() *EgressGateway {
 		return x.EgressGateway
 	}
 	return nil
-}
-
-func (x *RestoreWorkloadRequest) GetGoldenSnapshotUri() string {
-	if x != nil {
-		return x.GoldenSnapshotUri
-	}
-	return ""
 }
 
 func (x *RestoreWorkloadRequest) GetCpuMilli() int64 {
@@ -1994,9 +1985,10 @@ const file_ateom_proto_rawDesc = "" +
 	"actor_dirs\x18\v \x01(\v2\x10.ateom.ActorDirsR\tactorDirs\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x91\x06\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xe1\x05\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2011,8 +2003,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x13runtime_asset_paths\x18\t \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
 	"\x05scope\x18\n" +
 	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12@\n" +
-	"\x0eegress_gateway\x18\f \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12.\n" +
-	"\x13golden_snapshot_uri\x18\r \x01(\tR\x11goldenSnapshotUri\x12\x1b\n" +
+	"\x0eegress_gateway\x18\f \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12/\n" +
 	"\n" +
@@ -2044,12 +2035,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"V\n" +
 	"\x1eGetActiveWorkloadStatsResponse\x124\n" +
-	"\asamples\x18\x01 \x03(\v2\x1a.ateom.WorkloadStatsSampleR\asamples*\x84\x01\n" +
+	"\asamples\x18\x01 \x03(\v2\x1a.ateom.WorkloadStatsSampleR\asamples*a\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x02\x12!\n" +
-	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x03*b\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x02*b\n" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +

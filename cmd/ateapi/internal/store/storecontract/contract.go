@@ -110,8 +110,8 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 						}},
 					}},
 					{TrustBundle: &ateapipb.TrustBundleDataSource{
-						Name: "egress-mitm.ate.dev",
-						Path: "trust-bundle.pem",
+						Names: []string{"egress-mitm.ate.dev"},
+						Path:  "trust-bundle.pem",
 					}},
 				},
 			},
@@ -229,9 +229,12 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatal(err)
 		}
 		actorRef := resources.ActorRefFromActor(actor)
-		policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-			Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
-		}}}
+		policy := &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+			Rules: []*ateapipb.EgressRule{{
+				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+			}},
+		}
 
 		created, err := s.CreateEgressPolicy(ctx, actorRef, policy)
 		if err != nil {
@@ -239,9 +242,6 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		if md := created.GetMetadata(); md.GetName() != "default" || md.GetAtespace() != testAtespace || md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
 			t.Fatalf("created metadata = %v", md)
-		}
-		if policy.GetMetadata() != nil {
-			t.Fatalf("input metadata = %v; want nil", policy.GetMetadata())
 		}
 		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); !errors.Is(err, store.ErrAlreadyExists) {
 			t.Fatalf("duplicate create error = %v, want ErrAlreadyExists", err)
@@ -286,7 +286,9 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 		create := func() *ateapipb.EgressPolicy {
-			created, err := s.CreateEgressPolicy(ctx, actorRef, &ateapipb.EgressPolicy{})
+			created, err := s.CreateEgressPolicy(ctx, actorRef, &ateapipb.EgressPolicy{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+			})
 			if err != nil {
 				t.Fatalf("CreateEgressPolicy failed: %v", err)
 			}
@@ -340,7 +342,9 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		ctx := context.Background()
 		mustCreateAtespace(t, s, testAtespace)
 		actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
-		policy := &ateapipb.EgressPolicy{}
+		policy := &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+		}
 		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Fatalf("policy without Actor error = %v, want ErrFailedPrecondition", err)
 		}
@@ -3163,6 +3167,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		ref := resources.ActorRefFromActor(actor)
 		created, err := s.CreateEgressPolicy(ctx, ref, withUnknownField(&ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 			Rules: []*ateapipb.EgressRule{withUnknownField(&ateapipb.EgressRule{
 				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
 			})},

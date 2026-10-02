@@ -19,9 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -29,7 +28,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // SetWorkerCapacity records a Worker's reported capacity. As with MintCert,
@@ -40,17 +38,10 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	if err != nil {
 		return nil, err
 	}
-	// Workers are global-scoped, so the reference carries no atespace.
-	if errs := resources.ValidateGlobalObjectRef(req.GetWorker(), field.NewPath("worker")); len(errs) > 0 {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid worker: %v", errs.ToAggregate())
+	if errs := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	reported := req.GetCapacity()
-	if reported == nil {
-		return nil, status.Error(codes.InvalidArgument, "capacity is required")
-	}
-	if err := validateReportedCapacity(reported); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid capacity: %v", err)
-	}
 	name := req.GetWorker().GetName()
 
 	// Use authoritative state to authorize the write.
@@ -95,26 +86,4 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		slog.String("was", worker.GetStatus().GetCapacity().String()),
 		slog.String("now", updated.GetStatus().GetCapacity().String()))
 	return &ateapipb.SetWorkerCapacityResponse{Worker: updated}, nil
-}
-
-// validateReportedCapacity rejects a report that cannot mean anything. A report
-// is written straight to the store, so it does not pass the declarative
-// validation an UpdateWorker request would, and an unchecked ceiling persists.
-// A negative one is the costly case: placement asks whether allocated is below
-// capacity, which is false for every Actor, so the Worker silently never takes
-// another one.
-func validateReportedCapacity(reported *ateapipb.WorkerResources) error {
-	if reported.GetActors() < 0 {
-		return fmt.Errorf("actors is %d, must not be negative", reported.GetActors())
-	}
-	quantities, err := resources.ParseQuantities(reported.GetResources())
-	if err != nil {
-		return err
-	}
-	for _, name := range slices.Sorted(maps.Keys(quantities)) {
-		if quantity := quantities[name]; quantity.Sign() < 0 {
-			return fmt.Errorf("%s is %s, must not be negative", name, quantity.String())
-		}
-	}
-	return nil
 }

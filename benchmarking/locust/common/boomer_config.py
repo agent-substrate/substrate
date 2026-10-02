@@ -66,6 +66,13 @@ _FLAGS = {
     "--sweperf-template": str,
     "--sweperf-total-steps": int,
     "--sweperf-num-cycles": int,
+    "--sweperf-poll-interval-ms": int,
+    "--agentsession-script": str,
+    "--agentsession-script-file": str,
+    "--agentsession-think-scale": float,
+    "--total-actors": int,
+    "--spawn-concurrency": int,
+    "--actor-deadline": float,
 }
 
 
@@ -141,11 +148,13 @@ def init_boomer_config() -> None:
     from locust.argument_parser import LocustArgumentParser
     from locust.env import Environment
 
+    from common.agentsession_config import add_agentsession_arguments  # noqa: F401
     from common.durdir_config import add_durdir_arguments
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments
     from common.ping_config import add_ping_arguments
     from common.resume_mode import add_resume_mode_arguments
+    from common.spawn_config import add_spawn_arguments
     from common.sweperf_config import add_sweperf_arguments
     from common.trace import init_tracing
     from common.wait_time import init_wait_time

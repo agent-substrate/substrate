@@ -45,8 +45,6 @@ ATE_DEMOS=(
   demo-counter-microvm
   demo-egress
   demo-egress-microvm
-  demo-egress-mitm
-  demo-egress-microvm-mitm
   demo-jupyter
   demo-sandbox
   demo-claude-code-multiplex
@@ -64,14 +62,6 @@ demo_usage() {
       ;;
     demo-counter-microvm|demo-egress-microvm)
       echo "  Needs hack/install-microvm-deps.sh --install to have run (cluster-wide microvm SandboxConfig)."
-      ;;
-    demo-egress-mitm)
-      echo "  Needs an sdsmint install (--deploy-atenet --experimental-use-sdsmint): the actors"
-      echo "  project the egress gateway trust bundle, which does not resolve otherwise."
-      ;;
-    demo-egress-microvm-mitm)
-      echo "  Needs hack/install-microvm-deps.sh --install to have run (cluster-wide microvm SandboxConfig),"
-      echo "  and an sdsmint install (--deploy-atenet --experimental-use-sdsmint) for the trust bundle."
       ;;
     demo-claude-code-multiplex)
       echo "  Required env: ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO"
@@ -96,24 +86,22 @@ usage() {
   echo "  --atenet-dataplane=envoy|agentgateway  Select the atenet ingress and egress dataplane (default: envoy)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
   echo "  --cluster-size size0|size10            Cluster size profile (default: size0). \"size10\" assumes a dedicated postgres node"
-  echo "  --cordon-control-plane                 Pin each control plane pod to its own node: assumes a pool labeled and tainted"
-  echo "                                         ate.dev/workloadType=ate-control-plane:NoSchedule with one node per pod (7 at the"
-  echo "                                         shipped replica counts) plus a spare, since rollouts surge a new pod first"
+  echo "  --cordon-control-plane                 Keep the control plane off the worker nodes: assumes a small shared pool labeled and"
+  echo "                                         tainted ate.dev/workloadType=ate-control-plane:NoSchedule, and a one-node pool"
+  echo "                                         labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
   echo "Experiments:"
   echo ""
-  echo "  --experimental-use-sdsmint             Deploy the egress gateway with per-SNI certificate minting (experimental)"
   echo "  --experimental-additional-egress-extproc-service NS/SVC:PORT"
   echo "                                         Run an additional ext_proc authorization filter, served by that Service."
-  echo "                                         Requires --experimental-use-sdsmint. (experimental)"
+  echo "                                         Requires --atenet-dataplane=envoy."
   echo "  --experimental-egress-credential-injection"
   echo "                                         Point the egress gateway's MITM-leg handler at a credential provider, so a"
   echo "                                         matching EgressPolicy rule injects its credential. A modifier applied when"
   echo "                                         the gateway is deployed (e.g. with --deploy-atenet); the credential provider"
-  echo "                                         itself is deployed separately. Implies --experimental-use-sdsmint; requires"
-  echo "                                         --atenet-dataplane=envoy. (experimental)"
+  echo "                                         itself is deployed separately. Requires --atenet-dataplane=envoy."
   echo "  --credential-provider-name NAME        Provider the injector serves, as a ate-secret:// prefix"
   echo "                                         (default ate-secret://k8s.io). Only meaningful with"
   echo "                                         --experimental-egress-credential-injection. (experimental)"
@@ -263,7 +251,6 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--atenet-dataplane=${prescan_args[$((i + 1))]}")
       ;;
-    --experimental-use-sdsmint) GLOBAL_FLAGS+=(--experimental-use-sdsmint) ;;
     --experimental-additional-egress-extproc-service=*)
       GLOBAL_FLAGS+=("${prescan_args[i]}")
       ;;
@@ -274,10 +261,8 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--experimental-additional-egress-extproc-service=${prescan_args[$((i + 1))]}")
       ;;
-    # Enabling credential injection implies sdsmint in the shell installer, so
-    # forward both flags to ate-setup.
     --experimental-egress-credential-injection)
-      GLOBAL_FLAGS+=(--experimental-use-sdsmint --experimental-egress-credential-injection)
+      GLOBAL_FLAGS+=(--experimental-egress-credential-injection)
       ;;
     --credential-provider-name=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --credential-provider-name)
@@ -374,7 +359,7 @@ while [[ "$#" -gt 0 ]]; do
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
     --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
-    --experimental-use-sdsmint|--experimental-additional-egress-extproc-service=*) ;;
+    --experimental-additional-egress-extproc-service=*) ;;
     --experimental-egress-credential-injection|--credential-provider-name=*|--credential-provider-address=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
 

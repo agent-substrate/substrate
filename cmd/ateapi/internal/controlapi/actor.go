@@ -25,6 +25,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
@@ -38,8 +39,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/validate"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -54,8 +54,8 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	}
 
 	// Validate the request, including the object within it.
-	if errs := validateCreateActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateCreateActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	start := time.Now()
@@ -144,7 +144,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// data alone.
 		outActor.Status.ExternalSnapshot.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
 	}
-	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
+	if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
 	}
 
@@ -198,15 +198,9 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	return tag, nil
 }
 
-func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
-	if errs := validateGetActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateGetActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	actor, err := s.impl.GetActor(ctx, actorRef)
@@ -222,15 +216,9 @@ func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef)
 	return s.store.GetActor(ctx, actorRef)
 }
 
-func validateGetActorRequest(ctx context.Context, req *ateapipb.GetActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_GetActorRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
-	if errs := validateListActorsRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateListActorsRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -247,12 +235,6 @@ func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts stor
 	return s.store.ListActors(ctx, atespace, opts)
 }
 
-func validateListActorsRequest(ctx context.Context, req *ateapipb.ListActorsRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_ListActorsRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
 	// First scrub any fields that users are not allowed to set.
 	inActor := req.Actor
@@ -262,8 +244,8 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 	}
 
 	// Validate the request.
-	if errs := validateUpdateActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateUpdateActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	actorRef := resources.ActorRefFromActor(inActor)
@@ -302,8 +284,8 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		newVal := toUpdate
 
 		// Validate the user's input before doing any further work.
-		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, false); len(errs) > 0 {
-			return toGRPCStatusError(errs)
+		if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, false); len(errs) > 0 {
+			return resources.ToGRPCStatusError(errs)
 		}
 
 		// Do any further work on the resource.
@@ -312,7 +294,8 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
 		// cleanly), and the replacement's sandbox config, volumes, and
-		// volume mounts must match the old template's.
+		// volume mounts must match the old template's. It must also store
+		// snapshots under the location the actor's own already live in.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return status.Errorf(codes.FailedPrecondition,
@@ -320,6 +303,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
+				return err
+			}
+			if err := validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
 				return err
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
@@ -346,7 +332,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		}
 
 		// Validate the final value before storing it.
-		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
+		if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
 			return toGRPCInternalError(errs)
 		}
 
@@ -404,19 +390,43 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 	return nil
 }
 
-func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRequest) field.ErrorList {
-	// Call the generated validation.
-	// We model this as a create rather than an update because updates assume
-	// the existence of a "current" value, which we do not have yet.  This is
-	// validating the request itself. The result will be validated later, after
-	// we have a current value to compare against.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_UpdateActorRequest(ctx, op, nil, req, nil)
+// validateSnapshotLocationUnchanged rejects a template repoint that would
+// store the actor's next snapshots under a different location than the one it
+// already owns. This is needed to not leak snapshots when the actor is deleted:
+// Deleting an actor collects everything under its external snapshot prefix. If
+// the location prefix ever changes, we risk leaking the snapshots under the old prefix.
+func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
+	currentSnapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if currentSnapshotURI == "" {
+		return nil
+	}
+	currentURI, err := resources.ParseSnapshotURI(currentSnapshotURI)
+	if err != nil {
+		return fmt.Errorf("while parsing the external snapshot %q: %w", currentSnapshotURI, err)
+	}
+	// Tag-owned snapshot
+	if !currentURI.OwnedBy(actorSnapshotOwner(actor)) {
+		return nil
+	}
+	// Compared as prefixes, so a newLocation spelled with and without a
+	// trailing slash counts as the same.
+	newLocation := newTemplate.GetSnapshotConfig().GetStorageLocation()
+	// Generate what the new snapshot prefix would look like for this actor.
+	nextSnapshotLocationPrefix, err := currentURI.Owner().Prefix(newLocation)
+	if err != nil {
+		return fmt.Errorf("while resolving the new actor template's storage location %q: %w", newLocation, err)
+	}
+	if nextSnapshotLocationPrefix != currentURI.OwnerPrefix() {
+		return status.Errorf(codes.FailedPrecondition,
+			"the actor's snapshots are stored under %q but the new actor template stores them under %q: the storage location must be identical to repoint an actor that owns a snapshot",
+			currentURI.Location(), newLocation)
+	}
+	return nil
 }
 
 func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
-	if errs := validateDeleteActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateDeleteActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
@@ -447,15 +457,9 @@ func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	return s.store.DeleteActor(ctx, actorRef, precondition)
 }
 
-func validateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
-	if errs := validatePauseActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidatePauseActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -475,15 +479,9 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 	return &ateapipb.PauseActorResponse{Actor: actor}, nil
 }
 
-func validatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_PauseActorRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
-	if errs := validateResumeActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateResumeActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -503,15 +501,9 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	return &ateapipb.ResumeActorResponse{Actor: actor, Resumed: resumed}, nil
 }
 
-func validateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_ResumeActorRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
-	if errs := validateSuspendActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateSuspendActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -530,15 +522,9 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
 }
 
-func validateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {
-	if errs := validateRevertActorRequest(ctx, req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
+	if errs := apivalidation.ValidateRevertActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -557,43 +543,8 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 	return &ateapipb.RevertActorResponse{Actor: actor}, nil
 }
 
-func validateRevertActorRequest(ctx context.Context, req *ateapipb.RevertActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_RevertActorRequest(ctx, op, nil, req, nil)
-}
-
-func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
-	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
-	if requireStatus {
-		// Status is optional in the schema, but is actually required to be set
-		// by the server.  If it was specified, it was already validated above,
-		// but if it was not specified we need to flag that as an error.
-		errs = append(errs, validate.RequiredPointer(ctx, op, fldPath.Child("status"), newVal.GetStatus(), nil)...)
-	}
-	return errs
-}
-
-// This exists only because nested subfield tags are not supported yet.
-func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.Operation, fldPath *field.Path, actor, _ *ateapipb.Actor) field.ErrorList {
-	if actor == nil || actor.Metadata == nil {
-		return nil // handled by DV
-	}
-
-	// Updates are validated in 2 steps: first the update request and then the
-	// resource itself. DV for the request doesn't descend into the resource
-	// metadata.  Once DV supports nested subfield tags, this can be changed to
-	// something like:
-	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
-	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
-	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &actor.Metadata.Atespace, nil)...)
-	return errs
-}
-
 func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
-	if errs := validateMintActorJWTRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
 		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 
@@ -619,14 +570,17 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
+	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// equal to the exp claim.
+	now := time.Now().Truncate(time.Second)
+	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
-		Issuer: s.actorJWTIssuer,
-		// TODO(identity): this format is very likely going to change.
-		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Issuer:     s.actorJWTIssuer,
+		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudience(),
-		Expiration: time.Now().Add(15 * time.Minute),
-		NotBefore:  time.Now().Add(-5 * time.Minute),
-		IssuedAt:   time.Now(),
+		Expiration: expiresAt,
+		NotBefore:  now.Add(-5 * time.Minute),
+		IssuedAt:   now,
 		JTI:        rand.Text(),
 
 		Substrate: actoridjwt.SubstrateClaims{
@@ -642,18 +596,13 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	}
 
 	return &ateapipb.MintActorJWTResponse{
-		ActorJwt: actorJWT,
+		ActorJwt:  actorJWT,
+		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil
 }
 
-func validateMintActorJWTRequest(ctx context.Context, req *ateapipb.MintActorJWTRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_MintActorJWTRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {
-	if errs := validateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
 		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 
@@ -736,10 +685,4 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 	return &ateapipb.MintActorCertificateResponse{
 		ActorCertificates: chain,
 	}, nil
-}
-
-func validateMintActorCertificateRequest(ctx context.Context, req *ateapipb.MintActorCertificateRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
 }

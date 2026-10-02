@@ -398,7 +398,6 @@ func TestMetricLabelValues(t *testing.T) {
 
 		{SnapshotScopeFull, "full"},
 		{SnapshotScopeData, "data"},
-		{SnapshotScopeDataOnGolden, "data_on_golden"},
 		{SnapshotScopeUnknown, "unknown"},
 
 		{SnapshotPhaseVolumeMount, "volume_mount"},
@@ -579,7 +578,6 @@ func TestSnapshotScopeValue(t *testing.T) {
 	}{
 		{name: "full", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, want: SnapshotScopeFull},
 		{name: "data", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, want: SnapshotScopeData},
-		{name: "data on golden", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, want: SnapshotScopeDataOnGolden},
 		{name: "unspecified", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, want: SnapshotScopeUnknown},
 		{name: "value outside the enum", scope: ateletpb.SnapshotScope(9999), want: SnapshotScopeUnknown},
 	}

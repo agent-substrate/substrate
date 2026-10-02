@@ -20,8 +20,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -41,7 +41,7 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}); status.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {

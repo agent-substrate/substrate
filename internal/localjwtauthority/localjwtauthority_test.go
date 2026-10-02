@@ -163,7 +163,7 @@ func TestSignJWTHeader(t *testing.T) {
 		ActiveForSigning: "key-1",
 	}
 
-	jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "atespaces:a:actors:b", Audiences: []string{"aud"}})
+	jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
 	if err != nil {
 		t.Fatalf("Unexpected error signing JWT: %v", err)
 	}

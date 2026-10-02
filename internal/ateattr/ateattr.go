@@ -304,13 +304,11 @@ const (
 	SnapshotKindBoot   = "boot"
 )
 
-// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope. Checkpoints
-// only ever capture Full or Data; DataOnGolden is restore-only.
+// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope.
 const (
-	SnapshotScopeFull         = "full"
-	SnapshotScopeData         = "data"
-	SnapshotScopeDataOnGolden = "data_on_golden"
-	SnapshotScopeUnknown      = "unknown"
+	SnapshotScopeFull    = "full"
+	SnapshotScopeData    = "data"
+	SnapshotScopeUnknown = "unknown"
 )
 
 // SnapshotScopeValue maps the wire enum onto its label value, shared so ateapi
@@ -323,8 +321,6 @@ func SnapshotScopeValue(scope ateletpb.SnapshotScope) string {
 		return SnapshotScopeFull
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return SnapshotScopeData
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		return SnapshotScopeDataOnGolden
 	default:
 		return SnapshotScopeUnknown
 	}

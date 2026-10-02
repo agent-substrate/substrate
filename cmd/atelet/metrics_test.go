@@ -100,7 +100,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
 		kind:              ateattr.SnapshotKindLatest,
-		scope:             ateattr.SnapshotScopeDataOnGolden,
+		scope:             ateattr.SnapshotScopeData,
 		sandboxClass:      "gvisor",
 	}
 	inst.recordRestore(context.Background(), op,
@@ -127,7 +127,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		{ateattr.TemplateAtespaceKey, testTemplateNamespace},
 		{ateattr.TemplateNameKey, testTemplateName},
 		{ateattr.SnapshotKindKey, ateattr.SnapshotKindLatest},
-		{ateattr.SnapshotScopeKey, ateattr.SnapshotScopeDataOnGolden},
+		{ateattr.SnapshotScopeKey, ateattr.SnapshotScopeData},
 		{ateattr.SandboxClassKey, "gvisor"},
 	} {
 		if v := attrString(t, got, tc.key); v != tc.want {
@@ -297,14 +297,6 @@ func TestRestoreSnapshotKind(t *testing.T) {
 			name: "external snapshot of the actor",
 			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
 			want: ateattr.SnapshotKindLatest,
-		},
-		{
-			name: "data on golden keeps the actor snapshot's own kind",
-			req: &ateletpb.RestoreRequest{
-				Type:  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-			},
-			want: ateattr.SnapshotKindLocal,
 		},
 	}
 	for _, tt := range tests {

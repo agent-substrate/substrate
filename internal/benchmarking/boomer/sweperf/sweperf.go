@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -62,6 +63,18 @@ const (
 	defaultSweperfTemplate   = "swebench-astropy-7336"
 	defaultSweperfTotalSteps = 21
 	defaultSweperfNumCycles  = 4
+	// defaultSweperfPollInterval trades CycleCEL-to-ack accuracy against
+	// /status load on the router; sympy cycles take roughly 1.5-15s.
+	defaultSweperfPollInterval = 100 * time.Millisecond
+)
+
+// Derived rows: each spans more than one call, hence the actor method.
+const (
+	resumeToFirstExecMetric = "ResumeToFirstExec"
+	cycleCELMetric          = "CycleCEL"
+	taskCELMetric           = "TaskCEL"
+	taskWallClockMetric     = "TaskWallClock"
+	derivedMetricMethod     = "actor"
 )
 
 // init registers the sweperf user class so the boomer worker can select it by
@@ -158,6 +171,16 @@ func (r *sweperfRuntime) resolveConfig() (string, int, int) {
 	return template, totalSteps, numCycles
 }
 
+// pollInterval is the /status poll interval from dynconfig
+// (--sweperf-poll-interval-ms), or the default when unset. Read per job, so a
+// mid-run change applies to the next cycle.
+func pollInterval(cfg *userclass.Config) time.Duration {
+	if ms := cfg.Dyn.Load().SweperfPollIntervalMs; ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return defaultSweperfPollInterval
+}
+
 // dynamicWait is the think time between cycles: a uniform draw from
 // [MinWait, MaxWait), or MinWait when the range is empty.
 func (r *sweperfRuntime) dynamicWait() time.Duration {
@@ -193,6 +216,7 @@ func (r *sweperfRuntime) iterate() {
 	user.step(ctx)
 
 	if user.isDone() {
+		user.recordTaskMetrics()
 		user.resetCycles()
 		slog.Info("Actor finished all cycles and reset session back to cycle 1",
 			slog.String("actor", user.actorName),
@@ -243,6 +267,9 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 		return nil, fmt.Errorf("pollLiveness: %w", err)
 	}
 
+	// pollLiveness left the actor running, so cycle 1's resume is a no-op.
+	u.awake = true
+
 	slog.Info("Sweperf user session is ready", slog.String("actor", u.actorName))
 	return u, nil
 }
@@ -272,6 +299,13 @@ type sweperfUser struct {
 	chunks       []chunk
 	cycleIndex   int
 	cleanedUp    bool
+	// awake is set while the actor is still running from pollLiveness; the
+	// next resume is then a no-op and its success samples are not recorded.
+	awake bool
+	// Container compute and per-cycle wall clock so far, and whether any cycle failed.
+	loopCEL    time.Duration
+	loopWall   time.Duration
+	loopFailed bool
 }
 
 // ref is the control-plane reference to this user's actor.
@@ -326,7 +360,7 @@ func (u *sweperfUser) create(ctx context.Context) error {
 // failure is the caller's cue to abandon the cycle rather than talk to a
 // sandbox that is not running.
 func (u *sweperfUser) resume(ctx context.Context) bool {
-	err := u.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCallRecord(ctx, "ResumeActor", !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
@@ -339,10 +373,9 @@ func (u *sweperfUser) resume(ctx context.Context) bool {
 	return true
 }
 
-// suspend snapshots the actor and puts it to sleep, ending a cycle. A failure
-// is logged and recorded but not returned: the run continues, and the next
-// resume reports the resulting state.
-func (u *sweperfUser) suspend(ctx context.Context) {
+// suspend snapshots the actor and puts it to sleep, ending a cycle. It reports
+// whether the suspend succeeded, like resume.
+func (u *sweperfUser) suspend(ctx context.Context) bool {
 	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
@@ -351,7 +384,9 @@ func (u *sweperfUser) suspend(ctx context.Context) {
 	})
 	if err != nil {
 		slog.Error("SuspendActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
+		return false
 	}
+	return true
 }
 
 // delete removes the actor. Errors are recorded as a failed DeleteActor row
@@ -360,6 +395,8 @@ func (u *sweperfUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			Actor: u.ref(),
+			// Teardown discards the actor, so skip the SUSPENDED precondition.
+			AnyState: true,
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -384,8 +421,15 @@ func (u *sweperfUser) suspendAndDelete(ctx context.Context) {
 // tracedCall runs one control-plane RPC under a span named name and records
 // it as a locust stats row of the same name. It prefers the server-measured
 // elapsed time from the response trailer over the client-observed latency, so
-// the figure excludes the client's own queueing.
+// the figure excludes the client's own queueing. The client figure goes out as
+// a <name>_rtt row when the two differ.
 func (u *sweperfUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
+	return u.tracedCallRecord(ctx, name, true, do)
+}
+
+// tracedCallRecord is tracedCall with optional success rows; failures are
+// always recorded.
+func (u *sweperfUser) tracedCallRecord(ctx context.Context, name string, recordSuccess bool, do func(context.Context, *metadata.MD) error) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 
@@ -397,14 +441,28 @@ func (u *sweperfUser) tracedCall(ctx context.Context, name string, do func(conte
 	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
 	if source == boomerutil.SourceServer {
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
+		if err != nil || recordSuccess {
+			u.recordClientRTT(name, clientLatency, err)
+		}
 	}
 	boomerutil.LogSampledTrace(span, name, latency, source, err)
 	if err != nil {
 		bmetrics.RecordFailure("grpc", name, u.userClass, latency, err.Error())
 		return err
 	}
-	bmetrics.RecordSuccess("grpc", name, u.userClass, latency, 0)
+	if recordSuccess {
+		bmetrics.RecordSuccess("grpc", name, u.userClass, latency, 0)
+	}
 	return nil
+}
+
+// recordClientRTT publishes the client wall clock for an RPC whose own row carries server time.
+func (u *sweperfUser) recordClientRTT(name string, clientLatency time.Duration, err error) {
+	if err != nil {
+		bmetrics.RecordFailure("grpc", name+"_rtt", u.userClass, clientLatency, err.Error())
+		return
+	}
+	bmetrics.RecordSuccess("grpc", name+"_rtt", u.userClass, clientLatency, 0)
 }
 
 // statusResponse is the /status liveness reply; Status is "up" once the
@@ -483,22 +541,41 @@ func (u *sweperfUser) step(ctx context.Context) {
 	)
 
 	// 1. Resume actor
+	noopResume := u.awake
+	resumeStart := time.Now()
+	// Summed per cycle so the between-cycle think time stays out of the total.
+	defer func() { u.loopWall += time.Since(resumeStart) }()
 	if !u.resume(ctx) {
+		u.loopFailed = true
+		bmetrics.RecordFailure(derivedMetricMethod, resumeToFirstExecMetric, u.userClass,
+			time.Since(resumeStart), "ResumeActor failed")
 		slog.Error("ResumeActor failed in step", slog.String("actor", u.actorName), slog.Int("cycle", cycleNum))
 		return
 	}
+	u.awake = false
 
 	// 2. Execute step range chunk inside sandbox
-	if err := u.execute(ctx, cycleNum, chunk.start, chunk.end); err != nil {
+	ackAt, execDur, err := u.execute(ctx, cycleNum, chunk.start, chunk.end)
+	if err != nil {
+		u.loopFailed = true
 		slog.Error("execute steps failed",
 			slog.String("actor", u.actorName),
 			slog.Int("cycle", cycleNum),
 			slog.String("err", err.Error()),
 		)
+	} else {
+		u.loopCEL += execDur
 	}
+	// A no-op resume would record a near-zero sample; failures still count.
+	if !noopResume || ackAt.IsZero() {
+		u.recordResumeToFirstExec(resumeStart, ackAt, err)
+	}
+	u.recordCycleCEL(execDur, err)
 
 	// 3. Suspend actor
-	u.suspend(ctx)
+	if !u.suspend(ctx) {
+		u.loopFailed = true
+	}
 
 	slog.Info("Completed sweperf cycle",
 		slog.String("actor", u.actorName),
@@ -506,6 +583,54 @@ func (u *sweperfUser) step(ctx context.Context) {
 	)
 
 	u.cycleIndex++
+}
+
+// errSyncExit marks a synchronous /execute reply whose command exited non-zero:
+// the resume and HTTP routing succeeded, so it is not a ResumeToFirstExec failure.
+var errSyncExit = errors.New("synchronous exec failed")
+
+// recordResumeToFirstExec times the resume through to the sandbox accepting the
+// chunk. A set ackAt is a success even when the chunk fails later, because the
+// resume itself worked; a synchronous reply leaves ackAt zero and is skipped.
+func (u *sweperfUser) recordResumeToFirstExec(resumeStart, ackAt time.Time, err error) {
+	switch {
+	case !ackAt.IsZero():
+		bmetrics.RecordSuccess(derivedMetricMethod, resumeToFirstExecMetric, u.userClass,
+			ackAt.Sub(resumeStart), 0)
+	case errors.Is(err, errSyncExit):
+		return
+	case err != nil:
+		bmetrics.RecordFailure(derivedMetricMethod, resumeToFirstExecMetric, u.userClass,
+			time.Since(resumeStart), err.Error())
+	}
+}
+
+// recordCycleCEL reports one chunk's in-container command time. A synchronous
+// reply carries no duration, so there is nothing to record.
+func (u *sweperfUser) recordCycleCEL(execDur time.Duration, err error) {
+	switch {
+	case err != nil:
+		bmetrics.RecordFailure(derivedMetricMethod, cycleCELMetric, u.userClass, execDur, err.Error())
+	case execDur > 0:
+		bmetrics.RecordSuccess(derivedMetricMethod, cycleCELMetric, u.userClass, execDur, 0)
+	}
+}
+
+// recordTaskMetrics reports the finished trajectory's container compute time
+// and its wall clock, then rearms the counters for the next pass.
+func (u *sweperfUser) recordTaskMetrics() {
+	if u.loopFailed {
+		bmetrics.RecordFailure(derivedMetricMethod, taskCELMetric, u.userClass,
+			u.loopCEL, "cycle failure in trajectory")
+		bmetrics.RecordFailure(derivedMetricMethod, taskWallClockMetric, u.userClass,
+			u.loopWall, "cycle failure in trajectory")
+	} else {
+		bmetrics.RecordSuccess(derivedMetricMethod, taskCELMetric, u.userClass, u.loopCEL, 0)
+		bmetrics.RecordSuccess(derivedMetricMethod, taskWallClockMetric, u.userClass, u.loopWall, 0)
+	}
+	u.loopCEL = 0
+	u.loopWall = 0
+	u.loopFailed = false
 }
 
 // executeRequest is the /execute body: the 1-based, inclusive range of trace
@@ -531,25 +656,36 @@ type executeResponse struct {
 // because a job that has not finished reports none, which is distinct from an
 // exit code of 0.
 type jobStatusResponse struct {
-	JobID         string `json:"job_id"`
-	Status        string `json:"status"`
-	ExitCode      *int   `json:"exit_code"`
-	CompletedStep int    `json:"completed_step"`
-	Error         string `json:"error"`
+	JobID    string `json:"job_id"`
+	Status   string `json:"status"`
+	ExitCode *int   `json:"exit_code"`
+	// ExecutionDurationMs is this chunk's in-container command time, not the trajectory's.
+	ExecutionDurationMs float64 `json:"execution_duration_ms"`
+	CompletedStep       int     `json:"completed_step"`
+	Error               string  `json:"error"`
 }
 
-// pollJobCompletion waits for an asynchronous /execute job to reach a terminal
-// state, for up to two minutes. It returns an error when the job fails, when
-// it completes with a non-zero exit code, or when that budget runs out.
-func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycleNum int) error {
-	const maxRetries = 600
-	const retryInterval = 200 * time.Millisecond
+// pollJobCompletion polls /status every pollInterval, starting one interval after spawn, until the job ends,
+// for at most 2 minutes including in-flight requests; errors on job failure, non-zero exit or timeout.
+func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycleNum int) (time.Duration, error) {
+	retryInterval := pollInterval(u.cfg)
+	pollCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for {
+		select {
+		case <-pollCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			return 0, fmt.Errorf("timed out waiting for job %s to complete in cycle %d", jobID, cycleNum)
+		case <-time.After(retryInterval):
+		}
+
 		url := fmt.Sprintf("%s/status?job_id=%s", u.cfg.RouterURL, jobID)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(pollCtx, http.MethodGet, url, nil)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		u.setActorRouting(req)
 
@@ -562,35 +698,30 @@ func (u *sweperfUser) pollJobCompletion(ctx context.Context, jobID string, cycle
 				if err := json.Unmarshal(body, &jobResp); err == nil {
 					if strings.EqualFold(jobResp.Status, "COMPLETED") {
 						if jobResp.ExitCode != nil && *jobResp.ExitCode != 0 {
-							return fmt.Errorf("cycle %d job %s failed with exit code %d", cycleNum, jobID, *jobResp.ExitCode)
+							return 0, fmt.Errorf("cycle %d job %s failed with exit code %d", cycleNum, jobID, *jobResp.ExitCode)
 						}
-						return nil
+						return time.Duration(jobResp.ExecutionDurationMs * float64(time.Millisecond)), nil
 					}
 					if strings.EqualFold(jobResp.Status, "FAILED") {
 						exitCode := -1
 						if jobResp.ExitCode != nil {
 							exitCode = *jobResp.ExitCode
 						}
-						return fmt.Errorf("cycle %d job %s failed with exit code %d: %s", cycleNum, jobID, exitCode, jobResp.Error)
+						return 0, fmt.Errorf("cycle %d job %s failed with exit code %d: %s", cycleNum, jobID, exitCode, jobResp.Error)
 					}
 				}
 			}
 		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(retryInterval):
-		}
 	}
-	return fmt.Errorf("timed out waiting for job %s to complete in cycle %d", jobID, cycleNum)
 }
 
 // execute runs the trace steps of one cycle inside the actor's sandbox and
 // times them as Workload_Cycle_<cycleNum>. The server may answer either way:
 // a job ID means the run is asynchronous and pollJobCompletion waits it out,
-// while an exit code alone means it already finished.
-func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, endIdx int) error {
+// while an exit code alone means it already finished. The returned time is the
+// instant an asynchronous job was accepted, or zero when none was, and the
+// duration is the chunk's in-container command time, or zero when unreported.
+func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, endIdx int) (time.Time, time.Duration, error) {
 	metricName := fmt.Sprintf("Workload_Cycle_%d", cycleNum)
 
 	reqPayload := executeRequest{
@@ -601,23 +732,29 @@ func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, e
 	body, err := json.Marshal(reqPayload)
 	if err != nil {
 		bmetrics.RecordFailure("http", metricName, u.userClass, 0, err.Error())
-		return err
+		return time.Time{}, 0, err
 	}
 
+	var ackAt time.Time
+	var execDur time.Duration
 	_, err = u.httpJSONCall(ctx, metricName, "/execute", body, func(respBytes []byte) error {
 		var resp executeResponse
 		if err := json.Unmarshal(respBytes, &resp); err != nil {
 			return fmt.Errorf("unmarshal executeResponse: %w", err)
 		}
 		if resp.JobID != "" {
-			return u.pollJobCompletion(ctx, resp.JobID, cycleNum)
+			// A synchronous reply only lands after the chunk ran, so it is not an ack.
+			ackAt = time.Now()
+			var pollErr error
+			execDur, pollErr = u.pollJobCompletion(ctx, resp.JobID, cycleNum)
+			return pollErr
 		}
 		if resp.ExitCode != 0 {
-			return fmt.Errorf("cycle %d failed: exit code %d, stderr: %s", cycleNum, resp.ExitCode, resp.Stderr)
+			return fmt.Errorf("%w: cycle %d failed: exit code %d, stderr: %s", errSyncExit, cycleNum, resp.ExitCode, resp.Stderr)
 		}
 		return nil
 	})
-	return err
+	return ackAt, execDur, err
 }
 
 // httpJSONCall posts body to route on the actor's in-sandbox server and

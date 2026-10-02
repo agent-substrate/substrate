@@ -41,7 +41,13 @@ func TestParseValid(t *testing.T) {
 		"durdir_template": "glutton-durdir-data",
 		"sweperf_template": "swebench-astropy-7336",
 		"sweperf_total_steps": 21,
-		"sweperf_num_cycles": 4
+		"sweperf_num_cycles": 4,
+		"sweperf_poll_interval_ms": 100,
+		"agentsession_script": "coding-session",
+		"agentsession_script_file": "/etc/agentsession/script.yaml",
+		"total_actors": 50,
+		"spawn_concurrency": 5,
+		"actor_deadline": 60.0
 	}`)
 
 	cfg, err := Parse(jsonBlob, Config{})
@@ -87,6 +93,24 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.SweperfNumCycles != 4 {
 		t.Errorf("SweperfNumCycles: got %d, want 4", cfg.SweperfNumCycles)
+	}
+	if cfg.SweperfPollIntervalMs != 100 {
+		t.Errorf("SweperfPollIntervalMs: got %d, want 100", cfg.SweperfPollIntervalMs)
+	}
+	if cfg.AgentSessionScript != "coding-session" {
+		t.Errorf("AgentSessionScript: got %q, want coding-session", cfg.AgentSessionScript)
+	}
+	if cfg.AgentSessionScriptFile != "/etc/agentsession/script.yaml" {
+		t.Errorf("AgentSessionScriptFile: got %q", cfg.AgentSessionScriptFile)
+	}
+	if cfg.TotalActors != 50 {
+		t.Errorf("TotalActors: got %d, want 50", cfg.TotalActors)
+	}
+	if cfg.SpawnConcurrency != 5 {
+		t.Errorf("SpawnConcurrency: got %d, want 5", cfg.SpawnConcurrency)
+	}
+	if cfg.ActorDeadline != 60*time.Second {
+		t.Errorf("ActorDeadline: got %v, want 60s", cfg.ActorDeadline)
 	}
 }
 
@@ -154,6 +178,22 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "negative sweperf num cycles",
 			json: `{"sweperf_num_cycles": -1}`,
+		},
+		{
+			name: "negative sweperf poll interval",
+			json: `{"sweperf_poll_interval_ms": -1}`,
+		},
+		{
+			name: "negative total actors",
+			json: `{"total_actors": -1}`,
+		},
+		{
+			name: "negative spawn concurrency",
+			json: `{"spawn_concurrency": -1}`,
+		},
+		{
+			name: "negative actor deadline",
+			json: `{"actor_deadline": -1.0}`,
 		},
 	}
 

@@ -37,11 +37,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/objectstorage"
 )
 
 // maxAssetBytes guards disk against an unbounded download URL; a var so tests can lower it.
@@ -410,14 +410,14 @@ func writeTarFile(dest string, r io.Reader, mode fs.FileMode) error {
 // the returned reader. Streaming (rather than buffering the whole asset) keeps a
 // multi-hundred-MiB guest image off the heap.
 func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser, error) {
-	rc, anonErr := ategcs.Open(ctx, s.anonGCSClient, url)
+	rc, anonErr := objectstorage.Open(ctx, s.anonGCSClient, url)
 	if anonErr == nil {
 		return rc, nil
 	}
 	if s.gcsClient == nil {
 		return nil, anonErr
 	}
-	rc, mainErr := ategcs.Open(ctx, s.gcsClient, url)
+	rc, mainErr := objectstorage.Open(ctx, s.gcsClient, url)
 	if mainErr != nil {
 		return nil, fmt.Errorf("anonymous open failed (%v); main client open failed: %w", anonErr, mainErr)
 	}

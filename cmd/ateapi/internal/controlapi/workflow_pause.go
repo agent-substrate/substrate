@@ -73,8 +73,8 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 		return nil, err
 	}
 	actor = marked
-	var snapshotFiles []string
-	if wireSnapshotScope, snapshotFiles, err = w.ensureAteletPaused(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+	var files *ateletpb.CheckpointResponse
+	if wireSnapshotScope, files, err = w.ensureAteletPaused(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, err
 	}
 	// TODO: There is no difference between suspend and pause for now, but we
@@ -87,7 +87,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	// them here, as crash.go does for the crash counter.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensurePausedFinalized(leaseCtx, actorRef, actorTemplate, snapshotFiles); err != nil {
+	if finalized, err = w.ensurePausedFinalized(leaseCtx, actorRef, actorTemplate, files); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -154,7 +154,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 // the once-minted snapshot name, so a re-entered workflow re-sends the same
 // semantic request; once atelet's Checkpoint is idempotent on those keys this
 // step becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, snapshotFiles []string, err error) {
+func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, files *ateletpb.CheckpointResponse, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletPause")
 	defer func() { err = done(err) }()
 
@@ -207,7 +207,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		}
 		return wireSnapshotScope, nil, fmt.Errorf("actor %s crashed: %w", actorRef, err)
 	}
-	return wireSnapshotScope, resp.GetSnapshotFiles(), nil
+	return wireSnapshotScope, resp, nil
 }
 
 // ensurePausedFinalized releases the actor's worker (only when it is still
@@ -217,8 +217,8 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 // never be resumed. It re-reads the actor first so an out-of-band transition
 // (e.g. the syncer crashing the actor after its worker died) is not
 // overwritten: with no assignment left there is nothing to finalize.
-// snapshotFiles are the files the pause checkpoint reported.
-func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, snapshotFiles []string) (_ *ateapipb.Actor, err error) {
+// files are the snapshot files the pause checkpoint reported.
+func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, files *ateletpb.CheckpointResponse) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
 
@@ -284,9 +284,10 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
 			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
 				localSnapshot := &ateapipb.LocalSnapshot{
-					SnapshotName:  toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
-					ContentScope:  contentScope,
-					SnapshotFiles: snapshotFiles,
+					SnapshotName:      toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
+					ContentScope:      contentScope,
+					SnapshotFiles:     files.GetSnapshotFiles(),
+					DataSnapshotFiles: files.GetDataSnapshotFiles(),
 				}
 				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					localSnapshot.NodeVmsWithLocalSnapshots = []string{nodeName}

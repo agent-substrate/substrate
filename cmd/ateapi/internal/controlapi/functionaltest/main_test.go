@@ -149,6 +149,10 @@ var snapshotObjects = []string{"manifest.json", "memory.zst"}
 // checkpointFiles are the snapshot files the fake Checkpoint reports.
 var checkpointFiles = []string{"checkpoint.img", "durable-dir.tar"}
 
+// checkpointDataFiles is the data-scope subset of checkpointFiles the fake
+// atelet reports.
+var checkpointDataFiles = []string{"durable-dir.tar"}
+
 // SetObjectStore points the fake at the store a checkpoint should write to.
 func (f *FakeAteletServer) SetObjectStore(store *objectstoretest.Fake) {
 	f.Lock.Lock()
@@ -239,7 +243,7 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.CheckpointResponse{SnapshotFiles: checkpointFiles}, nil
+	return &ateletpb.CheckpointResponse{SnapshotFiles: checkpointFiles, DataSnapshotFiles: checkpointDataFiles}, nil
 }
 
 func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {

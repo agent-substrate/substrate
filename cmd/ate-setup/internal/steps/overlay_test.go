@@ -15,6 +15,8 @@
 package steps
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -26,12 +28,12 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
-// Splicing credential injection into the real sdsmint manifest replaces the
-// marker and adds the provider flags to the egress sidecar. CI deploys the
-// sdsmint variant but never with injection, so this is the only automated check
-// on the spliced flags.
+// Splicing credential injection into the real egress manifest replaces the
+// marker and adds the provider flags to the egress sidecar. CI deploys with
+// injection on envoy, but only this pins the spliced flags themselves.
 func TestPatchAtenetEgressInject(t *testing.T) {
 	root, err := config.RepoRoot()
 	if err != nil {
@@ -39,7 +41,6 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 	}
 	env := &Env{Cfg: &config.Config{
 		Root:                                  root,
-		ExperimentalUseSDSMint:                true,
 		ExperimentalEgressCredentialInjection: true,
 	}}
 
@@ -125,9 +126,9 @@ func TestEmitAdditionalEgressExtprocCluster(t *testing.T) {
 	}
 }
 
-// Splices the real sdsmint manifest and re-parses the result. CI deploys the
-// sdsmint variant but never with the extproc flag, so this is the only
-// automated check on the injected cluster.
+// Splices the real egress manifest and re-parses the result. CI never deploys
+// with the extproc flag, so this is the only automated check on the injected
+// cluster.
 func TestPatchAtenetEgressManifest(t *testing.T) {
 	root, err := config.RepoRoot()
 	if err != nil {
@@ -135,7 +136,6 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 	}
 	env := &Env{Cfg: &config.Config{
 		Root:                           root,
-		ExperimentalUseSDSMint:         true,
 		AdditionalEgressExtprocService: "ate-system/foo:50051",
 	}}
 
@@ -296,10 +296,13 @@ func TestSystemOverlayDefaultIsBase(t *testing.T) {
 }
 
 // pinnedWorkloads returns the Deployment and StatefulSet names in a rendered
-// manifest that carry the cordon-control-plane node pinning, and every
-// workload name seen.
-func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
+// manifest that carry the cordon-control-plane node pinning, mapped to the
+// pool each one selects, and every workload name seen. Only the shared pool
+// spreads its replicas, and no pool requires anti-affinity: that would need a
+// node per pod.
+func pinnedWorkloads(t *testing.T, manifest []byte) (pinned map[string]string, all []string) {
 	t.Helper()
+	pinned = map[string]string{}
 	for _, doc := range strings.Split(string(manifest), "\n---\n") {
 		var obj struct {
 			Kind     string `json:"kind"`
@@ -308,10 +311,14 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
 			} `json:"metadata"`
 			Spec struct {
 				Template struct {
+					Metadata struct {
+						Labels map[string]string `json:"labels"`
+					} `json:"metadata"`
 					Spec struct {
-						NodeSelector map[string]string `json:"nodeSelector"`
-						Tolerations  []map[string]any  `json:"tolerations"`
-						Affinity     map[string]any    `json:"affinity"`
+						NodeSelector              map[string]string `json:"nodeSelector"`
+						Tolerations               []map[string]any  `json:"tolerations"`
+						Affinity                  map[string]any    `json:"affinity"`
+						TopologySpreadConstraints []map[string]any  `json:"topologySpreadConstraints"`
 					} `json:"spec"`
 				} `json:"template"`
 			} `json:"spec"`
@@ -324,10 +331,27 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
 		}
 		all = append(all, obj.Metadata.Name)
 		podSpec := obj.Spec.Template.Spec
-		if podSpec.NodeSelector["ate.dev/workloadType"] == "ate-control-plane" &&
-			len(podSpec.Tolerations) > 0 && podSpec.Affinity["podAntiAffinity"] != nil {
-			pinned = append(pinned, obj.Metadata.Name)
+		pool := podSpec.NodeSelector["ate.dev/workloadType"]
+		if pool == "" {
+			continue
 		}
+		if !slices.ContainsFunc(podSpec.Tolerations, func(tol map[string]any) bool {
+			return tol["key"] == "ate.dev/workloadType" && tol["value"] == pool
+		}) {
+			t.Errorf("workload %s selects pool %s but does not tolerate its taint", obj.Metadata.Name, pool)
+		}
+		if podSpec.Affinity["podAntiAffinity"] != nil {
+			t.Errorf("workload %s has pod anti-affinity", obj.Metadata.Name)
+		}
+		if spread := len(podSpec.TopologySpreadConstraints) > 0; spread != (pool == "ate-control-plane") {
+			t.Errorf("workload %s in pool %s: topology spread = %v", obj.Metadata.Name, pool, spread)
+		}
+		// The spread narrows on the app label; without it the workload would
+		// spread against the whole pool instead of its own replicas.
+		if pool == "ate-control-plane" && obj.Spec.Template.Metadata.Labels["app"] == "" {
+			t.Errorf("workload %s has no app label to spread its replicas by", obj.Metadata.Name)
+		}
+		pinned[obj.Metadata.Name] = pool
 	}
 	return pinned, all
 }
@@ -335,7 +359,8 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned, all []string) {
 // Under --cordon-control-plane every control plane apply path has to carry the
 // pinning, since each workload reaches the cluster through a different one:
 // the system bundle, the lone redeploy files, the podcert overlay, the
-// postgres file, and the egress variants.
+// postgres file, and the egress variants. postgres gets a pool of its own;
+// every other control plane workload shares one.
 func TestRenderCordonControlPlane(t *testing.T) {
 	root := repoRoot(t)
 	for _, tc := range []struct {
@@ -389,20 +414,9 @@ func TestRenderCordonControlPlane(t *testing.T) {
 			want: []string{"atenet-egress"},
 		},
 		{
-			name: "egress sdsmint file",
-			cfg:  config.Config{ExperimentalUseSDSMint: true},
-			path: func(e *Env) string { return e.atenetEgressManifestPath() },
-			want: []string{"atenet-egress"},
-		},
-		{
 			name: "agentgateway egress overlay",
+			cfg:  config.Config{Router: config.RouterAgentgateway},
 			path: func(e *Env) string { return e.Cfg.Path(installDir + "/agentgateway-egress") },
-			want: []string{"atenet-egress"},
-		},
-		{
-			name: "agentgateway egress mitm overlay",
-			cfg:  config.Config{Router: config.RouterAgentgateway, ExperimentalUseSDSMint: true},
-			path: func(e *Env) string { return e.Cfg.Path(installDir + "/agentgateway-egress-mitm") },
 			want: []string{"atenet-egress"},
 		},
 	} {
@@ -421,13 +435,17 @@ func TestRenderCordonControlPlane(t *testing.T) {
 				if !slices.Contains(all, name) {
 					t.Errorf("rendered manifest has no workload %s (found %v)", name, all)
 				}
-				if !slices.Contains(pinned, name) {
-					t.Errorf("workload %s is not pinned to the control plane pool", name)
+				want := "ate-control-plane"
+				if name == "postgres" {
+					want = "ate-postgres"
+				}
+				if got := pinned[name]; got != want {
+					t.Errorf("workload %s pinned to pool %q, want %q", name, got, want)
 				}
 			}
-			// The DaemonSet-shaped and demo workloads stay off the pool; only
+			// The DaemonSet-shaped and demo workloads stay off the pools; only
 			// the named control plane workloads are pinned.
-			for _, name := range pinned {
+			for name := range pinned {
 				if !slices.Contains(tc.want, name) {
 					t.Errorf("workload %s is pinned but is not a control plane workload", name)
 				}
@@ -442,7 +460,6 @@ func TestRenderBytesCordonControlPlane(t *testing.T) {
 	e := &Env{Cfg: &config.Config{
 		Root:                           repoRoot(t),
 		CordonControlPlane:             true,
-		ExperimentalUseSDSMint:         true,
 		AdditionalEgressExtprocService: "ate-system/foo:50051",
 	}}
 	patched, err := e.patchAtenetEgressManifest()
@@ -454,7 +471,7 @@ func TestRenderBytesCordonControlPlane(t *testing.T) {
 		t.Fatalf("renderBytes: %v", err)
 	}
 	pinned, _ := pinnedWorkloads(t, rendered)
-	if !slices.Contains(pinned, "atenet-egress") {
+	if pinned["atenet-egress"] != "ate-control-plane" {
 		t.Errorf("atenet-egress is not pinned in the composed extproc manifest (pinned: %v)", pinned)
 	}
 	if !strings.Contains(string(rendered), additionalEgressExtprocCluster) {
@@ -481,20 +498,19 @@ func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
 	}
 }
 
-// The two sdsmint switches are coupled: the MITM overlay mounts the CA pool
-// Secret EnsureEgressMITMCAPoolSecret generates, so selecting one without the
-// other leaves atenet-egress waiting on a Secret nobody creates.
-func TestAgentgatewayEgressMITMOverlay(t *testing.T) {
+// The agentgateway egress overlay mounts the CA pool Secret
+// EnsureEgressMITMCAPoolSecret generates; without it atenet-egress waits on a
+// Secret nobody creates.
+func TestAgentgatewayEgressOverlay(t *testing.T) {
 	cfg := &config.Config{
-		Root:                   repoRoot(t),
-		Router:                 config.RouterAgentgateway,
-		ExperimentalUseSDSMint: true,
+		Root:   repoRoot(t),
+		Router: config.RouterAgentgateway,
 	}
 	e := &Env{Cfg: cfg, Kube: fakeKube(t)}
 
-	built, err := e.Kustomize(installDir + "/agentgateway-egress-mitm")
+	built, err := e.Kustomize(installDir + "/agentgateway-egress")
 	if err != nil {
-		t.Fatalf("Kustomize(agentgateway-egress-mitm) = %v", err)
+		t.Fatalf("Kustomize(agentgateway-egress) = %v", err)
 	}
 	if !strings.Contains(string(built), SecretEgressMITMCAPool) {
 		t.Errorf("the MITM overlay does not mount the %s Secret", SecretEgressMITMCAPool)
@@ -605,6 +621,65 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 			t.Error("the atelet DaemonSet was not restarted")
 		}
 	})
+}
+
+// A pre-built install renders the envoy egress manifest without building
+// anything: envoy-dataplane is pinned from the release like every ko image, so
+// neither docker nor KO_DOCKER_REPO is needed.
+func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
+	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	var looked []string
+	e := &Env{
+		Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Images: src},
+		resolver: images.NewPrebuilt(src, func(_ context.Context, ref string) (string, error) {
+			looked = append(looked, ref)
+			return digest, nil
+		}),
+	}
+
+	out, err := e.renderAtenetEgressManifest(t.Context())
+	if err != nil {
+		t.Fatalf("renderAtenetEgressManifest() error = %v", err)
+	}
+	want := "example.com/substrate/envoy-dataplane:v1.2.3@" + digest
+	if !strings.Contains(string(out), "image: "+want) {
+		t.Errorf("rendered manifest does not install %s:\n%s", want, out)
+	}
+	for _, leftover := range []string{"${ENVOY_DATAPLANE_IMAGE}", "ko://"} {
+		if strings.Contains(string(out), leftover) {
+			t.Errorf("rendered manifest still contains %q", leftover)
+		}
+	}
+	if !slices.Contains(looked, "example.com/substrate/envoy-dataplane:v1.2.3") {
+		t.Errorf("registry lookups = %v, want one for envoy-dataplane", looked)
+	}
+}
+
+// A release that did not publish envoy-dataplane fails the install with a
+// message naming the image and the target that publishes it, rather than a bare
+// registry error.
+func TestDockerfileImagePrebuiltNotPublished(t *testing.T) {
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	e := &Env{
+		Cfg: &config.Config{Images: src},
+		resolver: images.NewPrebuilt(src, func(_ context.Context, ref string) (string, error) {
+			return "", fmt.Errorf("resolving %s to a digest: MANIFEST_UNKNOWN", ref)
+		}),
+	}
+
+	_, err := e.dockerfileImage(t.Context(), envoyDataplaneImage, envoyDataplaneDockefile)
+	if err == nil {
+		t.Fatal("dockerfileImage() error = nil, want one")
+	}
+	for _, want := range []string{
+		"make build-envoy-dataplane",
+		"resolving example.com/substrate/envoy-dataplane:v1.2.3 to a digest: MANIFEST_UNKNOWN",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
+	}
 }
 
 func TestPatchEnvoyDataplaneImage(t *testing.T) {

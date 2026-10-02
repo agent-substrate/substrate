@@ -20,13 +20,41 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// ToGRPCStatusError turns validation errors into the InvalidArgument error an
+// RPC handler responds with. Callers check len(errs) > 0 first.
+func ToGRPCStatusError(errs field.ErrorList) error {
+	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
+
+// DeepEqual compares two values of any type, using proto.Equal if both are
+// proto messages, and reflect.DeepEqual otherwise. Declarative validation's
+// generated code reaches it through each generating package's ateDeepEqual.
+func DeepEqual[T any](a, b T) bool {
+	asProto := func(x any) proto.Message {
+		pm, ok := x.(proto.Message)
+		if !ok {
+			return nil
+		}
+		return pm
+	}
+
+	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
+		return proto.Equal(pa, pb)
+	}
+	return reflect.DeepEqual(a, b)
+}
 
 // ValidateResourceName checks that a string conforms to Agent Substrate's
 // rules for a resource name, which is a subset of the rules for an RFC-1123
@@ -47,35 +75,6 @@ func ValidateResourceName(name string, fldPath *field.Path) field.ErrorList {
 // ValidateResourceName. Empty is not a valid name.
 func IsValidResourceName(name string) bool {
 	return len(content.IsDNS1123Label(name)) == 0
-}
-
-// ValidateGlobalObjectRef checks that a reference to a global-scoped resource is
-// well-formed: its atespace must be empty (global resources do not belong to an
-// atespace) and its name must be a valid resource name. It does not check that
-// the referenced resource actually exists.
-//
-// A nil ref is an error rather than a no-op: every global ref in the API names
-// the resource a request acts on, and a request that names nothing cannot be
-// served.
-// TODO: EOL this when DV is fully implemented
-func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
-	if ref == nil {
-		return field.ErrorList{field.Required(fldPath, "")}
-	}
-
-	var errs field.ErrorList
-
-	if val, fldPath := ref.Atespace, fldPath.Child("atespace"); val != "" {
-		errs = append(errs, field.Invalid(fldPath, val, "must be empty for a global-scoped resource"))
-	}
-
-	if val, fldPath := ref.Name, fldPath.Child("name"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, ValidateResourceName(val, fldPath)...)
-	}
-
-	return errs
 }
 
 // ValidateAteomUID rejects a target ateom pod UID that could escape the host
@@ -238,4 +237,32 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 		}
 	}
 	return nil
+}
+
+// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
+var cpuLimitMax = resource.MustParse("1k")
+
+// ValidateLimit validates one resource limit entry at fldPath: only cpu and
+// memory are supported, the quantity must be greater than zero, and the cpu
+// limit must be less than 1000 cores. An empty quantity is left to the
+// required tag.
+func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
+	if name != ResourceCPU && name != ResourceMemory {
+		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
+	}
+	if quantity == "" {
+		return nil
+	}
+	q, err := resource.ParseQuantity(quantity)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath.Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
+	}
+	var errs field.ErrorList
+	if q.Sign() <= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
+	}
+	if name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be less than 1000 cores"))
+	}
+	return errs
 }

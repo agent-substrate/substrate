@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
@@ -45,13 +46,6 @@ type resumeSnapshotSource struct {
 	Scope       ateapipb.SnapshotContentScope
 	// SnapshotFiles are the files recorded for SnapshotURI.
 	SnapshotFiles []string
-	// GoldenSnapshotURI is the storage location of the ActorTemplate's golden
-	// snapshot. Populated only when the template's onResume configuration
-	// selects the golden snapshot as the boot source for the pending restore:
-	// restore then combines the golden snapshot with the actor's data.
-	GoldenSnapshotURI resources.SnapshotURI
-	// GoldenSnapshotFiles are the files recorded for GoldenSnapshotURI.
-	GoldenSnapshotFiles []string
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
@@ -59,8 +53,8 @@ type resumeSnapshotSource struct {
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
 // metric. WireSnapshotScope describes the restore requested, not the stored
-// snapshot's scope: a data snapshot restored on golden goes out as
-// data_on_golden.
+// snapshot's scope: a full snapshot restored under a replaced template goes
+// out as data.
 type restoreTelemetry struct {
 	SnapshotKind      string
 	WireSnapshotScope string
@@ -191,48 +185,6 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		src.SnapshotFiles = actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()
 		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
-	}
-
-	// The template's onResume configuration selects the boot source for the
-	// pending restore. When it names the golden snapshot, resolve the golden
-	// snapshot's location so the restore can combine the golden's guest
-	// state with the actor's data. The pending
-	// restore is data-only when the actor is paused with a Data pause scope
-	// (the local snapshot takes precedence at restore), or when its durable
-	// snapshot holds Data. Valid Full snapshots restore from their own
-	// content and ignore the policy.
-	if actorTemplate.GetSnapshotConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
-		dataOnly := false
-		if actor.GetStatus().GetLocalSnapshot() != nil {
-			dataOnly = actorTemplate.GetSnapshotConfig().GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-		} else if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
-			dataOnly = src.Scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-		}
-		if dataOnly {
-			ref := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-			if ref == nil {
-				return nil, nil, src, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden tag, which is not available")
-			}
-			tag, err := w.store.GetTag(ctx, resources.TagRefFromObjectRef(ref))
-			if errors.Is(err, store.ErrNotFound) {
-				return nil, nil, src, status.Error(codes.FailedPrecondition, "ActorTemplate golden tag is not available")
-			}
-			if err != nil {
-				return nil, nil, src, fmt.Errorf("while getting golden tag: %w", err)
-			}
-			golden := tag.GetStatus().GetSnapshot()
-			if golden.GetSnapshotUri() == "" || tag.GetStatus().GetActorTemplateUid() != actorTemplate.GetMetadata().GetUid() {
-				return nil, nil, src, status.Error(codes.FailedPrecondition, "ActorTemplate golden tag is incomplete or belongs to another template")
-			}
-			if err := validateGoldenSnapshotScope(golden); err != nil {
-				return nil, nil, src, err
-			}
-			goldenURI := golden.GetSnapshotUri()
-			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenURI); err != nil {
-				return nil, nil, src, status.Errorf(codes.DataLoss, "golden external snapshot %q: %v", goldenURI, err)
-			}
-			src.GoldenSnapshotFiles = golden.GetSnapshotFiles()
-		}
 	}
 
 	return actor, actorTemplate, src, nil
@@ -534,6 +486,9 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	newAssignment := workerAssignmentFrom(assignedWorker)
+	// The cached Worker may predate a raised epoch; the bind read it under the
+	// Worker's row lock.
+	newAssignment.WorkerEpoch = assignment.GetWorkerEpoch()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
@@ -576,7 +531,7 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 		WorkerPool:      w.GetWorkerPool(),
 		WorkerPod:       w.GetWorkerPod(),
 		WorkerPodUid:    w.GetWorkerPodUid(),
-		WorkerPodIp:     w.GetIp(),
+		WorkerPodIps:    slices.Clone(w.GetIps()),
 		NodeName:        w.GetNodeName(),
 	}
 }
@@ -648,8 +603,8 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 }
 
 // ensureAteletRestored brings the workload up on the assigned worker:
-// restoring the actor's local snapshot when one exists, else its durable (or
-// golden) snapshot, else cold-booting from the template spec. This is the
+// restoring the actor's local snapshot when one exists, else its external
+// snapshot, else cold-booting from the template spec. This is the
 // atelet reentrancy seam (#372): the request is keyed by the actor UID and
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
@@ -707,17 +662,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
 		req.SnapshotFiles = local.GetSnapshotFiles()
-		// The wire scope describes the restore OPERATION: DATA_ON_GOLDEN when
-		// loadActorForResume resolved a golden URI per the template's onResume
-		// configuration, else what the pause captured.
-		switch {
-		case !src.GoldenSnapshotURI.IsZero():
-			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			req.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
-			req.GoldenSnapshotFiles = src.GoldenSnapshotFiles
-		default:
-			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
-		}
+		req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		if _, err = client.Restore(ctx, req); err != nil {
@@ -731,24 +676,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, nil
 	} else if !src.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
-		// Mirrors loadActorForResume's source resolution: the durable URI is
-		// the actor's own snapshot when one exists, the golden otherwise.
-		tele.SnapshotKind = ateattr.SnapshotKindGolden
-		if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
-			tele.SnapshotKind = ateattr.SnapshotKindLatest
-		}
-		var scope ateletpb.SnapshotScope
-		var baseConfig *ateletpb.ExternalRestoreConfiguration
-		var goldenSnapshotFiles []string
-		switch {
-		case src.TemplateReplaced:
+		tele.SnapshotKind = ateattr.SnapshotKindLatest
+		scope := actorSnapshotContentScopeToAtelet(src.Scope)
+		if src.TemplateReplaced {
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-		case !src.GoldenSnapshotURI.IsZero():
-			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			baseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: src.GoldenSnapshotURI.String()}
-			goldenSnapshotFiles = src.GoldenSnapshotFiles
-		default:
-			scope = actorSnapshotContentScopeToAtelet(src.Scope)
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
@@ -769,14 +700,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			// Golden snapshots, and the golden tag an actor borrows until
 			// its first suspend, are owned in the golden atespace.
 			FromGoldenSnapshot: src.SnapshotURI.Atespace() == resources.GoldenActorAtespace,
-			// Empty unless this is a Golden data resume.
-			BaseConfig:          baseConfig,
-			GoldenSnapshotFiles: goldenSnapshotFiles,
-			SandboxAssets:       sandboxAssets,
-			ActorUid:            actor.GetMetadata().Uid,
-			EgressGateway:       egressGateway,
-			CpuMilli:            cpuMilli,
-			MemoryBytes:         memBytes,
+			SandboxAssets:      sandboxAssets,
+			ActorUid:           actor.GetMetadata().Uid,
+			EgressGateway:      egressGateway,
+			CpuMilli:           cpuMilli,
+			MemoryBytes:        memBytes,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",

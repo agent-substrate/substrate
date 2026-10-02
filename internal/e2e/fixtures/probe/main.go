@@ -22,12 +22,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -322,6 +324,10 @@ func parseFetchHeaders(params []string) (http.Header, error) {
 //     passes or fails.
 //   - header=<name>:<value>: repeatable; set on the request, so a suite can
 //     pre-seed a header and observe whether the gateway overwrites it.
+//   - dial=<host:port>: connect to this address instead of the URL's host,
+//     which still supplies the SNI and the Host header. A suite uses it to
+//     prove the gateway dials the name the SNI claims, not the address the
+//     actor dialed.
 //
 // The reply is a JSON object with the origin's "status" and the first 64 KiB
 // of its "body", so a suite can assert on what the origin received (e.g. an
@@ -361,6 +367,14 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, resp)
 		return
 	}
+	dial := r.URL.Query().Get("dial")
+	if dial != "" {
+		if _, _, err := net.SplitHostPort(dial); err != nil {
+			resp["error"] = "dial parameter: " + err.Error()
+			writeJSON(w, resp)
+			return
+		}
+	}
 	tlsCfg := &tls.Config{}
 	if roots != "system" {
 		b, err := os.ReadFile(trustFile)
@@ -377,9 +391,16 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		}
 		tlsCfg.RootCAs = pool
 	}
+	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	if dial != "" {
+		var dialer net.Dialer
+		transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, dial)
+		}
+	}
 	client := &http.Client{
 		Timeout:   20 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

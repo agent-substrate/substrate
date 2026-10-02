@@ -86,8 +86,8 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
 						DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
 							TrustBundle: &ateletpb.TrustBundleDataSource{
-								Name: dataSource.GetTrustBundle().GetName(),
-								Path: dataSource.GetTrustBundle().GetPath(),
+								Names: dataSource.GetTrustBundle().GetNames(),
+								Path:  dataSource.GetTrustBundle().GetPath(),
 							},
 						},
 					})

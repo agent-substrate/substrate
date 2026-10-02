@@ -16,10 +16,8 @@
 // destination. ateapi validates patterns with the same parser the gateway
 // matches with, so the two cannot drift.
 //
-// The gateway does not decide at the ClientHello yet: every TLS connection is
-// intercepted, and a tls_passthrough rule matches nothing until it does. The
-// rules are decided per request, on the authority, plus the SNI of the
-// connection for https.
+// Requests are decided here; TLS connections are decided by the dataplane
+// against SNIRules.
 //
 // The package is pure: no I/O, no logging.
 package egresspolicy
@@ -163,6 +161,67 @@ func (p *Policy) RuleCount() int { return len(p.rules) }
 
 func (r compiledRule) matchesPort(port uint16) bool {
 	return r.anyPort || slices.Contains(r.ports, port)
+}
+
+// SNIMode is how a TLS connection is handled when an SNIRule matches. Values
+// must match cmd/dataplane/envoy/dynamic-modules/egress-policy.
+type SNIMode string
+
+const (
+	// SNIModeMITM terminates TLS and decides each request inside.
+	SNIModeMITM SNIMode = "mitm"
+	// SNIModePassthrough forwards TLS without decryption.
+	SNIModePassthrough SNIMode = "passthrough"
+)
+
+// SNIRule is an SNI pattern and the mode applied when it matches first.
+type SNIRule struct {
+	Pattern string
+	Mode    SNIMode
+}
+
+// SNIRules returns the https and tls_passthrough rules for a dialed port,
+// sorted according to the API tie-breaking rules
+func (p *Policy) SNIRules(port uint16) []SNIRule {
+	type ranked struct {
+		rule SNIRule
+		rank matchRank
+	}
+	var entries []ranked
+	for _, rule := range p.rules {
+		if !rule.matchesPort(port) {
+			continue
+		}
+		var mode SNIMode
+		switch rule.protocol {
+		case protocolHTTPS:
+			mode = SNIModeMITM
+		case protocolTLSPassthrough:
+			mode = SNIModePassthrough
+		default:
+			continue
+		}
+		for _, pattern := range rule.patterns {
+			entries = append(entries, ranked{
+				rule: SNIRule{Pattern: pattern.String(), Mode: mode},
+				rank: matchRank{name: pattern.rank(), port: rule.portRank()},
+			})
+		}
+	}
+	slices.SortStableFunc(entries, func(a, b ranked) int {
+		switch {
+		case a.rank.beats(b.rank):
+			return -1
+		case b.rank.beats(a.rank):
+			return 1
+		}
+		return 0
+	})
+	rules := make([]SNIRule, len(entries))
+	for i, e := range entries {
+		rules[i] = e.rule
+	}
+	return rules
 }
 
 // EvaluateRequest decides one request the gateway can read, on the name or

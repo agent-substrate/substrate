@@ -151,7 +151,12 @@ spec:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
-        - --gcp-auth-for-image-pulls=true
+        # Pull credentials come from the node's own kubelet credential provider
+        # plugin (mounted read-only below) rather than a cloud SDK compiled into
+        # atelet, so the same atelet authenticates to Artifact Registry on GKE
+        # and to ECR on EKS.
+        - --image-credential-provider-config=/run/image-credential-provider/config.yaml
+        - --image-credential-provider-bin-dir=/run/image-credential-provider/bin
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
@@ -161,11 +166,10 @@ spec:
         - --drain-timeout=5m
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
-        # /var/lib/ate hostPath as root, so it needs no Linux
-        # capabilities. (Unpacking arbitrary actor images can require writing into
-        # image-defined read-only dirs; the untar in cmd/atelet/oci.go extracts
-        # directories writable then restores the image's modes, and removal makes
-        # them writable again first, so root suffices without CAP_DAC_OVERRIDE.)
+        # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
+        # emptying a directory a non-root actor created in its 0777 durable dir.
+        # It is owned by the actor's uid, typically 0755, so root has no write
+        # access to it and resetActorDirs fails after every checkpoint.
         # runAsUser is pinned explicitly rather than relying on the base image's
         # default user.
         securityContext:
@@ -174,6 +178,8 @@ spec:
           capabilities:
             drop:
             - ALL
+            add:
+            - DAC_OVERRIDE
         # Keep per-node reservations small; omit limits to allow usage to grow
         # with the number of hosted actors.
         resources:
@@ -244,6 +250,12 @@ spec:
         - name: host-dev
           mountPath: /host/dev
           readOnly: true
+        - name: image-credential-provider-bin
+          mountPath: /run/image-credential-provider/bin
+          readOnly: true
+        - name: image-credential-provider-config
+          mountPath: /run/image-credential-provider/config.yaml
+          readOnly: true
       volumes:
       - name: run-ateom
         hostPath:
@@ -270,6 +282,19 @@ spec:
         hostPath:
           path: /dev
           type: Directory
+      # The kubelet's own credential provider bin dir and config; these paths
+      # are GKE's, other node distributions differ. The bin dir also holds the
+      # node's other kubelet-installed binaries -- the plugin contract is
+      # directory-scoped, so a narrower mount would have to hard-code the
+      # provider name and give up being cloud-agnostic.
+      - name: image-credential-provider-bin
+        hostPath:
+          path: /home/kubernetes/bin
+          type: DirectoryOrCreate
+      - name: image-credential-provider-config
+        hostPath:
+          path: /etc/srv/kubernetes/cri_auth_config.yaml
+          type: FileOrCreate
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
       # serving cert (which requires DNS SANs it would not have); the

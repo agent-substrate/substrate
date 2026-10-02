@@ -22,7 +22,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
-	"github.com/agent-substrate/substrate/internal/atunnel"
 )
 
 // writeActorResolvConf points the guest resolver at its fixed gateway address.
@@ -32,11 +31,4 @@ func writeActorResolvConf(rootfs string) error {
 		return fmt.Errorf("reading the worker pod resolv.conf: %w", err)
 	}
 	return dns.WriteRootfsResolvConf(rootfs, dns.SandboxResolvConf(ateomnet.ActorVethGateway, pod))
-}
-
-// attachAtunnel completes setup after atunnel receives the service's dialer.
-func (s *AteomService) attachAtunnel(ingress *atunnel.Server, egress *atunnel.Egress, egressPort uint16) {
-	s.atunnelIngress = ingress
-	s.atunnelEgress = egress
-	s.atunnelEgressPort = egressPort
 }
