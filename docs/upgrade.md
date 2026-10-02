@@ -92,6 +92,17 @@ Every item has to hold. Nothing in the roll stops you if one does not.
   [Create Cluster warning](../tools/setup-gcp/README.md#2-create-cluster)
   requires.
 
+- [ ] If the install uses `--cordon-control-plane` with the bundled
+  PostgreSQL, at least one node carries
+  `ate.dev/workloadType=ate-postgres`. Releases before the dedicated
+  postgres pool ran postgres in the shared `ate-control-plane` pool; see
+  [Cordoned control plane: postgres pool](#cordoned-control-plane-postgres-pool).
+  `ate-setup` refuses to apply postgres without one.
+
+  ```bash
+  kubectl get nodes -l ate.dev/workloadType=ate-postgres
+  ```
+
 - [ ] The installed ate-api-server serves `DrainWorker`. Draining a
   worker is one `DrainWorker` RPC, and step 5 calls it with
   [grpcurl](https://github.com/fullstorydev/grpcurl). Open access to
@@ -191,6 +202,55 @@ gcloud container node-pools update $NODEPOOL --cluster $CLUSTER --zone $ZONE \
 Other providers have their own equivalents: stop whatever adds or
 recreates worker nodes during the roll, and make sure a node created
 later arrives with the old label.
+
+### Cordoned control plane: postgres pool
+
+Skip this section unless the install uses `--cordon-control-plane` with
+the bundled PostgreSQL. Under that flag, postgres runs alone in a
+one-node pool labeled and tainted
+`ate.dev/workloadType=ate-postgres:NoSchedule`, and every other control
+plane workload shares the `ate-control-plane` pool. An install from a
+release before that split has no postgres pool. The StatefulSet deletes
+its running pod before creating the replacement, so without the pool
+step 6 would take postgres down with nothing to schedule it on.
+
+Create the pool before step 6, in the zone of the postgres volume. The
+volume is a zonal disk, and a postgres pod on a node in another zone
+stays Pending with a volume node affinity conflict.
+
+```bash
+# The zone the postgres volume lives in.
+PG_ZONE=$(kubectl get pv \
+  "$(kubectl -n ate-system get pvc data-postgres-0 -o jsonpath='{.spec.volumeName}')" \
+  -o jsonpath='{.spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*].values[0]}')
+echo "$PG_ZONE"
+
+# A machine type that fits the postgres pod's requests: the size10
+# profile asks for 80 CPUs and 140Gi.
+gcloud container node-pools create ate-postgres --cluster $CLUSTER --zone $ZONE \
+  --node-locations "$PG_ZONE" --num-nodes 1 --machine-type <machine type> \
+  --node-labels ate.dev/workloadType=ate-postgres \
+  --node-taints ate.dev/workloadType=ate-postgres:NoSchedule
+```
+
+On other providers, create the equivalent: one node in the volume's
+zone, carrying the label and the taint.
+
+Step 6 then restarts postgres once onto the new node, which is a short
+outage for ate-api-server. The other control plane Deployments roll in
+steps 2 and 6 as well. Their old pods still carry the required
+anti-affinity of the earlier release, so the new pods land on the
+`ate-control-plane` pool's spare node first and stay packed there. Once
+`kubectl get pods -n ate-system -o wide` shows no pod older than the
+roll, spread them again and shrink the pool, which no longer needs one
+node per pod:
+
+```bash
+kubectl -n ate-system rollout restart deployment \
+  ate-api-server ate-controller atenet-router atenet-egress podcertificate-controller
+gcloud container clusters resize $CLUSTER --zone $ZONE \
+  --node-pool <ate-control-plane pool> --num-nodes <smaller size>
+```
 
 ## Three things that break an upgrade
 
@@ -461,7 +521,9 @@ go run ./cmd/ate-setup deploy ate-system
 ```
 
 The second command rolls atenet and converges the rest of the
-install; it re-resolves and re-applies everything, so it could take a
+install, postgres included: on a cordoned install it moves postgres to
+its own pool (see [Cordoned control plane: postgres
+pool](#cordoned-control-plane-postgres-pool)); it re-resolves and re-applies everything, so it could take a
 while. The checklist's port-forward dies when the API server rolls.
 Restart it and mint a fresh token if you still need to drain.
 

@@ -46,28 +46,16 @@ func TestApply(t *testing.T) {
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause:  scopeFull,
 			OnCommit: scopeFull,
-			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 		}},
 	}, {
 		name: "set scopes are kept",
 		in: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause:  scopeFull,
 			OnCommit: scopeData,
-			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
 		}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			OnPause:  scopeFull,
 			OnCommit: scopeData,
-			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
-		}},
-	}, {
-		name: "present but empty on_resume gets from_data",
-		in: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause: scopeFull, OnCommit: scopeFull, OnResume: &ateapipb.OnResumeConfig{},
-		}},
-		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause: scopeFull, OnCommit: scopeFull,
-			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 		}},
 	}, {
 		name: "container without wakeup probe stays without one",

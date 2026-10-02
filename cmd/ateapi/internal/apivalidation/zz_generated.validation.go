@@ -5618,50 +5618,6 @@ func Validate_ObjectRef(
 	return errs
 }
 
-// Validate_OnResumeConfig validates an instance of OnResumeConfig according
-// to declarative validation rules in the API schema.
-func Validate_OnResumeConfig(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.OnResumeConfig) (errs field.ErrorList) {
-
-	{ // field ateapipb.OnResumeConfig.FromData
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.ResumeSource,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.OnResumeConfig) *ateapipb.ResumeSource {
-				return &oldObj.FromData
-			})
-		errs = append(errs, fn(fldPath.Child("from_data"), &obj.FromData, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
 // Validate_PauseActorRequest validates an instance of PauseActorRequest according
 // to declarative validation rules in the API schema.
 func Validate_PauseActorRequest(
@@ -6693,37 +6649,6 @@ func Validate_SnapshotConfig(
 		errs = append(errs, fn(fldPath.Child("on_commit"), &obj.OnCommit, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.SnapshotConfig.OnResume
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.OnResumeConfig,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_OnResumeConfig(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SnapshotConfig) *ateapipb.OnResumeConfig {
-				return oldObj.OnResume
-			})
-		errs = append(errs, fn(fldPath.Child("on_resume"), obj.OnResume, oldVal, oldObj != nil)...)
-	}
-
 	{ // field ateapipb.SnapshotConfig.StorageLocation
 		fn := func(
 			fldPath *field.Path,
@@ -7322,39 +7247,52 @@ func Validate_TrustBundleDataSource(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.TrustBundleDataSource) (errs field.ErrorList) {
 
-	{ // field ateapipb.TrustBundleDataSource.Name
+	{ // field ateapipb.TrustBundleDataSource.Names
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *string,
+			obj, oldObj []string,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 1).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
+			if e := validate.MinItems(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
 				errs = append(errs, e...)
 			}
-			if e := validate.MinLength(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MinLength(ctx, op, fldPath, obj, oldObj, 1)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253)
+				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.TrustBundleDataSource) *string {
-				return &oldObj.Name
+			func(oldObj *ateapipb.TrustBundleDataSource) []string {
+				return oldObj.Names
 			})
-		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("names"), obj.Names, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.TrustBundleDataSource.Path

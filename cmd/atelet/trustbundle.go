@@ -21,8 +21,8 @@ import (
 	"slices"
 	"strings"
 
+	certsv1 "k8s.io/api/certificates/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 )
 
 // EgressTrustBundleName is the well-known name of the egress gateway CA
@@ -63,12 +63,12 @@ func bundleNamesFor(objectName string) []string {
 
 // rawTrustBundle returns the unsanitized contents of the ClusterTrustBundle
 // backing the allowlisted bundle name.
-func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (objectName, raw string, err error) {
+func rawTrustBundle(getBundle func(string) (*certsv1.ClusterTrustBundle, error), name string) (objectName, raw string, err error) {
 	objectName, supported := supportedTrustBundles[name]
 	if !supported {
 		return "", "", fmt.Errorf("trust bundle %q is not supported by this deployment (supported: %s)", name, supportedTrustBundleNames())
 	}
-	bundle, err := lister.Get(objectName)
+	bundle, err := getBundle(objectName)
 	if apierrors.IsNotFound(err) {
 		return "", "", fmt.Errorf("trust bundle %q: ClusterTrustBundle %q not found", name, objectName)
 	} else if err != nil {

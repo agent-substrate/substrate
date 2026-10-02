@@ -65,12 +65,6 @@ func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
 	if sc.OnCommit == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
 		sc.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	}
-	if sc.OnResume == nil {
-		sc.OnResume = &ateapipb.OnResumeConfig{}
-	}
-	if sc.OnResume.FromData == ateapipb.ResumeSource_RESUME_SOURCE_UNSPECIFIED {
-		sc.OnResume.FromData = ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT
-	}
 }
 
 func applyContainerDefaults(c *ateapipb.Container) {

@@ -27,8 +27,6 @@ import (
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/countermicrovm"
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/egress"
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/egressmicrovm"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/egressmicrovmmitm"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/egressmitm"
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/jupyter"
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/multitemplate"
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/parking"

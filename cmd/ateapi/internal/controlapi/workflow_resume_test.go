@@ -929,180 +929,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 	}
 }
 
-// TestLoadActorForResume_OnGoldenDataResume verifies the golden-location
-// plumbing: when the template's onResume.fromData is Golden, a pending
-// data-only restore (a Data durable snapshot, or a paused actor whose
-// onPause is Data) additionally resolves the template's golden snapshot
-func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
-	goldenSnapshotURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-
-	tests := []struct {
-		name     string
-		fromData ateapipb.ResumeSource
-		// paused seeds the actor with LocalSnapshot (a pause checkpoint)
-		// instead of a durable snapshot; onPause is the template's pause
-		// scope, contentScope the durable snapshot's recorded content.
-		paused       bool
-		onPause      ateapipb.SnapshotContentScope
-		contentScope ateapipb.SnapshotContentScope
-		// goldenURI and goldenScope are the template's recorded golden
-		// external snapshot; an empty URI means the template has none. A zero
-		// scope is treated as Full, the scope a golden snapshot must hold.
-		goldenURI     string
-		goldenScope   ateapipb.SnapshotContentScope
-		wantCode      codes.Code
-		wantGoldenURI string
-	}{
-		{
-			name:          "resolves golden location for Data durable snapshot",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: goldenSnapshotURI,
-		},
-		{
-			name:          "resolves golden location for paused actor with Data onPause",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			paused:        true,
-			onPause:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: goldenSnapshotURI,
-		},
-		{
-			// A Full pause snapshot restores from its own content; the policy
-			// only governs data-only restores.
-			name:          "leaves golden location empty for paused actor with Full onPause",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			paused:        true,
-			onPause:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: "",
-		},
-		{
-			name:         "fails when golden snapshot is not Full",
-			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:    goldenSnapshotURI,
-			goldenScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			wantCode:     codes.FailedPrecondition,
-		},
-		{
-			name:         "fails when template has no golden snapshot",
-			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			wantCode:     codes.FailedPrecondition,
-		},
-		{
-			name:         "fails when the golden snapshot uri is malformed",
-			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:    "golden-1",
-			goldenScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:     codes.DataLoss,
-		},
-		{
-			// A Full snapshot restores from its own content even under
-			// Golden fromData (e.g. taken before the template switched).
-			name:          "leaves golden location empty for Full snapshot",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: "",
-		},
-		{
-			name:          "leaves golden location empty under ColdBoot fromData",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT,
-			contentScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			persistence := newTestPersistence(t)
-
-			var seedOpts []func(*ateapipb.Actor)
-			if tt.paused {
-				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.Status.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "pause-1"}
-				})
-			} else {
-				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-						SnapshotUri:  someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"),
-						ContentScope: tt.contentScope,
-					}
-				})
-			}
-			actorState := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-			if tt.paused {
-				actorState = ateapipb.ActorState_ACTOR_STATE_PAUSED
-			}
-			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, seedOpts...)
-
-			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
-			tmpl := &ateapipb.ActorTemplate{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotConfig: &ateapipb.SnapshotConfig{
-					OnPause:  tt.onPause,
-					OnResume: &ateapipb.OnResumeConfig{FromData: tt.fromData},
-				},
-			}
-			if tt.goldenURI != "" {
-				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
-				}}
-			}
-			stored, err := persistence.CreateActorTemplate(ctx, tmpl)
-			if err != nil {
-				t.Fatalf("create template: %v", err)
-			}
-			if tt.goldenURI != "" {
-				_, err := persistence.CreateTag(ctx, &ateapipb.Tag{
-					Metadata:    &ateapipb.ResourceMetadata{Atespace: "ns", Name: "golden"},
-					SourceActor: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
-					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-					Status: &ateapipb.TagStatus{
-						ActorTemplateUid: stored.GetMetadata().GetUid(),
-						Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tt.goldenURI, ContentScope: tt.goldenScope},
-					},
-				})
-				if err != nil {
-					t.Fatalf("create golden tag: %v", err)
-				}
-			}
-
-			w := &ActorWorkflow{store: persistence}
-			_, _, src, err := w.loadActorForResume(ctx, actorRef)
-			if got := status.Code(err); got != tt.wantCode {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
-			}
-			if err != nil {
-				return
-			}
-			if got := src.GoldenSnapshotURI.String(); got != tt.wantGoldenURI {
-				t.Errorf("src.GoldenSnapshotURI = %q, want %q", got, tt.wantGoldenURI)
-			}
-			if !tt.paused && src.Scope != tt.contentScope {
-				t.Errorf("src.Scope = %v, want %v", src.Scope, tt.contentScope)
-			}
-		})
-	}
-}
-
 // A golden tag becoming ready after creation does not change an actor's source.
 func TestLoadActorForResume_DoesNotDefaultGolden(t *testing.T) {
 	ctx := context.Background()
@@ -1228,7 +1054,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	if tmpl != nil {
 		t.Errorf("expected nil template, got %v", tmpl)
 	}
-	if !src.SnapshotURI.IsZero() || !src.GoldenSnapshotURI.IsZero() {
+	if !src.SnapshotURI.IsZero() {
 		t.Errorf("expected empty snapshot source, got %+v", src)
 	}
 }
@@ -1337,11 +1163,11 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 // TestResumeActor_AteletWireRequest is the characteristic test for the
 // loadActorForResume + ensureAteletRestored seam: for every combination of
 // boot-source inputs it pins the exact request atelet receives — which RPC,
-// req.Scope, req.BaseConfig, and the snapshot the config names — and
-// that a source-resolution error never produces an atelet RPC.
+// req.Scope, and the snapshot the config names — and that a source-resolution
+// error never produces an atelet RPC.
 //
 // The rows are ordered strictly by input columns (local → external → tmplUID →
-// golden → fromData) so a missing permutation is visible by scanning.
+// golden) so a missing permutation is visible by scanning.
 func TestResumeActor_AteletWireRequest(t *testing.T) {
 	const localSnapshotName = "pause-snap-1"
 	const malformedURI = "not-a-valid-snapshot-uri"
@@ -1352,7 +1178,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	dataScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 	unspecScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
-	fromGolden := ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
@@ -1373,8 +1198,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		onPause ateapipb.SnapshotContentScope
 		// golden seeds the template's golden tag snapshot.
 		golden *ateapipb.ExternalSnapshot
-		// fromData is the template's onResume boot-source policy.
-		fromData ateapipb.ResumeSource
 		// configName is the SandboxConfig the template names; "" means the
 		// "gvisor" config the workflow's lister serves.
 		configName string
@@ -1393,7 +1216,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		snapshotName string
 		snapshotURI  string
 		scope        ateletpb.SnapshotScope
-		goldenURI    string
 	}
 
 	tests := []struct {
@@ -1407,14 +1229,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{run: true},
 		},
 		{
-			// fromData only governs data-only snapshots; with no snapshot at
-			// all the golden policy never engages and the actor cold-boots.
-			name: "02 Golden fromData with nothing to restore still cold-boots",
-			tmpl: templateSeed{fromData: fromGolden},
-			want: restoreWant{run: true},
-		},
-		{
-			name:  "03 inherited golden snapshot restores in Full",
+			name:  "02 inherited golden snapshot restores in Full",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}, tmplUID: "current"},
 			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}},
 			want: restoreWant{
@@ -1424,38 +1239,24 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// An inherited Full golden snapshot needs no data-only overlay.
-			name:  "04 inherited golden under Golden fromData is a plain Full restore",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}, tmplUID: "current"},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-				snapshotURI:    goldenURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-			},
-		},
-		{
-			name: "05 late non-Full golden does not change a cold boot",
+			name: "03 late non-Full golden does not change a cold boot",
 			tmpl: templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: dataScope}},
 			want: restoreWant{run: true},
 		},
 		{
-			name:  "06 inherited golden snapshot rejects a malformed URI",
+			name:  "04 inherited golden snapshot rejects a malformed URI",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}, tmplUID: "current"},
 			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
 			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
-			name:  "07 template repoint with a late golden still cold-boots",
+			name:  "05 template repoint with a late golden still cold-boots",
 			actor: actorSeed{tmplUID: "old-template-uid"},
 			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}},
 			want:  restoreWant{run: true},
 		},
 		{
-			name:  "08 Full durable snapshot restores itself in Full",
+			name:  "06 Full durable snapshot restores itself in Full",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope}},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
@@ -1464,20 +1265,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name:  "09 Full durable snapshot ignores Golden fromData",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope}},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-			},
-		},
-		{
-			name: "10 durable snapshot built on the current template stays Full",
+			name: "07 durable snapshot built on the current template stays Full",
 			actor: actorSeed{
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 				tmplUID:          "current",
@@ -1492,7 +1280,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// The snapshot's guest state was built on another template; the
 			// repointed actor must drop to Data so the new template's image
 			// boots fresh and only the volume data carries over.
-			name: "11 repointed actor's Full durable snapshot drops to Data",
+			name: "08 repointed actor's Full durable snapshot drops to Data",
 			actor: actorSeed{
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 				tmplUID:          "mismatch",
@@ -1504,26 +1292,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// TemplateReplaced leads the scope switch: a repointed actor
-			// restores plain Data even when the golden policy is configured,
-			// with no golden overlay.
-			name: "12 template repoint beats the golden policy",
-			actor: actorSeed{
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
-				tmplUID:          "mismatch",
-			},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
-			},
-		},
-		{
-			name:  "13 Data durable snapshot restores as Data",
+			name:  "09 Data durable snapshot restores as Data",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope}},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
@@ -1532,40 +1301,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name:  "14 Data durable snapshot under Golden fromData restores on the golden",
+			// The template's golden snapshot never supplies guest state for a
+			// Data snapshot: it restores as plain Data.
+			name:  "10 Data durable snapshot ignores the template's golden",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope}},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
-			},
-		},
-		{
-			name:  "15 Golden data resume rejects a non-Full golden",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope}},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: dataScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{code: codes.FailedPrecondition},
-		},
-		{
-			// Even when the golden policy would produce DATA_ON_GOLDEN, a
-			// repointed actor restores plain Data with no golden overlay.
-			name: "16 template repoint beats a Golden data resume",
-			actor: actorSeed{
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope},
-				tmplUID:          "mismatch",
-			},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
+			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
@@ -1575,7 +1315,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			// Snapshots recorded before content_scope existed carry
 			// UNSPECIFIED; the conversion sends them out as Full.
-			name:  "17 unspecified durable scope goes out as Full",
+			name:  "11 unspecified durable scope goes out as Full",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: unspecScope}},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
@@ -1584,12 +1324,12 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name:  "18 malformed durable snapshot URI fails with DataLoss",
+			name:  "12 malformed durable snapshot URI fails with DataLoss",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
 			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
-			name: "19 Full pause snapshot restores locally as Full",
+			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
 				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 			},
@@ -1601,26 +1341,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "20 Full pause snapshot ignores Golden fromData",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  fullScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-			},
-		},
-		{
 			// The repoint permutation without a durable snapshot is
 			// deliberately not pinned: its wire scope is in flux while the
 			// resume-source resolution is being reworked.
-			name: "21 local snapshot built on the current template stays Full",
+			name: "14 local snapshot built on the current template stays Full",
 			actor: actorSeed{
 				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 				tmplUID:       "current",
@@ -1633,7 +1357,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "22 Data pause snapshot restores locally as Data",
+			name: "15 Data pause snapshot restores locally as Data",
 			actor: actorSeed{
 				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 			},
@@ -1645,91 +1369,33 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "23 Golden data resume requires a golden snapshot",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{onPause: dataScope, fromData: fromGolden},
-			want: restoreWant{code: codes.FailedPrecondition},
-		},
-		{
-			name: "24 Data pause snapshot under Golden fromData restores on the golden",
+			name: "16 Data pause snapshot ignores the template's golden",
 			actor: actorSeed{
 				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 			},
 			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
+				onPause: dataScope,
+				golden:  &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 			},
 		},
 		{
-			name: "25 Golden data resume rejects a non-Full golden, local path",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: dataScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{code: codes.FailedPrecondition},
-		},
-		{
-			// Golden snapshots recorded before content_scope existed carry
-			// UNSPECIFIED, which counts as Full.
-			name: "26 unspecified golden scope is accepted for a Golden data resume",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: unspecScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
-			},
-		},
-		{
-			name: "27 Golden data resume rejects a malformed golden URI",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{code: codes.DataLoss},
-		},
-		{
-			// The local snapshot takes precedence at restore, and dataOnly
+			// The local snapshot takes precedence at restore, and its scope
 			// comes from the pause scope, not the durable snapshot's.
-			name: "28 local snapshot wins over a Full durable snapshot",
+			name: "17 local snapshot wins over a Full durable snapshot",
 			actor: actorSeed{
 				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
+			tmpl: templateSeed{onPause: dataScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 			},
 		},
 		{
@@ -1737,34 +1403,29 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// local pause restore: templates can only be updated while
 			// SUSPENDED, so a pause checkpoint is always from the current
 			// template.
-			name: "29 local snapshot ignores an older external snapshot's template mismatch",
+			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
 				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 				tmplUID:          "mismatch",
 			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
+			tmpl: templateSeed{onPause: fullScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 			},
 		},
 		{
 			// Restores take their sandbox from the template, like cold boots,
 			// so an unresolvable SandboxConfig stops them before atelet.
-			name:  "30 durable snapshot restore with a missing SandboxConfig is rejected",
+			name:  "19 durable snapshot restore with a missing SandboxConfig is rejected",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope}},
 			tmpl:  templateSeed{configName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
 		},
 		{
-			name:  "31 local snapshot restore with a missing SandboxConfig is rejected",
+			name:  "20 local snapshot restore with a missing SandboxConfig is rejected",
 			actor: actorSeed{localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName}},
 			tmpl:  templateSeed{onPause: fullScope, configName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
@@ -1795,7 +1456,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
 					OnPause:         tt.tmpl.onPause,
-					OnResume:        &ateapipb.OnResumeConfig{FromData: tt.tmpl.fromData},
 				},
 				SandboxConfig: &ateapipb.SandboxConfig{
 					SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -1890,9 +1550,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if got := restore.GetScope(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
-			}
-			if got := restore.GetBaseConfig().GetSnapshotUri(); got != tt.want.goldenURI {
-				t.Errorf("BaseConfig.SnapshotUri = %q, want %q", got, tt.want.goldenURI)
 			}
 		})
 	}

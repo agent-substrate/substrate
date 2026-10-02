@@ -16,6 +16,11 @@
 # NOT the ate.dev/v1alpha1 CRD) for the egress demo. Applied with
 # `kubectl ate create actor-template -f -` after `ko resolve` replaces the
 # ko:// image reference; the ate-demo-egress atespace must exist.
+#
+# The actor also trusts the egress gateway CA: the gateway terminates the TLS
+# its `https` rules allow and mints the per-SNI leaf the actor sees, which
+# chains to no public CA. The networking e2e suite builds its egress actors
+# from this fixture.
 
 metadata:
   atespace: ate-demo-egress
@@ -27,10 +32,31 @@ containers:
 - name: egress
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
+  # The demo fetches with a stock net/http client. SSL_CERT_FILE adds the
+  # gateway CA, and Go still scans /etc/ssl/certs, so the image's public
+  # roots stay available for tls_passthrough origins. SSL_CERT_DIR would
+  # drop them, so it is deliberately not set.
+  env:
+  - name: SSL_CERT_FILE
+    value: /run/ate/trust-bundle.pem
+  volumeMounts:
+  # the bundle lands at /run/ate/trust-bundle.pem
+  - name: system-info
+    mountPath: /run/ate
   wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    # The trust anchors for the per-SNI leaves the egress gateway mints.
+    # Only allowlisted bundle names resolve; this is the one supported today.
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        path: trust-bundle.pem
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
   configName: gvisor-default

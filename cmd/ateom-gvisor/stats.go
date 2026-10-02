@@ -24,10 +24,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -95,7 +93,7 @@ const sandboxCgroupContainer = ocispec.PauseContainer
 // would wait on telemetry. The cgroup files are read with no lock held.
 func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "actor_uid is required")
+		return nil, apierror.InvalidArgument("actor_uid is required")
 	}
 
 	// NOT_FOUND rather than FAILED_PRECONDITION: the requested actor is not
@@ -103,7 +101,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// worker-to-actor mapping wants re-resolving.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted == nil {
-		return nil, status.Errorf(codes.NotFound, "ateom is not executing actor %q", req.GetActorUid())
+		return nil, apierror.NotFound("ateom is not executing actor %q", req.GetActorUid())
 	}
 	active := &hosted.attribution
 
@@ -118,16 +116,16 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		// caller should take the next sample, so FAILED_PRECONDITION. Anything
 		// else is a real read failure.
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, status.Error(codes.FailedPrecondition, "no sandbox cgroup to measure yet")
+			return nil, apierror.FailedPrecondition("no sandbox cgroup to measure yet")
 		}
-		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
+		return nil, apierror.Internal("reading sandbox cgroup: %v", err)
 	}
 
 	// The read above holds no lock, so a checkpoint plus a fresh run can land
 	// underneath it. Pointer identity catches that: hostActor stores a new
 	// record every time.
 	if s.lookupActor(req.GetActorUid()) != hosted {
-		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
+		return nil, apierror.NotFound("ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
 
 	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil

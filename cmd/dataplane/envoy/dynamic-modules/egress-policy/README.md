@@ -1,7 +1,7 @@
 # Envoy Substrate Egress Policy Implementation - Rust Dynamic Module
 
 An Envoy dynamic module, written in Rust, that runs as a listener filter on
-the sdsmint egress gateway's inner listener and names the filter chain each
+the egress gateway's inner listener and names the filter chain each
 tunneled connection belongs on.
 
 ## What it decides
@@ -85,5 +85,5 @@ listener_filters:
 Set the environment variable `ENVOY_DYNAMIC_MODULES_SEARCH_PATH` to the
 directory containing `libenvoy_substrate_egress_policy.so` (e.g.
 `export ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/path/to/target/release`).
-`manifests/ate-install/atenet-egress-with-sdsmint.yaml` is the complete
+`manifests/ate-install/atenet-egress.yaml` is the complete
 configuration, matcher and chains included.

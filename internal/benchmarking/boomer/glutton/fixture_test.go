@@ -50,6 +50,17 @@ func suspendActorFunc(errs ...error) func(context.Context, *ateapipb.SuspendActo
 	}
 }
 
+// createActorFunc adapts fn, which gets each actor's name and may fail the
+// create, to a CreateActorFunc.
+func createActorFunc(fn func(name string) error) func(context.Context, *ateapipb.CreateActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
+	return func(_ context.Context, in *ateapipb.CreateActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+		if err := fn(in.GetActor().GetMetadata().GetName()); err != nil {
+			return nil, err
+		}
+		return &ateapipb.Actor{}, nil
+	}
+}
+
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures
 // APIStub, Tracer, and Dyn are populated if nil.
 func newTestConfig(t *testing.T, srv *fake.Server, cfg *userclass.Config) *userclass.Config {

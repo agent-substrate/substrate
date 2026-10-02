@@ -208,8 +208,13 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
 
 * `--agentsession-script` — built-in script variant to run, by file name
   under `internal/benchmarking/boomer/agentsession/scripts/` (default
-  `coding-session`). Read once, on the worker's first iteration after the
-  swarm starts, then fixed for the worker's lifetime.
+  `coding-session`). Resolved when a session starts, so a change takes
+  effect for sessions started after the next swarm; sessions already
+  running finish on the script they started with.
+* `--agentsession-script-file` — path, on the boomer worker, of a script
+  YAML to run instead of a built-in variant; wins over
+  `--agentsession-script`. Normally set for you by
+  `locust/deploy.sh --agentsession-script FILE` (below).
 * `--agentsession-think-scale` — multiplier on every think gap; 0.5 makes the
   fleet twice as chatty, 4.0 models slow reasoning models (default 1.0). Each
   gap gets ±20% jitter so sessions don't move in lockstep.
@@ -262,6 +267,21 @@ duplicate step name, or a `min_actor_memory` below the declared RAM plus
 disk all fail before any actor is created. Built-in variants are checked by
 `TestEmbeddedScriptsAreValid`, so a broken file cannot merge.
 
+To run a script of your own without rebuilding anything, hand it to the
+locust deploy:
+
+```sh
+./benchmarking/locust/deploy.sh --deploy --user-class agentsession --agentsession-script ./my-session.yaml
+```
+
+The script validates the file locally first (the same check the worker
+runs, via `boomer-worker --check-agentsession-script`), uploads it as the
+`agentsession-script` ConfigMap, mounts it into the boomer workers at
+`/etc/agentsession/script.yaml`, and points the master's
+`--agentsession-script-file` default at that path. Workers log the loaded
+script's name, step count, and declared budgets on their first iteration.
+To go back to a built-in variant, redeploy without the flag.
+
 #### Agent-Session Reported Metrics
 
 * `WakeFirstTouch`: latency of a dedicated ping sent before each step's ops —
@@ -271,6 +291,40 @@ disk all fail before any actor is created. Built-in variants are checked by
   think gap excluded.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
   lifecycle latencies.
+
+### Spawn Benchmark
+
+The Spawn benchmark creates a batch of actors once and measures how long each
+actor takes from creation to its first answered ping, and how long the whole
+batch takes. `tests.yaml` runs it as `spawn_smoke_10_actors` with
+`shapes/spawn_shape.py`, which holds one user and ends the run once
+`TimeToAllReady` is recorded.
+
+Each boomer process creates one batch; extra users in the same process do
+nothing. Actors are named `spawn-<run-id>-<n>` and deleted when boomer exits.
+
+#### Spawn Configuration Knobs
+
+* `--total-actors`: Actors in the batch (default `100`).
+* `--spawn-concurrency`: Actors created concurrently (default `1`).
+* `--actor-deadline`: Per-actor timeout in seconds, covering create, resume and
+  first ping (default `120`).
+
+The web UI shows the same fields; `0` keeps the value boomer-worker started with.
+
+#### Spawn Reported Metrics
+
+* `CreateActor`, `ResumeActor`, `GluttonPing`: Latency of each call.
+* `ActorTimeToReady`: Per actor, from its first `CreateActor` attempt to its
+  first successful ping.
+* `TimeToReady_<k>pct` (`k` = 10, 20, … 100): From batch start until `k`% of
+  the batch was ready.
+* `TimeToAllReady`: From batch start until the last ready actor answered.
+  Actors that failed show up as `ActorTimeToReady` failures instead.
+* `CrashCount`: Actors that crashed during resume.
+
+The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
+count users × `--actors-per-user`, not `--total-actors`.
 
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.

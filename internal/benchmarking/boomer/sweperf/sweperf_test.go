@@ -94,15 +94,12 @@ func recordedSince(t *testing.T, before map[statKey]statSample, name, status str
 	return statSample{count: now.count - was.count, sumMs: now.sumMs - was.sumMs}
 }
 
-func createAtespaceErrFunc(err error) func(context.Context, *ateapipb.CreateAtespaceRequest, ...grpc.CallOption) (*ateapipb.Atespace, error) {
-	return func(context.Context, *ateapipb.CreateAtespaceRequest, ...grpc.CallOption) (*ateapipb.Atespace, error) {
-		return nil, err
-	}
-}
-
-func resumeErrFunc(err error) func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-	return func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-		return nil, err
+// setTrailer fills the metadata that grpc.Trailer asked the call to populate.
+func setTrailer(opts []grpc.CallOption, md metadata.MD) {
+	for _, o := range opts {
+		if to, ok := o.(grpc.TrailerCallOption); ok {
+			*to.TrailerAddr = md
+		}
 	}
 }
 
@@ -116,6 +113,18 @@ func resumeTrailerFunc(delay time.Duration, elapsedUs string) func(context.Conte
 	}
 }
 
+func createAtespaceErrFunc(err error) func(context.Context, *ateapipb.CreateAtespaceRequest, ...grpc.CallOption) (*ateapipb.Atespace, error) {
+	return func(context.Context, *ateapipb.CreateAtespaceRequest, ...grpc.CallOption) (*ateapipb.Atespace, error) {
+		return nil, err
+	}
+}
+
+func resumeErrFunc(err error) func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+	return func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+		return nil, err
+	}
+}
+
 func suspendErrFunc(err error) func(context.Context, *ateapipb.SuspendActorRequest, ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
 	return func(context.Context, *ateapipb.SuspendActorRequest, ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
 		return nil, err
@@ -125,15 +134,6 @@ func suspendErrFunc(err error) func(context.Context, *ateapipb.SuspendActorReque
 func deleteErrFunc(err error) func(context.Context, *ateapipb.DeleteActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
 	return func(context.Context, *ateapipb.DeleteActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
 		return nil, err
-	}
-}
-
-// setTrailer fills the metadata that grpc.Trailer asked the call to populate.
-func setTrailer(opts []grpc.CallOption, md metadata.MD) {
-	for _, o := range opts {
-		if to, ok := o.(grpc.TrailerCallOption); ok {
-			*to.TrailerAddr = md
-		}
 	}
 }
 

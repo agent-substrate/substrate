@@ -166,8 +166,7 @@ func outerChain(t *testing.T, tree node) node {
 // leg, and each manifest must have exactly the legs its topology implies.
 func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
 	want := map[string][]string{
-		egressManifests[0]: {extproc.EgressFilterChainName, extproc.EgressCleartextFilterChainName},
-		egressManifests[1]: {extproc.EgressFilterChainName, extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName},
+		egressManifests[0]: {extproc.EgressFilterChainName, extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName},
 	}
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
@@ -287,7 +286,7 @@ const plainPassthroughDestinationFormat = "%DYNAMIC_METADATA(dev.ate.egress:pass
 func TestEgressManifestsConnectLegDecidesThePassthroughDestination(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
-			if path == sdsmintManifest {
+			if path == egressManifest {
 				t.Skip("sdsmint dials no address the actor chose; see TestEgressManifestsConnectLegHandsTheDialedPortToTheInnerListener")
 			}
 			tree := bootstrapTree(t, path)
@@ -339,17 +338,16 @@ func TestEgressManifestsConnectLegDecidesThePassthroughDestination(t *testing.T)
 
 // Every inner chain without an HCM is a passthrough chain: a plain tcp_proxy
 // to the ORIGINAL_DST cluster, dialing the filter state the CONNECT leg's
-// answer produced and nothing else. The plain gateway needs one per transport
-// protocol; sdsmint needs one, selected by the egress-policy module.
+// answer produced and nothing else. The gateway needs one, selected by the
+// egress-policy module.
 var wantPassthroughChains = map[string][]string{
-	egressManifests[0]: {"egress_passthrough", "egress_tls_passthrough"},
-	egressManifests[1]: {"egress_passthrough"},
+	egressManifests[0]: {"egress_passthrough"},
 }
 
 func TestEgressManifestsPassthroughChainDialsOnlyTheDecidedAddress(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
-			if path == sdsmintManifest {
+			if path == egressManifest {
 				t.Skip("sdsmint dials the resolved SNI; see TestEgressManifestsPassthroughChainDialsTheResolvedSNI")
 			}
 			tree := bootstrapTree(t, path)
@@ -639,15 +637,15 @@ func mustJSON(t *testing.T, n node) string {
 	return string(j)
 }
 
-// sdsmintManifest is the gateway that runs the egress-policy module.
-var sdsmintManifest = egressManifests[1]
+// egressManifest is the envoy gateway, which runs the egress-policy module.
+var egressManifest = egressManifests[0]
 
-// mitmListener returns the sdsmint manifest's inner listener.
+// mitmListener returns the egress manifest's inner listener.
 func mitmListener(t *testing.T, tree node) node {
 	t.Helper()
 	l := byName(listeners(tree), "mitm_listener")
 	if l == nil {
-		t.Fatal("no mitm_listener in the sdsmint manifest")
+		t.Fatal("no mitm_listener in the egress manifest")
 	}
 	return l
 }
@@ -656,7 +654,7 @@ func mitmListener(t *testing.T, tree node) node {
 // "denied" mapping to no chain. The module runs after both inspectors, and no
 // chain keeps a filter_chain_match, which Envoy ignores once a matcher is set.
 func TestEgressManifestsInnerListenerSelectsOnTheModuleVerdict(t *testing.T) {
-	tree := bootstrapTree(t, sdsmintManifest)
+	tree := bootstrapTree(t, egressManifest)
 	l := mitmListener(t, tree)
 
 	filters := list(l, "listener_filters")
@@ -706,7 +704,7 @@ func TestEgressManifestsInnerListenerSelectsOnTheModuleVerdict(t *testing.T) {
 // The outer ext_proc must accept dev.ate.policy.egress, and the outer chain
 // must copy it after ext_proc into shared filter state for the module.
 func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.T) {
-	tree := bootstrapTree(t, sdsmintManifest)
+	tree := bootstrapTree(t, egressManifest)
 	outer := outerChain(t, tree)
 	cfg, extProcAt, filters := extProcOf(outer)
 	if cfg == nil {
@@ -758,7 +756,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 // record. It must log only NR connections and include the SNI, actor, and
 // verdict.
 func TestEgressManifestsInnerListenerLogsDeniedConnections(t *testing.T) {
-	tree := bootstrapTree(t, sdsmintManifest)
+	tree := bootstrapTree(t, egressManifest)
 	logs := list(mitmListener(t, tree), "access_log")
 	if len(logs) == 0 {
 		t.Fatal("mitm_listener has no access_log; a ClientHello the module denies would leave no record")
@@ -792,7 +790,7 @@ func TestEgressManifestsInnerListenerLogsDeniedConnections(t *testing.T) {
 // actor dialed must have no way in, and only this chain may dial the raw
 // cluster, since nothing else authorizes a by-name dial without a request leg.
 func TestEgressManifestsPassthroughChainDialsTheResolvedSNI(t *testing.T) {
-	tree := bootstrapTree(t, sdsmintManifest)
+	tree := bootstrapTree(t, egressManifest)
 	chain := byName(list(mitmListener(t, tree), "filter_chains"), "egress_passthrough")
 	if chain == nil {
 		t.Fatal("no egress_passthrough chain on mitm_listener")
@@ -856,7 +854,7 @@ func TestEgressManifestsPassthroughChainDialsTheResolvedSNI(t *testing.T) {
 		}
 	}
 	if writers := filterStateWriters(tree, originalDstKey); len(writers) != 0 {
-		t.Errorf("%s is written by %d filters; the sdsmint gateway must not carry the address the actor dialed to the inner listener", originalDstKey, len(writers))
+		t.Errorf("%s is written by %d filters; the gateway must not carry the address the actor dialed to the inner listener", originalDstKey, len(writers))
 	}
 }
 
@@ -865,7 +863,7 @@ func TestEgressManifestsPassthroughChainDialsTheResolvedSNI(t *testing.T) {
 // else. The forward proxy falls back to its configured port when the state is
 // absent, so a missing port would silently redirect the connection.
 func TestEgressManifestsConnectLegHandsTheDialedPortToTheInnerListener(t *testing.T) {
-	tree := bootstrapTree(t, sdsmintManifest)
+	tree := bootstrapTree(t, egressManifest)
 	writers := filterStateWriters(tree, extproc.UpstreamDynamicPortFilterStateKey)
 	if len(writers) != 1 {
 		t.Fatalf("%s is set by %d filters, want exactly the CONNECT leg's copy of its answer", extproc.UpstreamDynamicPortFilterStateKey, len(writers))

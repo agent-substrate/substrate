@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"google.golang.org/grpc"
@@ -33,6 +34,9 @@ import (
 // so clients can report a latency unaffected by their own scheduling overhead.
 const ServerElapsedTrailer = "x-server-elapsed-us"
 
+// TODO: Convert errors with apierror.FromError once ateapi's handlers return
+// apierrors, then use this interceptor for every server and delete
+// InternalServerUnaryInterceptor.
 func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	startTime := time.Now()
 
@@ -82,7 +86,12 @@ func MaxDeadlineUnaryInterceptor(maxDeadline time.Duration) grpc.UnaryServerInte
 	}
 }
 
-// InternalServerUnaryInterceptor is for internal services to return full gRPC errors with specific error codes and debugging details.
+// InternalServerUnaryInterceptor is for internal services. A handler's error
+// reaches the caller with the code apierror gives it; any other error, including
+// a status received from an upstream service, is Internal with its full text.
+//
+// TODO: Delete in favor of ServerUnaryInterceptor once that converts errors
+// with apierror too.
 func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	startTime := time.Now()
 
@@ -97,16 +106,8 @@ func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.Una
 	)
 
 	if err != nil {
-		var statusErr interface {
-			GRPCStatus() *status.Status
-		}
-
-		if errors.As(err, &statusErr) {
-			return nil, statusErr.GRPCStatus().Err()
-		}
-
-		// No status error found in chain.
-		return nil, status.Error(codes.Internal, err.Error())
+		st, _ := apierror.FromError(err)
+		return nil, st.Err()
 	}
 
 	return resp, err

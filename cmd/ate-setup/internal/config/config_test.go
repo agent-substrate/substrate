@@ -51,7 +51,6 @@ func loadEnv(t *testing.T) {
 		"ATE_CREDENTIAL_INJECTION_ENABLED",
 		"ATE_CREDENTIAL_PROVIDER_ADDRESS",
 		"ATE_CREDENTIAL_PROVIDER_NAME",
-		"ATE_EXPERIMENTAL_USE_SDSMINT",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
@@ -526,11 +525,9 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"negative rollout timeout", Options{RolloutTimeout: "-30s"}},
 		{"podcert workers", Options{PodcertWorkersPerSigner: -1}},
 		{"cluster size", Options{ClusterSize: "size5"}},
-		{"extproc missing sdsmint", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
-		{"extproc invalid format", Options{ExperimentalUseSDSMint: true, AdditionalEgressExtprocService: "extproc:50051"}},
-		{"extproc agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
-		{"injection missing sdsmint", Options{ExperimentalEgressCredentialInjection: true}},
-		{"injection agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, ExperimentalEgressCredentialInjection: true}},
+		{"extproc invalid format", Options{AdditionalEgressExtprocService: "extproc:50051"}},
+		{"extproc agentgateway", Options{Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"injection agentgateway", Options{Router: RouterAgentgateway, ExperimentalEgressCredentialInjection: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {
