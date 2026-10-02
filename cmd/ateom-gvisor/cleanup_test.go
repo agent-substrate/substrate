@@ -27,9 +27,12 @@ import (
 )
 
 // fakeRunsc stands in for *runsc. containers is the set runsc has a record of;
-// calls logs every command.
+// failState and failDelete make those commands fail for a container runsc
+// knows; calls logs every command.
 type fakeRunsc struct {
 	containers map[string]bool
+	failState  map[string]bool
+	failDelete map[string]bool
 	calls      []string
 }
 
@@ -43,7 +46,7 @@ func newFakeRunsc(containers ...string) *fakeRunsc {
 
 func (f *fakeRunsc) cmdState(_ context.Context, name string) error {
 	f.calls = append(f.calls, "state "+name)
-	if !f.containers[name] {
+	if !f.containers[name] || f.failState[name] {
 		return errors.New("exit status 128")
 	}
 	return nil
@@ -51,7 +54,7 @@ func (f *fakeRunsc) cmdState(_ context.Context, name string) error {
 
 func (f *fakeRunsc) cmdDelete(_ context.Context, name string) error {
 	f.calls = append(f.calls, "delete "+name)
-	if !f.containers[name] {
+	if !f.containers[name] || f.failDelete[name] {
 		return errors.New("exit status 128")
 	}
 	delete(f.containers, name)
@@ -117,6 +120,36 @@ func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
 	}
 
 	assertCalls(t, f, "state app", "list", "state _pause", "list")
+}
+
+// Deleting the pause container tears down the sandbox, so a failure on an
+// application container must not keep cleanup from reaching it.
+func TestCleanupContainers_DeletesThePauseContainerAfterADeleteFailure(t *testing.T) {
+	f := newFakeRunsc("app", "_pause")
+	f.failDelete = map[string]bool{"app": true}
+
+	if err := cleanupContainers(context.Background(), f, appContainers); err == nil {
+		t.Error("cleanupContainers succeeded, want the delete failure reported")
+	}
+
+	assertCalls(t, f, "state app", "state _pause", "delete app", "delete _pause")
+	if f.containers["_pause"] {
+		t.Error("the pause container survived cleanup")
+	}
+}
+
+func TestCleanupContainers_DeletesThePauseContainerAfterAStateFailure(t *testing.T) {
+	f := newFakeRunsc("app", "_pause")
+	f.failState = map[string]bool{"app": true}
+
+	if err := cleanupContainers(context.Background(), f, appContainers); err == nil {
+		t.Error("cleanupContainers succeeded, want the state failure reported")
+	}
+
+	assertCalls(t, f, "state app", "list", "state _pause", "delete _pause")
+	if f.containers["_pause"] {
+		t.Error("the pause container survived cleanup")
+	}
 }
 
 // The pause container is the sandbox: it must outlive the deletes of the
