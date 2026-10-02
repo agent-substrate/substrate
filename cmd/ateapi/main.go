@@ -77,6 +77,7 @@ var (
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	postgresAWSIAMAuth       = pflag.Bool("postgres-aws-iam-auth", false, "Authenticate to PostgreSQL with an RDS/Aurora IAM auth token instead of a static password. Requires TLS in --postgres-connection-string.")
 	experimentalEnableAuthz  = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
@@ -390,6 +391,9 @@ func loadFlagsFromEnv() {
 	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
 		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
+	if v := os.Getenv("ATE_API_POSTGRES_AWS_IAM_AUTH"); v != "" && !pflag.CommandLine.Changed("postgres-aws-iam-auth") {
+		*postgresAWSIAMAuth = (v == "true" || v == "1")
+	}
 }
 
 func logFlagValues(ctx context.Context) {
@@ -399,6 +403,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("authentication-config", *authenticationConfigFile),
 		postgresConnectionAttr(*postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Bool("postgres-aws-iam-auth", *postgresAWSIAMAuth),
 		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
@@ -488,7 +493,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema, *postgresAWSIAMAuth)
 		if err == nil {
 			return persistence, nil
 		}

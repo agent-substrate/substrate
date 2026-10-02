@@ -25,10 +25,14 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
 // TestPoolConfigRereadsRotatedCredentials covers the pod certificate rotation
@@ -47,7 +51,7 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 		"postgres://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=%s&sslcert=%s&sslkey=%s",
 		rootPath, bundlePath, bundlePath)
 
-	cfg, err := poolConfig(dsn)
+	cfg, err := poolConfig(dsn, false, aws.Config{})
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
@@ -78,12 +82,56 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 // TestPoolConfigWithoutTLS keeps the hook off connection strings that have no
 // TLS material to re-read, such as the ones the tests here use.
 func TestPoolConfigWithoutTLS(t *testing.T) {
-	cfg, err := poolConfig("postgres://postgres@localhost:5432/atepg?sslmode=disable")
+	cfg, err := poolConfig("postgres://postgres@localhost:5432/atepg?sslmode=disable", false, aws.Config{})
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
 	if cfg.BeforeConnect != nil {
 		t.Error("BeforeConnect is set for a connection string with no TLS material")
+	}
+}
+
+// TestPoolConfigIAMAuthRequiresTLS rejects IAM auth on a connection string
+// with no TLS, since RDS/Aurora only accept IAM tokens over TLS.
+func TestPoolConfigIAMAuthRequiresTLS(t *testing.T) {
+	_, err := poolConfig("postgres://postgres@localhost:5432/atepg?sslmode=disable", true, aws.Config{})
+	if err == nil {
+		t.Fatal("poolConfig: want error for IAM auth without TLS, got nil")
+	}
+}
+
+// TestPoolConfigIAMAuthSetsPassword covers token generation: BuildAuthToken
+// signs a presigned URL locally, so this runs with static credentials and no
+// network access.
+func TestPoolConfigIAMAuthSetsPassword(t *testing.T) {
+	awsCfg := aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("AKIAEXAMPLE", "secret", ""),
+	}
+	cfg, err := poolConfig("postgres://ate_api@db.example.com:5432/atepg?sslmode=require", true, awsCfg)
+	if err != nil {
+		t.Fatalf("poolConfig: %v", err)
+	}
+	if cfg.BeforeConnect == nil {
+		t.Fatal("BeforeConnect is nil, no IAM auth token would ever be generated")
+	}
+
+	conn := cfg.ConnConfig.Copy()
+	if err := cfg.BeforeConnect(context.Background(), conn); err != nil {
+		t.Fatalf("BeforeConnect: %v", err)
+	}
+	parsed, err := url.Parse("https://" + conn.Password)
+	if err != nil {
+		t.Fatalf("parsing generated auth token as a URL: %v", err)
+	}
+	if got, want := parsed.Host, "db.example.com:5432"; got != want {
+		t.Errorf("auth token host = %q, want %q", got, want)
+	}
+	if got, want := parsed.Query().Get("DBUser"), "ate_api"; got != want {
+		t.Errorf("auth token DBUser = %q, want %q", got, want)
+	}
+	if got, want := parsed.Query().Get("Action"), "connect"; got != want {
+		t.Errorf("auth token Action = %q, want %q", got, want)
 	}
 }
 
@@ -177,7 +225,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", schema)
+	persistence, err := Connect(ctx, dsn+"&search_path=public", schema, false)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
