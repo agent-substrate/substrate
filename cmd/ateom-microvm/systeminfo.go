@@ -43,16 +43,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+	"syscall"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"golang.org/x/sys/unix"
 )
 
 // hasSystemInfoVolumes reports whether any container mounts a system-info
@@ -76,23 +76,19 @@ func (s *AteomService) stageSystemInfoVolumes(ctx context.Context, actorUID, src
 	}
 	dst := filepath.Join(kata.SharedDir(actorUID), ocispec.ShareSystemInfo)
 	// Drop any stale mount first (lazy if busy), then ensure clean mountpoint.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
+	if err := unix.Unmount(dst, 0); err != nil {
+		if !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOENT) {
+			_ = unix.Unmount(dst, unix.MNT_DETACH)
+		}
 	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating %q: %w", dst, err)
 	}
-	cmd := exec.CommandContext(ctx, "mount", "--bind", src, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting system-info volumes at %q: %w (%s)", dst, err, strings.TrimSpace(stderr.String()))
+	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind-mounting system-info volumes at %q: %w", dst, err)
 	}
-	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
-	var roErr strings.Builder
-	ro.Stderr = &roErr
-	if err := reaper.Run(ro); err != nil {
-		return fmt.Errorf("remounting system-info volumes read-only %q: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
+	if err := unix.Mount("", dst, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+		return fmt.Errorf("remounting system-info volumes read-only %q: %w", dst, err)
 	}
 	return nil
 }

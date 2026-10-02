@@ -22,10 +22,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"golang.org/x/sys/unix"
 )
 
@@ -51,8 +49,8 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 	// outFile := sparse copy of baseFile (preserves holes so it stays sparse).
 	tmp := outFile + ".merge.tmp"
 	_ = os.Remove(tmp)
-	if o, err := reaper.RunCombined(exec.CommandContext(ctx, "cp", "--sparse=always", baseFile, tmp)); err != nil {
-		return fmt.Errorf("cp base->tmp: %w: %s", err, o)
+	if err := copySparseFile(baseFile, tmp); err != nil {
+		return fmt.Errorf("sparse copy base->tmp: %w", err)
 	}
 
 	d, err := os.Open(deltaFile)
@@ -237,4 +235,30 @@ func copySparseRegions(src, dst *os.File) (copied int64, err error) {
 		off = de
 	}
 	return copied, nil
+}
+
+// copySparseFile creates dstPath with the logical size of srcPath and copies all
+// non-hole data regions from srcPath to dstPath, preserving sparse holes.
+func copySparseFile(srcPath, dstPath string) error {
+	s, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	si, err := s.Stat()
+	if err != nil {
+		return err
+	}
+	d, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := d.Truncate(si.Size()); err != nil {
+		return err
+	}
+	if _, err := copySparseRegions(s, d); err != nil {
+		return err
+	}
+	return d.Close()
 }
