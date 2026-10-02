@@ -388,7 +388,7 @@ func TestMetricLabelValues(t *testing.T) {
 		{ImageCacheOutcomeTimeout, "timeout"},
 
 		{SchedulerOutcomeAssigned, "assigned"},
-		{SchedulerOutcomeNoFreeWorker, "no_free_worker"},
+		{SchedulerOutcomeNoCapacity, "no_capacity"},
 		{SchedulerOutcomeError, "error"},
 
 		{SnapshotKindGolden, "golden"},

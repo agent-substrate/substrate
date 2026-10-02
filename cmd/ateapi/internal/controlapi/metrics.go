@@ -229,8 +229,8 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 
 // recordSchedulerAssignment records one assignment attempt. pool is set only
 // when a worker was assigned and error.type only for the Error outcome, so
-// no_free_worker (a capacity signal, not a failure) carries neither. class is
-// set on every outcome it is known for, so no_free_worker names the capacity
+// no_capacity (a capacity signal, not a failure) carries neither. class is
+// set on every outcome it is known for, so no_capacity names the capacity
 // that ran out and stays comparable with assigned.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.Time, outcome, poolNamespace, pool, class string, err error) {
