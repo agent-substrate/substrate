@@ -1063,12 +1063,60 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 		t.Fatalf("writing volume contents: %v", err)
 	}
 
-	if err := removeActorDirs(actorUID); err == nil {
+	err := removeActorDirs(actorUID)
+	if err == nil {
 		t.Fatal("removeActorDirs succeeded with a populated volume dir, want an error")
+	}
+	if strings.Contains(err.Error(), "%w") {
+		t.Errorf("removeActorDirs error %q has a literal %%w", err)
 	}
 	if _, err := os.Stat(stillMounted); err != nil {
 		t.Errorf("removeActorDirs deleted the contents of a volume that was still populated: %v", err)
 	}
+}
+
+func TestResetDir(t *testing.T) {
+	t.Run("empties and recreates the directory", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "state")
+		if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := resetDir("state dir", dir, os.RemoveAll, 0o750); err != nil {
+			t.Fatalf("resetDir: %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 0 {
+			t.Errorf("ReadDir = %v, %v, want an empty directory", entries, err)
+		}
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o750 {
+			t.Errorf("Stat = %v, %v, want mode 0750", info, err)
+		}
+	})
+
+	t.Run("names the directory when the remove fails", func(t *testing.T) {
+		boom := errors.New("boom")
+		err := resetDir("state dir", t.TempDir(), func(string) error { return boom }, 0o700)
+		if !errors.Is(err, boom) {
+			t.Fatalf("resetDir = %v, want it to wrap %v", err, boom)
+		}
+		if got, want := err.Error(), "while deleting state dir: boom"; got != want {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("names the directory when the create fails", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := resetDir("state dir", filepath.Join(file, "child"), func(string) error { return nil }, 0o700)
+		if err == nil || !strings.HasPrefix(err.Error(), "while creating state dir: ") {
+			t.Errorf("resetDir = %v, want an error starting %q", err, "while creating state dir: ")
+		}
+		if err != nil && strings.Contains(err.Error(), "%w") {
+			t.Errorf("error %q has a literal %%w", err)
+		}
+	})
 }
 
 // blockerDesc registers a single unary method whose handler blocks until block

@@ -1882,46 +1882,22 @@ func resetActorDirs(actorUID string) error {
 	// making them writable. (The rootfs itself is just an empty mountpoint
 	// here: the overlay is mounted in the ateom pod's mount namespace, not
 	// atelet's, and is detached by ateom at teardown.)
-	bundleDir := ateletpath.OCIBundleDir(actorUID)
-	if err := imagecache.RemoveAllWritable(bundleDir); err != nil {
-		return wrapFileSystemErr("while deleting bundle dir: %w", err)
+	if err := resetDir("bundle dir", ateletpath.OCIBundleDir(actorUID), imagecache.RemoveAllWritable, 0o700); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating bundle dir: %w", err)
+	if err := resetDir("checkpoint-state dir", ateletpath.CheckpointStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
+		return err
 	}
-
-	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
-	if err := os.RemoveAll(checkpointDir); err != nil {
-		return wrapFileSystemErr("while deleting checkpoint-state dir: %w", err)
+	if err := resetDir("restore-state dir", ateletpath.RestoreStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating checkpoint-state dir: %w", err)
+	if err := resetDir("durable-dir volumes mount dir", ateletpath.DurableDirVolumeMountsDir(actorUID), os.RemoveAll, 0o755); err != nil {
+		return err
 	}
-
-	restoreStateDir := ateletpath.RestoreStateDir(actorUID)
-	if err := os.RemoveAll(restoreStateDir); err != nil {
-		return wrapFileSystemErr("while deleting restore-state dir: %w", err)
-	}
-	if err := os.MkdirAll(restoreStateDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating restore-state dir: %w", err)
-	}
-
-	durableDirVolumesMountDir := ateletpath.DurableDirVolumeMountsDir(actorUID)
-	if err := os.RemoveAll(durableDirVolumesMountDir); err != nil {
-		return wrapFileSystemErr("while deleting durable-dir volumes mount dir: %w", err)
-	}
-	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating durable-dir volumes mount dir: %w", err)
-	}
-
 	// World-readable (0o755): bind-mounted read-only into the actor, whose
 	// workload reads it through the gofer.
-	systemInfoVolumeRootsDir := ateletpath.SystemInfoVolumeRootsDir(actorUID)
-	if err := os.RemoveAll(systemInfoVolumeRootsDir); err != nil {
-		return wrapFileSystemErr("while deleting system-info volume roots dir: %w", err)
-	}
-	if err := os.MkdirAll(systemInfoVolumeRootsDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating system-info volume roots dir: %w", err)
+	if err := resetDir("system-info volume roots dir", ateletpath.SystemInfoVolumeRootsDir(actorUID), os.RemoveAll, 0o755); err != nil {
+		return err
 	}
 
 	// Do not call RemoveAll on volume directories in case the unmount failed.
@@ -1929,18 +1905,30 @@ func resetActorDirs(actorUID string) error {
 	volumesDir := ateletpath.VolumesDir(actorUID)
 	entries, err := os.ReadDir(volumesDir)
 	if err != nil && !os.IsNotExist(err) {
-		return wrapFileSystemErr("while reading volumes dir: %w", err)
+		return wrapFileSystemErr("while reading volumes dir", err)
 	}
 	for _, entry := range entries {
 		volPath := filepath.Join(volumesDir, entry.Name())
 		if err := os.Remove(volPath); err != nil {
-			return wrapFileSystemErr("while removing volume dir: %w", err)
+			return wrapFileSystemErr("while removing volume dir", err)
 		}
 	}
 	if err := os.MkdirAll(volumesDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating volumes dir: %w", err)
+		return wrapFileSystemErr("while creating volumes dir", err)
 	}
 
+	return nil
+}
+
+// resetDir empties dir with remove and recreates it with mode. what names the
+// directory in errors.
+func resetDir(what, dir string, remove func(string) error, mode os.FileMode) error {
+	if err := remove(dir); err != nil {
+		return wrapFileSystemErr("while deleting "+what, err)
+	}
+	if err := os.MkdirAll(dir, mode); err != nil {
+		return wrapFileSystemErr("while creating "+what, err)
+	}
 	return nil
 }
 
@@ -1956,7 +1944,7 @@ func removeActorDirs(actorUID string) error {
 		return err
 	}
 	if err := os.RemoveAll(ateletpath.ActorPath(actorUID)); err != nil {
-		return wrapFileSystemErr("while deleting actor dir: %w", err)
+		return wrapFileSystemErr("while deleting actor dir", err)
 	}
 	return nil
 }
