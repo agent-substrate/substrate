@@ -83,6 +83,8 @@ type Handler struct {
 	actorIdentityRoots *x509.CertPool
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
+	// actorJWTs mints the actor JWTs that credential injections ask for.
+	actorJWTs *actorJWTs
 	// provider resolves an egress policy's credential injections. Nil means
 	// credential injection is not configured, and injection will be skipped.
 	provider credproviderpb.CredentialProviderClient
@@ -94,7 +96,8 @@ type Handler struct {
 
 // New builds the egress handler. actorIdentityRoots is the egress listener's
 // trusted_ca; see verifyActorCertificate for why it is checked again here.
-// policyCacheTTL of 0 fetches the policy on every callout.
+// policyCacheTTL also bounds how long the actor UID read on CONNECT is reused;
+// 0 fetches the policy on every callout and records no UID.
 //
 // provider resolves an allowed rule's credential injections on the
 // TLS-terminated MITM leg; nil leaves credential injection off, so a rule that
@@ -105,6 +108,7 @@ func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, po
 		apiClient:          apiClient,
 		actorIdentityRoots: actorIdentityRoots,
 		policies:           newPolicyCache(apiClient, policyCacheTTL),
+		actorJWTs:          newActorJWTs(apiClient, policyCacheTTL),
 		provider:           provider,
 		providerName:       providerName,
 	}
@@ -268,6 +272,7 @@ func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef
 		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
 			"egress denied: actor %q/%q is %s, not running", actorRef.Atespace, actorRef.Name, actor.GetStatus().GetState())
 	}
+	h.actorJWTs.recordUID(actorRef, actor.GetMetadata().GetUid())
 	return nil
 }
 
