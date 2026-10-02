@@ -134,7 +134,7 @@ substitute() {
   esac
   # One flow-style line, so an unset WORKER_MEMORY leaves only a blank line.
   if [[ -n "${WORKER_MEMORY}" ]]; then
-    worker_template="template: {resources: {requests: {memory: ${WORKER_MEMORY}}, limits: {memory: ${WORKER_MEMORY}}}}"
+    worker_template="template: {resources: {requests: {memory: \"${WORKER_MEMORY}\"}, limits: {memory: \"${WORKER_MEMORY}\"}}}"
   fi
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
