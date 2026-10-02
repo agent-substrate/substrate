@@ -44,6 +44,52 @@
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
+#   gcsPrewarm     Optional. When enabled, tools/gcs-prewarm ramps synthetic
+#                  writes against the snapshot bucket while substrate and
+#                  workloads deploy, and the test starts only once it has
+#                  finished, so the bucket's key ranges are already scaled
+#                  up and the run doesn't measure GCS autoscaling (a cold
+#                  bucket sheds write bursts with 429s for ~20 minutes per
+#                  doubling of load). A failed warm-up fails the test. It
+#                  adds roughly ramp + hold to the run: log2(targetRate /
+#                  startRate) * doubleEvery, plus hold. Fields:
+#                    enabled        Must be true for the prewarm to run;
+#                                   missing or false leaves it off, and the
+#                                   other fields are then only type-checked.
+#                    actorTemplate  Required when enabled. The benchmark ActorTemplate
+#                                   whose snapshots the test writes, i.e.
+#                                   benchmarking/workloads/manifests/<name>-template.yaml.tmpl.
+#                                   Its storageLocation must be
+#                                   gs://${BUCKET_NAME}/<path>: the bucket
+#                                   always comes from the target cluster
+#                                   config, and <path> is the base prefix.
+#                    atespace       Required when enabled. The atespace the test creates
+#                                   its actors in (boomer's --atespace for
+#                                   glutton, "benchmark-workloads" for the
+#                                   locust-only workloads). Snapshots go
+#                                   under <storageLocation>/atespaces/<atespace>/actors/.
+#                    startRate      Initial writes/s (tool default 50).
+#                    targetRate     Writes/s to ramp to and hold (tool
+#                                   default 500).
+#                    doubleEvery    How often the rate doubles while ramping,
+#                                   e.g. "5m" (tool default 5m).
+#                    hold           How long to hold targetRate after the
+#                                   ramp (tool default 5m).
+#                    objectBytes    Size of each warm-up object (tool default
+#                                   4096); scaling follows request rate, not
+#                                   bytes.
+#                    workers        Max writes in flight (tool default 128).
+#                    cleanup        Delete the warm-up objects before the
+#                                   test starts (tool default true).
+#                  For example, a 20m ramp from 50 to 800 writes/s:
+#                    gcsPrewarm:
+#                      enabled: true
+#                      actorTemplate: glutton
+#                      atespace: benchmark
+#                      startRate: 50
+#                      targetRate: 800
+#                      doubleEvery: 5m
+#                      hold: 5m
 #
 # ---- type: locust -----------------------------------------------------------
 #

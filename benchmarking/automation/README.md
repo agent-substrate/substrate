@@ -50,6 +50,20 @@ For `microvm` tests the target cluster must have KVM-capable nodes and the
 object store bucket named in its `.ate-dev-env.sh` must be writable by the
 orchestrator's Workload Identity principal.
 
+## Prewarming the snapshot bucket
+
+A cold GCS bucket sheds write bursts with 429s until its autoscaler splits
+the loaded key ranges, about 20 minutes per doubling of load, so a large
+suspend-heavy test can end up measuring GCS scaling instead of substrate.
+A `tests.yaml` entry with a `gcsPrewarm` block that sets `enabled: true` runs
+[tools/gcs-prewarm](../../tools/gcs-prewarm/main.go) in the background while
+substrate and workloads deploy, then holds the test until the warm-up has
+finished. It always warms the target cluster's `BUCKET_NAME` bucket, under the
+test's ActorTemplate snapshot path, so a test can't point it anywhere else.
+The block's fields are documented at the top of `tests.yaml`. The
+orchestrator's Workload Identity principal needs object create and delete
+on the bucket.
+
 ## Setup
 
 ```bash
