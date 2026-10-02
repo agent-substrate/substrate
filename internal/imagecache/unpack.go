@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -106,6 +107,10 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// atelet, running as plain root, unpack arbitrary actor images without
 	// CAP_DAC_OVERRIDE. Keyed by name so a repeated dir entry's last mode wins.
 	dirModes := map[string]os.FileMode{}
+
+	// Records each directory's tar mtime to restore after extraction, since
+	// creating child entries updates the parent directory's mtime.
+	dirModTimes := map[string]time.Time{}
 
 	// Ancestors an entry needed vs. directories the tar declared: the
 	// difference is recorded as ImplicitDirs (attrs fabricated, see the
@@ -199,6 +204,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if closeErr != nil {
 				return nil, fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
+			if err := restoreModTime(root, name, hdr.ModTime); err != nil {
+				return nil, err
+			}
 
 		case tar.TypeDir:
 			// Create owner-writable so children can be written even when the image
@@ -213,6 +221,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
 			dirModes[name] = mode
+			dirModTimes[name] = hdr.ModTime
 			declared[name] = true
 			delete(implicit, name)
 
@@ -240,6 +249,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if err := root.Symlink(hdr.Linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
 			}
+			// The symlink's own mtime is not restored: Chtimes follows the link,
+			// so it would stamp the target instead.
 
 		case tar.TypeLink:
 			linkname, linkSkip, err := validateTarName(hdr.Linkname)
@@ -260,6 +271,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if err := root.Link(linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
+			// No mtime to restore: the link shares the target's inode, which
+			// already has the target entry's mtime.
 
 		default:
 			tfStr := string([]byte{hdr.Typeflag})
@@ -268,7 +281,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		}
 	}
 
-	// Restore the image's intended directory modes now that every child exists.
+	// Restore the image's intended directory modes and mtime now that every child exists.
 	// Deepest paths first: a child's path is always longer than its parent's, so
 	// length-descending order guarantees a directory is restored before any of its
 	// ancestors — restoring a parent to a non-traversable mode then can't block
@@ -281,6 +294,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	for _, name := range dirs {
 		if err := root.Chmod(name, dirModes[name]); err != nil {
 			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", dirModes[name], name, err)
+		}
+		if err := restoreModTime(root, name, dirModTimes[name]); err != nil {
+			return nil, err
 		}
 	}
 
@@ -312,4 +328,17 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	sort.Strings(wh.ImplicitDirs)
 
 	return wh, nil
+}
+
+// restoreModTime sets the atime and mtime of an unpacked path to the mtime its
+// tar entry records, so that every node unpacks a layer to the same tree (see
+// the deterministic-unpack note in cmd/ateom-microvm/restore.go).
+func restoreModTime(root *os.Root, name string, modTime time.Time) error {
+	if modTime.IsZero() {
+		return nil
+	}
+	if err := root.Chtimes(name, modTime, modTime); err != nil {
+		return fmt.Errorf("while restoring mtime on %q: %w", name, err)
+	}
+	return nil
 }
