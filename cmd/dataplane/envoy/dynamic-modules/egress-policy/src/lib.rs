@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! The egress-policy listener filter picks the filter chain for a tunneled
+//! connection. See the README in this directory.
+
 use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::envoy_dynamic_module_type_on_listener_filter_status,
   declare_listener_filter_init_functions, envoy_log_trace, EnvoyListenerFilter,
@@ -19,103 +22,151 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 };
 use serde::Deserialize;
 
-/// Key of the filter state object holding the Substrate egress policy.
+/// Filter state holding the SNI rules as JSON. See
+/// EgressPolicyMetadataNamespace in cmd/atenet/internal/router/extproc.
 pub const ATE_POLICY_EGRESS: &[u8] = b"dev.ate.policy.egress";
 
-/// Key of the filter state object holding the SNI passthrough match result.
+/// Filter state this filter writes the chosen chain name to.
 pub const ATE_EGRESS_FILTER_CHAIN: &[u8] = b"dev.ate.egress.filter_chain";
 
-/// Filter chain name for MITM traffic.
+/// Verdict for TLS an https rule allows.
 pub const ATE_EGRESS_FILTER_CHAIN_MITM: &str = "mitm";
 
-/// Filter chain name for cleartext traffic.
+/// Verdict for TLS a tls_passthrough rule allows.
+pub const ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH: &str = "passthrough";
+
+/// Verdict for anything that is not TLS.
 pub const ATE_EGRESS_FILTER_CHAIN_CLEARTEXT: &str = "cleartext";
 
-/// Filter chain name when request is denied by policy.
-/// Since there is no filter chain with this name, TCP connection will be reset.
-pub const ATE_EGRESS_FILTER_CHAIN_NONE: &str = "denied";
+/// Verdict for a denied connection. No chain has this name.
+pub const ATE_EGRESS_FILTER_CHAIN_DENIED: &str = "denied";
 
+/// Mode of a rule whose match terminates the connection.
+pub const SNI_MODE_MITM: &str = "mitm";
 
-/// Parsed Substrate egress policy from the `ATE_POLICY_EGRESS` filter state JSON.
-#[derive(Debug, Deserialize)]
+/// Mode of a rule whose match forwards the connection without decryption.
+pub const SNI_MODE_PASSTHROUGH: &str = "passthrough";
+
+/// Transport protocol tls_inspector sets for TLS.
+const TRANSPORT_TLS: &str = "tls";
+
+/// Transport protocol Envoy assumes when no inspector detected one.
+const TRANSPORT_RAW_BUFFER: &str = "raw_buffer";
+
+/// The SNI rules for a connection.
+#[derive(Debug, Deserialize, PartialEq)]
 pub struct EgressPolicy {
-  pub allowed_snis: Vec<String>,
+  /// Most specific first; the first match wins.
+  pub rules: Vec<SniRule>,
 }
 
-/// Empty filter configuration for the listener filter.
-pub struct EmptyFilterConfig;
+/// A pattern and the mode applied when it matches.
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct SniRule {
+  pub pattern: String,
+  pub mode: String,
+}
 
-impl<ELF: EnvoyListenerFilter> ListenerFilterConfig<ELF> for EmptyFilterConfig {
-  fn new_listener_filter(&self, _envoy: &mut ELF) -> Box<dyn ListenerFilter<ELF>> {
-    Box::new(EmptyListenerFilter)
+/// Reports whether a normalized `hostname` matches `pattern`. Must agree with
+/// HostnamePattern.Matches in internal/egresspolicy.
+pub fn pattern_matches(pattern: &str, hostname: &str) -> bool {
+  if hostname.is_empty() {
+    return false;
+  }
+  if pattern == "*" {
+    return true;
+  }
+  if let Some(suffix) = pattern.strip_prefix("*.") {
+    return match hostname
+      .strip_suffix(suffix)
+      .and_then(|rest| rest.strip_suffix('.'))
+    {
+      Some(label) => !label.is_empty() && !label.contains('.'),
+      None => false,
+    };
+  }
+  pattern == hostname
+}
+
+/// ASCII-lowercases an SNI and strips one trailing dot, as the gateway does.
+fn normalize_sni(sni: &str) -> String {
+  let lower = sni.to_ascii_lowercase();
+  match lower.strip_suffix('.') {
+    Some(stripped) => stripped.to_owned(),
+    None => lower,
   }
 }
 
-/// A listener filter that matches requested server name (SNI) against the SNI passthrough policy.
-pub struct EmptyListenerFilter;
+/// Returns the verdict from the transport alone, or None for TLS, which is
+/// decided by SNI. Unknown transports are denied.
+pub fn transport_verdict(transport: Option<&str>) -> Option<&'static str> {
+  match transport {
+    Some(TRANSPORT_TLS) => None,
+    None | Some(TRANSPORT_RAW_BUFFER) => Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT),
+    Some(_) => Some(ATE_EGRESS_FILTER_CHAIN_DENIED),
+  }
+}
 
-impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EmptyListenerFilter {
+/// Returns the mode of the first rule matching the SNI, or denied.
+pub fn tls_verdict(policy: Option<&EgressPolicy>, sni: Option<&str>) -> &'static str {
+  let (Some(policy), Some(sni)) = (policy, sni) else {
+    return ATE_EGRESS_FILTER_CHAIN_DENIED;
+  };
+  let hostname = normalize_sni(sni);
+  match policy
+    .rules
+    .iter()
+    .find(|rule| pattern_matches(&rule.pattern, &hostname))
+  {
+    Some(rule) if rule.mode == SNI_MODE_MITM => ATE_EGRESS_FILTER_CHAIN_MITM,
+    Some(rule) if rule.mode == SNI_MODE_PASSTHROUGH => ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH,
+    _ => ATE_EGRESS_FILTER_CHAIN_DENIED,
+  }
+}
+
+/// The filter takes no configuration.
+pub struct EgressPolicyFilterConfig;
+
+impl<ELF: EnvoyListenerFilter> ListenerFilterConfig<ELF> for EgressPolicyFilterConfig {
+  fn new_listener_filter(&self, _envoy: &mut ELF) -> Box<dyn ListenerFilter<ELF>> {
+    Box::new(EgressPolicyFilter)
+  }
+}
+
+/// Runs after tls_inspector and http_inspector, once per connection.
+pub struct EgressPolicyFilter;
+
+impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EgressPolicyFilter {
   fn on_accept(
     &mut self,
     envoy_filter: &mut ELF,
   ) -> envoy_dynamic_module_type_on_listener_filter_status {
-    let transport_protocol_str = envoy_filter
+    let transport = envoy_filter
       .get_detected_transport_protocol()
-      .map(|transport_protocol| {
-        String::from_utf8_lossy(transport_protocol.as_slice()).into_owned()
-      });
-    envoy_log_trace!("transport_protocol: {:#?} : {}", transport_protocol_str, transport_protocol_str.as_deref() != Some("tls"));
+      .map(|value| String::from_utf8_lossy(value.as_slice()).into_owned());
 
-    if transport_protocol_str.as_deref() != Some("tls")
-    {
-      // TODO(yanavlasov): allow plaintext traffic only if there are `http` rules in the policy
-      envoy_filter.set_filter_state_bytes(
-        ATE_EGRESS_FILTER_CHAIN,
-        ATE_EGRESS_FILTER_CHAIN_CLEARTEXT.as_bytes(),
-      );
-      envoy_log_trace!(
-        "dev.ate.egress.filter_chain: {}",
-        ATE_EGRESS_FILTER_CHAIN_CLEARTEXT
-      );
-      return envoy_dynamic_module_type_on_listener_filter_status::Continue;
-    }
-
-    let server_name_str = envoy_filter
-      .get_requested_server_name()
-      .map(|server_name| {
-        String::from_utf8_lossy(server_name.as_slice()).into_owned()
-      });
-
-    let sni_passthrough_policy_str = envoy_filter
-      .get_filter_state_bytes(ATE_POLICY_EGRESS)
-      .map(|sni_passthrough_policy| {
-        String::from_utf8_lossy(sni_passthrough_policy.as_slice()).into_owned()
-      });
-
-    let egress_policy = sni_passthrough_policy_str
-      .as_deref()
-      .and_then(|policy_str| serde_json::from_str::<EgressPolicy>(policy_str).ok());
-
-    let comparison_result = match (&server_name_str, &egress_policy) {
-      (Some(server_name), Some(policy))
-        if policy
-          .allowed_snis
-          .iter()
-          // TODO(yanavlasov): implement wildcard matching.
-          .any(|sni| server_name.eq_ignore_ascii_case(sni)) =>
-      {
-        ATE_EGRESS_FILTER_CHAIN_MITM
+    let verdict = match transport_verdict(transport.as_deref()) {
+      Some(verdict) => verdict,
+      None => {
+        let sni = envoy_filter
+          .get_requested_server_name()
+          .map(|value| String::from_utf8_lossy(value.as_slice()).into_owned());
+        // Unparseable rules deny, like absent ones.
+        let policy = envoy_filter
+          .get_filter_state_bytes(ATE_POLICY_EGRESS)
+          .and_then(|value| serde_json::from_slice::<EgressPolicy>(value.as_slice()).ok());
+        let verdict = tls_verdict(policy.as_ref(), sni.as_deref());
+        envoy_log_trace!("egress policy: sni={:?} chain={}", sni, verdict);
+        verdict
       }
-      // TODO(yanavlasov): implement passthrough TLS policy.
-      _ => ATE_EGRESS_FILTER_CHAIN_NONE,
     };
 
-    envoy_filter.set_filter_state_bytes(
-      ATE_EGRESS_FILTER_CHAIN,
-      comparison_result.as_bytes(),
+    envoy_filter.set_filter_state_bytes(ATE_EGRESS_FILTER_CHAIN, verdict.as_bytes());
+    envoy_log_trace!(
+      "egress policy: transport={:?} chain={}",
+      transport,
+      verdict
     );
-    envoy_log_trace!("dev.ate.egress.filter_chain: {}", comparison_result);
-
     envoy_dynamic_module_type_on_listener_filter_status::Continue
   }
 }
@@ -136,7 +187,7 @@ fn new_listener_filter_config_fn<
   _name: &str,
   _config: &[u8],
 ) -> Option<Box<dyn ListenerFilterConfig<ELF>>> {
-  Some(Box::new(EmptyFilterConfig))
+  Some(Box::new(EgressPolicyFilterConfig))
 }
 
 #[cfg(test)]
@@ -146,353 +197,260 @@ mod tests {
     EnvoyBuffer, MockEnvoyListenerFilter, MockEnvoyListenerFilterConfig,
   };
 
+  fn policy(rules: &[(&str, &str)]) -> EgressPolicy {
+    EgressPolicy {
+      rules: rules
+        .iter()
+        .map(|(pattern, mode)| SniRule {
+          pattern: pattern.to_string(),
+          mode: mode.to_string(),
+        })
+        .collect(),
+    }
+  }
+
+  #[test]
+  fn test_pattern_matches() {
+    let cases: &[(&str, &str, bool)] = &[
+      // "*" matches every name and only names.
+      ("*", "anything.example.com", true),
+      ("*", "localhost", true),
+      ("*", "", false),
+      // "*.suffix" matches exactly one non-empty leftmost label.
+      ("*.example.com", "api.example.com", true),
+      ("*.example.com", "example.com", false),
+      ("*.example.com", "a.b.example.com", false),
+      ("*.example.com", ".example.com", false),
+      ("*.example.com", "xexample.com", false),
+      ("*.example.com", "api.example.co", false),
+      ("*.example.com", "api.example.com.evil", false),
+      // Anything else matches the whole name.
+      ("api.example.com", "api.example.com", true),
+      ("api.example.com", "www.api.example.com", false),
+      ("api.example.com", "api.example.co", false),
+      ("example.com", "api.example.com", false),
+      // Normalization is the caller's job.
+      ("api.example.com", "API.example.com", false),
+      ("api.example.com", "api.example.com.", false),
+    ];
+    for (pattern, hostname, want) in cases {
+      assert_eq!(
+        pattern_matches(pattern, hostname),
+        *want,
+        "pattern_matches({pattern:?}, {hostname:?})"
+      );
+    }
+  }
+
+  #[test]
+  fn test_normalize_sni() {
+    assert_eq!(normalize_sni("API.Example.COM."), "api.example.com");
+    assert_eq!(normalize_sni("api.example.com"), "api.example.com");
+    // One trailing dot, not every one.
+    assert_eq!(normalize_sni("api.example.com.."), "api.example.com.");
+    // Only ASCII folds: U+212A KELVIN SIGN stays itself and cannot become "k".
+    assert_eq!(normalize_sni("\u{212A}.example.com"), "\u{212A}.example.com");
+  }
+
+  #[test]
+  fn test_transport_verdict() {
+    assert_eq!(transport_verdict(Some("tls")), None);
+    assert_eq!(transport_verdict(None), Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT));
+    assert_eq!(
+      transport_verdict(Some("raw_buffer")),
+      Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT)
+    );
+    assert_eq!(transport_verdict(Some("quic")), Some(ATE_EGRESS_FILTER_CHAIN_DENIED));
+    assert_eq!(transport_verdict(Some("")), Some(ATE_EGRESS_FILTER_CHAIN_DENIED));
+  }
+
+  #[test]
+  fn test_tls_verdict_denies_without_inputs() {
+    let p = policy(&[("*", SNI_MODE_MITM)]);
+    assert_eq!(tls_verdict(None, Some("api.example.com")), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_eq!(tls_verdict(Some(&p), None), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_eq!(tls_verdict(Some(&p), Some("")), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_eq!(
+      tls_verdict(Some(&policy(&[])), Some("api.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_DENIED
+    );
+  }
+
+  #[test]
+  fn test_tls_verdict_matches_wildcards() {
+    let p = policy(&[("api.example.com", SNI_MODE_MITM), ("*.example.org", SNI_MODE_MITM)]);
+    assert_eq!(tls_verdict(Some(&p), Some("api.example.com")), ATE_EGRESS_FILTER_CHAIN_MITM);
+    assert_eq!(tls_verdict(Some(&p), Some("API.EXAMPLE.COM.")), ATE_EGRESS_FILTER_CHAIN_MITM);
+    assert_eq!(tls_verdict(Some(&p), Some("www.example.org")), ATE_EGRESS_FILTER_CHAIN_MITM);
+    assert_eq!(tls_verdict(Some(&p), Some("example.org")), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_eq!(tls_verdict(Some(&p), Some("a.b.example.org")), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_eq!(tls_verdict(Some(&p), Some("www.example.com")), ATE_EGRESS_FILTER_CHAIN_DENIED);
+
+    let any = policy(&[("*", SNI_MODE_MITM)]);
+    assert_eq!(tls_verdict(Some(&any), Some("whatever.test")), ATE_EGRESS_FILTER_CHAIN_MITM);
+  }
+
+  #[test]
+  fn test_tls_verdict_first_match_decides() {
+    // The first match is final, even with an unknown mode.
+    let unknown_first = policy(&[("*.example.com", "not-a-mode"), ("api.example.com", SNI_MODE_MITM)]);
+    assert_eq!(
+      tls_verdict(Some(&unknown_first), Some("api.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_DENIED
+    );
+    let known_first = policy(&[
+      ("api.example.com", SNI_MODE_MITM),
+      ("pinned.example.com", SNI_MODE_PASSTHROUGH),
+      ("*.example.com", "not-a-mode"),
+    ]);
+    assert_eq!(
+      tls_verdict(Some(&known_first), Some("api.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_MITM
+    );
+    assert_eq!(
+      tls_verdict(Some(&known_first), Some("pinned.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH
+    );
+    assert_eq!(
+      tls_verdict(Some(&known_first), Some("www.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_DENIED
+    );
+  }
+
+  #[test]
+  fn test_policy_json_shape() {
+    let parsed: EgressPolicy = serde_json::from_str(
+      r#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*","mode":"mitm"}]}"#,
+    )
+    .unwrap();
+    assert_eq!(parsed, policy(&[("api.example.com", "mitm"), ("*", "mitm")]));
+    assert!(serde_json::from_str::<EgressPolicy>(r#"{"allowed_snis":["api.example.com"]}"#).is_err());
+  }
+
+  fn new_filter_config() -> Box<dyn ListenerFilterConfig<MockEnvoyListenerFilter>> {
+    let mut mock_config = MockEnvoyListenerFilterConfig::new();
+    new_listener_filter_config_fn::<MockEnvoyListenerFilterConfig, MockEnvoyListenerFilter>(
+      &mut mock_config,
+      "envoy_substrate_egress_policy",
+      b"",
+    )
+    .expect("a filter config")
+  }
+
+  /// Runs on_accept for a TLS connection with the given SNI and policy filter
+  /// state, asserting the verdict written.
+  fn assert_tls_verdict(sni: Option<&'static [u8]>, policy: Option<&'static [u8]>, want: &'static str) {
+    let config = new_filter_config();
+    let mut mock_filter = MockEnvoyListenerFilter::new();
+    mock_filter
+      .expect_get_detected_transport_protocol()
+      .returning(|| Some(EnvoyBuffer::new(b"tls")));
+    mock_filter
+      .expect_get_requested_server_name()
+      .returning(move || sni.map(EnvoyBuffer::new));
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS)
+      .returning(move |_| policy.map(EnvoyBuffer::new));
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(move |key, value| key == ATE_EGRESS_FILTER_CHAIN && value == want.as_bytes())
+      .times(1)
+      .returning(|_, _| true);
+
+    let mut filter = config.new_listener_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_accept(&mut mock_filter),
+      envoy_dynamic_module_type_on_listener_filter_status::Continue
+    );
+  }
+
+  /// Runs on_accept for a connection with the given detected transport,
+  /// asserting the verdict written.
+  fn assert_transport_verdict(transport: Option<&'static [u8]>, want: &'static str) {
+    let config = new_filter_config();
+    let mut mock_filter = MockEnvoyListenerFilter::new();
+    mock_filter
+      .expect_get_detected_transport_protocol()
+      .returning(move || transport.map(EnvoyBuffer::new));
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(move |key, value| key == ATE_EGRESS_FILTER_CHAIN && value == want.as_bytes())
+      .times(1)
+      .returning(|_, _| true);
+
+    let mut filter = config.new_listener_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_accept(&mut mock_filter),
+      envoy_dynamic_module_type_on_listener_filter_status::Continue
+    );
+    assert_eq!(
+      filter.on_data(&mut mock_filter, 0),
+      envoy_dynamic_module_type_on_listener_filter_status::Continue
+    );
+  }
+
   #[test]
   fn test_init() {
     assert!(init());
   }
 
   #[test]
-  fn test_empty_listener_filter_lifecycle() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"");
-    assert!(config.is_some());
-    let config = config.unwrap();
-
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| None);
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| None);
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .returning(|_| None);
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"cleartext"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
-
-    let status = filter.on_data(&mut mock_filter, 0);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+  fn test_on_accept_no_transport_is_cleartext() {
+    assert_transport_verdict(None, ATE_EGRESS_FILTER_CHAIN_CLEARTEXT);
   }
 
   #[test]
-  fn test_on_accept_raw_buffer_transport_protocol() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
-
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"raw_buffer")));
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"cleartext"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+  fn test_on_accept_raw_buffer_is_cleartext() {
+    assert_transport_verdict(Some(b"raw_buffer"), ATE_EGRESS_FILTER_CHAIN_CLEARTEXT);
   }
 
   #[test]
-  fn test_on_accept_matching_sni_and_policy() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
+  fn test_on_accept_unknown_transport_is_denied() {
+    assert_transport_verdict(Some(b"quic"), ATE_EGRESS_FILTER_CHAIN_DENIED);
+  }
 
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"tls")));
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(|_| {
-        Some(EnvoyBuffer::new(
-          br#"{"allowed_snis":["api.google.com","www.google.com"]}"#,
-        ))
-      });
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"mitm"
-      })
-      .times(1)
-      .returning(|_, _| true);
+  const RULES: &[u8] =
+    br#"{"rules":[{"pattern":"api.google.com","mode":"mitm"},{"pattern":"*.google.com","mode":"mitm"}]}"#;
 
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+  #[test]
+  fn test_on_accept_matching_sni() {
+    assert_tls_verdict(Some(b"api.google.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_MITM);
   }
 
   #[test]
-  fn test_on_accept_case_insensitive_matching_sni_and_policy() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
-
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"tls")));
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| Some(EnvoyBuffer::new(b"WWW.Google.COM")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(|_| {
-        Some(EnvoyBuffer::new(br#"{"allowed_snis":["www.google.com"]}"#))
-      });
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"mitm"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+  fn test_on_accept_wildcard_sni() {
+    assert_tls_verdict(Some(b"mail.google.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_MITM);
   }
 
   #[test]
-  fn test_on_accept_mismatched_sni_and_policy() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
-
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"tls")));
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(|_| {
-        Some(EnvoyBuffer::new(
-          br#"{"allowed_snis":["api.google.com","mail.google.com"]}"#,
-        ))
-      });
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"denied"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+  fn test_on_accept_case_insensitive_sni() {
+    assert_tls_verdict(Some(b"API.Google.COM"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_MITM);
   }
 
   #[test]
-  fn test_on_accept_empty_allowed_snis() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
+  fn test_on_accept_mismatched_sni() {
+    assert_tls_verdict(Some(b"google.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_tls_verdict(Some(b"www.example.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_DENIED);
+  }
 
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"tls")));
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(|_| Some(EnvoyBuffer::new(br#"{"allowed_snis":[]}"#)));
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"denied"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+  #[test]
+  fn test_on_accept_no_rules() {
+    assert_tls_verdict(Some(b"api.google.com"), Some(br#"{"rules":[]}"#), ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 
   #[test]
   fn test_on_accept_invalid_policy_json() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
-
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"tls")));
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(|_| Some(EnvoyBuffer::new(b"not-json")));
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"denied"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+    assert_tls_verdict(Some(b"api.google.com"), Some(b"not-json"), ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 
   #[test]
   fn test_on_accept_missing_policy() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
-
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"tls")));
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| Some(EnvoyBuffer::new(b"www.google.com")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(|_| None);
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"denied"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+    assert_tls_verdict(Some(b"api.google.com"), None, ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 
   #[test]
   fn test_on_accept_missing_sni() {
-    let mut mock_config = MockEnvoyListenerFilterConfig::new();
-    let config = new_listener_filter_config_fn::<
-      MockEnvoyListenerFilterConfig,
-      MockEnvoyListenerFilter,
-    >(&mut mock_config, "envoy_substrate_egress_policy", b"")
-    .unwrap();
-
-    let mut mock_filter = MockEnvoyListenerFilter::new();
-    mock_filter
-      .expect_get_detected_transport_protocol()
-      .returning(|| Some(EnvoyBuffer::new(b"tls")));
-    mock_filter
-      .expect_get_requested_server_name()
-      .returning(|| None);
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(|_| {
-        Some(EnvoyBuffer::new(br#"{"allowed_snis":["www.google.com"]}"#))
-      });
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, value| {
-        key == ATE_EGRESS_FILTER_CHAIN && value == b"denied"
-      })
-      .times(1)
-      .returning(|_, _| true);
-
-    let mut filter = config.new_listener_filter(&mut mock_filter);
-
-    let status = filter.on_accept(&mut mock_filter);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_listener_filter_status::Continue
-    );
+    assert_tls_verdict(None, Some(RULES), ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 }
-

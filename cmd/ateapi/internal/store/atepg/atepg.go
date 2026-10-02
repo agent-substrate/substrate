@@ -26,9 +26,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -41,9 +43,9 @@ import (
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
-// watchPoolMaxConns sizes the dedicated outbox watch pool: one connection
-// for the WatchWorkers poller, one for the maintenance loop, and one of headroom
-// so a transiently slow poll can never gate a maintenance pass.
+// watchPoolMaxConns sizes the dedicated watch pool: one connection for the
+// WatchWorkers poller, one for the maintenance loop, and one of headroom so a
+// transiently slow poll can never gate a maintenance pass.
 const (
 	watchPoolMaxConns = 3
 	watchPoolMinConns = 1
@@ -51,10 +53,11 @@ const (
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the outbox side only: the WatchWorkers pollers
-	// and the partition-maintenance loop.
+	// watchPool serves the WatchWorkers pollers and the maintenance loop
+	// (outbox partitions, expired leases), keeping them off the request path's pool.
 	watchPool             *pgxpool.Pool
 	ownsWatchPool         bool
+	policyManager         *authz.PolicyManager
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
@@ -239,12 +242,12 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 	}
 	go func() {
 		defer close(p.maintenanceDone)
-		p.outboxMaintenance(maintenanceCtx)
+		p.maintenance(maintenanceCtx)
 	}()
 	return p, nil
 }
 
-// Close stops the outbox maintenance loop and waits for it to exit,
+// Close stops the maintenance loop and waits for it to exit,
 // then closes the watch pool if Connect created one. It does not close the
 // main pool, which the caller owns.
 func (p *Persistence) Close() {
@@ -258,6 +261,14 @@ func (p *Persistence) Close() {
 // Pool returns the underlying PostgreSQL connection pool.
 func (p *Persistence) Pool() *pgxpool.Pool {
 	return p.pool
+}
+
+// SetPolicyManager configures the authorization policy manager that writes
+// OpenFGA tuples in the same transaction as access policy and atespace
+// mutations. It must be set before the store serves access policy or
+// atespace writes.
+func (p *Persistence) SetPolicyManager(pm *authz.PolicyManager) {
+	p.policyManager = pm
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
@@ -280,17 +291,13 @@ func unmarshalStored(b []byte, m proto.Message) error {
 	return nil
 }
 
-// TODO: EOL this in favor of setCreateMetadata
-func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
-	now := timestamppb.Now()
-	return &ateapipb.ResourceMetadata{
-		Atespace:   atespace,
-		Name:       name,
-		Uid:        uuid.NewString(),
-		Version:    1,
-		CreateTime: now,
-		UpdateTime: now,
+// unmarshalRow is unmarshalStored for a row in a listing. A listing fails as a
+// whole on one bad row, so the error names the row.
+func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
+	if err := unmarshalStored(b, m); err != nil {
+		return fmt.Errorf("unmarshaling %s %s: %w", kind, strings.Join(id, "/"), err)
 	}
+	return nil
 }
 
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
@@ -298,14 +305,6 @@ func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
-}
-
-// TODO: EOL this in favor of setUpdateMetadata
-func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
-	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
-	metadata.Version++
-	metadata.UpdateTime = timestamppb.Now()
-	return metadata
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database
@@ -370,4 +369,37 @@ func pgErrConstraint(err error) string {
 		return pgErr.ConstraintName
 	}
 	return ""
+}
+
+const (
+	// Paces the maintenance loop (outbox partitions and expired leases).
+	maintenanceInterval = time.Minute
+
+	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
+	// which would permanently starve partition creation. Stalls abort and retry.
+	maintenancePassTimeout = 5 * time.Minute
+)
+
+// Maintains worker_outbox partitions and reaps expired leases on a fixed
+// timer. The two are independent: a failure in one still lets the other run.
+func (p *Persistence) maintenance(ctx context.Context) {
+	ticker := time.NewTicker(maintenanceInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		passCtx, cancel := context.WithTimeout(ctx, maintenancePassTimeout)
+		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
+		}
+		if deleted, err := p.cleanupExpiredLeases(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "expired lease cleanup failed", slog.Int64("deleted", deleted), slog.Any("err", err))
+		} else if deleted > 0 {
+			slog.InfoContext(ctx, "removed expired PostgreSQL leases", slog.Int64("deleted", deleted))
+		}
+		cancel()
+	}
 }

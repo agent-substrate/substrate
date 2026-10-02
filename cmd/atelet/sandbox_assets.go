@@ -33,15 +33,16 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/objectstorage"
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
@@ -98,6 +99,10 @@ type sandboxAssetsRecord struct {
 	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
 	// on-node record written at Run/Restore; populated at Checkpoint.
 	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
+	// DataSnapshotFiles is the subset of SnapshotFiles that restores the actor
+	// at DATA scope on its own, as reported by CheckpointWorkloadResponse.
+	// Empty when the capture holds no durable data.
+	DataSnapshotFiles []string `json:"dataSnapshotFiles,omitempty"`
 	// Scope is the snapshot scope the checkpoint captured, as the shared
 	// ateattr label ("full" or "data"), so a snapshot's content is knowable
 	// from the manifest alone. Empty in the on-node record written at
@@ -436,14 +441,14 @@ func writeTarFile(dest string, r io.Reader, mode fs.FileMode) error {
 // the returned reader. Streaming (rather than buffering the whole asset) keeps a
 // multi-hundred-MiB guest image off the heap.
 func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser, error) {
-	rc, anonErr := ategcs.Open(ctx, s.anonGCSClient, url)
+	rc, anonErr := objectstorage.Open(ctx, s.anonGCSClient, url)
 	if anonErr == nil {
 		return rc, nil
 	}
 	if s.gcsClient == nil {
 		return nil, anonErr
 	}
-	rc, mainErr := ategcs.Open(ctx, s.gcsClient, url)
+	rc, mainErr := objectstorage.Open(ctx, s.gcsClient, url)
 	if mainErr != nil {
 		return nil, fmt.Errorf("anonymous open failed (%v); main client open failed: %w", anonErr, mainErr)
 	}
@@ -493,6 +498,9 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
 		return nil, fmt.Errorf("sandbox record/manifest has invalid snapshotFiles: %w", err)
 	}
+	if err := validateDataSnapshotFiles(rec.SnapshotFiles, rec.DataSnapshotFiles); err != nil {
+		return nil, fmt.Errorf("sandbox record/manifest has invalid dataSnapshotFiles: %w", err)
+	}
 	return rec, nil
 }
 
@@ -512,6 +520,16 @@ func validateSnapshotFiles(files []string) error {
 			return fmt.Errorf("snapshotFiles[%d] %q is duplicated", i, name)
 		}
 		seen[name] = true
+	}
+	return nil
+}
+
+// validateDataSnapshotFiles requires each data file to be one of files.
+func validateDataSnapshotFiles(files, dataFiles []string) error {
+	for _, name := range dataFiles {
+		if !slices.Contains(files, name) {
+			return fmt.Errorf("data snapshot file %q is not one of the snapshot files", name)
+		}
 	}
 	return nil
 }

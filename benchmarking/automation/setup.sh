@@ -102,7 +102,9 @@ echo "Snapshotted ${ATE_DEV_ENV} -> ${TARGET_CLUSTERS_DIR}/${TARGET_CLUSTER_NAME
 
 echo
 echo "Building ${ORCHESTRATOR_IMAGE}..."
-docker build -t "${ORCHESTRATOR_IMAGE}" "${AUTOMATION_DIR}"
+# The Dockerfile installs the amd64 Go toolchain, so pin the platform even
+# when building on an arm64 host.
+docker build --platform=linux/amd64 -t "${ORCHESTRATOR_IMAGE}" "${AUTOMATION_DIR}"
 echo "Pushing ${ORCHESTRATOR_IMAGE}..."
 docker push "${ORCHESTRATOR_IMAGE}"
 

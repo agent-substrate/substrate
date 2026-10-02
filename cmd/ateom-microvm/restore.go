@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -38,8 +39,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
@@ -97,10 +96,6 @@ func newReseedNonce() ([]byte, error) {
 //     (restoreFullScope).
 //   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
 //     cold-boot the actor, which starts its containers afresh from the OCI image.
-//   - DATA_ON_GOLDEN: atelet staged a combined set into restore_dir — the
-//     guest files (memory + VM state) from the template's golden snapshot plus
-//     the durable-dir tar from the actor's own snapshot — so this restores
-//     exactly like FULL: the golden guest resumes over the actor's data.
 //
 // Contract with atelet: the snapshot's files have been downloaded to
 // ActorDirs.restore_dir, and the durable-dir volume directories re-created (empty).
@@ -109,7 +104,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -122,7 +117,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 	defer release()
 
-	if err := s.deactivateActorNetworking(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
+	if err := s.tunnel.Deactivate(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
 
@@ -175,13 +170,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	switch scope := req.GetScope(); scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		// DATA_ON_GOLDEN: the restore dir holds the golden snapshot's guest
-		// files, and the untar above re-materialized the ACTOR's durable-dir
-		// data, so resuming the golden guest picks up the actor's data through
-		// the durable virtio-fs share.
-		if err := s.restoreFullScope(ctx, p, restoreDir, tStart); err != nil {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		if err := s.restoreFullScope(ctx, p, scope, restoreDir, tStart); err != nil {
 			return nil, err
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
@@ -191,10 +181,15 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
 		}
+		dTotal := time.Since(tStart)
 		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",
-			slog.String("id", p.actorUID), slog.Duration("total", time.Since(tStart)))
+			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
+		// A cold boot has none of the full-scope phases, so the total is the
+		// only observation on its record.
+		logSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			restoreDurationKey, nil, []phase{{phaseTotal, dTotal}})
 	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
@@ -213,11 +208,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // and resume. Guest RAM — the actor's in-memory state and the frozen network config —
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
-func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, restoreDir string, tStart time.Time) (retErr error) {
+func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, scope ateompb.SnapshotScope, restoreDir string, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
-	egress, err := s.prepareActorEgress(ctx, p.actorRef.Atespace, p.actorRef.Name, p.actorUID, p.egressGateway)
+	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
 	if err != nil {
 		return err
 	}
@@ -270,10 +265,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// (plus, for merged rootfs, the upper re-materialized from the tar).
 	containers := p.containers
 	if len(containers) == 0 {
-		return status.Error(codes.InvalidArgument, "actor spec has no containers")
+		return apierror.InvalidArgument("actor spec has no containers")
 	}
 	if len(containers) > maxActorContainers {
-		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
 	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
 	if err != nil {
@@ -316,7 +311,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if cleanupErr := s.deactivateActorNetworking(cleanupCtx, p.attribution()); cleanupErr != nil {
+			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -433,6 +428,8 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// which hid that a first (cold) restore and a later (warm) one differ by more
 	// than 5x on the same actor. upper/lowers is the host reassembling the rootfs;
 	// vm_restore is cloud-hypervisor reading guest RAM back.
+	dWakeupProbe := time.Since(tResume)
+	dTotal := time.Since(tStart)
 	slog.InfoContext(ctx, "Actor restore phases", slog.String("id", actorUID),
 		slog.Duration("prep", tPrep.Sub(tStart)),
 		slog.Duration("bundles", tBundles.Sub(tPrep)),
@@ -443,8 +440,24 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		slog.Duration("vmm_launch", tLaunch.Sub(tTap)),
 		slog.Duration("vm_restore", tVMRestore.Sub(tLaunch)),
 		slog.Duration("resume", tResume.Sub(tVMRestore)),
-		slog.Duration("wakeup_probe", time.Since(tResume)),
-		slog.Duration("total", time.Since(tStart)))
+		slog.Duration("wakeup_probe", dWakeupProbe),
+		slog.Duration("total", dTotal))
+	// The joinable per-actor record the benchmarking tooling aggregates. The
+	// durable delta is not carried: tDurable is pinned to tLowers today, so it
+	// would always be the zero a record skips.
+	logSnapshotPhases(ctx, "Restore timing breakdown", p.actorAttribution(), scope,
+		restoreDurationKey, nil, []phase{
+			{phasePrep, tPrep.Sub(tStart)},
+			{phaseBundles, tBundles.Sub(tPrep)},
+			{phaseUpperJoin, tUpper.Sub(tBundles)},
+			{phaseLowers, tLowers.Sub(tUpper)},
+			{phaseTap, tTap.Sub(tDurable)},
+			{phaseVMMLaunch, tLaunch.Sub(tTap)},
+			{phaseVMRestore, tVMRestore.Sub(tLaunch)},
+			{phaseResume, tResume.Sub(tVMRestore)},
+			{phaseWakeupProbe, dWakeupProbe},
+			{phaseTotal, dTotal},
+		})
 
 	// An eager restore has read the whole snapshot into guest memory, and nothing
 	// merges against it afterwards, so the staged copy is dead weight from here on —
@@ -479,7 +492,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
 	}
 
-	if err := s.activateActorNetworking(p.attribution(), egress); err != nil {
+	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)

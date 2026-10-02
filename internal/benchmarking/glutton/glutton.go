@@ -41,4 +41,7 @@ const (
 	ReadDiskRoute  = "/readdisk"
 	WriteRAMRoute  = "/writeram"
 	ReadRAMRoute   = "/readram"
+	BurnCPURoute   = "/burncpu"
+	IngestRoute    = "/ingest"
+	UseCPURoute    = "/usecpu"
 )

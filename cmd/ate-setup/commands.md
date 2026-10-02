@@ -28,10 +28,9 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--rollout-timeout DURATION` | `--rollout-timeout DURATION` | Readiness timeout for workloads (default `60s`). Unlike the shell flag it also governs the podcertificate-controller and CSI waits, which stay at their 120s default until it is passed |
 | `--podcert-workers-per-signer N` | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |
 | `--cluster-size size0\|size10` | `--cluster-size size0\|size10` | Footprint profile (default `size0`). `size10` assumes a dedicated PostgreSQL node: it resizes the bundled StatefulSet and its `postgresql.conf`, pins the apiserver's connection pool, and raises the podcertificate-controller's API rate limits. `ATE_INSTALL_CLUSTER_SIZE` when the flag is absent |
-| `--cordon-control-plane` | `--cordon-control-plane` | Pin each control plane pod to its own node. Assumes a pool labeled and tainted `ate.dev/workloadType=ate-control-plane:NoSchedule` with one node per pod (7 at the shipped replica counts) plus a spare for rollout surges. `ATE_INSTALL_CORDON_CONTROL_PLANE=true` when the flag is absent |
-| `--experimental-use-sdsmint` | `--experimental-use-sdsmint` | Mint TLS certificates on-demand via SDS in atenet egress gateway |
+| `--cordon-control-plane` | `--cordon-control-plane` | Keep the control plane off the worker nodes. Assumes a small shared pool labeled and tainted `ate.dev/workloadType=ate-control-plane:NoSchedule`, across which each workload's replicas are spread, and a one-node pool labeled and tainted `ate.dev/workloadType=ate-postgres:NoSchedule` for postgres alone. `ATE_INSTALL_CORDON_CONTROL_PLANE=true` when the flag is absent |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
-| `--experimental-egress-credential-injection` | `--experimental-egress-credential-injection` | Egress credential injection on the sdsmint gateway's MITM leg (`--credential-provider-name` and `--credential-provider-address` select the provider) |
+| `--experimental-egress-credential-injection` | `--experimental-egress-credential-injection` | Egress credential injection on the egress gateway's MITM leg (`--credential-provider-name` and `--credential-provider-address` select the provider) |
 | `--otlp-endpoint URL` | `--otlp-endpoint URL`, or `ATE_OTLP_ENDPOINT=URL` | Send control plane telemetry to `URL` instead of the cluster default (see [`benchmarking/telemetry/README.md`](../../benchmarking/telemetry/README.md)) |
 | `--context NAME` | `KUBECTL_CONTEXT=NAME` | Kubeconfig context; still defaults to `KUBECTL_CONTEXT` |
 | `--kubeconfig PATH` | `KUBECONFIG=PATH` | Explicit kubeconfig path |
@@ -62,6 +61,10 @@ toolchain, and write access to a registry.
 `REPO` has to hold every component image the manifests reference, all under the
 same tag, which is how a release publishes them. A release that adds a component
 has to publish it alongside the others before a pre-built install can use it.
+`make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` publishes the full
+set, including `envoy-dataplane`, which is built from a Dockerfile with `docker
+buildx` rather than with `ko`. A build from source builds that image itself, so
+it needs `docker` as well as `ko`.
 Each reference is then pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the
 cluster does.
@@ -86,6 +89,8 @@ that already names a manifest is used as written, and is not looked up.
 | `deploy apiserver` | `--deploy-ate-apiserver` |
 | `deploy ate-controller` | (no shell equivalent) |
 | `deploy atenet` | `--deploy-atenet` |
+| `deploy podcertificate-controller` | (no shell equivalent) |
+| `deploy sandboxconfig` | (no shell equivalent) |
 | `deploy postgres` | (no shell equivalent) |
 
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the
@@ -168,10 +173,8 @@ See
 | `deploy demo counter` | `--deploy-demo-counter` | A counter actor exercising snapshot, resume, and atenet ingress |
 | `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate. Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
 | `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
-| `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet |
+| `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
 | `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
-| `deploy demo egress-mitm` | `--deploy-demo-egress-mitm` | Egress with TLS interception. Needs an sdsmint install (`deploy atenet --experimental-use-sdsmint`) for the trust bundle |
-| `deploy demo egress-microvm-mitm` | `--deploy-demo-egress-microvm-mitm` | Interception on micro-VM workers; needs both of the above |
 | `deploy demo jupyter` | `--deploy-demo-jupyter` | A Jupyter notebook server per actor, reached through atenet ingress |
 | `deploy demo sandbox` | `--deploy-demo-sandbox` | An on-demand sandbox actor driven by the sandbox client |
 | `deploy demo multi-template` | `--deploy-demo-multi-template` | Two ActorTemplates sharing one WorkerPool |

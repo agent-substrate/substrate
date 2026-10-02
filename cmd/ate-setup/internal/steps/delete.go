@@ -78,12 +78,7 @@ func (e *Env) DeleteAtenet(ctx context.Context) error {
 	for _, path := range [][]string{
 		{"atenet-router.yaml"},
 		{"components", "agentgateway", "configmap.yaml"},
-		// Both egress variants, not the selected one: teardown has to clean up
-		// an install made with --experimental-use-sdsmint whether or not this
-		// invocation passes it, and either file may declare resources the
-		// other does not.
 		{"atenet-egress.yaml"},
-		{"atenet-egress-with-sdsmint.yaml"},
 	} {
 		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest(path...)); err != nil {
 			return err

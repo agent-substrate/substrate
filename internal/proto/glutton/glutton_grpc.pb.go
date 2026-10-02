@@ -40,6 +40,9 @@ const (
 	Glutton_OpenFD_FullMethodName    = "/glutton.Glutton/OpenFD"
 	Glutton_Ping_FullMethodName      = "/glutton.Glutton/Ping"
 	Glutton_Gossip_FullMethodName    = "/glutton.Glutton/Gossip"
+	Glutton_BurnCPU_FullMethodName   = "/glutton.Glutton/BurnCPU"
+	Glutton_Ingest_FullMethodName    = "/glutton.Glutton/Ingest"
+	Glutton_UseCPU_FullMethodName    = "/glutton.Glutton/UseCPU"
 )
 
 // GluttonClient is the client API for Glutton service.
@@ -72,6 +75,19 @@ type GluttonClient interface {
 	// Tells the glutton to send network traffic to a peer glutton.
 	// messages will be sent on regular intervals separated by delay_ms.
 	Gossip(ctx context.Context, in *GossipRequest, opts ...grpc.CallOption) (*GossipResponse, error)
+	// Tells glutton to spin CPU for a wall-clock duration, hashing in a
+	// tight loop across the requested number of goroutines. Models
+	// compute-bound work such as compiling or running a test suite.
+	BurnCPU(ctx context.Context, in *BurnCPURequest, opts ...grpc.CallOption) (*BurnCPUResponse, error)
+	// Carries caller-supplied bytes over the wire into the glutton, which
+	// writes them to a file under its data dir. Unlike WriteDisk, the bytes
+	// cross the network, so the request models a download (git clone,
+	// dependency fetch) arriving through the actor's ingress path.
+	Ingest(ctx context.Context, in *IngestRequest, opts ...grpc.CallOption) (*IngestResponse, error)
+	// Tells the glutton to consume CPU. The request sets the current CPU
+	// load; calling again replaces it, and num_cores=0 stops it. See
+	// UseCPURequest for the (goroutines x duty cycle) shape.
+	UseCPU(ctx context.Context, in *UseCPURequest, opts ...grpc.CallOption) (*UseCPUResponse, error)
 }
 
 type gluttonClient struct {
@@ -152,6 +168,36 @@ func (c *gluttonClient) Gossip(ctx context.Context, in *GossipRequest, opts ...g
 	return out, nil
 }
 
+func (c *gluttonClient) BurnCPU(ctx context.Context, in *BurnCPURequest, opts ...grpc.CallOption) (*BurnCPUResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BurnCPUResponse)
+	err := c.cc.Invoke(ctx, Glutton_BurnCPU_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gluttonClient) Ingest(ctx context.Context, in *IngestRequest, opts ...grpc.CallOption) (*IngestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IngestResponse)
+	err := c.cc.Invoke(ctx, Glutton_Ingest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gluttonClient) UseCPU(ctx context.Context, in *UseCPURequest, opts ...grpc.CallOption) (*UseCPUResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UseCPUResponse)
+	err := c.cc.Invoke(ctx, Glutton_UseCPU_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GluttonServer is the server API for Glutton service.
 // All implementations must embed UnimplementedGluttonServer
 // for forward compatibility.
@@ -182,6 +228,19 @@ type GluttonServer interface {
 	// Tells the glutton to send network traffic to a peer glutton.
 	// messages will be sent on regular intervals separated by delay_ms.
 	Gossip(context.Context, *GossipRequest) (*GossipResponse, error)
+	// Tells glutton to spin CPU for a wall-clock duration, hashing in a
+	// tight loop across the requested number of goroutines. Models
+	// compute-bound work such as compiling or running a test suite.
+	BurnCPU(context.Context, *BurnCPURequest) (*BurnCPUResponse, error)
+	// Carries caller-supplied bytes over the wire into the glutton, which
+	// writes them to a file under its data dir. Unlike WriteDisk, the bytes
+	// cross the network, so the request models a download (git clone,
+	// dependency fetch) arriving through the actor's ingress path.
+	Ingest(context.Context, *IngestRequest) (*IngestResponse, error)
+	// Tells the glutton to consume CPU. The request sets the current CPU
+	// load; calling again replaces it, and num_cores=0 stops it. See
+	// UseCPURequest for the (goroutines x duty cycle) shape.
+	UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error)
 	mustEmbedUnimplementedGluttonServer()
 }
 
@@ -212,6 +271,15 @@ func (UnimplementedGluttonServer) Ping(context.Context, *PingRequest) (*PingResp
 }
 func (UnimplementedGluttonServer) Gossip(context.Context, *GossipRequest) (*GossipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Gossip not implemented")
+}
+func (UnimplementedGluttonServer) BurnCPU(context.Context, *BurnCPURequest) (*BurnCPUResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BurnCPU not implemented")
+}
+func (UnimplementedGluttonServer) Ingest(context.Context, *IngestRequest) (*IngestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Ingest not implemented")
+}
+func (UnimplementedGluttonServer) UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UseCPU not implemented")
 }
 func (UnimplementedGluttonServer) mustEmbedUnimplementedGluttonServer() {}
 func (UnimplementedGluttonServer) testEmbeddedByValue()                 {}
@@ -360,6 +428,60 @@ func _Glutton_Gossip_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Glutton_BurnCPU_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BurnCPURequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).BurnCPU(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_BurnCPU_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).BurnCPU(ctx, req.(*BurnCPURequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Glutton_Ingest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IngestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).Ingest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_Ingest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).Ingest(ctx, req.(*IngestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Glutton_UseCPU_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UseCPURequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).UseCPU(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_UseCPU_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).UseCPU(ctx, req.(*UseCPURequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Glutton_ServiceDesc is the grpc.ServiceDesc for Glutton service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -394,6 +516,18 @@ var Glutton_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Gossip",
 			Handler:    _Glutton_Gossip_Handler,
+		},
+		{
+			MethodName: "BurnCPU",
+			Handler:    _Glutton_BurnCPU_Handler,
+		},
+		{
+			MethodName: "Ingest",
+			Handler:    _Glutton_Ingest_Handler,
+		},
+		{
+			MethodName: "UseCPU",
+			Handler:    _Glutton_UseCPU_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

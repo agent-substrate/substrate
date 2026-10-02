@@ -36,6 +36,7 @@ import (
 	"github.com/myzhan/boomer"
 
 	// Register user classes via init():
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/agentsession"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/sweperf"
 )
@@ -46,11 +47,15 @@ func main() {
 		routerURL               = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
 		atespace                = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr                = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		configJSON              = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time, min_live_time, max_live_time in seconds, durdir_file_size_bytes, resume_mode, lifecycle_mode, durdir_read_mode, durdir_template, mem_target, mem_churn, mem_read, max_pings_per_wake). Unset fields keep their built-in defaults.")
+		configJSON              = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time, min_live_time, max_live_time in seconds, durdir_file_size_bytes, resume_mode, lifecycle_mode, durdir_read_mode, durdir_template, mem_target, mem_churn, mem_read, cpu_cores, cpu_duty_cycle, max_pings_per_wake). Unset fields keep their built-in defaults.")
 		masterWebPort           = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message. Exits if the first fetch fails; later failures keep the last fetched values. {master-host} comes from boomer's existing --master-host flag.")
 		configPollInterval      = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
 		userClass               = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 		actorsPerUser           = flag.Int("actors-per-user", 1, "Number of actors each user (VU) creates and cycles through in round-robin: on iteration i, the user targets actor i%actors-per-user. Startup creates all actors; shutdown hibernates+deletes them.")
+		checkAgentSessionScript = flag.String("check-agentsession-script", "", "Validate this agent-session script YAML and exit; nothing else runs. Used by benchmarking/locust/deploy.sh before uploading a script.")
+		totalActors             = flag.Int("total-actors", 100, "Total actors to create in the batch (spawn benchmark).")
+		spawnConcurrency        = flag.Int("spawn-concurrency", 1, "Number of actors created concurrently (spawn benchmark).")
+		actorDeadline           = flag.Float64("actor-deadline", 120, "Per-actor timeout in seconds covering CreateActor + ResumeActor + Ping (spawn benchmark).")
 		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
@@ -65,7 +70,37 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *totalActors < 1 {
+		slog.Error("fatal: --total-actors must be >= 1",
+			slog.Int("total_actors", *totalActors))
+		os.Exit(1)
+	}
+
+	if *spawnConcurrency < 1 {
+		slog.Error("fatal: --spawn-concurrency must be >= 1",
+			slog.Int("spawn_concurrency", *spawnConcurrency))
+		os.Exit(1)
+	}
+
+	if *actorDeadline <= 0 {
+		slog.Error("fatal: --actor-deadline must be > 0",
+			slog.Float64("actor_deadline", *actorDeadline))
+		os.Exit(1)
+	}
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	if *checkAgentSessionScript != "" {
+		s, err := agentsession.LoadFile(*checkAgentSessionScript)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		b := agentsession.Budgets(s.Steps)
+		fmt.Printf("agent-session script %q: %d steps, declares %s RAM + %s disk, min_actor_memory %s\n",
+			s.Name, len(s.Steps), agentsession.FormatSize(b.RAM), agentsession.FormatSize(b.Disk), agentsession.FormatSize(s.MinActorMemory))
+		return
+	}
 
 	initialCfg, err := dynconfig.Parse([]byte(*configJSON), dynconfig.Config{
 		MaxWait:         500 * time.Millisecond,
@@ -149,12 +184,15 @@ func main() {
 	}
 
 	cfg := &userclass.Config{
-		APIStub:       apiStub,
-		HTTPClient:    httpClient,
-		RouterURL:     *routerURL,
-		Atespace:      *atespace,
-		Dyn:           dyn,
-		ActorsPerUser: *actorsPerUser,
+		APIStub:          apiStub,
+		HTTPClient:       httpClient,
+		RouterURL:        *routerURL,
+		Atespace:         *atespace,
+		Dyn:              dyn,
+		ActorsPerUser:    *actorsPerUser,
+		TotalActors:      *totalActors,
+		SpawnConcurrency: *spawnConcurrency,
+		ActorDeadline:    time.Duration(*actorDeadline * float64(time.Second)),
 	}
 
 	entry, ok := userclass.Lookup(class)

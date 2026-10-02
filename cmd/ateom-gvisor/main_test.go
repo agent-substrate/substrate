@@ -21,8 +21,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
@@ -48,7 +48,7 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 			return err
 		},
 	} {
-		if got := status.Code(call()); got != codes.InvalidArgument {
+		if got := apierror.Code(call()); got != codes.InvalidArgument {
 			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
 		}
 	}

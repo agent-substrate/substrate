@@ -163,14 +163,12 @@ type Config struct {
 	// or size10.
 	ClusterSize string
 
-	// CordonControlPlane pins each control plane workload to its own node
-	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a node pool labeled and
-	// tainted ate.dev/workloadType=ate-control-plane:NoSchedule with one node
-	// per pod plus a spare for rollout surges.
+	// CordonControlPlane keeps the control plane off the worker nodes
+	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a small shared pool
+	// labeled and tainted ate.dev/workloadType=ate-control-plane:NoSchedule,
+	// and a one-node pool labeled and tainted
+	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
 	CordonControlPlane bool
-
-	// ExperimentalUseSDSMint enables per-SNI dynamic cert minting on atenet-egress.
-	ExperimentalUseSDSMint bool
 
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
@@ -241,7 +239,6 @@ type Options struct {
 	PodcertWorkersPerSigner               int
 	ClusterSize                           string
 	CordonControlPlane                    bool
-	ExperimentalUseSDSMint                bool
 	AdditionalEgressExtprocService        string
 	ExperimentalEgressCredentialInjection bool
 	CredentialProviderName                string
@@ -319,7 +316,6 @@ func Load(opts Options) (*Config, error) {
 		podcertWorkers = w
 	}
 
-	sdsmint := opts.ExperimentalUseSDSMint || env["ATE_EXPERIMENTAL_USE_SDSMINT"] == "true"
 	extproc := firstNonEmpty(opts.AdditionalEgressExtprocService, env["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"])
 	injection := opts.ExperimentalEgressCredentialInjection || env["ATE_CREDENTIAL_INJECTION_ENABLED"] == "true"
 	cordon := opts.CordonControlPlane || env["ATE_INSTALL_CORDON_CONTROL_PLANE"] == "true"
@@ -361,7 +357,6 @@ func Load(opts Options) (*Config, error) {
 		PodcertWorkersPerSigner:               podcertWorkers,
 		ClusterSize:                           firstNonEmpty(opts.ClusterSize, env["ATE_INSTALL_CLUSTER_SIZE"], ClusterSizeSize0),
 		CordonControlPlane:                    cordon,
-		ExperimentalUseSDSMint:                sdsmint,
 		AdditionalEgressExtprocService:        extproc,
 		ExperimentalEgressCredentialInjection: injection,
 		CredentialProviderName:                firstNonEmpty(opts.CredentialProviderName, env["ATE_CREDENTIAL_PROVIDER_NAME"]),
@@ -452,17 +447,11 @@ func validate(cfg *Config) error {
 		if err := validateExtprocService(cfg.AdditionalEgressExtprocService); err != nil {
 			return err
 		}
-		if !cfg.ExperimentalUseSDSMint {
-			return fmt.Errorf("--experimental-additional-egress-extproc-service requires --experimental-use-sdsmint")
-		}
 		if cfg.Router != RouterEnvoy {
 			return fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-dataplane=envoy")
 		}
 	}
 	if cfg.ExperimentalEgressCredentialInjection {
-		if !cfg.ExperimentalUseSDSMint {
-			return fmt.Errorf("--experimental-egress-credential-injection requires --experimental-use-sdsmint")
-		}
 		if cfg.Router != RouterEnvoy {
 			return fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
 		}
@@ -617,9 +606,6 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
 	if c.CordonControlPlane {
 		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
-	}
-	if c.ExperimentalUseSDSMint {
-		merged["ATE_EXPERIMENTAL_USE_SDSMINT"] = "true"
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService

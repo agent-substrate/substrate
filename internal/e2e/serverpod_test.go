@@ -216,7 +216,7 @@ func TestRenderServerPod(t *testing.T) {
 	}
 }
 
-// TestRenderServerPod_Volumes covers the credential-carrying shape the sdsmint
+// TestRenderServerPod_Volumes covers the credential-carrying shape the egressmitm
 // suite deploys, with both volume kinds it needs: a plain Secret and a
 // projection. A projection is the interesting one — it nests three levels, so
 // it is what an off-by-two in the block indentation shows up in.

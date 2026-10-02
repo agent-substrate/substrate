@@ -106,17 +106,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	// Enforce per-class SandboxConfig asset requirements. This is applied
-	// before any SandboxConfig so the config below is validated too.
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
-		return err
-	}
-
-	// Install the cluster-wide sandbox config. Sandbox binaries live on
-	// cluster-scoped SandboxConfigs each ActorTemplate names via
-	// sandboxConfig.configName; gVisor templates name this one unless they
-	// create their own SandboxConfig.
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml")); err != nil {
+	if err := e.DeploySandboxConfig(ctx); err != nil {
 		return err
 	}
 
@@ -408,6 +398,28 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// DeploySandboxConfig applies the SandboxConfig admission policy, then the
+// default gVisor SandboxConfig.
+func (e *Env) DeploySandboxConfig(ctx context.Context) error {
+	log.Step("deploy_sandboxconfig")
+
+	if err := e.EnsureCRDs(ctx); err != nil {
+		return err
+	}
+
+	// Enforce per-class SandboxConfig asset requirements. This is applied
+	// before any SandboxConfig so the config below is validated too.
+	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
+		return err
+	}
+
+	// Install the cluster-wide sandbox config. Sandbox binaries live on
+	// cluster-scoped SandboxConfigs each ActorTemplate names via
+	// sandboxConfig.configName; gVisor templates name this one unless they
+	// create their own SandboxConfig.
+	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 
 // EnsureCRDs installs the CRDs only if they are missing. Component redeploys

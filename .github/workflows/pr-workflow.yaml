@@ -67,6 +67,34 @@ jobs:
       run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml"
         --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose
         -- -race -v ./...
+    # Kept apart from the root module so it can move to its own repository.
+    - name: gcp-secret-manager credential provider tests
+      working-directory: internal/plugins/gcp-secret-manager
+      run: ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcp-secret-manager.xml"
+        --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" --format standard-verbose
+        -- -race -v ./...
+    # The root verifiers stop at the module's go.mod, so it gets its own run:
+    # gofmt, go vet and the tidy check, then golangci-lint with the root config.
+    - name: gcp-secret-manager credential provider verify
+      working-directory: internal/plugins/gcp-secret-manager
+      run: |
+        make verify
+        ../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
+    - name: Cache cargo
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          cmd/dataplane/envoy/dynamic-modules/*/target
+        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/*/Cargo.lock') }}
+        restore-keys: cargo-${{ runner.os }}-
+    - name: dynamic module tests
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends clang libclang-dev
+        make test-dynamic-modules
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
@@ -96,7 +124,7 @@ jobs:
   e2e-test-matrix:
     name: E2E (${{ matrix.dataplane }})
     runs-on: ubuntu-latest
-    # Cluster bring-up, image builds and six sequential lanes; generous, but far
+    # Cluster bring-up, image builds and four sequential lanes; generous, but far
     # short of the six-hour platform default a hung lane would otherwise consume.
     timeout-minutes: 120
     continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
@@ -122,7 +150,11 @@ jobs:
           ) }}
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      # E2E_JUNIT_FILE is set per step, not here: the six lanes below share this
+      # Envoy only: the installer has no agentgateway credential-provider
+      # configuration yet. Job-wide because every ate-setup invocation reads
+      # it, including the control plane redeploy in run-microvm-demo-kind.sh.
+      ATE_CREDENTIAL_INJECTION_ENABLED: ${{ matrix.dataplane == 'envoy' }}
+      # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts
     steps:
@@ -176,14 +208,19 @@ jobs:
     - name: Deploy egress demos
       # TestActorEgress in the networking suite builds its Actor from the egress
       # ActorTemplate for the class under test, so both fixtures have to exist
-      # before their respective lane runs.
+      # before their respective lane runs. The demo's actors trust the CA the
+      # gateway mints its leaves from.
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
     - name: Run E2E tests (gVisor)
       env:
+        # Gates the injection suite. Injection happens inside the gateway, so
+        # the sandbox class does not matter and only this lane runs it.
+        E2E_EGRESS_CREDINJECT: ${{ matrix.dataplane == 'envoy' && '1' || '' }}
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor.xml
-      run: hack/run-e2e-kind.sh -v -args --no-color
+      # The identity suite runs last and alone (see below), not here.
+      run: hack/run-e2e-kind.sh -skip '^TestActorIdentity' -v -args --no-color
     - name: Run E2E tests (micro-VM)
       # The same suites again, with every fixture repointed at its micro-VM
       # variant by the single E2E_SANDBOX_CLASS knob (see internal/e2e/sandbox.go).
@@ -193,66 +230,20 @@ jobs:
       env:
         E2E_SANDBOX_CLASS: microvm
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm.xml
-      run: hack/run-e2e-kind.sh -v -args --no-color
-    - name: Deploy MITM egress (sdsmint)
-      # Swap the passthrough egress gateway for the sdsmint variant, which
-      # mints per-SNI leaves from the egress-mitm-ca-pool (created here if
-      # missing). --deploy-atenet redeploys only the atenet components (the
-      # rest of the control plane is unchanged), keeping this step cheap.
-      # Cluster-wide, so it must come AFTER the standard lanes: once egress
-      # TLS is intercepted, their passthrough assumptions
-      # (TestActorEgressHTTPS's end-to-end TLS with the origin) no longer hold.
-      run: hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=${{ matrix.dataplane }} --experimental-use-sdsmint
-    - name: Run E2E tests (egress MITM trust)
-      # The consumption half of the trust-bundle chain: an actor does TLS with
-      # the MITM gateway's minted leaf using ONLY the projected bundle, plus a
-      # system-roots negative control proving interception is real (see
-      # internal/e2e/suites/egressmitm).
+      run: hack/run-e2e-kind.sh -skip '^TestActorIdentity' -v -args --no-color
+    - name: Run E2E tests (identity, gVisor)
+      # The suite rotates the cluster-wide egress CA pool, and
+      # the gateway picks a rotation up only once kubelet has propagated the
+      # Secret into its pod, so until then it signs with a CA no actor trusts.
+      # Nothing that does TLS through the gateway can run alongside it.
       env:
-        E2E_EGRESS_MITM: "1"
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-mitm.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
-    - name: Run E2E tests (egress MITM trust, micro-VM)
-      # The same proof with the probe on the micro-VM runtime. Trust DELIVERY
-      # differs per sandbox class (gVisor RO bind vs the micro-VM unified
-      # virtio-fs share), so the handshake is proven on both. Uses the
-      # micro-VM deps staged earlier in this job.
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-identity-gvisor.xml
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/identity -v -args --no-color
+    - name: Run E2E tests (identity, micro-VM)
       env:
-        E2E_EGRESS_MITM: "1"
         E2E_SANDBOX_CLASS: microvm
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-mitm-microvm.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
-    - name: Deploy MITM egress demo
-      # The networking suite's egress tests need a fixture that trusts the
-      # CA used by sdsmint.
-      run: |
-        hack/install-ate-kind.sh --deploy-demo-egress-mitm
-        hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm
-    - name: Run E2E tests (networking, MITM egress)
-      env:
-        E2E_EGRESS_MITM: "1"
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-networking-mitm.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
-    - name: Run E2E tests (networking, MITM egress, micro-VM)
-      env:
-        E2E_EGRESS_MITM: "1"
-        E2E_SANDBOX_CLASS: microvm
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-networking-mitm-microvm.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
-    - name: Deploy MITM egress with credential injection
-      # Envoy lane only: the injection flag requires the envoy dataplane.
-      # TODO: support agent gateway as dataplane.
-      if: matrix.dataplane == 'envoy'
-      run: hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=envoy --experimental-use-sdsmint --experimental-egress-credential-injection
-    - name: Run E2E tests (egress credential injection)
-      # Injection happens entirely inside the gateway, so the sandbox class
-      # does not change the path — per-class trust delivery is already the
-      # egressmitm steps' job. One (gVisor) run suffices.
-      if: matrix.dataplane == 'envoy'
-      env:
-        E2E_EGRESS_CREDINJECT: "1"
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-credinject.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-identity-microvm.xml
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/identity -v -args --no-color
     # Every lane must have reported tests; a `-run` filter that stops matching
     # otherwise leaves its lane green and empty. The set comes from the manifest
     # each lane registers itself in, so adding a lane needs no change here, and

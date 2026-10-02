@@ -19,6 +19,8 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
+	"strings"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -33,7 +35,77 @@ import (
 const (
 	// defaultStoreName is the name of the OpenFGA store managed by Substrate.
 	defaultStoreName = "substrate"
+
+	// GlobalRootObject is the singleton global scope object identifier in OpenFGA.
+	GlobalRootObject = "global:root"
+
+	RoleOwner  = "owner"
+	RoleEditor = "editor"
+	RoleViewer = "viewer"
+
+	RelationCanCreateAtespace     = "can_create_atespace"
+	RelationCanListAtespaces      = "can_list_atespaces"
+	RelationCanGet                = "can_get"
+	RelationCanDelete             = "can_delete"
+	RelationCanCreateAccessPolicy = "can_create_access_policy"
+	RelationCanGetAccessPolicy    = "can_get_access_policy"
+	RelationCanUpdateAccessPolicy = "can_update_access_policy"
+	RelationCanDeleteAccessPolicy = "can_delete_access_policy"
+
+	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
+	maxTuplesPerWrite = 100
 )
+
+type bypassKey struct{}
+
+// WithBypass returns a context that bypasses runtime authorization checks (for internal system reconcilers).
+func WithBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bypassKey{}, true)
+}
+
+// IsBypassed reports whether ctx has authorization checks bypassed.
+func IsBypassed(ctx context.Context) bool {
+	v, _ := ctx.Value(bypassKey{}).(bool)
+	return v
+}
+
+var tupleReplacer = strings.NewReplacer(
+	"%", "%25",
+	":", "%3A",
+	"#", "%23",
+	" ", "%20",
+	"*", "%2A",
+)
+
+// AtespaceObject formats an atespace name as an OpenFGA object string.
+func AtespaceObject(name string) string {
+	return "atespace:" + tupleReplacer.Replace(name)
+}
+
+// formatUser formats a principal ID as a valid OpenFGA user string.
+// OpenFGA disallows ':', '#', whitespace, and treats '*' as a public wildcard;
+// these characters (plus '%') are percent-encoded to prevent collisions and
+// wildcard injection while preserving '/', '@', '.', '-', and '_'.
+func formatUser(id string) string {
+	return "user:" + tupleReplacer.Replace(id)
+}
+
+// FormatMember validates a policy member string (such as "user:alice@example.com")
+// and returns the percent-encoded OpenFGA user string. Control characters are
+// rejected because OpenFGA does not accept them in tuple user IDs.
+func FormatMember(member string) (string, error) {
+	id, ok := strings.CutPrefix(member, "user:")
+	if !ok || strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("member %q must have non-empty \"user:<id>\" format", member)
+	}
+	if id == "*" {
+		return "", fmt.Errorf("wildcard member %q is not allowed", member)
+	}
+	if strings.ContainsFunc(id, unicode.IsControl) {
+		return "", fmt.Errorf("member %q must not contain control characters", member)
+	}
+	return formatUser(id), nil
+}
 
 //go:embed model.fga
 var modelDSL string
@@ -86,6 +158,48 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 	)
 
 	return storeID, modelID, nil
+}
+
+// New provisions the default OpenFGA store and authorization model via
+// EnsureStoreAndModel and returns the read-path Authorizer and write-path
+// PolicyManager. bootstrapOwners are principal IDs (with or without the
+// "user:" prefix) that the Authorizer treats as owners of global:root on every
+// check, independent of any stored AccessPolicy.
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string) (*Authorizer, *PolicyManager, error) {
+	owners, err := parseBootstrapOwners(bootstrapOwners)
+	if err != nil {
+		return nil, nil, err
+	}
+	storeID, modelID, err := EnsureStoreAndModel(ctx, pool, fgaServer)
+	if err != nil {
+		return nil, nil, err
+	}
+	authorizer := &Authorizer{
+		fgaServer:       fgaServer,
+		storeID:         storeID,
+		modelID:         modelID,
+		bootstrapOwners: owners,
+	}
+	policyManager := &PolicyManager{
+		fgaServer: fgaServer,
+		storeID:   storeID,
+		modelID:   modelID,
+	}
+	return authorizer, policyManager, nil
+}
+
+// parseBootstrapOwners validates principal IDs and returns the set of their
+// OpenFGA user strings.
+func parseBootstrapOwners(ids []string) (map[string]struct{}, error) {
+	owners := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		user, err := FormatMember("user:" + strings.TrimPrefix(strings.TrimSpace(id), "user:"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid bootstrap owner %q: %w", id, err)
+		}
+		owners[user] = struct{}{}
+	}
+	return owners, nil
 }
 
 // ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing

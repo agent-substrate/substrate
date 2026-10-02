@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package egresscredinject e2e-tests egress credential injection: a matching
-// EgressPolicy https rule with a replace_headers effect makes the sdsmint
-// egress gateway's MITM leg resolve the credential through the
+// EgressPolicy https rule with a replace_headers effect makes the egress
+// gateway's MITM leg resolve the credential through the
 // k8s-credential-provider and replace the actor's placeholder header with it
 // before re-originating upstream. See TestActorEgressCredentialInjection for
 // the proof structure and how to run this locally.
@@ -87,15 +87,14 @@ var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+plac
 // A request without the header is not covered: the API forwards it without
 // the credential, which the gateway does not implement yet.
 //
-// The gate: this needs the sdsmint egress gateway with injection enabled
-// (which replaces the passthrough gateway cluster-wide) plus the
-// k8s-credential-provider, which the suite deploys itself. Locally:
+// The gate: this needs the egress gateway deployed with injection enabled
+// plus the k8s-credential-provider, which the suite deploys itself. Locally:
 //
-//	hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint --experimental-egress-credential-injection
+//	hack/install-ate-kind.sh --deploy-atenet --experimental-egress-credential-injection
 //	E2E_EGRESS_CREDINJECT=1 hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
 func TestActorEgressCredentialInjection(t *testing.T) {
 	if os.Getenv("E2E_EGRESS_CREDINJECT") == "" {
-		t.Skip("needs the sdsmint (MITM) egress gateway with credential injection: deploy with hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint --experimental-egress-credential-injection, then set E2E_EGRESS_CREDINJECT=1")
+		t.Skip("needs the egress gateway with credential injection: deploy with hack/install-ate-kind.sh --deploy-atenet --experimental-egress-credential-injection, then set E2E_EGRESS_CREDINJECT=1")
 	}
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
