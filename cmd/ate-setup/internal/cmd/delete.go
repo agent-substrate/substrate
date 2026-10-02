@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 )
 
 var deleteCmd = &cobra.Command{
@@ -25,12 +26,16 @@ var deleteCmd = &cobra.Command{
 	Short: "Delete Agent Substrate components",
 }
 
+// deleteOpts is shared by the control-plane delete commands; only one of them
+// runs per invocation.
+var deleteOpts steps.DeleteOptions
+
 var deleteAteSystemCmd = &cobra.Command{
 	Use:   "ate-system",
 	Short: "Delete the core system",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeleteAteSystem(cmd.Context())
+		return env.DeleteAteSystem(cmd.Context(), deleteOpts)
 	},
 }
 
@@ -48,11 +53,24 @@ var deleteAllCmd = &cobra.Command{
 	Short: "Delete every demo and then the core system",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeleteAll(cmd.Context(), demos.Deleters(env.Cfg))
+		return env.DeleteAll(cmd.Context(), demos.Deleters(env.Cfg), deleteOpts)
 	},
+}
+
+// registerDeleteFlags adds the flags of the commands that delete the control
+// plane.
+func registerDeleteFlags(cmd *cobra.Command, opts *steps.DeleteOptions) {
+	fs := cmd.Flags()
+	fs.BoolVar(&opts.KeepNodeState, "keep-node-state", false,
+		"Leave /var/lib/ate on the nodes (default: wipe it, unless an external database outlives the install)")
+	fs.BoolVar(&opts.WipeNodeCaches, "wipe-node-caches", false,
+		"Wipe the content-addressed caches in /var/lib/ate too (image layers, sandbox runtimes), which the wipe otherwise leaves; no effect when node state is kept")
+	cmd.MarkFlagsMutuallyExclusive("keep-node-state", "wipe-node-caches")
 }
 
 func init() {
 	rootCmd.AddCommand(deleteCmd)
 	deleteCmd.AddCommand(deleteAteSystemCmd, deleteAtenetCmd, deleteAllCmd)
+	registerDeleteFlags(deleteAteSystemCmd, &deleteOpts)
+	registerDeleteFlags(deleteAllCmd, &deleteOpts)
 }

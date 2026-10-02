@@ -51,6 +51,10 @@ const (
 	// first ActorTemplate: downloading runsc, the first gVisor pod start, and
 	// image pulls.
 	DemoTimeout = 300 * time.Second
+	// NodeStateWipeTimeout bounds the node state wipe on delete: an image pull
+	// and an rm -rf of every actor's state on each node. Config.WaitTimeout
+	// applies here too.
+	NodeStateWipeTimeout = 600 * time.Second
 )
 
 // Well-known namespaces.

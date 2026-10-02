@@ -119,6 +119,16 @@ their refs; a WorkerPool points `spec.workerImage` to a build to use the ateom.
 
 `delete all` removes every registered demo and then the control plane.
 
+`delete ate-system` and `delete all` also empty `/var/lib/ate` on every node
+atelet ran on, once the control plane is gone. That directory holds actor
+state and local snapshots, which otherwise outlive the install. The image and
+sandbox runtime caches in it are content-addressed and stay, unless passed
+`--wipe-node-caches` (`hack/install-ate.sh --wipe-node-caches`). They keep the
+whole directory when the database is external, because its actor records
+outlive the install too, and when passed `--keep-node-state`
+(`hack/install-ate.sh --keep-node-state`); `--wipe-node-caches` has no effect
+then. Anything still mounted under the directory is left in place.
+
 ## Create
 
 Individual secrets and config that `deploy ate-system` creates automatically.

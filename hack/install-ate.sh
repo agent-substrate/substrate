@@ -94,6 +94,10 @@ usage() {
   echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
+  echo "  --keep-node-state                      Leave /var/lib/ate on the nodes when deleting (default: wipe it,"
+  echo "                                         unless an external database outlives the install)"
+  echo "  --wipe-node-caches                     Wipe the image and sandbox runtime caches in /var/lib/ate too"
+  echo "                                         (default: the wipe leaves them; no effect when node state is kept)"
   echo "  --atenet-dataplane=envoy|agentgateway  Select the atenet ingress and egress dataplane (default: envoy)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
   echo "  --cluster-size size0|size10            Cluster size profile (default: size0). \"size10\" assumes a dedicated postgres node"
@@ -255,9 +259,13 @@ GLOBAL_FLAGS=()
 # workstation will not have loaded.
 SETUP_CSI="${SETUP_CSI:-none}"
 BENCHMARK_FLAGS=()
+# Modifiers of the control-plane delete actions.
+DELETE_FLAGS=()
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
   case "${prescan_args[i]}" in
+    --keep-node-state) DELETE_FLAGS+=(--keep-node-state) ;;
+    --wipe-node-caches) DELETE_FLAGS+=(--wipe-node-caches) ;;
     --atenet-dataplane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --atenet-dataplane)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -366,6 +374,7 @@ while [[ "$#" -gt 0 ]]; do
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
+    --keep-node-state|--wipe-node-caches) ;;
 
     --deploy-ate-system) ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" ;;
     --setup-csi=*) ate_setup setup csi "${SETUP_CSI}" ;;
@@ -375,8 +384,8 @@ while [[ "$#" -gt 0 ]]; do
       fi
       ate_setup setup csi "${SETUP_CSI}"
       ;;
-    --delete-ate-system) ate_setup delete ate-system ;;
-    --delete-all) ate_setup delete all ;;
+    --delete-ate-system) ate_setup delete ate-system ${DELETE_FLAGS[@]+"${DELETE_FLAGS[@]}"} ;;
+    --delete-all) ate_setup delete all ${DELETE_FLAGS[@]+"${DELETE_FLAGS[@]}"} ;;
 
     --deploy-atelet) ate_setup deploy atelet ;;
     --deploy-ate-apiserver) ate_setup deploy apiserver ;;

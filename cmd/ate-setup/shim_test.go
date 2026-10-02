@@ -259,6 +259,14 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--delete-ate-system", "--delete-all"},
 		want: []string{"delete ate-system", "delete all"},
 	}, {
+		name: "keep-node-state applies to both control-plane deletes from either side",
+		args: []string{"--delete-ate-system", "--keep-node-state", "--delete-all"},
+		want: []string{"delete ate-system --keep-node-state", "delete all --keep-node-state"},
+	}, {
+		name: "wipe-node-caches applies to both control-plane deletes from either side",
+		args: []string{"--delete-ate-system", "--wipe-node-caches", "--delete-all"},
+		want: []string{"delete ate-system --wipe-node-caches", "delete all --wipe-node-caches"},
+	}, {
 		name: "benchmark flags are renamed and apply to both benchmark actions",
 		args: []string{
 			"--benchmark-worker-count=4", "--deploy-benchmarks",
