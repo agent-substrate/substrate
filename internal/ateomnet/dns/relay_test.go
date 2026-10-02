@@ -20,6 +20,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,7 +54,7 @@ func TestRelayCancelsUDPExchange(t *testing.T) {
 
 	// Two upstreams: a canceled exchange must not move on to the second.
 	second := newFakeResolver(t, func(query []byte) []byte { return query })
-	relay, err := NewRelay([]string{silent.LocalAddr().String(), second})
+	relay, err := NewRelayForUpstreams([]string{silent.LocalAddr().String(), second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func TestRelayForwardsUDPVerbatim(t *testing.T) {
 		return append([]byte{0xff}, query...)
 	})
 
-	relay, err := NewRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +113,7 @@ func TestRelayFallsBackToTheNextResolver(t *testing.T) {
 	dead.Close()
 
 	live := newFakeResolver(t, func(query []byte) []byte { return []byte("answered") })
-	relay, err := NewRelay([]string{deadAddress, live})
+	relay, err := NewRelayForUpstreams([]string{deadAddress, live})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,11 +128,18 @@ func TestRelayFallsBackToTheNextResolver(t *testing.T) {
 }
 
 func TestNewRelayRejects(t *testing.T) {
-	if _, err := NewRelay(nil); err == nil {
-		t.Error("NewRelay(nil) succeeded; a relay with no upstream can answer nothing")
+	empty := filepath.Join(t.TempDir(), "resolv.conf")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := NewRelay([]string{"10.96.0.10"}); err == nil {
-		t.Error("NewRelay accepted an address with no port")
+	if _, err := NewRelay(empty); err == nil {
+		t.Error("NewRelay succeeded with an empty resolv.conf")
+	}
+	if _, err := NewRelayForUpstreams(nil); err == nil {
+		t.Error("NewRelayForUpstreams(nil) succeeded; a relay with no upstream can answer nothing")
+	}
+	if _, err := NewRelayForUpstreams([]string{"10.96.0.10"}); err == nil {
+		t.Error("NewRelayForUpstreams accepted an address with no port")
 	}
 }
 
@@ -166,7 +175,7 @@ func serveRelayUDP(t *testing.T, relay *Relay) net.Conn {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = relay.ServePacket(ctx, pc) }()
+	go func() { _ = relay.servePacket(ctx, pc) }()
 
 	client, err := net.Dial("udp", pc.LocalAddr().String())
 	if err != nil {
@@ -197,7 +206,7 @@ func TestRelayForwardsAnswersLargerThanTheCommonBuffer(t *testing.T) {
 	}
 	upstream := newFakeResolver(t, func([]byte) []byte { return answer })
 
-	relay, err := NewRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +251,7 @@ func TestRelayDropsQueriesBeyondItsInFlightLimit(t *testing.T) {
 		}
 	}()
 
-	relay, err := NewRelay([]string{pc.LocalAddr().String()})
+	relay, err := NewRelayForUpstreams([]string{pc.LocalAddr().String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +321,7 @@ func serveRelayTCP(t *testing.T, relay *Relay, ctx context.Context) net.Addr {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { lis.Close() })
-	go func() { _ = relay.Serve(ctx, lis) }()
+	go func() { _ = relay.serveTCP(ctx, lis) }()
 	return lis.Addr()
 }
 
@@ -331,7 +340,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func TestRelayRefusesTCPConnectionsBeyondItsLimit(t *testing.T) {
 	upstream, held := newHeldTCPResolver(t)
-	relay, err := NewRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +376,7 @@ func TestRelayRefusesTCPConnectionsBeyondItsLimit(t *testing.T) {
 
 func TestRelayClosesTCPConnectionsWhenServingEnds(t *testing.T) {
 	upstream, held := newHeldTCPResolver(t)
-	relay, err := NewRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +435,7 @@ func TestRelayFailsOverOnServerFailure(t *testing.T) {
 		return dnsAnswer(query, 0)
 	})
 
-	relay, err := NewRelay([]string{sick, healthy})
+	relay, err := NewRelayForUpstreams([]string{sick, healthy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +457,7 @@ func TestRelayReturnsServerFailureWhenAllFail(t *testing.T) {
 	first := newFakeResolver(t, func(query []byte) []byte { return dnsAnswer(query, rcodeServFail) })
 	second := newFakeResolver(t, func(query []byte) []byte { return dnsAnswer(query, rcodeRefused) })
 
-	relay, err := NewRelay([]string{first, second})
+	relay, err := NewRelayForUpstreams([]string{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +481,7 @@ func TestRelayReturnsNXDomainWithoutFailover(t *testing.T) {
 		return dnsAnswer(query, 0)
 	})
 
-	relay, err := NewRelay([]string{first, second})
+	relay, err := NewRelayForUpstreams([]string{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}

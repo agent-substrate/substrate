@@ -27,8 +27,8 @@ import (
 	"strings"
 )
 
-// ResolvConfNameservers reads nameservers from resolv.conf as "host:53".
-func ResolvConfNameservers(path string) ([]string, error) {
+// resolvConfNameservers reads nameservers from resolv.conf as "host:53".
+func resolvConfNameservers(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("dns: reading resolv.conf: %w", err)

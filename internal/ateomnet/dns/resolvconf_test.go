@@ -53,15 +53,15 @@ func TestResolvConfNameservers(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			got, err := ResolvConfNameservers(path)
+			got, err := resolvConfNameservers(path)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("ResolvConfNameservers() = %v, want an error", got)
+					t.Fatalf("resolvConfNameservers() = %v, want an error", got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ResolvConfNameservers: %v", err)
+				t.Fatalf("resolvConfNameservers: %v", err)
 			}
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("nameservers mismatch (-want +got):\n%s", diff)

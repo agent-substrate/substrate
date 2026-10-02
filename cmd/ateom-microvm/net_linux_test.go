@@ -23,7 +23,6 @@ import (
 	"github.com/vishvananda/netlink"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/atunnel"
@@ -41,12 +40,8 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dnsRelay, err := dns.NewRelay([]string{"127.0.0.1:53"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	service := &AteomService{
-		tunnel:    &ateomtunnel.Tunnel{Egress: egress, EgressPort: 15001, DNSRelay: dnsRelay},
+		tunnel:    &ateomtunnel.Tunnel{Egress: egress, EgressPort: 15001},
 		actors:    map[string]*hostedActor{},
 		maxActors: 1,
 	}

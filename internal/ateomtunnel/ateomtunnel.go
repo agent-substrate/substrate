@@ -108,18 +108,13 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("while parsing atunnel upstream: %w", err)
 	}
-	// The pod's own resolvers, so an actor resolves exactly what the worker
-	// resolves, cluster DNS included.
-	nameservers, err := dns.ResolvConfNameservers(resolvConfPath)
-	if err != nil {
-		return nil, fmt.Errorf("while reading the worker pod resolvers: %w", err)
-	}
-	dnsRelay, err := dns.NewRelay(nameservers)
-	if err != nil {
-		return nil, fmt.Errorf("while building the actor DNS relay: %w", err)
-	}
-	slog.InfoContext(ctx, "Actor DNS relay ready", slog.Any("upstreams", nameservers))
 
+	dnsRelay, err := dns.NewRelay(resolvConfPath)
+	if err != nil {
+		return nil, fmt.Errorf("configuring DNS relay: %w", err)
+	}
+
+	// Ingress
 	ingress, err := atunnel.NewServer(atunnel.Config{
 		CredentialBundlePath: cfg.CredentialBundle,
 		TrustBundlePath:      cfg.TrustBundle,
@@ -127,7 +122,7 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 		Upstream:             upstreamURL,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("while configuring atunnel: %w", err)
+		return nil, fmt.Errorf("configuring ingress: %w", err)
 	}
 	if err := serve(ctx, "atunnel", cfg.ListenAddress, ingress.Serve); err != nil {
 		return nil, err
@@ -136,15 +131,23 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 		return nil, err
 	}
 
+	// Egress
 	egress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
 	if err != nil {
-		return nil, fmt.Errorf("while configuring atunnel egress: %w", err)
+		return nil, fmt.Errorf("configuring egress: %w", err)
 	}
 	egressPort, err := atunnel.EgressPort(cfg.EgressListenAddress)
 	if err != nil {
 		return nil, err
 	}
-	return &Tunnel{Ingress: ingress, Egress: egress, EgressPort: egressPort, DNSRelay: dnsRelay, cfg: cfg}, nil
+
+	return &Tunnel{
+			Ingress:    ingress,
+			Egress:     egress,
+			EgressPort: egressPort,
+			DNSRelay:   dnsRelay,
+			cfg:        cfg},
+		nil
 }
 
 // serve listens on address and runs serveFn on it, exiting the process if it

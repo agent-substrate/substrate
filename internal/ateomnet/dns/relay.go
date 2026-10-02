@@ -21,13 +21,16 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 )
 
 const (
-	// Port is the relay port on the sandbox's gateway.
-	Port = 53
+	// dnsPort is the relay port on the sandbox's gateway.
+	dnsPort = 53
 
 	// Read complete UDP datagrams without truncating EDNS responses.
 	maxDNSDatagram = 65535
@@ -58,8 +61,17 @@ type Relay struct {
 	connections chan struct{}
 }
 
-// NewRelay forwards to upstreams, each "host:port".
-func NewRelay(upstreams []string) (*Relay, error) {
+// NewRelay reads nameservers from resolvConfPath and forwards to each on port 53.
+func NewRelay(resolvConfPath string) (*Relay, error) {
+	upstreams, err := resolvConfNameservers(resolvConfPath)
+	if err != nil {
+		return nil, err
+	}
+	return NewRelayForUpstreams(upstreams)
+}
+
+// NewRelayForUpstreams forwards to upstreams, each "host:port", tried in order.
+func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 	if len(upstreams) == 0 {
 		return nil, fmt.Errorf("dns: at least one upstream resolver is required")
 	}
@@ -68,6 +80,9 @@ func NewRelay(upstreams []string) (*Relay, error) {
 			return nil, fmt.Errorf("dns: invalid upstream resolver %q: %w", u, err)
 		}
 	}
+
+	slog.Info("DNS relay configured", slog.Any("upstreams", upstreams))
+
 	return &Relay{
 		upstreams:   upstreams,
 		dialer:      &net.Dialer{Timeout: dnsExchangeTimeout},
@@ -76,8 +91,61 @@ func NewRelay(upstreams []string) (*Relay, error) {
 	}, nil
 }
 
-// ServePacket answers UDP queries until ctx is canceled or the socket fails.
-func (r *Relay) ServePacket(ctx context.Context, pc net.PacketConn) error {
+// Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.
+func (r *Relay) Serve(ctx context.Context, ns netns.Handle) ([]io.Closer, []func(), error) {
+	// Bind the wildcard because the microVM tap's gateway address is added later.
+	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(dnsPort))
+
+	var packet net.PacketConn
+	var stream net.Listener
+	if err := netns.Do(ctx, ns, func(context.Context) error {
+		pc, err := net.ListenPacket("udp", address)
+		if err != nil {
+			return fmt.Errorf("while opening the actor DNS socket: %w", err)
+		}
+		packet = pc
+		l, err := net.Listen("tcp", address)
+		if err != nil {
+			_ = pc.Close()
+			return fmt.Errorf("while opening the actor DNS listener: %w", err)
+		}
+		stream = l
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+
+	closers, serve := r.ServeOn(ctx, packet, stream)
+	return closers, serve, nil
+}
+
+// ServeOn serves UDP DNS on packet and TCP DNS on stream, which the caller has
+// already bound. It returns the functions that serve, each to be run on its own
+// goroutine, and the closers that stop them and release the sockets.
+func (r *Relay) ServeOn(ctx context.Context, packet net.PacketConn, stream net.Listener) ([]io.Closer, []func()) {
+	// Detached from the activation RPC's context but cancelable: the relay's
+	// capacity is the worker's, so teardown must drop queries still in flight.
+	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
+	serve := []func(){
+		func() {
+			if err := r.servePacket(serveCtx, packet); err != nil {
+				slog.WarnContext(ctx, "Actor DNS socket stopped", slog.Any("err", err))
+			}
+		},
+		func() {
+			if err := r.serveTCP(serveCtx, stream); err != nil {
+				slog.WarnContext(ctx, "Actor DNS listener stopped", slog.Any("err", err))
+			}
+		},
+	}
+	// Cancel first: closing the sockets alone leaves the queries already being
+	// resolved holding the relay.
+	closers := []io.Closer{closerFunc(func() error { stopServing(); return nil }), packet, stream}
+	return closers, serve
+}
+
+// servePacket answers UDP queries until ctx is canceled or the socket fails.
+func (r *Relay) servePacket(ctx context.Context, pc net.PacketConn) error {
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -126,8 +194,8 @@ func (r *Relay) ServePacket(ctx context.Context, pc net.PacketConn) error {
 	}
 }
 
-// Serve relays TCP DNS connections until ctx is canceled or the listener closes.
-func (r *Relay) Serve(ctx context.Context, listener net.Listener) error {
+// serveTCP relays TCP DNS connections until ctx is canceled or the listener closes.
+func (r *Relay) serveTCP(ctx context.Context, listener net.Listener) error {
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -217,40 +285,6 @@ func (r *Relay) exchangeUDP(ctx context.Context, query []byte) ([]byte, error) {
 	return nil, fmt.Errorf("dns: no upstream resolver answered: %w", errs)
 }
 
-// Response codes that say the resolver failed rather than answered. NXDOMAIN
-// and NOERROR are answers and are passed back as they are.
-const (
-	rcodeServFail = 2
-	rcodeNotImp   = 4
-	rcodeRefused  = 5
-)
-
-// failoverRcode reports the response code when the relay should try the next
-// upstream. Reads the 12-byte header only; anything shorter is passed through.
-func failoverRcode(msg []byte) (byte, bool) {
-	if len(msg) < 12 {
-		return 0, false
-	}
-	rcode := msg[3] & 0x0f
-	switch rcode {
-	case rcodeServFail, rcodeNotImp, rcodeRefused:
-		return rcode, true
-	}
-	return 0, false
-}
-
-func rcodeError(rcode byte) error {
-	switch rcode {
-	case rcodeServFail:
-		return errors.New("answered SERVFAIL")
-	case rcodeNotImp:
-		return errors.New("answered NOTIMP")
-	case rcodeRefused:
-		return errors.New("answered REFUSED")
-	}
-	return fmt.Errorf("answered rcode %d", rcode)
-}
-
 // relayTCP copies a DNS stream without parsing its length-prefixed messages.
 func (r *Relay) relayTCP(ctx context.Context, downstream net.Conn) {
 	defer downstream.Close()
@@ -309,3 +343,43 @@ func (r *Relay) relayTCP(ctx context.Context, downstream net.Conn) {
 	}()
 	wg.Wait()
 }
+
+// Response codes that say the resolver failed rather than answered. NXDOMAIN
+// and NOERROR are answers and are passed back as they are.
+const (
+	rcodeServFail = 2
+	rcodeNotImp   = 4
+	rcodeRefused  = 5
+)
+
+// failoverRcode reports the response code when the relay should try the next
+// upstream. Reads the 12-byte header only; anything shorter is passed through.
+func failoverRcode(msg []byte) (byte, bool) {
+	if len(msg) < 12 {
+		return 0, false
+	}
+	rcode := msg[3] & 0x0f
+	switch rcode {
+	case rcodeServFail, rcodeNotImp, rcodeRefused:
+		return rcode, true
+	}
+	return 0, false
+}
+
+func rcodeError(rcode byte) error {
+	switch rcode {
+	case rcodeServFail:
+		return errors.New("answered SERVFAIL")
+	case rcodeNotImp:
+		return errors.New("answered NOTIMP")
+	case rcodeRefused:
+		return errors.New("answered REFUSED")
+	}
+	return fmt.Errorf("answered rcode %d", rcode)
+}
+
+// closerFunc adapts a cancel function to io.Closer, so a caller takes a
+// sandbox's sockets and the work behind them down as one list.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
