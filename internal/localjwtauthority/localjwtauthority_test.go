@@ -15,6 +15,9 @@
 package localjwtauthority
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -27,10 +30,11 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 func TestRefreshingPool(t *testing.T) {
-	ca1, err := GenerateECDSAP256Authority("1")
+	ca1, err := GenerateAuthority("ES256", "1")
 	if err != nil {
 		t.Fatalf("Unexpected error generating CA 1: %v", err)
 	}
@@ -43,7 +47,7 @@ func TestRefreshingPool(t *testing.T) {
 		t.Fatalf("Unexpected error marshaling pool 1: %v", err)
 	}
 
-	ca2, err := GenerateECDSAP256Authority("2")
+	ca2, err := GenerateAuthority("ES256", "2")
 	if err != nil {
 		t.Fatalf("Unexpected error generating CA 2: %v", err)
 	}
@@ -154,7 +158,7 @@ func TestRefreshingPool(t *testing.T) {
 }
 
 func TestSignJWTHeader(t *testing.T) {
-	authority, err := GenerateECDSAP256Authority("key-1")
+	authority, err := GenerateAuthority("ES256", "key-1")
 	if err != nil {
 		t.Fatalf("Unexpected error generating authority: %v", err)
 	}
@@ -184,5 +188,196 @@ func TestSignJWTHeader(t *testing.T) {
 	want := map[string]string{"typ": "JWT", "alg": "ES256", "kid": "key-1"}
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Errorf("Wrong JWT header; diff (-got +want)\n%s", diff)
+	}
+}
+
+func authorityIDs(p *ConcretePool) []string {
+	var ids []string
+	for _, a := range p.Authorities {
+		ids = append(ids, a.ID)
+	}
+	return ids
+}
+
+func testPool(t *testing.T, ids ...string) *ConcretePool {
+	t.Helper()
+	pool := &ConcretePool{ActiveForSigning: ids[0]}
+	for _, id := range ids {
+		authority, err := GenerateAuthority("ES256", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.Authorities = append(pool.Authorities, authority)
+	}
+	return pool
+}
+
+func TestPoolRotation(t *testing.T) {
+	pool := testPool(t, "old")
+	next, err := GenerateAuthority("RS256", "next")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pool.AddAuthority(next); err != nil {
+		t.Fatalf("AddAuthority: %v", err)
+	}
+	if pool.ActiveForSigning != "old" {
+		t.Errorf("after AddAuthority, active = %q, want old", pool.ActiveForSigning)
+	}
+	if err := pool.Activate("next"); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if err := pool.RemoveAuthority("old"); err != nil {
+		t.Fatalf("RemoveAuthority: %v", err)
+	}
+
+	if diff := cmp.Diff([]string{"next"}, authorityIDs(pool)); diff != "" {
+		t.Errorf("authorities (-want +got):\n%s", diff)
+	}
+	jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+	if err != nil {
+		t.Fatalf("SignJWT: %v", err)
+	}
+	header, err := base64.RawURLEncoding.DecodeString(strings.Split(jwt, ".")[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"typ":"JWT","alg":"RS256","kid":"next"}`; string(header) != want {
+		t.Errorf("header = %s, want %s", header, want)
+	}
+}
+
+func TestPoolRotationRejects(t *testing.T) {
+	dup, err := GenerateAuthority("ES256", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noID := &Authority{Algorithm: "ES256", SigningKey: dup.SigningKey}
+
+	for _, tc := range []struct {
+		name   string
+		pool   *ConcretePool
+		change func(*ConcretePool) error
+	}{
+		{name: "add duplicate ID", pool: testPool(t, "1", "2"), change: func(p *ConcretePool) error { return p.AddAuthority(dup) }},
+		{name: "add without ID", pool: testPool(t, "1"), change: func(p *ConcretePool) error { return p.AddAuthority(noID) }},
+		{name: "activate absent", pool: testPool(t, "1"), change: func(p *ConcretePool) error { return p.Activate("2") }},
+		{name: "remove absent", pool: testPool(t, "1"), change: func(p *ConcretePool) error { return p.RemoveAuthority("2") }},
+		{name: "remove active", pool: testPool(t, "1", "2"), change: func(p *ConcretePool) error { return p.RemoveAuthority("1") }},
+		{name: "remove first with none designated", pool: func() *ConcretePool {
+			p := testPool(t, "1", "2")
+			p.ActiveForSigning = ""
+			return p
+		}(), change: func(p *ConcretePool) error { return p.RemoveAuthority("1") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantIDs, wantActive := authorityIDs(tc.pool), tc.pool.ActiveForSigning
+			if err := tc.change(tc.pool); err == nil {
+				t.Error("got nil error")
+			}
+			if diff := cmp.Diff(wantIDs, authorityIDs(tc.pool)); diff != "" {
+				t.Errorf("authorities changed (-want +got):\n%s", diff)
+			}
+			if tc.pool.ActiveForSigning != wantActive {
+				t.Errorf("active = %q, want %q", tc.pool.ActiveForSigning, wantActive)
+			}
+		})
+	}
+}
+
+func TestPoolActiveID(t *testing.T) {
+	designated := testPool(t, "1", "2")
+	designated.ActiveForSigning = "2"
+	undesignated := testPool(t, "1", "2")
+	undesignated.ActiveForSigning = ""
+
+	for _, tc := range []struct {
+		name string
+		pool *ConcretePool
+		want string
+	}{
+		{name: "designated", pool: designated, want: "2"},
+		{name: "none designated", pool: undesignated, want: "1"},
+		{name: "empty", pool: &ConcretePool{}, want: ""},
+	} {
+		if got := tc.pool.ActiveID(); got != tc.want {
+			t.Errorf("%s: ActiveID() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestGenerateAuthority(t *testing.T) {
+	for _, alg := range []string{"RS256", "ES256"} {
+		t.Run(alg, func(t *testing.T) {
+			authority, err := GenerateAuthority(alg, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if authority.Algorithm != alg {
+				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
+			}
+			thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if authority.ID != thumbprint {
+				t.Errorf("ID = %q, want the key thumbprint %q", authority.ID, thumbprint)
+			}
+			switch key := authority.SigningKey.(type) {
+			case *rsa.PrivateKey:
+				if alg != "RS256" || key.N.BitLen() != 2048 {
+					t.Errorf("got a %d-bit RSA key for %s, want 2048-bit for RS256", key.N.BitLen(), alg)
+				}
+			case *ecdsa.PrivateKey:
+				if alg != "ES256" || key.Curve != elliptic.P256() {
+					t.Errorf("got an EC key on %s for %s, want P-256 for ES256", key.Curve.Params().Name, alg)
+				}
+			default:
+				t.Errorf("unexpected key type %T", key)
+			}
+
+			pool := &ConcretePool{Authorities: []*Authority{authority}, ActiveForSigning: authority.ID}
+			poolBytes, err := Marshal(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Unmarshal(poolBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			jwt, err := loaded.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			headerB64, _, _ := strings.Cut(jwt, ".")
+			headerBytes, err := base64.RawURLEncoding.DecodeString(headerB64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var header map[string]string
+			if err := json.Unmarshal(headerBytes, &header); err != nil {
+				t.Fatal(err)
+			}
+			if header["alg"] != alg || header["kid"] != thumbprint {
+				t.Errorf("header = %v, want alg %s and kid %s", header, alg, thumbprint)
+			}
+		})
+	}
+}
+
+func TestGenerateAuthorityExplicitID(t *testing.T) {
+	authority, err := GenerateAuthority("RS256", "my-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authority.ID != "my-key" {
+		t.Errorf("ID = %q, want %q", authority.ID, "my-key")
+	}
+}
+
+func TestGenerateAuthorityRejectsUnsupportedAlgorithm(t *testing.T) {
+	if _, err := GenerateAuthority("HS256", ""); err == nil {
+		t.Error("GenerateAuthority(HS256) returned nil error")
 	}
 }

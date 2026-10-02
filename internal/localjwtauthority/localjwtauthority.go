@@ -27,10 +27,12 @@ import (
 	"fmt"
 	"hash"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 // Pool is the interface for a JWT signing pool.
@@ -167,8 +169,6 @@ func (p *ConcretePool) SignJWT(claims *actoridjwt.Claims) (string, error) {
 		selectedAuthority = p.Authorities[0]
 	}
 
-	// TODO(identity): The key IDs should probably be SHA256 of the key, to
-	// prevent user misuse.
 	jwt, err := sign(payloadBytes, selectedAuthority.SigningKey, selectedAuthority.Algorithm, selectedAuthority.ID)
 	if err != nil {
 		return "", fmt.Errorf("while signing JWT: %w", err)
@@ -187,6 +187,56 @@ func (p *ConcretePool) VerificationKeys() ([]*VerificationKey, error) {
 		keys = append(keys, vk)
 	}
 	return keys, nil
+}
+
+// AddAuthority adds authority to the pool without activating it, so relying
+// parties can learn its key before it signs anything.
+func (p *ConcretePool) AddAuthority(authority *Authority) error {
+	if authority.ID == "" {
+		return fmt.Errorf("authority has no ID")
+	}
+	if p.index(authority.ID) >= 0 {
+		return fmt.Errorf("authority %q already present", authority.ID)
+	}
+	p.Authorities = append(p.Authorities, authority)
+	return nil
+}
+
+// Activate makes the authority with id the one that signs.
+func (p *ConcretePool) Activate(id string) error {
+	if p.index(id) < 0 {
+		return fmt.Errorf("authority %q not present", id)
+	}
+	p.ActiveForSigning = id
+	return nil
+}
+
+// RemoveAuthority removes the authority with id, which must not be the one
+// that signs.
+func (p *ConcretePool) RemoveAuthority(id string) error {
+	i := p.index(id)
+	if i < 0 {
+		return fmt.Errorf("authority %q not present", id)
+	}
+	if id == p.ActiveID() {
+		return fmt.Errorf("authority %q is active for signing", id)
+	}
+	p.Authorities = slices.Delete(p.Authorities, i, i+1)
+	return nil
+}
+
+// ActiveID returns the ID of the authority that signs: ActiveForSigning, or
+// the first authority's when none is designated.
+func (p *ConcretePool) ActiveID() string {
+	if p.ActiveForSigning == "" && len(p.Authorities) > 0 {
+		return p.Authorities[0].ID
+	}
+	return p.ActiveForSigning
+}
+
+// index returns the position of the authority with id, or -1.
+func (p *ConcretePool) index(id string) int {
+	return slices.IndexFunc(p.Authorities, func(a *Authority) bool { return a.ID == id })
 }
 
 type wireHeader struct {
@@ -338,16 +388,32 @@ func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 	return pool, nil
 }
 
-// GenerateECDSAP256Authority generates an ECDSA P256 JWT signing key.
-func GenerateECDSAP256Authority(id string) (*Authority, error) {
-	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+// GenerateAuthority generates a JWT signing key for algorithm, which must be
+// RS256 or ES256. An empty id defaults to the RFC 7638 thumbprint of the
+// public key.
+func GenerateAuthority(algorithm, id string) (*Authority, error) {
+	var key crypto.Signer
+	var err error
+	switch algorithm {
+	case "RS256":
+		key, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "ES256":
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	default:
+		return nil, fmt.Errorf("unsupported algorithm %q, want RS256 or ES256", algorithm)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("while generating key: %w", err)
 	}
-
+	if id == "" {
+		id, err = oidcdiscovery.Thumbprint(key.Public())
+		if err != nil {
+			return nil, fmt.Errorf("while computing key thumbprint: %w", err)
+		}
+	}
 	return &Authority{
 		ID:         id,
-		Algorithm:  "ES256",
-		SigningKey: privKey,
+		Algorithm:  algorithm,
+		SigningKey: key,
 	}, nil
 }
