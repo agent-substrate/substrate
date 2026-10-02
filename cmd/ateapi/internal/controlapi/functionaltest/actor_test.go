@@ -27,6 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -300,8 +301,8 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 			SourceTag:     &ateapipb.ObjectRef{Atespace: testAtespace, Name: "data-snapshot"},
 		},
 	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateActor status = %v, want FailedPrecondition", apierror.Code(err))
 	}
 }
 
@@ -344,8 +345,8 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			SourceTag:     tagRef,
 		},
 	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateActor status = %v, want FailedPrecondition", apierror.Code(err))
 	}
 }
 
@@ -1031,7 +1032,7 @@ func TestUpdateActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 				Uid:     "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
 				Version: 1,
 			}},
-		}); status.Code(err) != codes.NotFound {
+		}); apierror.Code(err) != codes.NotFound {
 			t.Fatalf("UpdateActor(missing) error = %v, want code NotFound", err)
 		}
 	})
@@ -1393,7 +1394,7 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 	_, err = tc.service.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "delete-retry-actor"},
 	})
-	if status.Code(err) != codes.NotFound {
+	if apierror.Code(err) != codes.NotFound {
 		t.Errorf("GetActor after successful delete retry = %v, want NotFound", err)
 	}
 }
@@ -3269,7 +3270,7 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ResumeActor to fail due to atelet error")
 	}
-	// The caller sees atelet's own status, not a synthetic crash status.
+	// Atelet's code does not reach the caller.
 	if got := status.Code(err); got != codes.Internal {
 		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
@@ -3319,8 +3320,8 @@ func TestResumeActor_AteletUnavailableLeavesActorResuming(t *testing.T) {
 
 	tc.fakeAtelet.FailRestore = status.Error(codes.Unavailable, "connection refused")
 	_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref})
-	if got := status.Code(err); got != codes.Unavailable {
-		t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, codes.Unavailable, err)
+	if got := status.Code(err); got != codes.Internal {
+		t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
 
 	actor, err := tc.persistence.GetActor(context.Background(), actorRef)
@@ -3984,16 +3985,16 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	tc.fakeAtelet.Reset()
 	tc.fakeAtelet.FailRestore = status.Error(codes.NotFound, "local checkpoint files missing on node: directory not found")
 
-	// A failed restore crashes the actor, and the caller sees atelet's own
-	// status rather than a synthetic crash status.
+	// A failed restore crashes the actor, and atelet's code does not reach the
+	// caller.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err == nil {
 		t.Fatal("expected ResumeActor to fail due to missing local snapshot, but it succeeded")
 	}
-	if got := status.Code(err); got != codes.NotFound {
-		t.Errorf("ResumeActor err code = %v, want %v", got, codes.NotFound)
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("ResumeActor err code = %v, want %v", got, codes.Internal)
 	}
 
 	// Assert actor transitioned to ACTOR_STATE_CRASHED
@@ -4030,7 +4031,7 @@ func TestPauseActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
 		if _, err := tc.service.PauseActor(ctx, &ateapipb.PauseActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
-		}); status.Code(err) != codes.NotFound {
+		}); apierror.Code(err) != codes.NotFound {
 			t.Fatalf("PauseActor(missing) error = %v, want code NotFound", err)
 		}
 	})
@@ -4665,7 +4666,7 @@ func TestSuspendActor_FromPaused_UploadFailureCrashes(t *testing.T) {
 	if err == nil {
 		t.Fatal("SuspendActor succeeded despite failing upload")
 	}
-	// The caller sees atelet's own status, not a synthetic crash status.
+	// Atelet's code does not reach the caller.
 	if got := status.Code(err); got != codes.Internal {
 		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}

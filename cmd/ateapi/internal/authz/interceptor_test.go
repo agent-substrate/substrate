@@ -18,11 +18,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func setupTestAuthorizer(t *testing.T) *Authorizer {
@@ -139,8 +139,8 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 				handlerCalled = true
 				return "ok", nil
 			})
-			if status.Code(err) != tc.wantCode {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", status.Code(err), tc.wantCode, err)
+			if apierror.Code(err) != tc.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
 			}
 			if handlerCalled != tc.wantHandler {
 				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, tc.wantHandler)
@@ -160,7 +160,7 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		t.Fatal("handler must not be invoked for unauthenticated request")
 		return nil, nil
 	})
-	if status.Code(err) != codes.Unauthenticated {
+	if apierror.Code(err) != codes.Unauthenticated {
 		t.Fatalf("expected Unauthenticated for missing principal, got %v", err)
 	}
 
@@ -174,12 +174,12 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		FullMethod: ateapipb.Control_GetAtespace_FullMethodName,
 	}, func(ctx context.Context, req any) (any, error) {
 		handlerCalled = true
-		return nil, status.Error(codes.InvalidArgument, "atespace.name is required")
+		return nil, apierror.InvalidArgument("atespace.name is required")
 	})
 	if !handlerCalled {
 		t.Fatal("expected handler to be invoked to return validation error")
 	}
-	if status.Code(err) != codes.InvalidArgument {
+	if apierror.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument from handler, got %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		t.Fatal("handler must not be invoked when request type assertion fails")
 		return nil, nil
 	})
-	if status.Code(err) != codes.Internal {
+	if apierror.Code(err) != codes.Internal {
 		t.Fatalf("expected Internal for unexpected request type, got %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		t.Fatal("handler must not be invoked when authorizer is nil")
 		return nil, nil
 	})
-	if status.Code(err) != codes.Internal {
+	if apierror.Code(err) != codes.Internal {
 		t.Fatalf("expected Internal when authorizer is nil, got %v", err)
 	}
 }

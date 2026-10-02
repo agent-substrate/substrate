@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,7 +32,7 @@ import (
 // initialActorVolumes constructs initial volume objects in PENDING state before volume creation.
 func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
 	if template == nil {
-		return nil, status.Error(codes.InvalidArgument, "template is required")
+		return nil, apierror.InvalidArgument("template is required")
 	}
 	var volumes []*ateapipb.ExternalVolume
 	for _, vol := range template.GetVolumes() {
@@ -40,9 +41,9 @@ func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageC
 			sc, err := scLister.Get(scName)
 			if err != nil {
 				if k8serrors.IsNotFound(err) {
-					return nil, status.Errorf(codes.FailedPrecondition, "StorageClass %q not found", scName)
+					return nil, apierror.FailedPrecondition("StorageClass %q not found", scName)
 				}
-				return nil, status.Errorf(codes.Internal, "failed to get StorageClass %q: %v", scName, err)
+				return nil, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
 			}
 
 			volumes = append(volumes, &ateapipb.ExternalVolume{
@@ -82,7 +83,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			}
 		}
 		if specVol == nil || specVol.GetExternalVolumeTemplate() == nil {
-			return resultVolumes, status.Errorf(codes.NotFound, "volume %q not found in template", volName)
+			return resultVolumes, apierror.NotFound("volume %q not found in template", volName)
 		}
 
 		switch vol.GetStatus() {
@@ -92,9 +93,9 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			resultVolumes = append(resultVolumes, vol)
 			continue
 		case ateapipb.ExternalVolume_STATUS_DELETING:
-			return resultVolumes, status.Errorf(codes.FailedPrecondition, "cannot create volume %q in DELETING status", volName)
+			return resultVolumes, apierror.FailedPrecondition("cannot create volume %q in DELETING status", volName)
 		default:
-			return resultVolumes, status.Errorf(codes.Internal, "unexpected status %s for volume %q", vol.GetStatus(), volName)
+			return resultVolumes, apierror.Internal("unexpected status %s for volume %q", vol.GetStatus(), volName)
 		}
 
 		actVolID := actorVolumeID(actorUID, volName)
@@ -102,21 +103,21 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		scName := specVol.GetExternalVolumeTemplate().GetStorageClassName()
 		sc, err := scLister.Get(scName)
 		if err != nil {
-			return resultVolumes, status.Errorf(codes.Internal, "failed to get StorageClass %q: %v", scName, err)
+			return resultVolumes, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
 		}
 
 		if sc.Provisioner != vol.GetVolumeType() {
-			return resultVolumes, status.Errorf(codes.FailedPrecondition, "volume %q has mismatched type %q (expected %q from StorageClass %q)", volName, vol.GetVolumeType(), sc.Provisioner, scName)
+			return resultVolumes, apierror.FailedPrecondition("volume %q has mismatched type %q (expected %q from StorageClass %q)", volName, vol.GetVolumeType(), sc.Provisioner, scName)
 		}
 
 		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
-			return resultVolumes, status.Errorf(codes.FailedPrecondition, "failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
+			return resultVolumes, apierror.FailedPrecondition("failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
 		}
 
 		storageVolumeID, volCtx, volErr := plugin.CreateVolume(ctx, actVolID, specVol.GetExternalVolumeTemplate().GetCapacity(), sc.Provisioner, sc.Parameters)
 		if volErr != nil {
-			return resultVolumes, status.Errorf(codes.Internal, "failed to create volume %q: %v", specVol.GetName(), volErr)
+			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
 		}
 
 		resultVolumes = append(resultVolumes, &ateapipb.ExternalVolume{

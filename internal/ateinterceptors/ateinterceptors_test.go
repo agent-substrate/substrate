@@ -52,16 +52,34 @@ func TestStatusErrorInterceptor(t *testing.T) {
 			expectResponse: true,
 		},
 		{
-			name:       "StatusErrorInChain",
+			name:       "WrappedStatusBecomesInternal",
 			handlerErr: fmt.Errorf("outer error: %w", status.Error(codes.NotFound, "actor not found")),
-			wantCode:   codes.NotFound,
-			wantMsg:    "actor not found",
+			wantCode:   codes.Internal,
+			wantMsg:    "internal server error: outer error: rpc error: code = NotFound desc = actor not found",
 		},
 		{
 			name:       "RawErrorFallback",
 			handlerErr: errors.New("database connection failed"),
 			wantCode:   codes.Internal,
 			wantMsg:    "internal server error: database connection failed",
+		},
+		{
+			name:       "APIErrorInChain",
+			handlerErr: fmt.Errorf("workflow failed at step Load: %w", apierror.NotFound("actor not found")),
+			wantCode:   codes.NotFound,
+			wantMsg:    "actor not found",
+		},
+		{
+			name:       "APIErrorWinsOverStatusItWraps",
+			handlerErr: apierror.Internal("while calling atelet: %w", status.Error(codes.Unavailable, "atelet down")),
+			wantCode:   codes.Internal,
+			wantMsg:    "while calling atelet: rpc error: code = Unavailable desc = atelet down",
+		},
+		{
+			name:       "ContextErrorKeepsItsCode",
+			handlerErr: fmt.Errorf("while loading actor: %w", context.DeadlineExceeded),
+			wantCode:   codes.DeadlineExceeded,
+			wantMsg:    "while loading actor: context deadline exceeded",
 		},
 	}
 
@@ -154,9 +172,9 @@ func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 		},
 		{
 			name:       "upstream status becomes Internal without its details",
-			handlerErr: statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil),
+			handlerErr: fmt.Errorf("while calling ateom: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
 			wantCode:   codes.Internal,
-			wantMsg:    "rpc error: code = DataLoss desc = boom",
+			wantMsg:    "while calling ateom: rpc error: code = DataLoss desc = boom",
 		},
 		{
 			name:       "wrapped upstream status becomes Internal",
@@ -201,41 +219,6 @@ func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 				t.Errorf("ErrorInfo = %v, want none", info)
 			}
 		})
-	}
-}
-
-// TestServerUnaryInterceptorPreservesDetails verifies the public interceptor
-// returns the handler's status intact: ErrorInfo details (reason and metadata)
-// must survive the public wire, even when the status is wrapped.
-func TestServerUnaryInterceptorPreservesDetails(t *testing.T) {
-	metadata := map[string]string{"want": "0.2.0", "have": "0.1.0"}
-	structuredErr := statusWithErrorInfo(t, codes.FailedPrecondition, "INVALID_CHECKPOINT_RESULT", metadata)
-
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return nil, fmt.Errorf("outer error: %w", structuredErr)
-	}
-
-	_, err := ServerUnaryInterceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.FailedPrecondition {
-		t.Errorf("code = %v, want %v", st.Code(), codes.FailedPrecondition)
-	}
-
-	info := errorInfoOf(t, err)
-	if info == nil {
-		t.Fatal("status is missing the ErrorInfo detail")
-	}
-	if got, want := info.GetReason(), "INVALID_CHECKPOINT_RESULT"; got != want {
-		t.Errorf("ErrorInfo.Reason = %q, want %q", got, want)
-	}
-	for k, want := range metadata {
-		if got := info.GetMetadata()[k]; got != want {
-			t.Errorf("ErrorInfo.Metadata[%q] = %q, want %q", k, got, want)
-		}
 	}
 }
 
@@ -501,7 +484,7 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
 	log := captureDefaultLog(t)
 	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return nil, status.Error(codes.PermissionDenied, "no")
+		return nil, apierror.PermissionDenied("no")
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("err = %v", err)

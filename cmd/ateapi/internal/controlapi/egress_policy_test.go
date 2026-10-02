@@ -19,10 +19,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -46,13 +46,13 @@ func TestActorEgressPolicy(t *testing.T) {
 
 	if _, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{
 		Actor: actorRef,
-	}); status.Code(err) != codes.NotFound {
-		t.Fatalf("policy before create status = %v, want NotFound", status.Code(err))
+	}); apierror.Code(err) != codes.NotFound {
+		t.Fatalf("policy before create status = %v, want NotFound", apierror.Code(err))
 	}
 	if _, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing-actor"},
-	}); status.Code(err) != codes.NotFound {
-		t.Fatalf("missing parent status = %v, want NotFound", status.Code(err))
+	}); apierror.Code(err) != codes.NotFound {
+		t.Fatalf("missing parent status = %v, want NotFound", apierror.Code(err))
 	}
 	created, err := service.CreateActorEgressPolicy(t.Context(), &ateapipb.CreateActorEgressPolicyRequest{
 		Actor: actorRef,
@@ -84,8 +84,8 @@ func TestActorEgressPolicy(t *testing.T) {
 		EgressPolicy: &ateapipb.EgressPolicy{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 		},
-	}); status.Code(err) != codes.AlreadyExists {
-		t.Fatalf("create collision status = %v, want AlreadyExists", status.Code(err))
+	}); apierror.Code(err) != codes.AlreadyExists {
+		t.Fatalf("create collision status = %v, want AlreadyExists", apierror.Code(err))
 	}
 	if created.GetRules()[0].GetHttp().GetEffects().GetReplaceHeaders()[0].GetHeader() != "Authorization" {
 		t.Fatalf("policy input was rewritten: %v", created)
@@ -100,8 +100,8 @@ func TestActorEgressPolicy(t *testing.T) {
 	if _, err := service.impl.UpdateEgressPolicy(t.Context(), resources.ActorRefFromObjectRef(actorRef), store.PreconditionFrom(created), func(policy *ateapipb.EgressPolicy) error {
 		policy.Rules[0].Http.Hostnames = nil
 		return nil
-	}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("invalid internal update status = %v, want InvalidArgument", status.Code(err))
+	}); apierror.Code(err) != codes.InvalidArgument {
+		t.Fatalf("invalid internal update status = %v, want InvalidArgument", apierror.Code(err))
 	}
 	replacement := proto.Clone(created).(*ateapipb.EgressPolicy)
 	replacement.Rules = nil
@@ -111,8 +111,8 @@ func TestActorEgressPolicy(t *testing.T) {
 	if _, err := service.UpdateActorEgressPolicy(t.Context(), &ateapipb.UpdateActorEgressPolicyRequest{
 		Actor:        actorRef,
 		EgressPolicy: missingPreconditions,
-	}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("missing preconditions status = %v, want InvalidArgument", status.Code(err))
+	}); apierror.Code(err) != codes.InvalidArgument {
+		t.Fatalf("missing preconditions status = %v, want InvalidArgument", apierror.Code(err))
 	}
 	changedIdentity := proto.Clone(replacement).(*ateapipb.EgressPolicy)
 	changedIdentity.Metadata.Atespace = "other"
@@ -120,8 +120,8 @@ func TestActorEgressPolicy(t *testing.T) {
 	if _, err := service.UpdateActorEgressPolicy(t.Context(), &ateapipb.UpdateActorEgressPolicyRequest{
 		Actor:        actorRef,
 		EgressPolicy: changedIdentity,
-	}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("changed identity status = %v, want InvalidArgument", status.Code(err))
+	}); apierror.Code(err) != codes.InvalidArgument {
+		t.Fatalf("changed identity status = %v, want InvalidArgument", apierror.Code(err))
 	}
 	updated, err := service.UpdateActorEgressPolicy(t.Context(), &ateapipb.UpdateActorEgressPolicyRequest{
 		Actor:        actorRef,
@@ -133,8 +133,8 @@ func TestActorEgressPolicy(t *testing.T) {
 	if _, err := service.UpdateActorEgressPolicy(t.Context(), &ateapipb.UpdateActorEgressPolicyRequest{
 		Actor:        actorRef,
 		EgressPolicy: replacement,
-	}); status.Code(err) != codes.Aborted {
-		t.Fatalf("stale replacement status = %v, want Aborted", status.Code(err))
+	}); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("stale replacement status = %v, want Aborted", apierror.Code(err))
 	}
 	deleted, err := service.DeleteActorEgressPolicy(t.Context(), &ateapipb.DeleteActorEgressPolicyRequest{
 		Actor: actorRef,
@@ -144,7 +144,7 @@ func TestActorEgressPolicy(t *testing.T) {
 	}
 	if _, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{
 		Actor: actorRef,
-	}); status.Code(err) != codes.NotFound {
-		t.Fatalf("policy after delete status = %v, want NotFound", status.Code(err))
+	}); apierror.Code(err) != codes.NotFound {
+		t.Fatalf("policy after delete status = %v, want NotFound", apierror.Code(err))
 	}
 }
