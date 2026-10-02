@@ -90,6 +90,8 @@ func valueFor(key string) string {
 		return RouterEnvoy
 	case "clusterSize":
 		return ClusterSizeSize0
+	case "ingressAuthMode":
+		return IngressAuthStaticMTLS
 	case "ateapi.postgres.cloudsql.ipType":
 		return CloudSQLIPTypePSC
 	case "atenet.egress.additionalExtprocService":

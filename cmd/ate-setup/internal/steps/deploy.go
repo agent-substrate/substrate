@@ -330,7 +330,7 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	manifest, err := e.renderDataPlane(e.Cfg.Manifest("ate-controller.yaml"))
+	manifest, err := e.render(e.Cfg.Manifest("ate-controller.yaml"))
 	if err != nil {
 		return err
 	}
@@ -464,7 +464,7 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		// The kind overlay patches the DaemonSet for the local node layout.
 		path = e.Cfg.Path(installDir + "/kind/atelet")
 	}
-	manifest, err := e.renderDataPlane(path)
+	manifest, err := e.render(path)
 	if err != nil {
 		return err
 	}
