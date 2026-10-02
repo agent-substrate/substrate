@@ -70,9 +70,11 @@ TEST_TYPES = tuple(TYPES)
 _ORIG_ENV = dict(os.environ)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--repo", required=True, help="Git URL of substrate repo to clone")
+    p.add_argument(
+        "--repo", help="Git URL of substrate repo to clone (required unless --in-place)"
+    )
     p.add_argument("--branch", default="main", help="Branch to benchmark")
     p.add_argument(
         "--dest",
@@ -95,10 +97,19 @@ def parse_args() -> argparse.Namespace:
         help="Directory holding the per-type runner Job templates",
     )
     p.add_argument(
+        "--in-place",
+        action="store_true",
+        help="Build from the checkout this script lives in instead of cloning "
+        "--repo, and use its existing .ate-dev-env.sh for every test",
+    )
+    p.add_argument(
         "--junit-output",
         help="Path to write a JUnit XML report summarizing test results and durations",
     )
-    return p.parse_args()
+    args = p.parse_args(argv)
+    if not args.in_place and not args.repo:
+        p.error("--repo is required unless --in-place is set")
+    return args
 
 
 def source_env(path: str) -> None:
@@ -116,23 +127,30 @@ def source_env(path: str) -> None:
 
 
 def apply_target_cluster(
-    target_cluster: str, target_cluster_dir: str = TARGET_CLUSTER_DIR
+    target_cluster: str,
+    target_cluster_dir: str = TARGET_CLUSTER_DIR,
+    in_place: bool = False,
 ) -> None:
     """Copy target_cluster_dir/<name>.sh into the cloned
     substrate repo as .ate-dev-env.sh (so install-ate.sh / deploy.sh source
     it) and merge it into this process's env (so the orchestrator's own
     gcloud / docker / kubectl calls see the same values). Resets os.environ
     to the startup baseline first so vars defined by a previous target
-    cluster don't bleed into the next one."""
-    src = Path(target_cluster_dir) / f"{target_cluster}.sh"
-    if not src.exists():
-        raise FileNotFoundError(
-            f"target cluster {target_cluster!r} not found at {src}"
-        )
+    cluster don't bleed into the next one. With in_place, the checkout's
+    own .ate-dev-env.sh is sourced as-is instead."""
     os.environ.clear()
     os.environ.update(_ORIG_ENV)
     dst = Path(SUBSTRATE_DIR) / ENV_FILE_NAME
-    shutil.copy(src, dst)
+    if in_place:
+        if not dst.exists():
+            raise FileNotFoundError(f"--in-place needs {dst}")
+    else:
+        src = Path(target_cluster_dir) / f"{target_cluster}.sh"
+        if not src.exists():
+            raise FileNotFoundError(
+                f"target cluster {target_cluster!r} not found at {src}"
+            )
+        shutil.copy(src, dst)
     source_env(str(dst))
     for k in ("PROJECT_ID", "CLUSTER_NAME", "CLUSTER_LOCATION", "KO_DOCKER_REPO"):
         if not os.environ.get(k):
@@ -437,19 +455,26 @@ def main() -> None:
     args = parse_args()
 
     # Config-independent setup: DIND + clone the substrate branch once.
+    global SUBSTRATE_DIR
     wait_for_docker()
-    run(
-        [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            args.branch,
-            args.repo,
-            SUBSTRATE_DIR,
-        ]
-    )
+    if args.in_place:
+        here = Path(__file__).resolve().parent
+        SUBSTRATE_DIR = str(here.parents[1])
+        if args.manifests_dir == MANIFESTS_DIR:
+            args.manifests_dir = str(here / "manifests")
+    else:
+        run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                args.branch,
+                args.repo,
+                SUBSTRATE_DIR,
+            ]
+        )
     os.chdir(SUBSTRATE_DIR)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     print(f"Building commit {commit}", flush=True)
@@ -479,7 +504,9 @@ def main() -> None:
         )
 
         try:
-            apply_target_cluster(target_cluster, args.target_cluster_dir)
+            apply_target_cluster(
+                target_cluster, args.target_cluster_dir, args.in_place
+            )
         except Exception as e:
             print(
                 f"Failed to apply target cluster {target_cluster!r}: {e}",
@@ -554,8 +581,10 @@ def main() -> None:
         finally:
             # Drop .ate-dev-env.sh so the next test cannot accidentally
             # inherit this one's cluster/project if the next
-            # apply_target_cluster fails partway through.
-            clear_target_cluster()
+            # apply_target_cluster fails partway through. In place, the
+            # file is the user's own, so it stays.
+            if not args.in_place:
+                clear_target_cluster()
 
     print("\n=== summary ===", flush=True)
     failed = 0
