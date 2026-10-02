@@ -318,4 +318,11 @@ kubectl ate admin make-ca-pool \
 kubectl ate admin make-jwt-pool \
   --name actor-id-jwt-pool \
   --secret-namespace ate-system
+
+# Rotate the JWT signing key. The new key is published but signs nothing until
+# activated; activate it once relying parties have refetched the key set, and
+# remove the old key once every token it signed has expired.
+kubectl ate admin add-jwt-key --name actor-id-jwt-pool --secret-namespace ate-system
+kubectl ate admin activate-jwt-key --name actor-id-jwt-pool --secret-namespace ate-system --key-id <new key ID>
+kubectl ate admin remove-jwt-key --name actor-id-jwt-pool --secret-namespace ate-system --key-id <old key ID>
 ```
