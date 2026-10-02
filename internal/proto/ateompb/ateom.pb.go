@@ -530,7 +530,6 @@ type RunWorkloadRequest struct {
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
 	// +k8s:optional
-	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,10,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. ateom
 	// sizes the sandbox to these (cgroup caps via the OCI spec, and for the
@@ -669,6 +668,10 @@ type EgressGateway struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// address is required and identifies the remote gateway as an IP address or
 	// DNS name followed by its port.
+	//
+	// +k8s:required
+	// +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
+	// +k8s:customValidation # host:port shape
 	Address       string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1667,7 +1670,6 @@ type RestoreWorkloadRequest struct {
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
 	// +k8s:optional
-	// +k8s:opaqueType # tagged in a follow-up
 	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. Used to
 	// (re)size the sandbox on a VOLUMES restore (fresh guest container). On a

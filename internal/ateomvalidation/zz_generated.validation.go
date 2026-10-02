@@ -880,6 +880,51 @@ func Validate_Container(
 	return errs
 }
 
+// Validate_EgressGateway validates an instance of EgressGateway according
+// to declarative validation rules in the API schema.
+func Validate_EgressGateway(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateompb.EgressGateway) (errs field.ErrorList) {
+
+	{ // field ateompb.EgressGateway.Address
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_EgressGateway_Address(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 261); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateompb.EgressGateway) *string {
+				return &oldObj.Address
+			})
+		errs = append(errs, fn(fldPath.Child("address"), &obj.Address, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_GetWorkloadStatsRequest validates an instance of GetWorkloadStatsRequest according
 // to declarative validation rules in the API schema.
 func Validate_GetWorkloadStatsRequest(
@@ -1285,6 +1330,8 @@ func Validate_RestoreWorkloadRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_EgressGateway(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -1714,6 +1761,8 @@ func Validate_RunWorkloadRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_EgressGateway(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,

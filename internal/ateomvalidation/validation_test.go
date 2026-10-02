@@ -156,6 +156,21 @@ func TestValidateRunWorkloadRequest(t *testing.T) {
 		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.MemoryBytes = -1 }),
 		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
 	}, {
+		name: "empty egress_gateway",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.EgressGateway = &ateompb.EgressGateway{} }),
+		want: field.ErrorList{field.Required(field.NewPath("egress_gateway", "address"), "")},
+	}, {
+		name: "egress_gateway address without port",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.EgressGateway.Address = "gateway" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("egress_gateway", "address"), nil, "")},
+	}, {
+		name: "egress_gateway address too long",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.EgressGateway.Address = strings.Repeat("h", 258) + ":443" }),
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("egress_gateway", "address"), nil, 261).WithOrigin("maxLength"),
+			field.Invalid(field.NewPath("egress_gateway", "address"), nil, ""),
+		},
+	}, {
 		name: "missing actor_dirs",
 		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.ActorDirs = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("actor_dirs"), "")},
@@ -573,6 +588,10 @@ func TestValidateRestoreWorkloadRequest(t *testing.T) {
 		name: "invalid snapshot_uri: query string",
 		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "gs://bucket/snapshots/1?x=1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_uri"), nil, "")},
+	}, {
+		name: "egress_gateway address without port",
+		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.EgressGateway.Address = "gateway" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("egress_gateway", "address"), nil, "")},
 	}, {
 		name: "missing fidelity",
 		obj: valid(func(r *ateompb.RestoreWorkloadRequest) {

@@ -109,6 +109,13 @@ func ValidateCustom_CheckpointWorkloadRequest_SnapshotUri(_ context.Context, _ o
 	return validateSnapshotURI(fldPath, *value)
 }
 
+// ValidateCustom_EgressGateway_Address holds the gateway address to the
+// host:port shape the tunnel dials. The rule is atelet's, shared through
+// internal/resources, so the two ends of the RPC agree on what is dialable.
+func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateHostPort(fldPath, *value)
+}
+
 // ValidateCustom_ActorDirs holds every directory to an absolute, clean path.
 // Presence and length are the tags' job. The rule is the one both ateom
 // binaries applied by hand before, shared through internal/resources.

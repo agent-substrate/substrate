@@ -223,7 +223,6 @@ message RunWorkloadRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  // +k8s:opaqueType # tagged in a follow-up
   optional EgressGateway egress_gateway = 10;
 
   // The actor's declared size, from the ActorTemplate's resource limits. ateom
@@ -246,6 +245,10 @@ message RunWorkloadRequest {
 message EgressGateway {
   // address is required and identifies the remote gateway as an IP address or
   // DNS name followed by its port.
+  //
+  // +k8s:required
+  // +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
+  // +k8s:customValidation # host:port shape
   string address = 1;
 }
 
@@ -540,7 +543,6 @@ message RestoreWorkloadRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  // +k8s:opaqueType # tagged in a follow-up
   optional EgressGateway egress_gateway = 12;
 
   // The actor's declared size, from the ActorTemplate's resource limits. Used to
