@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,7 +51,7 @@ const (
 // EnsureEgressTrustBundle makes sure the egress trust bundle exists, then
 // waits until the reconciler-published bundle is non-empty. It provisions a
 // pool only when there is none and never replaces one it finds: the pool is
-// cluster-wide, and the sdsmint gateway mounts the one the install created.
+// cluster-wide, and the egress gateway mounts the one the install created.
 // A suite that needs to OWN the pool's contents (the identity suite's
 // deterministic assertions and rotation) uses ReplaceEgressTrustPool.
 func EnsureEgressTrustBundle(t *testing.T, ctx context.Context, clients *Clients) {
@@ -143,10 +144,14 @@ func createEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients, 
 // assertion ever flakes, this lag is the first suspect.
 func waitForEgressTrustBundle(t *testing.T, ctx context.Context, clients *Clients, want string) {
 	t.Helper()
+	bundles, err := clustertrustbundle.NewClient(clients.K8s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var last string
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		ctb, err := clients.K8s.CertificatesV1beta1().ClusterTrustBundles().Get(ctx, EgressTrustBundleObjectName, metav1.GetOptions{})
+		ctb, err := bundles.Get(ctx, EgressTrustBundleObjectName, metav1.GetOptions{})
 		if err == nil {
 			if got := ctb.Spec.TrustBundle; got == want || (want == "" && got != "") {
 				return

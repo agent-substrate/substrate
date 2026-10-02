@@ -36,7 +36,7 @@ import (
 	"github.com/myzhan/boomer"
 
 	// Register user classes via init():
-	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/agentsession"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/agentsession"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/sweperf"
 )
@@ -52,6 +52,7 @@ func main() {
 		configPollInterval      = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
 		userClass               = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 		actorsPerUser           = flag.Int("actors-per-user", 1, "Number of actors each user (VU) creates and cycles through in round-robin: on iteration i, the user targets actor i%actors-per-user. Startup creates all actors; shutdown hibernates+deletes them.")
+		checkAgentSessionScript = flag.String("check-agentsession-script", "", "Validate this agent-session script YAML and exit; nothing else runs. Used by benchmarking/locust/deploy.sh before uploading a script.")
 		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
@@ -67,6 +68,18 @@ func main() {
 	}
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	if *checkAgentSessionScript != "" {
+		s, err := agentsession.LoadFile(*checkAgentSessionScript)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		b := agentsession.Budgets(s.Steps)
+		fmt.Printf("agent-session script %q: %d steps, declares %s RAM + %s disk, min_actor_memory %s\n",
+			s.Name, len(s.Steps), agentsession.FormatSize(b.RAM), agentsession.FormatSize(b.Disk), agentsession.FormatSize(s.MinActorMemory))
+		return
+	}
 
 	initialCfg, err := dynconfig.Parse([]byte(*configJSON), dynconfig.Config{
 		MaxWait:         500 * time.Millisecond,

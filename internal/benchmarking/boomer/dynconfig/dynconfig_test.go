@@ -43,7 +43,8 @@ func TestParseValid(t *testing.T) {
 		"sweperf_total_steps": 21,
 		"sweperf_num_cycles": 4,
 		"sweperf_poll_interval_ms": 100,
-		"agentsession_script": "coding-session"
+		"agentsession_script": "coding-session",
+		"agentsession_script_file": "/etc/agentsession/script.yaml"
 	}`)
 
 	cfg, err := Parse(jsonBlob, Config{})
@@ -95,6 +96,9 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.AgentSessionScript != "coding-session" {
 		t.Errorf("AgentSessionScript: got %q, want coding-session", cfg.AgentSessionScript)
+	}
+	if cfg.AgentSessionScriptFile != "/etc/agentsession/script.yaml" {
+		t.Errorf("AgentSessionScriptFile: got %q", cfg.AgentSessionScriptFile)
 	}
 }
 

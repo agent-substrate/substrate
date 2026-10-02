@@ -17,6 +17,8 @@ package agentsession
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -247,15 +249,16 @@ func TestExecOpAgainstFake(t *testing.T) {
 	}
 }
 
-// TestLoadScriptFollowsTheKnob: the script is resolved from dynconfig on
-// first use (an empty knob means the default), an unknown name is an error
-// that leaves nothing cached, and a later call returns the same script.
+// TestLoadScriptFollowsTheKnob: the script is resolved from dynconfig when
+// a session starts (an empty knob means the default), an unknown name is an
+// error that leaves the previous script in place, and a changed knob loads
+// the new script for sessions that start afterwards.
 func TestLoadScriptFollowsTheKnob(t *testing.T) {
 	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{AgentSessionScript: "no-such-script"})}}
 	if _, err := rt.loadScript(); err == nil {
 		t.Fatal("loadScript accepted an unknown script name")
 	}
-	if rt.script != nil {
+	if rt.loaded != nil {
 		t.Fatal("a failed load must not cache a script")
 	}
 
@@ -267,19 +270,106 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 	if s.Name != DefaultScript {
 		t.Errorf("empty knob loaded %q, want %q", s.Name, DefaultScript)
 	}
-	if int64(len(rt.ingestBuf)) == 0 {
+	if len(s.ingestBuf) == 0 {
 		t.Error("ingestBuf not sized after load")
 	}
-
-	// Once loaded, the script is fixed for the worker even if the knob moves.
-	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScript: "no-such-script"})
 	if again, err := rt.loadScript(); err != nil || again != s {
-		t.Errorf("second loadScript = (%v, %v), want the cached script", again, err)
+		t.Errorf("unchanged knob: loadScript = (%v, %v), want the cached script", again, err)
+	}
+
+	// A knob that names something that does not load is an error, and the
+	// previous script stays available to sessions that already run on it.
+	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScript: "no-such-script"})
+	if _, err := rt.loadScript(); err == nil {
+		t.Error("loadScript accepted an unknown name after a successful load")
+	}
+	if rt.loaded != s {
+		t.Error("a failed reload must not replace the loaded script")
+	}
+
+	// A knob that names a different, valid script is picked up.
+	path := filepath.Join(t.TempDir(), "tiny.yaml")
+	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScriptFile: path})
+	next, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Name != "tiny" {
+		t.Errorf("changed knob loaded %q, want tiny", next.Name)
+	}
+	if int64(len(next.ingestBuf)) != 1<<20 {
+		t.Errorf("ingestBuf = %d bytes, want sized to tiny's largest ingest (1Mi)", len(next.ingestBuf))
+	}
+
+	// The same path with new content is a new script: a redeployed
+	// ConfigMap arrives as a rewritten file, not a new knob value.
+	if err := os.WriteFile(path, []byte(strings.Replace(validScript, "name: tiny", "name: tiny-v2", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rewritten.Name != "tiny-v2" {
+		t.Errorf("rewritten file loaded %q, want tiny-v2", rewritten.Name)
+	}
+	if again, err := rt.loadScript(); err != nil || again != rewritten {
+		t.Errorf("unchanged file: loadScript = (%v, %v), want the cached script", again, err)
+	}
+}
+
+// TestLoadFile reads a script from disk and reports the path on errors.
+func TestLoadFile(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "tiny.yaml")
+	if err := os.WriteFile(good, []byte(validScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Name != "tiny" || len(s.Steps) != 2 {
+		t.Errorf("LoadFile = %q with %d steps, want tiny with 2", s.Name, len(s.Steps))
+	}
+
+	bad := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(bad, []byte(strings.Replace(validScript, "- ping: {}", "- nap: {}", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(bad); err == nil || !strings.Contains(err.Error(), bad) || !strings.Contains(err.Error(), "unknown op kind") {
+		t.Errorf("LoadFile(bad) = %v, want an error naming the file and the op", err)
+	}
+	if _, err := LoadFile(filepath.Join(dir, "missing.yaml")); err == nil {
+		t.Error("LoadFile of a missing path must fail")
+	}
+}
+
+// TestLoadScriptPrefersFile: a file path beats a built-in name.
+func TestLoadScriptPrefersFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tiny.yaml")
+	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{
+		AgentSessionScript:     DefaultScript,
+		AgentSessionScriptFile: path,
+	})}}
+	s, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Name != "tiny" {
+		t.Errorf("loaded %q, want the file's script", s.Name)
 	}
 }
 
 // TestStartUserChecksTemplateMemory: a template smaller than the script's
-// floor is refused before any actor is created; a big enough one proceeds.
+// floor, or with a limit that does not parse, is refused before any actor
+// is created; a big enough one, or one with no limit, proceeds.
 func TestStartUserChecksTemplateMemory(t *testing.T) {
 	script, err := Load(DefaultScript)
 	if err != nil {
@@ -288,30 +378,96 @@ func TestStartUserChecksTemplateMemory(t *testing.T) {
 	for _, tc := range []struct {
 		name, memory string
 		wantStart    bool
+		wantErr      string
 	}{
-		{"too small", "512Mi", false},
-		{"exact", "1Gi", true},
-		{"no limit", "", true},
+		{"too small", "512Mi", false, "min_actor_memory"},
+		{"unparseable", "1Gi-ish", false, "memory limit"},
+		{"exact", "1Gi", true, ""},
+		{"no limit", "", true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctl := &fakeControlClient{templateMemory: tc.memory}
 			u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
-			rt := &runtime{cfg: u.cfg, script: script, ingestBuf: makeIngestBuf(script.Steps)}
+			rt := &runtime{cfg: u.cfg}
 
-			_, err := rt.startUser(context.Background())
+			started, err := rt.startUser(context.Background(), &loadedScript{Script: script, ingestBuf: makeIngestBuf(script.Steps)})
 			created := countCalls(ctl.recordedCalls(), "CreateActor") > 0
-			if tc.wantStart && (err != nil || !created) {
-				t.Fatalf("startUser = %v, CreateActor called = %v; want a started session", err, created)
+			if tc.wantStart {
+				if err != nil || !created {
+					t.Fatalf("startUser = %v, CreateActor called = %v; want a started session", err, created)
+				}
+				if len(started.steps) != len(script.Steps) || len(started.ingestBuf) != len(makeIngestBuf(script.Steps)) {
+					t.Errorf("session captured %d steps and a %d-byte buffer, want the loaded script's own", len(started.steps), len(started.ingestBuf))
+				}
+				return
 			}
-			if !tc.wantStart {
-				if err == nil || !strings.Contains(err.Error(), "min_actor_memory") {
-					t.Fatalf("startUser = %v, want a min_actor_memory refusal", err)
-				}
-				if created {
-					t.Error("CreateActor was called despite the refusal")
-				}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("startUser = %v, want a refusal mentioning %q", err, tc.wantErr)
+			}
+			if created {
+				t.Error("CreateActor was called despite the refusal")
 			}
 		})
+	}
+}
+
+// TestTemplateMemoryRefusalExpires: a refusal is re-checked after
+// templateRecheckInterval, so redeploying the workloads with a bigger limit
+// is picked up without restarting the workers.
+func TestTemplateMemoryRefusalExpires(t *testing.T) {
+	script, err := Load(DefaultScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctl := &fakeControlClient{templateMemory: "512Mi"}
+	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	rt := &runtime{cfg: u.cfg}
+
+	if err := rt.checkTemplateMemory(context.Background(), script); err == nil {
+		t.Fatal("512Mi template passed the check")
+	}
+	ctl.templateMemory = "1Gi" // the operator redeployed
+	if err := rt.checkTemplateMemory(context.Background(), script); err == nil {
+		t.Fatal("refusal must stand for templateRecheckInterval")
+	}
+	if got := countCalls(ctl.recordedCalls(), "GetActorTemplate"); got != 1 {
+		t.Errorf("GetActorTemplate calls = %d, want 1 while the refusal is cached", got)
+	}
+	rt.templateErrAt = time.Now().Add(-2 * templateRecheckInterval)
+	if err := rt.checkTemplateMemory(context.Background(), script); err != nil {
+		t.Fatalf("check after the interval = %v, want the redeployed template to pass", err)
+	}
+	if err := rt.checkTemplateMemory(context.Background(), script); err != nil || countCalls(ctl.recordedCalls(), "GetActorTemplate") != 2 {
+		t.Errorf("success must be cached: err=%v calls=%d", err, countCalls(ctl.recordedCalls(), "GetActorTemplate"))
+	}
+}
+
+// TestRunningSessionKeepsItsScript: changing the knob affects sessions that
+// start afterwards, not one already walking its steps.
+func TestRunningSessionKeepsItsScript(t *testing.T) {
+	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	rt := &runtime{cfg: u.cfg}
+	first, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := rt.startUser(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "tiny.yaml")
+	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScriptFile: path})
+	second, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Name != "tiny" || len(session.steps) != len(first.Steps) || len(session.ingestBuf) != len(first.ingestBuf) {
+		t.Errorf("after the knob change: new script %q, running session has %d steps and a %d-byte buffer (want %d / %d)", second.Name, len(session.steps), len(session.ingestBuf), len(first.Steps), len(first.ingestBuf))
 	}
 }
 

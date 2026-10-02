@@ -29,6 +29,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -136,98 +137,154 @@ type runtime struct {
 	cfg   *userclass.Config
 	users sync.Map // goroutineID -> *sessionUser
 
-	// script is resolved by loadScript on the first iteration and fixed for
-	// the worker's lifetime; ingestBuf is sized to it.
-	scriptMu  sync.Mutex
-	script    *Script
-	ingestBuf []byte // shared read-only ingest payload, sized to the largest ingest op
+	// loaded is what the knobs currently select, resolved by loadScript when
+	// a session starts and re-resolved when the knobs name something else or
+	// the named file's content changes. A session captures the script it
+	// started on, so a change applies to new sessions only.
+	scriptMu sync.Mutex
+	loaded   *loadedScript
 
-	// The template memory check runs once per worker. A fetch failure
-	// leaves it unanswered so the next startUser retries; a verdict is
-	// final until the workloads are redeployed.
-	templateMu  sync.Mutex
-	templateOK  bool
-	templateErr error
+	// The template memory check is tied to the loaded script. Success is
+	// cached until the script changes; a refusal is cached for
+	// templateRecheckInterval so a redeploy with a bigger limit is picked
+	// up without restarting the workers.
+	templateMu     sync.Mutex
+	templateOKFor  *Script
+	templateErr    error
+	templateErrAt  time.Time
+	templateErrFor *Script
 }
 
-// loadScript resolves the run's script on first use. It cannot happen at
-// Init: the operator's knob values arrive with the first spawn message,
-// after Init, so a load there would only ever see --config-json. A failed
-// load is retried on the next iteration, so correcting the knob in the web
-// UI and starting a new swarm recovers without a pod restart.
-func (r *runtime) loadScript() (*Script, error) {
+// templateRecheckInterval is how long a template memory refusal stands
+// before the next startUser asks ateapi again.
+const templateRecheckInterval = 30 * time.Second
+
+// loadedScript is a resolved script together with what was derived from
+// it, so a session never pairs one script's steps with another's buffer.
+type loadedScript struct {
+	*Script
+	// source is the file path or built-in name the knobs resolved to, and
+	// sum the content it had when loaded; together they say whether the
+	// knobs still select this script.
+	source string
+	sum    [sha256.Size]byte
+	// ingestBuf is the shared read-only ingest payload, sized to the
+	// script's largest ingest op.
+	ingestBuf []byte
+}
+
+// scriptSource is what the knobs select: a file named by
+// --agentsession-script-file wins, else the built-in variant named by
+// --agentsession-script, else the default.
+func scriptSource(dyn dynconfig.Config) (source string, fromFile bool) {
+	if dyn.AgentSessionScriptFile != "" {
+		return dyn.AgentSessionScriptFile, true
+	}
+	if dyn.AgentSessionScript != "" {
+		return dyn.AgentSessionScript, false
+	}
+	return DefaultScript, false
+}
+
+// loadScript resolves the script the knobs currently select, loading it the
+// first time and again whenever the knobs change or, for a file, its content
+// changes: a redeployed ConfigMap reaches a running pod as a rewritten file
+// at the same path. It cannot happen at Init: the operator's knob values
+// arrive with the first spawn message, after Init, so a load there would
+// only ever see --config-json. A failed load is returned each time, so new
+// sessions block loudly until the knob is corrected and a new swarm
+// started; sessions already running keep the script they started on.
+func (r *runtime) loadScript() (*loadedScript, error) {
 	r.scriptMu.Lock()
 	defer r.scriptMu.Unlock()
-	if r.script != nil {
-		return r.script, nil
+	source, fromFile := scriptSource(r.cfg.Dyn.Load())
+	data, err := readScript(source, fromFile)
+	if err != nil {
+		return nil, err
 	}
-	name := r.cfg.Dyn.Load().AgentSessionScript
-	if name == "" {
-		name = DefaultScript
+	sum := sha256.Sum256(data)
+	if r.loaded != nil && source == r.loaded.source && sum == r.loaded.sum {
+		return r.loaded, nil
 	}
-	s, err := Load(name)
+	s, err := decodeScript(data, source, fromFile)
 	if err != nil {
 		return nil, err
 	}
 	b := Budgets(s.Steps)
 	slog.Info("agentsession: loaded script",
 		slog.String("script", s.Name),
+		slog.String("source", source),
 		slog.Int("steps", len(s.Steps)),
-		slog.String("declared_ram", formatSize(b.RAM)),
-		slog.String("declared_disk", formatSize(b.Disk)),
-		slog.String("min_actor_memory", formatSize(s.MinActorMemory)))
-	r.script = s
-	r.ingestBuf = makeIngestBuf(s.Steps)
-	return s, nil
+		slog.String("declared_ram", FormatSize(b.RAM)),
+		slog.String("declared_disk", FormatSize(b.Disk)),
+		slog.String("min_actor_memory", FormatSize(s.MinActorMemory)))
+	if r.loaded != nil {
+		slog.Warn("agentsession: script changed; sessions already running keep the old one",
+			slog.String("old", r.loaded.Name), slog.String("new", s.Name))
+	}
+	r.loaded = &loadedScript{Script: s, source: source, sum: sum, ingestBuf: makeIngestBuf(s.Steps)}
+	return r.loaded, nil
 }
 
 // checkTemplateMemory refuses to start sessions against a template whose
-// memory limit is below the script's min_actor_memory. A too-small actor
-// OOMs partway through the script and shows up as flaky steps, which is far
-// harder to read than a refusal at start. A template with no memory limit
-// is allowed through with a warning.
-func (r *runtime) checkTemplateMemory(ctx context.Context) error {
+// memory limit is below the script's min_actor_memory, or whose limit does
+// not parse. A too-small actor OOMs partway through the script and shows up
+// as flaky steps, which is far harder to read than a refusal at start. A
+// template with no memory limit at all is allowed through with a warning.
+func (r *runtime) checkTemplateMemory(ctx context.Context, script *Script) error {
 	r.templateMu.Lock()
 	defer r.templateMu.Unlock()
-	if r.templateOK {
+	if r.templateOKFor == script {
 		return nil
 	}
-	if r.templateErr != nil {
+	if r.templateErr != nil && r.templateErrFor == script && time.Since(r.templateErrAt) < templateRecheckInterval {
 		return r.templateErr
 	}
 	ref := &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName}
 	tmpl, err := r.cfg.APIStub.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
 	if err != nil {
+		// Not a verdict: the next startUser asks again.
 		return fmt.Errorf("GetActorTemplate %s/%s: %w", templateNS, templateName, err)
 	}
-	limit, ok := memoryLimit(tmpl)
+	refuse := func(err error) error {
+		r.templateErr, r.templateErrAt, r.templateErrFor = err, time.Now(), script
+		return err
+	}
+	limit, found, err := memoryLimit(tmpl)
 	switch {
-	case !ok:
+	case err != nil:
+		return refuse(fmt.Errorf("template %s/%s: %w", templateNS, templateName, err))
+	case !found:
 		slog.Warn("agentsession: template sets no memory limit; cannot check it against the script",
 			slog.String("template", templateName),
-			slog.String("min_actor_memory", formatSize(r.script.MinActorMemory)))
-	case limit < r.script.MinActorMemory:
-		r.templateErr = fmt.Errorf("template %s/%s memory limit %s is below script %q min_actor_memory %s; redeploy the workloads with --actor-memory %s",
-			templateNS, templateName, formatSize(limit), r.script.Name, formatSize(r.script.MinActorMemory), formatSize(r.script.MinActorMemory))
-		return r.templateErr
+			slog.String("min_actor_memory", FormatSize(script.MinActorMemory)))
+	case limit < script.MinActorMemory:
+		return refuse(fmt.Errorf("template %s/%s memory limit %s is below script %q min_actor_memory %s; redeploy the workloads with --actor-memory %s",
+			templateNS, templateName, FormatSize(limit), script.Name, FormatSize(script.MinActorMemory), FormatSize(script.MinActorMemory)))
 	}
-	r.templateOK = true
+	r.templateOKFor = script
+	r.templateErr = nil
 	return nil
 }
 
-// memoryLimit reads the template's memory limit in bytes, if it has one.
-func memoryLimit(tmpl *ateapipb.ActorTemplate) (int64, bool) {
+// memoryLimit reads the template's memory limit in bytes. found is false
+// when the template sets none; a limit that does not parse is an error.
+func memoryLimit(tmpl *ateapipb.ActorTemplate) (limit int64, found bool, err error) {
 	for _, l := range tmpl.GetResources().GetLimits() {
 		if l.GetName() != "memory" {
 			continue
 		}
 		q, err := resource.ParseQuantity(l.GetQuantity())
 		if err != nil {
-			return 0, false
+			return 0, true, fmt.Errorf("memory limit %q: %w", l.GetQuantity(), err)
 		}
-		return q.AsInt64()
+		n, ok := q.AsInt64()
+		if !ok {
+			return 0, true, fmt.Errorf("memory limit %q is not a whole byte count", l.GetQuantity())
+		}
+		return n, true, nil
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 // think returns the suspended "LLM thinking" gap before step s, which is the
@@ -247,19 +304,17 @@ func (r *runtime) think(s Step) time.Duration {
 // script completes, so one actor keeps producing suspend/resume cycles for
 // the whole run.
 func (r *runtime) iterate() {
-	script, err := r.loadScript()
-	if err != nil {
-		slog.Error("agentsession: cannot load script; goroutine will retry next iter",
-			slog.String("err", err.Error()))
-		time.Sleep(2 * time.Second)
-		return
-	}
-	steps := script.Steps
-
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
-		u, err := r.startUser(context.Background())
+		loaded, err := r.loadScript()
+		if err != nil {
+			slog.Error("agentsession: cannot load script; goroutine will retry next iter",
+				slog.String("err", err.Error()))
+			time.Sleep(2 * time.Second)
+			return
+		}
+		u, err := r.startUser(context.Background(), loaded)
 		if err != nil {
 			slog.Warn("agentsession start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
@@ -270,13 +325,13 @@ func (r *runtime) iterate() {
 	}
 	u := val.(*sessionUser)
 
-	step := steps[u.stepIndex]
+	step := u.steps[u.stepIndex]
 
 	// The LLM is "thinking": the actor stays suspended for the gap.
 	time.Sleep(r.think(step))
 
 	if u.runStep(context.Background(), step) {
-		u.stepIndex = (u.stepIndex + 1) % len(steps)
+		u.stepIndex = (u.stepIndex + 1) % len(u.steps)
 		if u.stepIndex == 0 {
 			slog.Info("agent session completed the full script; starting over",
 				slog.String("actor", u.actorName))
@@ -295,14 +350,15 @@ func (r *runtime) iterate() {
 // startUser creates the session's actor, waits for its sandbox to serve,
 // then suspends it so the first scripted step begins — like every later
 // step — with a wake from suspension.
-func (r *runtime) startUser(ctx context.Context) (*sessionUser, error) {
-	if err := r.checkTemplateMemory(ctx); err != nil {
+func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*sessionUser, error) {
+	if err := r.checkTemplateMemory(ctx, loaded.Script); err != nil {
 		return nil, err
 	}
 	u := &sessionUser{
 		cfg:       r.cfg,
 		actorName: "agent-" + uuid.NewString(),
-		ingestBuf: r.ingestBuf,
+		steps:     loaded.Steps,
+		ingestBuf: loaded.ingestBuf,
 	}
 	slog.Info("Creating agent session", slog.String("actor", u.actorName))
 	bmetrics.UpdateUsers(agentSessionUserClass, 1)
@@ -340,6 +396,9 @@ type sessionUser struct {
 	actorName string
 	stepIndex int
 	cleanedUp bool
+	// steps is the script this session started on; a knob change mid-run
+	// does not move a session to another script.
+	steps []Step
 	// ingestBuf is the runtime's shared read-only ingest payload.
 	ingestBuf []byte
 	// hibernatePending is set by a failed Pause/Suspend: the actor is

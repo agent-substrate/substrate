@@ -26,20 +26,21 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
-	"sync"
-
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atelet"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -52,7 +53,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -61,7 +61,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
-	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -79,9 +78,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/lru"
 )
 
@@ -95,7 +94,13 @@ var (
 	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
 
-	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
+	// The kubelet already knows how to authenticate to its node's cloud
+	// registry, via an exec plugin the node ships. Pointing atelet at the same
+	// config and bin dir (mounted read-only from the host) lets it pull with
+	// no cloud SDK compiled in, on any cloud whose nodes configure a provider.
+	imageCredentialProviderConfig = pflag.String("image-credential-provider-config", "", "Path to a kubelet CredentialProviderConfig. Its exec plugins supply image pull credentials; without it, pulls are anonymous.")
+	imageCredentialProviderBinDir = pflag.String("image-credential-provider-bin-dir", "", "Directory holding the credential provider executables named by --image-credential-provider-config. Required when that flag is set.")
+
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 	imageCacheDir                = pflag.String("image-cache-dir", ateletpath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
@@ -193,19 +198,26 @@ func main() {
 
 	ateomDialer := newAteomDialer(256)
 
-	var gcpRegistryAuthn authn.Authenticator
-	if *gcpAuthForImagePulls {
-		gcpRegistryAuthn, err = googlecontainerauth.NewEnvAuthenticator(ctx)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to create GCP registry authenticator", err)
+	// Without a credential provider config, pulls are anonymous: all an
+	// unconfigured node (kind, say) can do and all a public registry needs.
+	var imageCredsKeychain authn.Keychain
+	if *imageCredentialProviderConfig != "" {
+		if *imageCredentialProviderBinDir == "" {
+			serverboot.Fatal(ctx, "Failed to configure image pull credentials",
+				errors.New("--image-credential-provider-bin-dir is required when --image-credential-provider-config is set"))
 		}
+		kc, err := credentialprovider.New(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to configure image pull credentials", err)
+		}
+		imageCredsKeychain = kc
 	}
 
 	if err := validateImageCacheGCFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
 	}
 	imageCache, err := imagecache.New(*imageCacheDir,
-		imagecache.WithAuthenticator(gcpRegistryAuthn),
+		imagecache.WithKeychain(imageCredsKeychain),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
 		imagecache.WithActorsDir(nodepath.ActorsDir),
 		imagecache.WithMinAge(*imageCacheMinAge),
@@ -272,19 +284,21 @@ func main() {
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	clusterTrustBundleInformerFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 24*time.Hour,
-		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
-			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
-		}))
-	clusterTrustBundles := clusterTrustBundleInformerFactory.Certificates().V1beta1().ClusterTrustBundles()
-	systemInfoVolumes := newSystemInfoVolumeRefresher(clusterTrustBundles.Lister(), clusterTrustBundles.Informer())
+	trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
+		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "Error discovering ClusterTrustBundle API", slog.Any("err", err))
+		os.Exit(1)
+	}
+	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundles.GetCached, trustBundles.Informer())
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	ateFactory.Start(stopCh)
-	clusterTrustBundleInformerFactory.Start(stopCh)
+	go trustBundles.Informer().Run(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
-	clusterTrustBundleInformerFactory.WaitForCacheSync(stopCh)
+	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
 	wmService := NewService(
 		ctx,
@@ -472,9 +486,7 @@ func NewService(
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *ateletpb.RunResponse, err error) {
 	if err := validateRunRequest(req); err != nil {
-		// status.Error so the interceptor surfaces InvalidArgument and the
-		// message instead of masking both as Internal.
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorUID := req.GetActorUid()
@@ -482,7 +494,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 
 	sandboxRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	if err != nil {
@@ -525,7 +537,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
@@ -582,7 +594,7 @@ func recordSnapshotSize(ctx context.Context, file string, size int64, templateAt
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
 	if err := validateCheckpointRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorUID := req.GetActorUid()
@@ -648,7 +660,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// cloud-hypervisor's snapshot set, ...) rather than a hardcoded list.
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
 	tAteom := time.Now()
@@ -673,7 +685,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	s.systemInfoVolumes.Deregister(actorUID)
 
-	sandboxRec.SnapshotFiles, err = checkpointSnapshotFiles(resp, shouldHaveSnapshots(req))
+	sandboxRec.SnapshotFiles, sandboxRec.DataSnapshotFiles, err = checkpointSnapshotFiles(resp, shouldHaveSnapshots(req))
 	if err != nil {
 		return nil, err
 	}
@@ -733,15 +745,19 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-func checkpointSnapshotFiles(resp *ateompb.CheckpointWorkloadResponse, required bool) ([]string, error) {
-	files := resp.GetSnapshotFiles()
+func checkpointSnapshotFiles(resp *ateompb.CheckpointWorkloadResponse, required bool) (files, dataFiles []string, err error) {
+	files = resp.GetSnapshotFiles()
 	if len(files) == 0 && required {
-		return nil, errors.New("ateom reported no snapshot files for checkpoint")
+		return nil, nil, errors.New("ateom reported no snapshot files for checkpoint")
 	}
 	if err := validateSnapshotFiles(files); err != nil {
-		return nil, fmt.Errorf("ateom reported invalid snapshot files: %w", err)
+		return nil, nil, fmt.Errorf("ateom reported invalid snapshot files: %w", err)
 	}
-	return files, nil
+	dataFiles = resp.GetDataSnapshotFiles()
+	if err := validateDataSnapshotFiles(files, dataFiles); err != nil {
+		return nil, nil, fmt.Errorf("ateom reported invalid data snapshot files: %w", err)
+	}
+	return files, dataFiles, nil
 }
 
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
@@ -890,7 +906,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 // local-checkpoints directory, written by an earlier local Checkpoint (pause).
 func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
 	if err := validateUploadPausedCheckpointRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	tStart := time.Now()
@@ -911,7 +927,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 
 	uri, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri())
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
 
@@ -971,7 +987,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 
 	capturedScope := rec.Scope
 	if capturedScope == "" {
-		return rec.SandboxClass, status.Errorf(codes.FailedPrecondition, "local snapshot %q has no scope recorded in its manifest (written by an older atelet); resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
+		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no scope recorded in its manifest (written by an older atelet); resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
 	}
 	desiredScope := ateattr.SnapshotScopeValue(req.GetDesiredScope())
 
@@ -980,7 +996,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 	case capturedScope == ateattr.SnapshotScopeData && desiredScope == ateattr.SnapshotScopeFull:
 		// The control plane rejects this before marking SUSPENDING; reaching
 		// it here means the template changed mid-flight or store state drifted.
-		return rec.SandboxClass, status.Errorf(codes.FailedPrecondition, "pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedScope, desiredScope)
+		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedScope, desiredScope)
 	default: // captured FULL, DATA wanted
 		if err := narrowFullCaptureToData(rec); err != nil {
 			return rec.SandboxClass, err
@@ -1000,30 +1016,21 @@ func readSnapshotManifest(dir string) ([]byte, error) {
 }
 
 // narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA
-// snapshot. Each sandbox class owns one branch: micro-VM durable data is a
-// self-contained tar that can be carved out of the full file set; gVisor's
-// full checkpoint is monolithic until split checkpoints land.
+// snapshot holding only the data-scope files ateom reported at checkpoint.
 func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
-	switch atev1alpha1.SandboxClass(rec.SandboxClass) {
-	case atev1alpha1.SandboxClassMicroVM, atev1alpha1.SandboxClassGvisor:
-		if !slices.Contains(rec.SnapshotFiles, resources.DurableDirTarFile) {
-			// No durable-dir volumes were attached at pause: this snapshot
-			// holds no data, and never will — not retryable.
-			return status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", rec.SandboxClass, resources.DurableDirTarFile, ateattr.SnapshotScopeData)
-		}
-		rec.SnapshotFiles = []string{resources.DurableDirTarFile}
-		rec.Scope = ateattr.SnapshotScopeData
-		return nil
-
-	default:
-		// The manifest's class is unvalidated input from disk/object storage.
-		return status.Errorf(codes.FailedPrecondition, "unknown sandbox class %q in snapshot manifest", rec.SandboxClass)
+	if len(rec.DataSnapshotFiles) == 0 {
+		// Either no durable-dir volumes were attached at pause, or the
+		// manifest predates the list. Neither is retryable.
+		return apierror.FailedPrecondition("full capture lists no data-scope files; the actor has no durable data to upload as %s", ateattr.SnapshotScopeData)
 	}
+	rec.SnapshotFiles = rec.DataSnapshotFiles
+	rec.Scope = ateattr.SnapshotScopeData
+	return nil
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
 	if err := validateRestoreRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorUID := req.GetActorUid()
@@ -1036,7 +1043,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// work so an invalid request changes nothing.
 	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid sandbox_assets: %v", err)
+		return nil, apierror.InvalidArgument("invalid sandbox_assets: %v", err)
 	}
 
 	// Per-step timing so we can attribute resume latency between the rustfs
@@ -1214,7 +1221,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// all application containers.
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
 	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
@@ -1256,7 +1263,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 // and resets actor directories on the node.
 func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	if err := validateTerminateRequest(req); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, apierror.InvalidArgument("%v", err)
 	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
@@ -1280,7 +1287,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
 		Atespace:              req.GetAtespace(),

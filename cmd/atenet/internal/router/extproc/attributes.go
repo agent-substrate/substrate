@@ -71,7 +71,7 @@ const (
 	EgressSNIRuleModeKey    = "mode"
 
 	// EgressFilterChainFilterStateKey holds the egress-policy module's verdict:
-	// the filter chain name the sdsmint manifest's matcher selects on.
+	// the filter chain name the egress manifest's matcher selects on.
 	EgressFilterChainFilterStateKey = "dev.ate.egress.filter_chain"
 	// EgressFilterChainMITM: TLS terminated on EgressTLSMITMFilterChainName.
 	EgressFilterChainMITM = "mitm"
@@ -128,8 +128,8 @@ const UpstreamDynamicPortFilterStateKey = "envoy.upstream.dynamic_port"
 const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
 
 // OriginalDstFilterStateKey is Envoy's filter-state key for the address an
-// ORIGINAL_DST cluster dials. The plain gateway writes it; the sdsmint gateway
-// does not and dials only by name. The request legs read it as an attribute.
+// ORIGINAL_DST cluster dials. The gateway never writes it and dials only by
+// name; the request legs read it as an attribute.
 const OriginalDstFilterStateKey = "envoy.network.transport_socket.original_dst_address"
 
 // OriginalDstIPAttribute and OriginalDstPortAttribute are the CEL expressions

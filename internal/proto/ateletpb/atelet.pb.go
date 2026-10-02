@@ -2642,8 +2642,8 @@ type UploadPausedCheckpointRequest struct {
 	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
 	// The scope the pause checkpoint captured is not sent: atelet reads it from
 	// the local snapshot's own manifest, which is authoritative. When they
-	// differ, atelet converts where possible (micro-VM FULL capture to a DATA
-	// upload by selecting the durable-dir tar) and rejects otherwise.
+	// differ, atelet converts where possible (a FULL capture to a DATA upload
+	// of the data-scope files ateom reported) and rejects otherwise.
 	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

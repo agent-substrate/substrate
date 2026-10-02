@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -35,7 +36,6 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -158,10 +158,8 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
 
-	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
-	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
-	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
-	// clusters), client-go will print out a warning every time it initializes.
+	// Older clusters use the deprecated beta ClusterTrustBundle API.
+	// Suppress its warnings when falling back from v1.
 	config.WarningHandlerWithContext = &rest.NoWarnings{}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -215,10 +213,8 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
 
-	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
-	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
-	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
-	// clusters), client-go will print out a warning every time it initializes.
+	// Older clusters use the deprecated beta ClusterTrustBundle API.
+	// Suppress its warnings when falling back from v1.
 	config.WarningHandlerWithContext = &rest.NoWarnings{}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -268,7 +264,11 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 }
 
 func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.Config, error) {
-	ctbs, err := clientset.CertificatesV1beta1().ClusterTrustBundles().List(ctx, metav1.ListOptions{
+	bundles, err := clustertrustbundle.NewClient(clientset, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover ClusterTrustBundle API: %w", err)
+	}
+	ctbs, err := bundles.List(ctx, metav1.ListOptions{
 		LabelSelector: liveBundleSelector,
 	})
 	if err != nil {

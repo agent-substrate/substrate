@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
@@ -56,9 +57,7 @@ import (
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -345,7 +344,7 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 // shutdown, so the control plane reschedules the actor onto a live worker.
 func (s *AteomService) rejectIfDraining() error {
 	if s.shuttingDown.Load() {
-		return status.Error(codes.Unavailable, "worker draining: not accepting new workloads")
+		return apierror.Unavailable("worker draining: not accepting new workloads")
 	}
 	return nil
 }
@@ -505,7 +504,7 @@ func containerNames(containers []*ateompb.Container) []string {
 // validateActorDirs rejects a request whose actor directories are unusable.
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil
 }
@@ -515,7 +514,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 	ctx, cancel := context.WithCancel(ctx)
@@ -635,7 +634,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -724,7 +723,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
+	resp := &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}
+	if slices.Contains(snapshotFiles, durableTarFile) {
+		resp.DataSnapshotFiles = []string{durableTarFile}
+	}
+	return resp, nil
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
@@ -806,7 +809,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 	ctx, cancel := context.WithCancel(ctx)
@@ -955,7 +958,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 

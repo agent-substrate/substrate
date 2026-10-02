@@ -70,6 +70,7 @@ type Config struct {
 	SweperfPollIntervalMs int    // /status poll interval in ms; 0 falls back to default
 
 	AgentSessionScript     string  // built-in agent-session script variant; "" falls back to the default
+	AgentSessionScriptFile string  // path to a script YAML on the worker; wins over AgentSessionScript when set
 	AgentSessionThinkScale float64 // multiplier on the script's per-step think times; 0 reads as 1.0
 }
 
@@ -121,6 +122,7 @@ type payload struct {
 	SweperfPollIntervalMs *float64 `json:"sweperf_poll_interval_ms"`
 
 	AgentSessionScript     *string  `json:"agentsession_script"`
+	AgentSessionScriptFile *string  `json:"agentsession_script_file"`
 	AgentSessionThinkScale *float64 `json:"agentsession_think_scale"`
 }
 
@@ -290,6 +292,9 @@ func (p payload) merge(current Config) Config {
 	if p.AgentSessionScript != nil {
 		out.AgentSessionScript = *p.AgentSessionScript
 	}
+	if p.AgentSessionScriptFile != nil {
+		out.AgentSessionScriptFile = *p.AgentSessionScriptFile
+	}
 	if p.AgentSessionThinkScale != nil {
 		out.AgentSessionThinkScale = *p.AgentSessionThinkScale
 	}
@@ -370,6 +375,7 @@ func StartPoll(
 					slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
 					slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
 					slog.String("agentsession_script", next.AgentSessionScript),
+					slog.String("agentsession_script_file", next.AgentSessionScriptFile),
 					slog.Float64("agentsession_think_scale", next.AgentSessionThinkScale),
 				)
 			}
@@ -419,6 +425,7 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
 			slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
 			slog.String("agentsession_script", next.AgentSessionScript),
+			slog.String("agentsession_script_file", next.AgentSessionScriptFile),
 			slog.Float64("agentsession_think_scale", next.AgentSessionThinkScale),
 		)
 	})

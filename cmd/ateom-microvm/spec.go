@@ -21,10 +21,9 @@ import (
 	"math"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/apierror"
 )
 
 // guestEnvelope is the ceiling an actor's container limits must fit inside.
@@ -91,7 +90,7 @@ func checkResourceEnvelope(ctrs []actorContainer, env guestEnvelope) error {
 		if r.Memory != nil && r.Memory.Limit != nil && *r.Memory.Limit > 0 {
 			limit := *r.Memory.Limit
 			if limit > guestBytes {
-				return status.Errorf(codes.InvalidArgument,
+				return apierror.InvalidArgument(
 					"container %q asks for %d bytes of memory but the guest has %d MiB; %s",
 					c.name, limit, env.memMiB, env.remedy())
 			}
@@ -102,7 +101,7 @@ func checkResourceEnvelope(ctrs []actorContainer, env guestEnvelope) error {
 			return err
 		}
 		if millis > guestMillis {
-			return status.Errorf(codes.InvalidArgument,
+			return apierror.InvalidArgument(
 				"container %q asks for %dm CPU but the guest has %d vCPU; %s",
 				c.name, millis, env.vcpus, env.cpuRemedy())
 		}
@@ -110,12 +109,12 @@ func checkResourceEnvelope(ctrs []actorContainer, env guestEnvelope) error {
 	}
 
 	if totalBytes > guestBytes {
-		return status.Errorf(codes.InvalidArgument,
+		return apierror.InvalidArgument(
 			"the actor's containers ask for %d bytes of memory in total but the guest has %d MiB; %s",
 			totalBytes, env.memMiB, env.remedy())
 	}
 	if totalMillis > guestMillis {
-		return status.Errorf(codes.InvalidArgument,
+		return apierror.InvalidArgument(
 			"the actor's containers ask for %dm CPU in total but the guest has %d vCPU; %s",
 			totalMillis, env.vcpus, env.cpuRemedy())
 	}
@@ -132,14 +131,14 @@ func cpuLimitMillis(name string, cpu *specs.LinuxCPU) (int64, error) {
 	period := int64(kata.DefaultCPUPeriodUS)
 	if cpu.Period != nil && *cpu.Period > 0 {
 		if *cpu.Period > math.MaxInt64 {
-			return 0, status.Errorf(codes.InvalidArgument,
+			return 0, apierror.InvalidArgument(
 				"container %q has a cpu period of %d, which is out of range", name, *cpu.Period)
 		}
 		period = int64(*cpu.Period)
 	}
 	quota := *cpu.Quota
 	if quota > math.MaxInt64/1000 {
-		return 0, status.Errorf(codes.InvalidArgument,
+		return 0, apierror.InvalidArgument(
 			"container %q has a cpu quota of %d, which is out of range", name, quota)
 	}
 	return quota * 1000 / period, nil

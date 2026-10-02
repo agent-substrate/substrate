@@ -208,8 +208,13 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
 
 * `--agentsession-script` — built-in script variant to run, by file name
   under `internal/benchmarking/boomer/agentsession/scripts/` (default
-  `coding-session`). Read once, on the worker's first iteration after the
-  swarm starts, then fixed for the worker's lifetime.
+  `coding-session`). Resolved when a session starts, so a change takes
+  effect for sessions started after the next swarm; sessions already
+  running finish on the script they started with.
+* `--agentsession-script-file` — path, on the boomer worker, of a script
+  YAML to run instead of a built-in variant; wins over
+  `--agentsession-script`. Normally set for you by
+  `locust/deploy.sh --agentsession-script FILE` (below).
 * `--agentsession-think-scale` — multiplier on every think gap; 0.5 makes the
   fleet twice as chatty, 4.0 models slow reasoning models (default 1.0). Each
   gap gets ±20% jitter so sessions don't move in lockstep.
@@ -261,6 +266,21 @@ take, a read of a file nothing wrote, a walk of an array nothing filled, a
 duplicate step name, or a `min_actor_memory` below the declared RAM plus
 disk all fail before any actor is created. Built-in variants are checked by
 `TestEmbeddedScriptsAreValid`, so a broken file cannot merge.
+
+To run a script of your own without rebuilding anything, hand it to the
+locust deploy:
+
+```sh
+./benchmarking/locust/deploy.sh --deploy --user-class agentsession --agentsession-script ./my-session.yaml
+```
+
+The script validates the file locally first (the same check the worker
+runs, via `boomer-worker --check-agentsession-script`), uploads it as the
+`agentsession-script` ConfigMap, mounts it into the boomer workers at
+`/etc/agentsession/script.yaml`, and points the master's
+`--agentsession-script-file` default at that path. Workers log the loaded
+script's name, step count, and declared budgets on their first iteration.
+To go back to a built-in variant, redeploy without the flag.
 
 #### Agent-Session Reported Metrics
 

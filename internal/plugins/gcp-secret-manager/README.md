@@ -237,13 +237,12 @@ provider while the gateway still points at it makes every credential fetch
 fail.
 
 ```bash
-hack/install-ate.sh --deploy-atenet --experimental-use-sdsmint   # from the repository root
-make undeploy                                                    # from this directory
+hack/install-ate.sh --deploy-atenet   # from the repository root
+make undeploy                         # from this directory
 ```
 
-Drop `--experimental-use-sdsmint` to turn off the gateway's TLS interception
-as well. `make undeploy` removes the provider's ServiceAccount, Deployment and
-Service, and leaves the project policy in place.
+`make undeploy` removes the provider's ServiceAccount, Deployment and Service,
+and leaves the project policy in place.
 
 ## Flags
 

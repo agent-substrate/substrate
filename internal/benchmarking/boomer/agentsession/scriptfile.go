@@ -229,7 +229,8 @@ func parseSize(s string) (int64, error) {
 	return n, nil
 }
 
-func formatSize(n int64) string {
+// FormatSize renders a byte count as a Kubernetes quantity (32Mi, 1Gi).
+func FormatSize(n int64) string {
 	return resource.NewQuantity(n, resource.BinarySI).String()
 }
 
@@ -238,7 +239,7 @@ func formatSize(n int64) string {
 func Encode(s *Script) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	addScalar(root, "name", s.Name)
-	addScalar(root, "min_actor_memory", formatSize(s.MinActorMemory))
+	addScalar(root, "min_actor_memory", FormatSize(s.MinActorMemory))
 	steps := &yaml.Node{Kind: yaml.SequenceNode}
 	for _, st := range s.Steps {
 		sn := &yaml.Node{Kind: yaml.MappingNode}
@@ -278,7 +279,7 @@ func encodeOp(o op) (*yaml.Node, error) {
 		addScalar(args, "key", o.key)
 	}
 	if spec.size {
-		addScalar(args, "size", formatSize(o.bytes))
+		addScalar(args, "size", FormatSize(o.bytes))
 	}
 	if spec.millis {
 		addScalar(args, "millis", strconv.FormatInt(o.millis, 10))

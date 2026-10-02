@@ -498,8 +498,8 @@ message UploadPausedCheckpointRequest {
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
   // The scope the pause checkpoint captured is not sent: atelet reads it from
   // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (micro-VM FULL capture to a DATA
-  // upload by selecting the durable-dir tar) and rejects otherwise.
+  // differ, atelet converts where possible (a FULL capture to a DATA upload
+  // of the data-scope files ateom reported) and rejects otherwise.
   SnapshotScope desired_scope = 8;
 }
 

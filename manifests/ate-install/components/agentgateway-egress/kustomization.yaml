@@ -16,6 +16,35 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 patches:
+  # The base is the envoy gateway. agentgateway mints its own leaves
+  # (tls.mode: dynamicCa below), so drop envoy's minting sidecar and its
+  # volumes, and the non-root pod identity only that pod is set up for.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: atenet-egress
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            securityContext:
+              runAsUser: null
+              runAsGroup: null
+              runAsNonRoot: null
+              fsGroup: null
+            initContainers: null
+            volumes:
+            - name: sdsmint-sock
+              $patch: delete
+            - name: ca-state
+              $patch: delete
   - target:
       version: v1
       kind: ConfigMap
