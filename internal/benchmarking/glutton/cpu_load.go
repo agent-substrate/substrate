@@ -98,13 +98,7 @@ func (c *cpuLoad) Set(numCores int, dutyCycle float64, cycleLen time.Duration, c
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.cancel != nil {
-		c.cancel()
-		c.done.Wait()
-		c.cancel = nil
-		c.done = nil
-		c.n = 0
-	}
+	c.stopLocked()
 	if numCores == 0 {
 		return 0
 	}
@@ -126,7 +120,22 @@ func (c *cpuLoad) Set(numCores int, dutyCycle float64, cycleLen time.Duration, c
 
 // Stop tears down any running pool.
 func (c *cpuLoad) Stop() {
-	c.Set(0, 0, 0, false)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopLocked()
+}
+
+// stopLocked cancels the running pool, if any, and waits for its
+// goroutines to exit. c.mu must be held.
+func (c *cpuLoad) stopLocked() {
+	if c.cancel == nil {
+		return
+	}
+	c.cancel()
+	c.done.Wait()
+	c.cancel = nil
+	c.done = nil
+	c.n = 0
 }
 
 // N returns the current pool size.

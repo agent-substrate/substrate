@@ -50,26 +50,33 @@ const (
 // Config is the dynamic-mutable subset of boomer's behavior. Holder swaps
 // it atomically so task goroutines read a consistent snapshot.
 type Config struct {
-	MinWait               time.Duration // gap between one actor's suspend and the VU's next resume, lower bound
-	MaxWait               time.Duration // upper bound of the same gap
-	MinLive               time.Duration // time a GluttonUser actor stays resumed between its first ping and suspend, lower bound
-	MaxLive               time.Duration // upper bound of the live window; zero (the default) suspends right after the ping
-	TraceProbability      float64
-	DurDirFileSize        int64   // bytes
-	ResumeMode            string  // ResumeModeExplicit | ResumeModeImplicit
-	LifecycleMode         string  // LifecycleModeSuspend | LifecycleModePause
-	DurDirReadMode        string  // ReadModeData | ReadModeDigest
-	DurDirTemplate        string  // ActorTemplate name
-	MemTarget             string  // resident RAM the GluttonUser fills via WriteRAM, suffixed (e.g. "2Gi"); "" disables
-	MemChurn              string  // RAM re-randomized in place each cycle via WriteRAM rotate, suffixed (e.g. "64Mi"); "" disables
-	MemRead               string  // RAM walked (one byte per page) via ReadRAM after each resume, suffixed (e.g. "1Gi") or "all"; "" disables
-	CPUCores              int     // goroutines each GluttonUser's actor spins via UseCPU; 0 disables
-	CPUDutyCycle          float64 // fraction of one core each of those goroutines consumes, in [0, 1]
-	MaxPingsPerWake       int     // cap on pings a GluttonUser sends during one resume/suspend cycle; values < 1 read as 1
-	SweperfTemplate       string  // ActorTemplate name for the sweperf workload; "" falls back to default
-	SweperfTotalSteps     int     // total steps in trace; 0 falls back to default
-	SweperfNumCycles      int     // number of cycles to partition steps into; 0 falls back to default
-	SweperfPollIntervalMs int     // /status poll interval in ms; 0 falls back to default
+	MinWait time.Duration // gap between one actor's suspend and the VU's next resume, lower bound
+	MaxWait time.Duration // upper bound of the same gap
+
+	MinLive time.Duration // time a GluttonUser actor stays resumed between its first ping and suspend, lower bound
+	MaxLive time.Duration // upper bound of the live window; zero (the default) suspends right after the ping
+
+	TraceProbability float64
+
+	ResumeMode    string // ResumeModeExplicit | ResumeModeImplicit
+	LifecycleMode string // LifecycleModeSuspend | LifecycleModePause
+
+	DurDirFileSize int64  // bytes
+	DurDirReadMode string // ReadModeData | ReadModeDigest
+	DurDirTemplate string // ActorTemplate name
+
+	MemTarget       string // resident RAM the GluttonUser fills via WriteRAM, suffixed (e.g. "2Gi"); "" disables
+	MemChurn        string // RAM re-randomized in place each cycle via WriteRAM rotate, suffixed (e.g. "64Mi"); "" disables
+	MemRead         string // RAM walked (one byte per page) via ReadRAM after each resume, suffixed (e.g. "1Gi") or "all"; "" disables
+	MaxPingsPerWake int    // cap on pings a GluttonUser sends during one resume/suspend cycle; values < 1 read as 1
+
+	SweperfTemplate       string // ActorTemplate name for the sweperf workload; "" falls back to default
+	SweperfTotalSteps     int    // total steps in trace; 0 falls back to default
+	SweperfNumCycles      int    // number of cycles to partition steps into; 0 falls back to default
+	SweperfPollIntervalMs int    // /status poll interval in ms; 0 falls back to default
+
+	CPUCores     int     // goroutines each GluttonUser's actor spins via UseCPU; 0 disables
+	CPUDutyCycle float64 // fraction of one core each of those goroutines consumes, in [0, 1]
 
 	AgentSessionScript     string  // built-in agent-session script variant; "" falls back to the default
 	AgentSessionScriptFile string  // path to a script YAML on the worker; wins over AgentSessionScript when set

@@ -85,6 +85,29 @@ func TestUseCPULifecycle(t *testing.T) {
 	}
 }
 
+// TestCPULoadStop covers Stop tearing down a running pool, then being a
+// no-op on an empty one, and the pool restarting afterward.
+func TestCPULoadStop(t *testing.T) {
+	var c cpuLoad
+	if got := c.Set(2, 0.1, 20*time.Millisecond, false); got != 2 {
+		t.Fatalf("Set = %d, want 2", got)
+	}
+
+	c.Stop()
+	if got := c.N(); got != 0 {
+		t.Errorf("N() after Stop = %d, want 0", got)
+	}
+	c.Stop()
+	if got := c.N(); got != 0 {
+		t.Errorf("N() after second Stop = %d, want 0", got)
+	}
+
+	if got := c.Set(1, 0.1, 20*time.Millisecond, false); got != 1 {
+		t.Fatalf("Set after Stop = %d, want 1", got)
+	}
+	c.Stop()
+}
+
 // TestUseCPUCapAtGomaxprocs covers the three cap_at_gomaxprocs states:
 // unset (default true), explicitly true, and explicitly false.
 func TestUseCPUCapAtGomaxprocs(t *testing.T) {
