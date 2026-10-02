@@ -1112,7 +1112,8 @@ type SandboxAssets struct {
 	// pause_image is the image for the sandbox's root container. Like the
 	// binaries above it is sandbox configuration, not workload configuration,
 	// and atelet pins it into the snapshot manifest so a restore rebuilds the
-	// sandbox from the same image.
+	// sandbox from the same image. Empty for sandboxes without a pause
+	// container (microvm).
 	PauseImage    string `protobuf:"bytes,3,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

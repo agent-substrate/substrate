@@ -1460,7 +1460,8 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with.
+// with. It is empty for sandboxes without a pause container, which get no
+// pause bundle.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1482,27 +1483,28 @@ func (s *AteomHerder) prepareOCIBundles(
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Pause container.
-	g.Go(func() error {
-		if err := prepareOCIDirectory(
-			gCtx,
-			s.imageCache,
-			actorUID,
-			ocispec.PauseContainer,
-			pauseImage,
-			[]string{"/pause"},
-			nil,
-			nil,
-			nodepath.ActorNetNSPath(actorUID),
-			nil, // pause is sandbox infra; it mounts no volumes.
-			nil,
-			nil, // pause only reaps; it needs no capabilities.
-			nil, // pause carries no user-declared limits.
-		); err != nil {
-			return wrapFileSystemErr("while creating pause OCI bundle", err)
-		}
-		return nil
-	})
+	if pauseImage != "" {
+		g.Go(func() error {
+			if err := prepareOCIDirectory(
+				gCtx,
+				s.imageCache,
+				actorUID,
+				ocispec.PauseContainer,
+				pauseImage,
+				[]string{"/pause"},
+				nil,
+				nil,
+				nodepath.ActorNetNSPath(actorUID),
+				nil, // pause is sandbox infra; it mounts no volumes.
+				nil,
+				nil, // pause only reaps; it needs no capabilities.
+				nil, // pause carries no user-declared limits.
+			); err != nil {
+				return wrapFileSystemErr("while creating pause OCI bundle", err)
+			}
+			return nil
+		})
+	}
 
 	// Application containers.
 	for _, ctr := range spec.GetContainers() {

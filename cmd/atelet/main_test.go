@@ -38,6 +38,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -207,15 +208,67 @@ func TestSnapshotManifestScopeAbsent(t *testing.T) {
 	}
 }
 
-// TestSnapshotManifestRequiresPauseImage pins that a manifest without a pause
-// image is rejected outright rather than yielding an empty image that would
-// fail later, deep in the image pull.
-func TestSnapshotManifestRequiresPauseImage(t *testing.T) {
-	noPause := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
-	if _, err := unmarshalSandboxRecord(noPause); err == nil {
-		t.Fatal("unmarshalSandboxRecord accepted a manifest with no pauseImage")
-	} else if !strings.Contains(err.Error(), "pauseImage") {
-		t.Errorf("error = %v, want it to name pauseImage", err)
+// TestSnapshotManifestPauseImage pins that only a gVisor manifest needs a
+// pause image: micro-VM sandboxes run no pause container.
+func TestSnapshotManifestPauseImage(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		manifest string
+		wantErr  bool
+	}{
+		{"gvisor without pause image", `{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`, true},
+		{"gvisor with pause image", `{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","snapshotFiles":["checkpoint.img"]}`, false},
+		{"microvm without pause image", `{"sandboxClass":"microvm","snapshotFiles":["checkpoint.img"]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := unmarshalSandboxRecord([]byte(tc.manifest))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("unmarshalSandboxRecord succeeded, want an error")
+				}
+				if !strings.Contains(err.Error(), "pauseImage") {
+					t.Errorf("error = %v, want it to name pauseImage", err)
+				}
+			} else if err != nil {
+				t.Fatalf("unmarshalSandboxRecord: %v", err)
+			}
+		})
+	}
+}
+
+// TestPrepareOCIBundlesPause pins that the pause bundle is built only when the
+// sandbox has a pause image.
+func TestPrepareOCIBundlesPause(t *testing.T) {
+	host := imageVolumeTestRegistry(t)
+	image := host + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+
+	for _, tc := range []struct {
+		name       string
+		pauseImage string
+		wantPause  bool
+	}{
+		{"with pause image", image, true},
+		{"without pause image", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			const actorUID = "actor-uid-1"
+			s := &AteomHerder{imageCache: newImageVolumeStore(t)}
+			if err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage, "ateom-uid-1"); err != nil {
+				t.Fatalf("prepareOCIBundles: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(ateletpath.OCIBundlePath(actorUID, "app"), "config.json")); err != nil {
+				t.Errorf("app bundle: %v", err)
+			}
+			_, err := os.Stat(ateletpath.OCIBundlePath(actorUID, ocispec.PauseContainer))
+			if gotPause := err == nil; gotPause != tc.wantPause {
+				t.Errorf("pause bundle exists = %v, want %v (stat: %v)", gotPause, tc.wantPause, err)
+			}
+		})
 	}
 }
 
