@@ -85,8 +85,8 @@ type Handler struct {
 	policies *policyCache
 	// actorJWTs mints the actor JWTs that credential injections ask for.
 	actorJWTs *actorJWTs
-	// provider resolves an egress policy's credential injections. Nil means
-	// credential injection is not configured, and injection will be skipped.
+	// provider resolves an egress policy's credential_uri injections. Nil
+	// means none are configured, and they will be skipped.
 	provider credproviderpb.CredentialProviderClient
 	// providerName, when set, is the provider this gateway serves (the host of
 	// its ate-secret:// prefix); a credential URI naming another provider
@@ -99,10 +99,11 @@ type Handler struct {
 // policyCacheTTL also bounds how long the actor UID read on CONNECT is reused;
 // 0 fetches the policy on every callout and records no UID.
 //
-// provider resolves an allowed rule's credential injections on the
-// TLS-terminated MITM leg; nil leaves credential injection off, so a rule that
-// requires an injection is skipped. providerName, when set, is the provider
-// this gateway serves; a credential URI naming another provider is refused.
+// provider resolves an allowed rule's credential_uri injections on the
+// TLS-terminated MITM leg; nil leaves them off, so such an injection is
+// skipped. Actor JWT injections need no provider. providerName, when set, is
+// the provider this gateway serves; a credential URI naming another provider
+// is refused.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
 	return &Handler{
 		apiClient:          apiClient,
