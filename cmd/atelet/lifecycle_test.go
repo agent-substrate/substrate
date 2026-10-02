@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
@@ -66,6 +67,8 @@ type fakeAteom struct {
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
+	// terminations counts TerminateWorkload calls.
+	terminations atomic.Int32
 }
 
 func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
@@ -109,6 +112,7 @@ func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkl
 }
 
 func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	f.terminations.Add(1)
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
@@ -878,6 +882,121 @@ func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
 			}
 			if localDir := ateletpath.LocalCheckpointsDir(actorUID); !isGone(localDir) {
 				t.Errorf("%s survived terminate, want the local snapshots pruned", localDir)
+			}
+		})
+	}
+}
+
+// TestTerminateCanBeRetried pins that a repeated Terminate succeeds. The control
+// plane retries a Terminate until one does, so a Terminate that cannot succeed
+// twice strands the actor in DELETING with its state on the node.
+func TestTerminateCanBeRetried(t *testing.T) {
+	const (
+		atespace  = "ate-demo"
+		actorName = "counter"
+		actorUID  = "actor-uid-1"
+		ateomUID  = "ateom-uid-1"
+	)
+
+	for _, tt := range []struct {
+		name string
+		// failFirst fails the first Terminate after its ateom teardown, the way
+		// a volume that has not finished unmounting does.
+		failFirst bool
+		// wantTeardowns is how many TerminateWorkload calls ateom sees. A retry
+		// tears down again only while the sandbox record survives.
+		wantTeardowns int32
+	}{
+		{name: "after a terminate that succeeded", wantTeardowns: 1},
+		{name: "after a terminate that failed past the teardown", failFirst: true, wantTeardowns: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+
+			ateom := &fakeAteom{}
+			serveFakeAteom(t, ateom)
+
+			host := imageVolumeTestRegistry(t)
+			image := host + "/actor:v1"
+			pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+			runsc := []byte("runsc binary")
+			s := &AteomHerder{
+				ateomDialer:       newAteomDialer(1),
+				imageCache:        newImageVolumeStore(t),
+				anonGCSClient:     fakeObjectStorage{data: runsc},
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+			}
+			spec := &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+			}
+			if _, err := s.Run(ctx, &ateletpb.RunRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				SandboxAssets: &ateletpb.SandboxAssets{
+					SandboxClass: "gvisor",
+					PauseImage:   image,
+					Assets: map[string]*ateletpb.ArchAssets{
+						runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+							runscAssetName: {
+								Url:    "gs://test-bucket/runsc",
+								Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+							},
+						}},
+					},
+				},
+				Spec: spec,
+			}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			// A populated volume directory, which resetActorDirs refuses to
+			// delete through.
+			straggler := filepath.Join(ateletpath.VolumeHostPath(actorUID, "data"), "file")
+			if tt.failFirst {
+				if err := os.MkdirAll(filepath.Dir(straggler), 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+				if err := os.WriteFile(straggler, []byte("still mounted"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+			}
+
+			req := &ateletpb.TerminateRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				Spec:                  spec,
+			}
+			_, err := s.Terminate(ctx, req)
+			if tt.failFirst {
+				if err == nil {
+					t.Fatal("first Terminate succeeded through a populated volume directory")
+				}
+				// The unmount finishes before the retry.
+				if err := os.Remove(straggler); err != nil {
+					t.Fatalf("removing %s: %v", straggler, err)
+				}
+			} else if err != nil {
+				t.Fatalf("first Terminate: %v", err)
+			}
+
+			if _, err := s.Terminate(ctx, req); err != nil {
+				t.Fatalf("retried Terminate: %v", err)
+			}
+			if got := ateom.terminations.Load(); got != tt.wantTeardowns {
+				t.Errorf("ateom saw %d TerminateWorkload calls, want %d", got, tt.wantTeardowns)
+			}
+			if actorDir := ateletpath.ActorPath(actorUID); !isGone(actorDir) {
+				t.Errorf("%s survived the retried terminate, want it removed", actorDir)
 			}
 		})
 	}
