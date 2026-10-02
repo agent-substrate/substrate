@@ -28,7 +28,7 @@ import (
 func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
 	// The first chunk doubles as the size probe: a range read reports the whole
 	// object's size in its attrs, so nothing pays an extra round trip for it.
-	head, err := g.client.Bucket(bucket).Object(object).NewRangeReader(ctx, 0, downloadChunkSize)
+	head, err := g.poolClient().Bucket(bucket).Object(object).NewRangeReader(ctx, 0, downloadChunkSize)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) || errors.Is(err, storage.ErrBucketNotExist) {
 			return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ErrObjectNotFound, bucket, object)
@@ -45,8 +45,8 @@ func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.Re
 // fetchRange reads one range with a pooled client, so concurrent ranges do not all
 // multiplex onto the one HTTP/2 connection a single storage.Client holds.
 func (g *gcsClient) fetchRange(bucket, object string) fetchRangeFunc {
-	return func(ctx context.Context, i int, off, n int64, buf []byte) error {
-		rc, err := g.uploadClient(ctx, i).Bucket(bucket).Object(object).NewRangeReader(ctx, off, n)
+	return func(ctx context.Context, off, n int64, buf []byte) error {
+		rc, err := g.poolClient().Bucket(bucket).Object(object).NewRangeReader(ctx, off, n)
 		if err != nil {
 			return fmt.Errorf("while opening range %d+%d of %q: %w", off, n, object, err)
 		}
