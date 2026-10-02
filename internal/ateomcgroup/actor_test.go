@@ -105,3 +105,85 @@ func TestNilActorLeaf(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestRemoveEmptyContainerLeaves(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"uid-a-_pause/sub", "uid-a-app", "uid-b-_pause", workerLeaf} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := removeEmptyContainerLeaves(root, "uid-a", "uid-a-"); err != nil {
+		t.Fatalf("removeEmptyContainerLeaves: %v", err)
+	}
+
+	for _, gone := range []string{"uid-a-_pause", "uid-a-app"} {
+		if _, err := os.Stat(filepath.Join(root, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s survived: %v", gone, err)
+		}
+	}
+	for _, kept := range []string{"uid-b-_pause", workerLeaf} {
+		if _, err := os.Stat(filepath.Join(root, kept)); err != nil {
+			t.Errorf("%s was removed: %v", kept, err)
+		}
+	}
+	if err := removeEmptyContainerLeaves(root, "uid-a", "uid-a-"); err != nil {
+		t.Errorf("repeated removeEmptyContainerLeaves: %v", err)
+	}
+}
+
+// A leaf that cannot be removed is reported, and the actor's other leaves are
+// still removed.
+func TestRemoveEmptyContainerLeavesReportsBusyLeaves(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"uid-a-_pause", "uid-a-app"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A regular file stands in for a cgroup that still holds processes: both
+	// make rmdir fail.
+	if err := os.WriteFile(filepath.Join(root, "uid-a-_pause", "busy"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeEmptyContainerLeaves(root, "uid-a", "uid-a-"); err == nil {
+		t.Error("removeEmptyContainerLeaves succeeded with a busy leaf, want an error")
+	}
+	if _, err := os.Stat(filepath.Join(root, "uid-a-app")); !os.IsNotExist(err) {
+		t.Errorf("uid-a-app survived: %v", err)
+	}
+}
+
+func TestRemoveEmptyContainerLeavesRejectsUnsafeNames(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "a/b", workerLeaf} {
+		if err := removeEmptyContainerLeaves(t.TempDir(), name, name+"-"); err == nil {
+			t.Errorf("removeEmptyContainerLeaves(%q) succeeded, want an error", name)
+		}
+	}
+}
+
+// The UID is matched literally, never as a pattern.
+func TestRemoveEmptyContainerLeavesMatchesTheUIDLiterally(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "uid-b-_pause"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeEmptyContainerLeaves(root, "uid-?", "uid-?-"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "uid-b-_pause")); err != nil {
+		t.Errorf("another actor's leaf was removed: %v", err)
+	}
+}
+
+// A prefix that does not extend the UID could reach the actor's own leaf or
+// another actor's.
+func TestRemoveEmptyContainerLeavesRejectsPrefixesOutsideTheActor(t *testing.T) {
+	for _, prefix := range []string{"", "uid-a", "uid-", "uid-b-", "uid-a-/x", "uid-a-\x00"} {
+		if err := removeEmptyContainerLeaves(t.TempDir(), "uid-a", prefix); err == nil {
+			t.Errorf("removeEmptyContainerLeaves(%q) succeeded, want an error", prefix)
+		}
+	}
+}
