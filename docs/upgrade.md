@@ -410,6 +410,17 @@ is fine: a snapshot written on either version restores on either
 version. The roll converges because step 5 takes old workers out of
 service node by node, not because the scheduler prefers the new pool.
 
+One exception: the release that starts honoring an image's `USER` and
+`WORKDIR`. `runsc restore` checks both against the snapshot for every
+container, and the pause image sets `USER 65535`, so no gVisor snapshot
+crosses that upgrade in either direction. Every gVisor actor loses its
+state: delete them before the roll, and recreate every gVisor template
+after it so each takes a new golden snapshot. Micro-VM snapshots are
+not checked. They resume as they were, and the new identity applies
+from the next cold boot; files an earlier run wrote as root into a
+durable dir stay root-owned, readable but not writable by a process
+that now runs as another user.
+
 ### 5. Roll each node
 
 Repeat for every node, one at a time. On a single-node cluster this

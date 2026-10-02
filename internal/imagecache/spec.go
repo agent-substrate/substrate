@@ -58,7 +58,7 @@ type OverlaySpec struct {
 	// ExtraDirs are absolute in-rootfs directories the consumer creates after
 	// mounting (they land in the actor's private upper): bind-mount targets
 	// that must exist for the runtime to attach them, e.g. the actor identity
-	// mount.
+	// mount, and the process's working directory.
 	ExtraDirs []string `json:"extraDirs,omitempty"`
 	// ImageVolumes are read-only image contents to expose beside the rootfs,
 	// one per image-typed volume the container mounts. The consumer composes

@@ -17,6 +17,7 @@ package ocispec
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -110,6 +111,41 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 			// limits come from is runtime-specific (see sizing's package doc).
 			if spec.Linux.Resources == nil {
 				t.Error("Linux.Resources = nil after shaping")
+			}
+		})
+	}
+}
+
+// Both shapers leave the process identity and cwd as Build set them.
+func TestShapers_PreserveProcess(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		shape   func(*specs.Spec) error
+	}{{
+		runtime: "gvisor",
+		shape: func(s *specs.Spec) error {
+			ShapeGVisor(s, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
+			return nil
+		},
+	}, {
+		runtime: "microvm",
+		shape: func(s *specs.Spec) error {
+			return ShapeMicroVM(s, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"})
+		},
+	}} {
+		t.Run(tc.runtime, func(t *testing.T) {
+			opts := parityOptions
+			opts.User = specs.User{UID: 65532, GID: 65534, AdditionalGids: []uint32{44}}
+			opts.Cwd = "/work"
+			spec := Build(opts)
+			if err := tc.shape(spec); err != nil {
+				t.Fatalf("shaping the spec: %v", err)
+			}
+			if !reflect.DeepEqual(spec.Process.User, opts.User) {
+				t.Errorf("Process.User = %+v after shaping, want %+v", spec.Process.User, opts.User)
+			}
+			if spec.Process.Cwd != "/work" {
+				t.Errorf("Process.Cwd = %q after shaping, want /work", spec.Process.Cwd)
 			}
 		})
 	}

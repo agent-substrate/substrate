@@ -15,8 +15,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"sort"
@@ -27,6 +31,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/moby/sys/user"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -75,14 +81,15 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
+// prepareOCIDirectory assembles the OCI bundle at bundlePath for one of the
+// actor's containers: it pulls the image, writes the overlay spec ateom
+// composes the rootfs from, and writes the runtime-neutral OCI spec.
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, bundlePath, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
 	span.SetAttributes(attribute.String("image", ref))
 	defer span.End()
-
-	bundlePath := ateletpath.OCIBundlePath(actorUID, containerName)
 
 	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
 	// already wiped the bundle dir on the Run/Restore path).
@@ -123,20 +130,31 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return err
 	}
 
-	// Argv and env need only the image config; resolve them before writing
-	// any spec so an invalid container config fails fast.
+	// Resolve argv, env and user before writing any spec so an invalid
+	// container config fails fast.
 	resolvedArgs, err := resolveProcessArgs(&img.Config, command, args)
 	if err != nil {
 		return fmt.Errorf("while resolving process args for container %q: %w", containerName, err)
 	}
 	resolvedEnv := resolveActorEnv(&img.Config, env)
+	identity, err := resolveImageUser(img)
+	if err != nil {
+		return fmt.Errorf("while resolving user for container %q: %w", containerName, err)
+	}
+	cwd, err := resolveCwd(&img.Config)
+	if err != nil {
+		return fmt.Errorf("while resolving working directory for container %q: %w", containerName, err)
+	}
 
-	// Every bind target must exist in the rootfs for the mount to attach;
-	// ateom creates them through the mounted overlay (they land in the
-	// actor's upper).
+	// Every bind target must exist in the rootfs for the mount to attach, and
+	// the working directory for the process to start; ateom creates them
+	// through the mounted overlay (they land in the actor's upper).
 	var extraDirs []string
 	for _, vm := range volumeMounts {
 		extraDirs = append(extraDirs, vm.GetMountPath())
+	}
+	if cwd != "/" {
+		extraDirs = append(extraDirs, cwd)
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
@@ -160,6 +178,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		VolumesDir:                ateletpath.VolumesDir(actorUID),
 		SystemInfoVolumeRootsDir:  ateletpath.SystemInfoVolumeRootsDir(actorUID),
 		BundlePath:                bundlePath,
+		User:                      identity,
+		Cwd:                       cwd,
 	})); err != nil {
 		return fmt.Errorf("while writing OCI spec: %w", err)
 	}
@@ -264,4 +284,64 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 		return nil, fmt.Errorf("no command specified: image defines neither ENTRYPOINT nor CMD and the container sets neither command nor args")
 	}
 	return argv, nil
+}
+
+// resolveImageUser resolves the image's USER against the image's own
+// /etc/passwd and /etc/group, either of which may be absent. No USER is root.
+func resolveImageUser(img *imagecache.Image) (specs.User, error) {
+	if img.Config.User == "" {
+		return specs.User{}, nil
+	}
+	passwd, err := readOptionalImageFile(img, "etc/passwd")
+	if err != nil {
+		return specs.User{}, err
+	}
+	group, err := readOptionalImageFile(img, "etc/group")
+	if err != nil {
+		return specs.User{}, err
+	}
+	return resolveUser(img.Config.User, passwd, group)
+}
+
+// readOptionalImageFile returns a nil reader for a file the image lacks.
+func readOptionalImageFile(img *imagecache.Image, name string) (io.Reader, error) {
+	b, err := img.ReadFile(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(b), nil
+}
+
+// resolveUser follows Docker's rules for USER "user[:group]": numeric ids as
+// is, a bare uid with its login group from passwd (gid 0 without an entry),
+// names looked up or an error, group memberships as supplementary groups.
+// Ids are bounded to int32. A nil reader means the image lacks the file.
+func resolveUser(userSpec string, passwd, group io.Reader) (specs.User, error) {
+	if strings.Count(userSpec, ":") > 1 {
+		return specs.User{}, fmt.Errorf("image User %q: want user[:group]", userSpec)
+	}
+	u, err := user.GetExecUser(userSpec, nil, passwd, group)
+	if err != nil {
+		return specs.User{}, fmt.Errorf("image User %q: %w", userSpec, err)
+	}
+	identity := specs.User{UID: uint32(u.Uid), GID: uint32(u.Gid)}
+	for _, gid := range u.Sgids {
+		identity.AdditionalGids = append(identity.AdditionalGids, uint32(gid))
+	}
+	return identity, nil
+}
+
+// resolveCwd reads the image's WORKDIR; none means "/". The OCI spec requires
+// an absolute path.
+func resolveCwd(imageCfg *v1.Config) (string, error) {
+	if imageCfg == nil || imageCfg.WorkingDir == "" {
+		return "/", nil
+	}
+	if !path.IsAbs(imageCfg.WorkingDir) {
+		return "", fmt.Errorf("image WorkingDir %q is not absolute", imageCfg.WorkingDir)
+	}
+	return path.Clean(imageCfg.WorkingDir), nil
 }
