@@ -243,10 +243,8 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
-| `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels
-`ate.workerpool.namespace`, `ate.workerpool.name`) |
-| `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
-`ate.workerpool.namespace`, `ate.workerpool.name`) |
+| `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels `ate.workerpool.namespace`, `ate.workerpool.name`) |
+| `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`partial`/`at_capacity`/`unschedulable`) and sandbox class to provide fleet capacity and saturation at a glance |
 | `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
 | `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
@@ -403,6 +401,38 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 > Every component reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
 > ateom workers don't read the ConfigMap at all — `ate-controller` copies the value into each worker pod at creation. A new endpoint reaches them only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
+
+<div class="code-tabs">
+<div class="code-tab" data-tab="Kind (Local)" data-persist="kind">
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-otel-config
+  namespace: ate-system
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector.otel-system.svc:4317
+  OTEL_METRIC_EXPORT_INTERVAL: "10000"
+  OTEL_METRIC_EXPORT_TIMEOUT: "10000"
+  OTEL_LOGS_EXPORTER: otlp
+```
+
+</div>
+<div class="code-tab" data-tab="GKE (Google Cloud)" data-persist="gke">
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-otel-config
+  namespace: ate-system
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+```
+
+</div>
+</div>
 
 ### The ateom OTLP relay
 

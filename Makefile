@@ -21,6 +21,7 @@ export KO_DOCKER_REPO := gcr.io/$(PROJECT_ID)/ate-images
 # Go commands
 GO := go
 KO := hack/run-tool.sh ko
+HUGO ?= hugo
 
 # Flags every ko image build gets, e.g. `make build-images KO_FLAGS=--push=false`.
 # Empty by default, so ko runs on its own defaults and whatever .ko.yaml configures.
@@ -178,6 +179,30 @@ lint:
 .PHONY: verify
 verify: test
 	bash hack/verify-all.sh
+
+.PHONY: site-release-data site-serve site-build site-test
+
+# Git ref the website is built from. Release builds set it to the tag.
+SITE_REF ?= HEAD
+
+# Writes site/data/release.json, which lists the docs added since the previous
+# full release so the sidebar can mark them new.
+site-release-data:
+	$(GO) run ./tools/site-release-data --ref $(SITE_REF) --out site/data/release.json
+
+# Serves the website in site/ with live reload. Needs Hugo extended and Go; see
+# site/README.md.
+site-serve: site-release-data
+	cd site && $(HUGO) server
+
+# Builds the website into site/public, as the site workflow does. Production
+# builds also need npm, for PostCSS.
+site-build: site-release-data
+	cd site && npm ci && $(HUGO) build --environment production --minify
+
+# Builds the website against site/testdata and checks the rendered templates.
+site-test:
+	HUGO=$(HUGO) hack/test-site-templates.sh
 
 .PHONY: clean
 clean:

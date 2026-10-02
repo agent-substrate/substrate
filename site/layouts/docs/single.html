@@ -1,0 +1,62 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+{{ define "main" -}}
+<div class="td-content as-prose">
+  {{- $params := partialCached "page-params.html" . .Path -}}
+  {{- with $params.status }}
+  <div class="as-status-banner as-status-banner--{{ . }}" role="note">
+    <i class="fa-solid {{ index (dict "experimental" "fa-flask" "deprecated" "fa-triangle-exclamation" "planned" "fa-compass-drafting") . }}" aria-hidden="true"></i>
+    <p><strong>{{ title . }}.</strong> {{ partial "rewrite-repo-links.html" (dict "content" (partial "status-text.html" $params) "dir" (path.Dir ($.Params.repo_source | default ""))) | markdownify }}</p>
+  </div>
+  {{- end }}
+  <div class="as-doc-header">
+    <h1>{{ .Title }}</h1>
+    {{ with .Params.description }}<p class="as-doc-lead">{{ . | markdownify }}</p>{{ end }}
+    <div class="as-doc-meta">
+      {{- with .Params.estimated_time }}
+      <span class="as-doc-time">⏱️ {{ . }}</span>
+      <span class="as-doc-meta__sep">·</span>
+      {{- end }}
+      <span>{{ math.Max 1 .ReadingTime }} min read</span>
+      <span class="as-doc-meta__sep">·</span>
+      <button type="button" class="as-copy-page-btn" data-copy-page="true">
+        <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+        <span class="as-copy-page-btn__label">Copy as Markdown</span>
+      </button>
+    </div>
+  </div>
+  <div class="as-doc-body">
+    {{- $content := string .Content -}}
+    {{- if eq .Params.repo_source "docs/glossary.md" -}}
+      {{/* Anchor each term from docs/glossary.md on its bold label, which
+           Goldmark renders at the start of the term's list item. */ -}}
+      {{- range partialCached "glossary-terms.html" . "glossary" -}}
+        {{- $label := replaceRE `([\\.+*?()|\[\]{}^$])` `\${1}` .term -}}
+        {{- $pattern := printf `(<li>\s*(?:<p>)?)<strong>%s</strong>` $label -}}
+        {{- $anchored := replaceRE $pattern (printf `${1}<strong id="%s">%s</strong>` .id .term) $content 1 -}}
+        {{- if eq $anchored $content -}}
+          {{- errorf "glossary: term %q from docs/glossary.md: label not found on the glossary page" .term -}}
+        {{- end -}}
+        {{- $content = $anchored -}}
+      {{- end -}}
+    {{- end -}}
+    {{ $content | safeHTML }}
+  </div>
+  <script type="application/json" id="as-page-markdown">{{ partial "raw-markdown.html" . | jsonify | safeJS }}</script>
+  {{ partial "feedback.html" . -}}
+  {{ partial "pager.html" . -}}
+</div>
+{{ end -}}
