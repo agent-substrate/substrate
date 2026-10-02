@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
@@ -172,6 +173,8 @@ type egressMockClient struct {
 	ateapipb.ControlClient
 	actor *ateapipb.Actor
 	err   error
+	// actorCalls counts GetActor calls.
+	actorCalls atomic.Int32
 
 	// policy is what GetActorEgressPolicy returns; nil answers NotFound.
 	// policyErr, when set, is returned instead.
@@ -182,9 +185,18 @@ type egressMockClient struct {
 	// policyGate, when non-nil, blocks each GetActorEgressPolicy until it is
 	// closed, so a test can hold several callers on one fetch.
 	policyGate chan struct{}
+
+	// The nth MintActorJWT call returns "jwt-<n>", expiring
+	// expiration_seconds from now. mintErr and mintGate work like policyErr
+	// and policyGate.
+	mintCalls atomic.Int32
+	lastMint  atomic.Pointer[ateapipb.MintActorJWTRequest]
+	mintErr   error
+	mintGate  chan struct{}
 }
 
 func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
+	m.actorCalls.Add(1)
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -207,6 +219,25 @@ func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb
 		return nil, status.Error(codes.NotFound, "EgressPolicy not found")
 	}
 	return m.policy, nil
+}
+
+func (m *egressMockClient) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest, _ ...grpc.CallOption) (*ateapipb.MintActorJWTResponse, error) {
+	n := m.mintCalls.Add(1)
+	m.lastMint.Store(req)
+	if m.mintGate != nil {
+		select {
+		case <-m.mintGate:
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+	}
+	if m.mintErr != nil {
+		return nil, m.mintErr
+	}
+	return &ateapipb.MintActorJWTResponse{
+		ActorJwt:  fmt.Sprintf("jwt-%d", n),
+		ExpiresAt: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
+	}, nil
 }
 
 // allowAllPolicy allows every name and address: cleartext HTTP on any port
