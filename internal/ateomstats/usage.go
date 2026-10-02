@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"go.opentelemetry.io/otel/log/noop"
@@ -173,11 +174,24 @@ func StartSampler(ctx context.Context, interval time.Duration, sweep func(contex
 				return
 			case <-t.C:
 			}
-			sweep(ctx)
+			sweepOnce(ctx, sweep)
 		}
 	}()
 	return func() {
 		cancel()
 		<-done
 	}
+}
+
+// sweepOnce runs one sweep. It recovers from panics: the sampler is a
+// background job, and a bug in it must not take the ateom down and every actor
+// on the worker with it.
+func sweepOnce(ctx context.Context, sweep func(context.Context)) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "Usage sweep panicked; skipping this tick",
+				slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
+		}
+	}()
+	sweep(ctx)
 }

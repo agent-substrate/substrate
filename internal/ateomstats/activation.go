@@ -194,11 +194,14 @@ func (a *Activation) Periodic(s *ateompb.WorkloadStatsSample, write func()) {
 }
 
 // Final marks the activation ended and runs write with the newest measured
-// sample, or nil when there is none. write runs under the activation's lock and
-// must not block or call into a.
+// sample, or nil when there is none, once: a later call does nothing. write
+// runs under the activation's lock and must not block or call into a.
 func (a *Activation) Final(write func(measured *ateompb.WorkloadStatsSample)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.ended {
+		return
+	}
 	a.ended = true
 	write(a.measured)
 }

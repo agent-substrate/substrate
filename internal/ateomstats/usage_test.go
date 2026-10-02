@@ -220,6 +220,26 @@ func TestStartSamplerSweepsOnSchedule(t *testing.T) {
 	})
 }
 
+// TestStartSamplerSurvivesAPanic pins that a sweep that panics skips its tick
+// and the sampler keeps going.
+func TestStartSamplerSurvivesAPanic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const interval = time.Minute
+		sweeps := 0
+		stop := StartSampler(context.Background(), interval, func(context.Context) {
+			sweeps++
+			if sweeps == 1 {
+				panic("first sweep fails")
+			}
+		})
+		time.Sleep(3*interval + time.Second)
+		stop()
+		if sweeps != 3 {
+			t.Errorf("swept %d times, want 3: the panic must not stop the sampler", sweeps)
+		}
+	})
+}
+
 func TestLabels(t *testing.T) {
 	t.Parallel()
 	for c, want := range map[ateompb.SandboxClass]string{

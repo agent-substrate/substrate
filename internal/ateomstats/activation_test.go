@@ -264,3 +264,15 @@ func TestActivationFailedInitialOpensWindow(t *testing.T) {
 		t.Error("no periodic record after a failed initial reading")
 	}
 }
+
+// TestActivationFinalOnce pins that a second Final writes nothing.
+func TestActivationFinalOnce(t *testing.T) {
+	t.Parallel()
+	a := NewActivation(time.Now(), false)
+	writes := 0
+	a.Final(func(*ateompb.WorkloadStatsSample) { writes++ })
+	a.Final(func(*ateompb.WorkloadStatsSample) { writes++ })
+	if writes != 1 {
+		t.Errorf("Final wrote %d records, want 1", writes)
+	}
+}
