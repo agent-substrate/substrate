@@ -15,16 +15,18 @@ of its own.
 
 By default every image is built from the checkout with `ko`, which is what a
 developer wants and what the shell installer always did. To install published
-images instead, name the registry they were pushed to:
+images instead, name the registry they were pushed to. Each release publishes
+its images to `ghcr.io/agent-substrate/substrate`, readable without
+credentials:
 
 ```
 ate-setup deploy ate-system \
-  --image-repo registry.example.com/substrate \
-  --image-tag v0.0.0
+  --image-repo ghcr.io/agent-substrate/substrate \
+  --image-tag vX.Y.Z
 ```
 
 Nothing is built and no registry is pushed to; the manifests still come from the
-checkout. Each reference is pinned to the digest its tag names, so the registry
+checkout, which should be the tag being installed. Each reference is pinned to the digest its tag names, so the registry
 has to be readable from here as well as from the cluster.
 
 - [`commands.md`](commands.md) — every command with its `hack/install-ate.sh`

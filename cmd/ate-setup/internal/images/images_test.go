@@ -168,6 +168,41 @@ func TestMakefilePublishesWithBaseImportPaths(t *testing.T) {
 	}
 }
 
+// The Makefile builds release images from CONTROL_PLANE_IMAGES, WORKER_IMAGES
+// and DEMO_IMAGES; an --image-repo install looks up exactly Components. A
+// package in only one of the two either ships an image no install uses, or is
+// missing from every release.
+func TestMakefileReleasesEveryComponent(t *testing.T) {
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("resolving repo root: %v", err)
+	}
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("reading the Makefile: %v", err)
+	}
+	// Join continuation lines so each variable is on one line.
+	joined := strings.ReplaceAll(string(makefile), "\\\n", " ")
+
+	var released []string
+	for _, name := range []string{"CONTROL_PLANE_IMAGES", "WORKER_IMAGES", "DEMO_IMAGES"} {
+		m := regexp.MustCompile(`(?m)^` + name + `\s*:=(.*)$`).FindStringSubmatch(joined)
+		if m == nil {
+			t.Fatalf("the Makefile no longer defines %s", name)
+		}
+		for _, pkg := range strings.Fields(m[1]) {
+			released = append(released, strings.TrimPrefix(pkg, "./"))
+		}
+	}
+	slices.Sort(released)
+
+	components := slices.Clone(images.Components)
+	slices.Sort(components)
+	if !slices.Equal(released, components) {
+		t.Errorf("Makefile release images %v differ from images.Components %v", released, components)
+	}
+}
+
 func TestSourceValidate(t *testing.T) {
 	tests := []struct {
 		name  string
