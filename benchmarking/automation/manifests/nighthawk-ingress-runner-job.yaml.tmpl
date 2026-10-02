@@ -107,6 +107,10 @@ spec:
         - "${SEND_RATE}"
         - "--tail-latency-slo-ms"
         - "${TAIL_LATENCY_SLO_MS}"
+        - "--fixed-rps"
+        - "${FIXED_RPS}"
+        - "--fixed-stage-duration"
+        - "${FIXED_STAGE_DURATION}"
         env:
         - name: ATE_ATEAPI_CLIENT_AUTH
           value: "${ATE_ATEAPI_CLIENT_AUTH}"
