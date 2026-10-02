@@ -23,7 +23,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
-	"github.com/agent-substrate/substrate/internal/protoredact"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -34,6 +33,12 @@ import (
 // so clients can report a latency unaffected by their own scheduling overhead.
 const ServerElapsedTrailer = "x-server-elapsed-us"
 
+// ServerUnaryInterceptor logs every RPC with its request and response body.
+// The bodies are logged as they are: redaction of debug_redact fields happens
+// in the shared slog handler (internal/contextlogging) that serverboot's
+// InitLogger and InitLoggerWithWriter install as the default logger in every
+// server, so it also covers protos logged anywhere else in the process.
+//
 // TODO: Convert errors with apierror.FromError once ateapi's handlers return
 // apierrors, then use this interceptor for every server and delete
 // InternalServerUnaryInterceptor.
@@ -54,8 +59,8 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
-		slog.Any("req", protoredact.ForLog(req)),
-		slog.Any("resp", protoredact.ForLog(resp)),
+		slog.Any("req", req),
+		slog.Any("resp", resp),
 		slog.Any("err", err),
 		slog.String("elapsed-time", elapsed.String()),
 		slog.Any("principal", pInfo),
@@ -99,8 +104,8 @@ func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.Una
 
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
-		slog.Any("req", protoredact.ForLog(req)),
-		slog.Any("resp", protoredact.ForLog(resp)),
+		slog.Any("req", req),
+		slog.Any("resp", resp),
 		slog.Any("err", err),
 		slog.String("elapsed-time", time.Since(startTime).String()),
 	)
