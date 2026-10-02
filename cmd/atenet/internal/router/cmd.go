@@ -66,12 +66,11 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")
 	cmd.Flags().StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
 	cmd.Flags().DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
-	// Egress credential injection (MITM leg). Only the egress gateway sets these,
-	// and only when injection is enabled: an empty --credential-provider-address
-	// leaves injection off, so an EgressPolicy rule requiring it is skipped and
-	// the request passes through without the credential.
+	// Egress credential injection (MITM leg). Only the egress gateway sets these.
+	// With an empty --credential-provider-address there is no provider, so a
+	// request an EgressPolicy rule asks to inject into is denied with 500.
 	cmd.Flags().StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as a ate-secret:// prefix (e.g. ate-secret://k8s.io); a policy credential URI naming any other provider is refused. Empty disables the check (dev only)")
-	cmd.Flags().StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection")
+	cmd.Flags().StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) configures no provider, and a request an EgressPolicy rule asks to inject into is denied with 500")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; required unless --credential-provider-insecure is set")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")
 	cmd.Flags().StringVar(&cfg.CredentialProvider.ServerName, "credential-provider-server-name", "", "SAN/SNI expected on the credential provider's serving certificate")

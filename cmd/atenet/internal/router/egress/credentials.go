@@ -20,7 +20,9 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
@@ -30,14 +32,29 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
+// The bodies of the denials a missing or unreachable credential provider
+// causes. Unlike a policy denial these name their reason: the fault is the
+// gateway's configuration, not anything the actor sent.
+const (
+	noProviderBody          = "egress denied: no credential provider configured"
+	providerUnavailableBody = "egress denied: credential provider unavailable"
+)
+
 // mapCredentialProviderError converts a FetchSecret failure into a
-// client-facing ext_proc denial, mirroring mapEgressIdentityError: a credential
-// the provider does not hold or will not release (NotFound, PermissionDenied)
-// denies as 403 — retrying cannot succeed — while a transient provider failure
-// (Unavailable, DeadlineExceeded) fails closed as a retryable 503. Anything
-// unexpected denies rather than inviting retries of a request that cannot be
-// completed as the policy promised.
-func mapCredentialProviderError(err error) error {
+// client-facing ext_proc denial, mirroring mapEgressIdentityError. reached
+// reports whether the call got through to the provider at all.
+//
+// A provider the gateway could not reach — not deployed, a wrong address, a
+// failed handshake — denies as 500 with providerUnavailableBody. Otherwise the
+// provider's own answer decides: a credential it does not hold or will not
+// release (NotFound, PermissionDenied) denies as 403, since retrying cannot
+// succeed, while a transient failure (Unavailable, DeadlineExceeded) fails
+// closed as a retryable 503. Anything unexpected denies rather than inviting
+// retries of a request that cannot be completed as the policy promised.
+func mapCredentialProviderError(err error, reached bool) error {
+	if !reached {
+		return extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, providerUnavailableBody)
+	}
 	switch status.Code(err) {
 	case codes.NotFound, codes.PermissionDenied:
 		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
@@ -52,13 +69,13 @@ func mapCredentialProviderError(err error) error {
 // header mutations to add to the request, or an error that denies it. A rule
 // with no injections adds nothing.
 //
-// A credential is only ever injected on the TLS-terminated MITM leg with a
-// credential provider configured. When injection cannot be performed — a
-// cleartext request, or no provider configured — it is skipped and the request
-// is let through without the credential rather than denied.
+// A credential is only ever injected on the TLS-terminated MITM leg. On a
+// cleartext request injection is skipped and the request is let through
+// without the credential rather than denied, so a secret never rides a
+// cleartext wire.
 //
-// Once injection is actually attempted (TLS leg, provider present), any failure
-// to produce the credential the policy required fails closed.
+// On the MITM leg any failure to produce the credential the policy required
+// fails closed, including a gateway with no credential provider configured.
 //
 // This gateway cannot mint actor JWTs yet, so on the MITM leg a rule that asks
 // for one is denied. Actor JWTs don't come from the credential provider, so
@@ -83,9 +100,9 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		}
 	}
 	if h.provider == nil {
-		slog.WarnContext(ctx, "egress: skipping credential injection because no credential provider is configured; the request proceeds without the credential",
+		slog.ErrorContext(ctx, "egress denied: the policy requires a credential but no credential provider is configured (--credential-provider-address)",
 			slog.Any("actor", ref), slog.String("host", dest.Hostname))
-		return nil, nil
+		return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, noProviderBody)
 	}
 
 	// Atunnel connected to us with an ateom-for-actor SPIFFE ID; translate it
@@ -119,16 +136,24 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 			}
 		}
 
+		// gRPC fills in the peer only once the call has a stream to the provider,
+		// so an empty one means the provider was never reached.
+		var p peer.Peer
 		resp, err := h.provider.FetchSecret(ctx, &credproviderpb.FetchSecretRequest{
 			Uri:           inj.GetCredentialUri(),
 			ActorSpiffeId: actorSpiffeID,
-		})
+		}, grpc.Peer(&p))
 		if err != nil {
 			// Fail closed: a credential the policy required but we could not fetch
 			// must not let the request out without it.
-			slog.ErrorContext(ctx, "egress denied: credential fetch failed",
+			reached := p.Addr != nil
+			msg := "egress denied: credential fetch failed"
+			if !reached {
+				msg = "egress denied: credential provider unavailable"
+			}
+			slog.ErrorContext(ctx, msg,
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", inj.GetCredentialUri()), slog.Any("err", err))
-			return nil, mapCredentialProviderError(err)
+			return nil, mapCredentialProviderError(err, reached)
 		}
 		secret, err := sanitizeSecret(resp.GetOpaqueBytes())
 		if err != nil {

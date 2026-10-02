@@ -1301,9 +1301,8 @@ spec:
         # the --credential-provider-* flags that point the egress handler at the
         # credential provider. The MITM leg already calls this handler over
         # ext_proc, so a provider address is all that is needed to turn injection
-        # on; with the flag off no provider is set and a policy rule that requires
-        # an injection is skipped, passing the request through without the
-        # credential (see egress.applyEffects).
+        # on; with the flag off no provider is set and a request a policy rule
+        # asks to inject into is denied with 500 (see egress.applyEffects).
         #ATE_EGRESS_INJECT_FLAGS -- Don't modify this line.
         env:
         - name: POD_NAME

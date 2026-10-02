@@ -143,10 +143,9 @@ type routerConfig struct {
 	EgressPolicyCacheTTL time.Duration
 
 	// CredentialProvider configures egress credential injection on the MITM leg.
-	// Only the egress gateway sets it, and only when injection is enabled: an
-	// empty CredentialProvider.Address leaves the injector disabled, so a rule
-	// that requires an injection is skipped and the request passes through
-	// without the credential. See egress.Handler.
+	// Only the egress gateway sets it. An empty CredentialProvider.Address
+	// configures no provider, so a request a rule asks to inject into is denied
+	// with 500. See egress.Handler.
 	CredentialProvider credentialProviderConfig
 
 	LogLevel    string

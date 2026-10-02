@@ -17,7 +17,9 @@ package egress
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -38,11 +40,21 @@ const injectionProviderName = "k8s"
 type fakeProvider struct {
 	resp *credproviderpb.FetchSecretResponse
 	err  error
-	got  *credproviderpb.FetchSecretRequest
+	// unreachable leaves the call's peer unset, as gRPC does for a call that
+	// never got a stream to the provider.
+	unreachable bool
+	got         *credproviderpb.FetchSecretRequest
 }
 
-func (f *fakeProvider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRequest, _ ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
+func (f *fakeProvider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRequest, opts ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
 	f.got = req
+	if !f.unreachable {
+		for _, opt := range opts {
+			if p, ok := opt.(grpc.PeerCallOption); ok {
+				p.PeerAddr.Addr = &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 50051}
+			}
+		}
+	}
 	return f.resp, f.err
 }
 
@@ -54,7 +66,7 @@ func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
 
 // injectionHandler builds a handler whose actor's policy injects a credential
 // for HTTPS to api.example.com, with provider as the credential provider (nil
-// leaves injection off).
+// configures none).
 func injectionHandler(provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
 	return injectionHandlerFor(credentialInjectionPolicySample("api.example.com"), provider, providerName)
 }
@@ -99,64 +111,52 @@ func TestInjectionOnTLSLeg(t *testing.T) {
 	}
 }
 
-// When injection cannot be performed — a cleartext leg, or no provider
-// configured — the request is allowed through with no header added, and any
-// provider is never dialed, because the secret must not go out over cleartext or
-// block egress the policy allowed.
-func TestInjectionSkippedAndPassedThrough(t *testing.T) {
-	tests := []struct {
-		name     string
-		policy   *ateapipb.EgressPolicy
-		provider *fakeProvider // nil means no provider configured
-		leg      string
-	}{
-		{
-			name:     "cleartext leg skips injection",
-			policy:   cleartextInjectionPolicy("api.example.com"),
-			provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
-			leg:      extproc.EgressCleartextFilterChainName,
-		},
-		{
-			name:     "no provider configured skips injection",
-			policy:   credentialInjectionPolicySample("api.example.com"),
-			provider: nil,
-			leg:      extproc.EgressTLSMITMFilterChainName,
-		},
+// On a cleartext leg the request is allowed through with no header added, and
+// the provider is never dialed, because the secret must not go out over
+// cleartext.
+func TestInjectionSkippedOnCleartextLeg(t *testing.T) {
+	provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	h := injectionHandlerFor(cleartextInjectionPolicy("api.example.com"), provider, injectionProviderName)
+	res, err := h.HandleRequestHeaders(context.Background(),
+		innerMetadata(extproc.EgressCleartextFilterChainName, "GET", "api.example.com", nil))
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders: %v", err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var h *Handler
-			if tc.provider == nil {
-				h = injectionHandlerFor(tc.policy, nil, injectionProviderName)
-			} else {
-				h = injectionHandlerFor(tc.policy, tc.provider, injectionProviderName)
-			}
-			res, err := h.HandleRequestHeaders(context.Background(),
-				innerMetadata(tc.leg, "GET", "api.example.com", nil))
-			if err != nil {
-				t.Fatalf("HandleRequestHeaders: %v", err)
-			}
-			if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
-				t.Errorf("got %d injected headers, want 0 (injection should be skipped)", len(got))
-			}
-			if tc.provider != nil && tc.provider.got != nil {
-				t.Error("provider was dialed; injection should be skipped without a callout")
-			}
-		})
+	if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
+		t.Errorf("got %d injected headers, want 0 (injection should be skipped)", len(got))
+	}
+	if provider.got != nil {
+		t.Error("provider was dialed; injection should be skipped without a callout")
 	}
 }
 
-// Once injection is attempted on the TLS leg with a provider present, a failure
-// to produce the promised credential fails closed rather than forwarding the
-// request without it.
+// On the TLS leg, a failure to produce the promised credential fails closed
+// rather than forwarding the request without it.
 func TestInjectionDenials(t *testing.T) {
 	tests := []struct {
 		name         string
-		provider     *fakeProvider
+		provider     *fakeProvider // nil means no provider configured
 		providerName string
 		leg          string
 		want         envoy_type.StatusCode
+		wantBody     string // empty means deniedBody
 	}{
+		{
+			// The gateway's misconfiguration, so the body says so.
+			name:         "no provider configured",
+			providerName: injectionProviderName,
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_InternalServerError,
+			wantBody:     noProviderBody,
+		},
+		{
+			name:         "unreachable provider",
+			provider:     &fakeProvider{err: status.Error(codes.Unavailable, "connection refused"), unreachable: true},
+			providerName: injectionProviderName,
+			leg:          extproc.EgressTLSMITMFilterChainName,
+			want:         envoy_type.StatusCode_InternalServerError,
+			wantBody:     providerUnavailableBody,
+		},
 		{
 			name:         "credential URI for another provider is refused",
 			provider:     &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
@@ -165,9 +165,10 @@ func TestInjectionDenials(t *testing.T) {
 			want:         envoy_type.StatusCode_InternalServerError,
 		},
 		{
-			// A transient provider failure is retryable.
-			name:         "provider unavailable fails closed as retryable",
-			provider:     &fakeProvider{err: status.Error(codes.Unavailable, "provider down")},
+			// A provider that answers with a transient failure of its own, such
+			// as an outage of its secret store, is retryable.
+			name:         "provider answers unavailable fails closed as retryable",
+			provider:     &fakeProvider{err: status.Error(codes.Unavailable, "secret store down")},
 			providerName: injectionProviderName,
 			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_ServiceUnavailable,
@@ -205,11 +206,92 @@ func TestInjectionDenials(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := injectionHandler(tc.provider, tc.providerName)
+			var h *Handler
+			if tc.provider == nil {
+				h = injectionHandler(nil, tc.providerName)
+			} else {
+				h = injectionHandler(tc.provider, tc.providerName)
+			}
 			_, err := h.HandleRequestHeaders(context.Background(),
 				innerMetadata(tc.leg, "GET", "api.example.com", nil))
 			wantStatus(t, err, tc.want)
+			wantBody := tc.wantBody
+			if wantBody == "" {
+				wantBody = deniedBody
+			}
+			wantDenialBody(t, err, wantBody)
 		})
+	}
+}
+
+// The reached/unreached split rests on how grpc-go fills in the peer, so pin it
+// against a real client: a provider nobody serves is a 500 naming the provider,
+// while a provider that answers Unavailable itself stays a retryable 503.
+func TestInjectionProviderReachability(t *testing.T) {
+	t.Run("nothing listening", func(t *testing.T) {
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		addr := lis.Addr().String()
+		lis.Close()
+
+		err = fetchThroughProvider(t, addr)
+		wantStatus(t, err, envoy_type.StatusCode_InternalServerError)
+		wantDenialBody(t, err, providerUnavailableBody)
+	})
+
+	t.Run("provider answers unavailable", func(t *testing.T) {
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		srv := grpc.NewServer()
+		credproviderpb.RegisterCredentialProviderServer(srv, unavailableProvider{})
+		go srv.Serve(lis)
+		t.Cleanup(srv.Stop)
+
+		err = fetchThroughProvider(t, lis.Addr().String())
+		wantStatus(t, err, envoy_type.StatusCode_ServiceUnavailable)
+		wantDenialBody(t, err, deniedBody)
+	})
+}
+
+// unavailableProvider is a credential provider whose secret store is down.
+type unavailableProvider struct {
+	credproviderpb.UnimplementedCredentialProviderServer
+}
+
+func (unavailableProvider) FetchSecret(context.Context, *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
+	return nil, status.Error(codes.Unavailable, "secret store down")
+}
+
+// fetchThroughProvider runs an injecting request through a handler whose
+// provider is dialed at addr, and returns the handler's error.
+func fetchThroughProvider(t *testing.T, addr string) error {
+	t.Helper()
+	conn, err := DialProvider(t.Context(), ProviderDialConfig{Address: addr, Insecure: true})
+	if err != nil {
+		t.Fatalf("DialProvider: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	h := injectionHandler(credproviderpb.NewCredentialProviderClient(conn), injectionProviderName)
+	_, err = h.HandleRequestHeaders(ctx, innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+	return err
+}
+
+// wantDenialBody checks the body a denial answers the actor with.
+func wantDenialBody(t *testing.T, err error, want string) {
+	t.Helper()
+	var re *extproc.ReqError
+	if !errors.As(err, &re) {
+		t.Fatalf("error %v is not a *extproc.ReqError", err)
+	}
+	if re.Msg != want {
+		t.Errorf("body = %q, want %q", re.Msg, want)
 	}
 }
 

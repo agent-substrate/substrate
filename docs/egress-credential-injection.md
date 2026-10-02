@@ -112,16 +112,19 @@ interpret. A URI the provider refuses denies the request with 403.
 | Request decided by an `https` rule, carries the header, provider configured, credential resolves | Header value replaced with the credential; request re-originated upstream |
 | Request decided by an `https` rule, does not carry the header | Forwarded without the credential. |
 | Cleartext request decided by an `http` rule with `replaceHeaders` | Injection **skipped**, request passes through without the credential — a secret is never put on a cleartext wire |
-| No provider configured (injection not enabled at install) | Injection **skipped**, request passes through — a policy that asks for injection does not break egress on a gateway that cannot perform it |
+| No provider configured (injection not enabled at install) | **500** `egress denied: no credential provider configured`, fail closed |
+| Gateway cannot reach the provider: nothing serves the address, it does not resolve, or the TLS handshake fails | **500** `egress denied: credential provider unavailable`, fail closed |
 | Secret missing, or namespace not authorized for the atespace | **403**, fail closed |
-| Provider unreachable or timed out | **503**, fail closed but retryable |
+| Provider answers `Unavailable` or `DeadlineExceeded`, e.g. its secret store is down | **503**, fail closed but retryable |
 | Provider returns an empty credential, or one containing control characters | **503**, fail closed |
 | URI names a provider class this gateway does not serve; unusable header name; unparseable URI | **500**, fail closed |
 
-The dividing line: skipping is only for a gateway that was never asked to
-inject on this request. Once injection is *attempted* — an intercepted HTTPS
-request, provider configured — any failure to produce the credential the
-policy promised denies the request rather than letting it out without it.
+The dividing line: skipping is only for a cleartext request, where injecting
+would put the secret on the wire. On an intercepted HTTPS request any failure
+to produce the credential the policy promised denies the request rather than
+letting it out without it. Only a missing or unreachable provider names its
+reason in the response body: it is the gateway's misconfiguration, not
+anything the actor sent.
 
 ## For cluster admins
 
@@ -141,7 +144,8 @@ hack/install-ate.sh --deploy-atenet --experimental-egress-credential-injection
 
 **2. The provider.** A separate component — the flag above only configures the
 gateway's client side. Until something serves the configured address, every
-matching injection rule fails closed with 503. For the Kubernetes Secrets
+matching injection rule fails closed with 500
+`egress denied: credential provider unavailable`. For the Kubernetes Secrets
 provider, deploy the manifests under `manifests/egress-credential-injection/`:
 
 ```bash
@@ -188,11 +192,11 @@ kubectl -n ate-system logs deployment/atenet-egress -c ext-proc | grep 'egress d
 
 ### Operational notes
 
-**Transient 503s right after (re)deploying the provider.** The gateway keeps a
+**Transient 500s right after (re)deploying the provider.** The gateway keeps a
 long-lived gRPC channel to the provider. If the provider's Service was deleted
 and recreated, the channel can sit in connect backoff for up to a couple of
-minutes before re-resolving; injection fails closed with 503 (deliberately
-retryable) until it reconnects.
+minutes before re-resolving; injection fails closed with 500
+`egress denied: credential provider unavailable` until it reconnects.
 
 **Scope of the reference provider's RBAC.** The sample deployment grants read
 on Secrets cluster-wide so the policy may name any namespace; a production
@@ -233,7 +237,9 @@ A provider should:
 **Status codes.** The gateway maps a `FetchSecret` failure onto the actor's
 request: `NotFound` and `PermissionDenied` deny with 403 (retrying cannot
 succeed); `Unavailable` and `DeadlineExceeded` fail closed with a retryable
-503; any other code denies with 403.
+503; any other code denies with 403. These apply to codes the provider
+returns; a call that never reaches the provider denies with 500 whatever its
+code.
 
 ### The reference provider
 

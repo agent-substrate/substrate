@@ -175,11 +175,16 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 
 const echoRetryWindow = 2 * time.Minute
 
+// providerUnavailableBody is the gateway's denial while it cannot reach the
+// credential provider (egress.providerUnavailableBody).
+const providerUnavailableBody = "egress denied: credential provider unavailable"
+
 // fetchEcho is probeFetch for echo fetches that should return 200. It retries
 // transient failures for up to echoRetryWindow:
 //
 //   - certificate errors, until the gateway's signing pool propagates;
-//   - 503, while the gateway reconnects to a redeployed provider;
+//   - a 500 naming the credential provider, while the gateway reconnects to
+//     the provider the suite just redeployed;
 //   - 502/503/504 from httpbin.org itself.
 func fetchEcho(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, origin string, extraParams []string) fetchResponse {
 	t.Helper()
@@ -200,6 +205,8 @@ func transientEchoFailure(resp fetchResponse) bool {
 		return strings.Contains(resp.Error, "certificate") || strings.Contains(resp.Error, "x509")
 	}
 	switch resp.Status {
+	case "500":
+		return resp.Body == providerUnavailableBody
 	case "502", "503", "504":
 		return true
 	}
