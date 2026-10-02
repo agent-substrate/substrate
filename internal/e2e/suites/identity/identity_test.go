@@ -93,7 +93,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		createAndResumeActor(t, ctx, clients, id)
 	}
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

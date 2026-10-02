@@ -404,7 +404,7 @@ func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *at
 
 func mustRouterClient(t *testing.T, ctx context.Context) *e2e.RouterClient {
 	t.Helper()
-	router, err := e2e.NewRouterClient(ctx)
+	router, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

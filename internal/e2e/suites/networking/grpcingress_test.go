@@ -25,16 +25,14 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"k8s.io/client-go/kubernetes"
 )
 
 // grpcEchoFixtureManifests name the fixture this suite installs to get a
@@ -61,10 +59,11 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "protodowngrade", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 
-	base := "http://" + routerAddress(t, ctx)
-
-	h1 := &http.Client{Timeout: 30 * time.Second}
-	h2c := &http.Client{Transport: h2cTransport(), Timeout: 30 * time.Second}
+	rc := mustRouterClient(t, ctx)
+	t.Cleanup(rc.Close)
+	base := rc.BaseURL()
+	h1 := &http.Client{Transport: routerTransport(rc, false), Timeout: 30 * time.Second}
+	h2 := &http.Client{Transport: routerTransport(rc, true), Timeout: 30 * time.Second}
 
 	request := func(client *http.Client, method, path, contentType string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, method, base+path, http.NoBody)
@@ -85,9 +84,9 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 	})
 
 	t.Run("h2 client reaches h1-only actor", func(t *testing.T) {
-		resp, err := request(h2c, http.MethodGet, "/readyz", "")
+		resp, err := request(h2, http.MethodGet, "/readyz", "")
 		if err != nil {
-			t.Fatalf("h2c request through ingress: %v", err)
+			t.Fatalf("h2 request through ingress: %v", err)
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -95,15 +94,15 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 			t.Errorf("downstream proto = %s, want HTTP/2.0 (the client really negotiated h2)", resp.Proto)
 		}
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("h2c GET = %d (body %q), want 200: non-gRPC HTTP/2 must be downgraded for HTTP/1.1-only actors", resp.StatusCode, body)
+			t.Fatalf("h2 GET = %d (body %q), want 200: non-gRPC HTTP/2 must be downgraded for HTTP/1.1-only actors", resp.StatusCode, body)
 		}
 		if !strings.Contains(string(body), "ok") {
-			t.Errorf("h2c GET body = %q, want the actor's health payload", body)
+			t.Errorf("h2 GET body = %q, want the actor's health payload", body)
 		}
 	})
 
 	t.Run("grpc to non-grpc actor fails loudly", func(t *testing.T) {
-		resp, err := request(h2c, http.MethodPost, "/count", "application/grpc")
+		resp, err := request(h2, http.MethodPost, "/count", "application/grpc")
 		if err != nil {
 			t.Fatalf("gRPC-shaped request through ingress: %v", err)
 		}
@@ -151,12 +150,16 @@ func TestIngressGRPC(t *testing.T) {
 		atenet.TargetActorHeader, actorRef.String(),
 	)
 
-	// Cleartext h2c to the router's HTTP port. Explicit metadata identifies the
-	// Actor; the conventional actor authority remains application metadata. The
-	// h2 ALPN offer is about the *TLS* listener; nothing here needs it.
-	conn, err := grpc.NewClient(routerAddress(t, ctx),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	// Cleartext h2c to the router's HTTP port, or h2 negotiated by ALPN on its
+	// TLS port when the router requires mTLS. Explicit metadata identifies the
+	// Actor; the conventional actor authority remains application metadata.
+	rc := mustRouterClient(t, ctx)
+	t.Cleanup(rc.Close)
+	creds := insecure.NewCredentials()
+	if tlsConfig := rc.TLSConfig(); tlsConfig != nil {
+		creds = credentials.NewTLS(tlsConfig)
+	}
+	conn, err := grpc.NewClient(rc.Address(), grpc.WithTransportCredentials(creds))
 	if err != nil {
 		t.Fatalf("creating the gRPC client for %s: %v", actorRef, err)
 	}
@@ -296,37 +299,31 @@ func waitForGRPCRouteReady(t *testing.T, ctx context.Context, client grpcechopb.
 	}
 }
 
-// routerAddress port-forwards to atenet-router's HTTP port and returns the
-// local host:port, torn down when the test ends.
+// routerTransport returns an HTTP transport for rc's router listener that
+// speaks HTTP/2 when http2 is set and HTTP/1.1 otherwise. Against the plaintext
+// listener HTTP/2 is cleartext h2c by prior knowledge; against the TLS
+// listener the router requires in static-mtls mode, it is negotiated by ALPN.
 //
-// e2e.RouterClient is not usable here: it speaks HTTP/1.1 only, and the whole
-// point of both tests in this file is to control the protocol the client
-// negotiates with the router.
-func routerAddress(t *testing.T, ctx context.Context) string {
-	t.Helper()
-	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
-	if err != nil {
-		t.Fatalf("loading kubeconfig: %v", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		t.Fatalf("creating k8s client: %v", err)
-	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, e2e.SystemNamespace(), e2e.ResourceName("atenet-router"), 80)
-	if err != nil {
-		t.Fatalf("port-forwarding to the router: %v", err)
-	}
-	t.Cleanup(stop)
-	return fmt.Sprintf("127.0.0.1:%d", localPort)
-}
-
-// h2cTransport is an HTTP transport that speaks cleartext HTTP/2 by prior
-// knowledge, so a test can reach the router's plain HTTP port as an h2 client
-// without any ALPN negotiation.
-func h2cTransport() *http.Transport {
+// e2e.RouterClient's own client is not usable here: it speaks HTTP/1.1 only,
+// and the whole point of both tests in this file is to control the protocol
+// the client negotiates with the router.
+func routerTransport(rc *e2e.RouterClient, http2 bool) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	protocols := new(http.Protocols)
-	protocols.SetUnencryptedHTTP2(true)
+	if tlsConfig := rc.TLSConfig(); tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig
+		if http2 {
+			protocols.SetHTTP2(true)
+		} else {
+			protocols.SetHTTP1(true)
+		}
+	} else {
+		if http2 {
+			protocols.SetUnencryptedHTTP2(true)
+		} else {
+			protocols.SetHTTP1(true)
+		}
+	}
 	transport.Protocols = protocols
 	return transport
 }

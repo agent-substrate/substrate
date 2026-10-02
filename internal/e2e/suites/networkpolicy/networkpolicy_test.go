@@ -174,7 +174,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 
 	// === Positive Data Plane Verification (Authorized Ingress) ===
 	t.Log("=== Verifying authorized ingress via atenet-router ===")
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

@@ -264,6 +264,21 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 }
 
 func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.Config, error) {
+	pool, err := ServiceDNSTrustPool(ctx, clientset)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    pool,
+		ServerName: apiServerName(),
+	}, nil
+}
+
+// ServiceDNSTrustPool returns the live trust bundle of the servicedns signer,
+// which issues the serving certificates of substrate's in-cluster Services
+// (ateapi and atenet-router among them).
+func ServiceDNSTrustPool(ctx context.Context, clientset kubernetes.Interface) (*x509.CertPool, error) {
 	bundles, err := clustertrustbundle.NewClient(clientset, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover ClusterTrustBundle API: %w", err)
@@ -289,12 +304,7 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 	if !found {
 		return nil, fmt.Errorf("no live ClusterTrustBundle found for signer %q", serviceDNSSignerName)
 	}
-
-	return &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		RootCAs:    pool,
-		ServerName: apiServerName(),
-	}, nil
+	return pool, nil
 }
 
 // bearerTokenDialOption attaches the configured token, or mints an ate-client

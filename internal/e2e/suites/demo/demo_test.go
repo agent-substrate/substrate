@@ -23,17 +23,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 )
 
 const demoAtespace = "demo"
@@ -1349,79 +1344,15 @@ func callActorPath(t *testing.T, actorRef resources.ActorRef, method, path strin
 
 func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path string) (string, error) {
 	t.Helper()
-	clients := e2e.GetClients()
-
-	svc, err := clients.K8s.CoreV1().Services(e2e.SystemNamespace()).Get(context.Background(), e2e.ResourceName("atenet-router"), metav1.GetOptions{})
+	router, err := e2e.NewRouterClient(t, context.Background())
 	if err != nil {
-		return "", fmt.Errorf("failed to get atenet-router service: %w", err)
+		return "", fmt.Errorf("connecting to atenet-router: %w", err)
 	}
+	defer router.Close()
 
-	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
-	pods, err := clients.K8s.CoreV1().Pods(e2e.SystemNamespace()).List(context.Background(), metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return "", fmt.Errorf("failed to list atenet-router pods: %w", err)
-	}
-	if len(pods.Items) == 0 {
-		return "", fmt.Errorf("no atenet-router pods found")
-	}
-	targetPod := pods.Items[0]
-
-	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
-	if err != nil {
-		return "", fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	reqConfig := clients.K8s.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(targetPod.Namespace).
-		Name(targetPod.Name).
-		SubResource("portforward")
-
-	transport, upgrader, err := spdy.RoundTripperFor(config)
-	if err != nil {
-		return "", fmt.Errorf("failed to create SPDY transport: %w", err)
-	}
-
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, reqConfig.URL())
-
-	stopCh := make(chan struct{})
-	readyCh := make(chan struct{})
-	defer close(stopCh)
-
-	fw, err := portforward.New(dialer, []string{"0:8080"}, stopCh, readyCh, io.Discard, io.Discard)
-	if err != nil {
-		return "", fmt.Errorf("failed to create port forwarder: %w", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		if err := fw.ForwardPorts(); err != nil {
-			errCh <- err
-		}
-	}()
-
-	select {
-	case <-readyCh:
-	case err := <-errCh:
-		return "", fmt.Errorf("port forwarding failed: %w", err)
-	case <-time.After(10 * time.Second):
-		return "", fmt.Errorf("timeout waiting for port-forward")
-	}
-
-	forwardedPorts, err := fw.GetPorts()
-	if err != nil || len(forwardedPorts) == 0 {
-		return "", fmt.Errorf("failed to get forwarded ports: %w", err)
-	}
-	localPort := forwardedPorts[0].Local
-
-	reqHttp, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", localPort, path), nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	reqHttp.Header.Set(atenet.TargetActorHeader, actorRef.String())
-
-	httpClient := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpClient.Do(reqHttp)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	resp, err := router.Do(ctx, method, actorRef, path, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to do request: %w", err)
 	}

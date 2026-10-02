@@ -59,8 +59,10 @@ func TestWebsocketIngressPing(t *testing.T) {
 	rc := mustRouterClient(t, ctx)
 	defer rc.Close()
 
-	// Convert http://127.0.0.1:<port> to ws://127.0.0.1:<port>/ws
-	wsURLStr := strings.Replace(rc.BaseURL(), "http://", "ws://", 1) + "/ws"
+	// Convert http(s)://127.0.0.1:<port> to ws(s)://127.0.0.1:<port>/ws
+	wsURLStr := "ws" + strings.TrimPrefix(rc.BaseURL(), "http") + "/ws"
+	dialer := *websocket.DefaultDialer
+	dialer.TLSClientConfig = rc.TLSConfig()
 	u, err := url.Parse(wsURLStr)
 	if err != nil {
 		t.Fatalf("parse ws URL: %v", err)
@@ -76,7 +78,7 @@ func TestWebsocketIngressPing(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		var resp *http.Response
-		c, resp, err = websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+		c, resp, err = dialer.DialContext(ctx, u.String(), header)
 		if err == nil {
 			break
 		}
