@@ -55,8 +55,12 @@ func checkStandardMethodReturnsResource(api *model.API) ([]Finding, error) {
 }
 
 func standardVerbFor(methodName, resourceName string) (verb string, ok bool) {
+	name := resourceName
+	if parent, isSubResource := model.ParentResourceName(resourceName); isSubResource {
+		name = parent + resourceName
+	}
 	for _, v := range []string{"Get", "Create", "Update", "Delete"} {
-		if methodName == v+resourceName {
+		if methodName == v+name {
 			return v, true
 		}
 	}

@@ -40,6 +40,7 @@ func checkCreateRequestShape(api *model.API) ([]Finding, error) {
 
 	var findings []Finding
 	for _, rg := range resources {
+		parentName, isSubResource := model.ParentResourceName(rg.Message.Name)
 		for _, m := range rg.Methods {
 			verb, ok := standardVerbFor(m.Name, rg.Message.Name)
 			if !ok || verb != "Create" {
@@ -53,7 +54,7 @@ func checkCreateRequestShape(api *model.API) ([]Finding, error) {
 				continue
 			}
 
-			var resourceFields, optionsFields int
+			var resourceFields, optionsFields, parentFields int
 			for _, f := range req.Fields {
 				switch {
 				case f.TypeKind == "message" && f.TypeFullName == rg.Message.FullName:
@@ -64,12 +65,24 @@ func checkCreateRequestShape(api *model.API) ([]Finding, error) {
 							Message: fmt.Sprintf("resource field is named %q, want %q", f.Name, want),
 						})
 					}
+				case isSubResource && f.TypeKind == "message" && f.TypeFullName == objectRefTypeFullName:
+					parentFields++
+					if want := fieldNameForResource(parentName); f.Name != want {
+						findings = append(findings, Finding{
+							Subject: subject,
+							Message: fmt.Sprintf("parent field is named %q, want %q", f.Name, want),
+						})
+					}
 				case f.TypeKind == "message" && f.TypeFullName == createOptionsTypeFullName:
 					optionsFields++
 				default:
+					wantTypes := fmt.Sprintf("%s or %s", rg.Message.FullName, createOptionsTypeFullName)
+					if isSubResource {
+						wantTypes = fmt.Sprintf("%s, %s, or %s", rg.Message.FullName, objectRefTypeFullName, createOptionsTypeFullName)
+					}
 					findings = append(findings, Finding{
 						Subject: subject,
-						Message: fmt.Sprintf("field %q is %s, want %s or %s - non-resource control fields belong in %s", f.Name, fieldTypeDescription(f), rg.Message.FullName, createOptionsTypeFullName, createOptionsTypeFullName),
+						Message: fmt.Sprintf("field %q is %s, want %s - non-resource control fields belong in %s", f.Name, fieldTypeDescription(f), wantTypes, createOptionsTypeFullName),
 					})
 				}
 			}
@@ -83,6 +96,12 @@ func checkCreateRequestShape(api *model.API) ([]Finding, error) {
 				findings = append(findings, Finding{
 					Subject: subject,
 					Message: fmt.Sprintf("request has %d field(s) of type %s, want at most 1", optionsFields, createOptionsTypeFullName),
+				})
+			}
+			if isSubResource && parentFields != 1 {
+				findings = append(findings, Finding{
+					Subject: subject,
+					Message: fmt.Sprintf("request has %d field(s) of type %s identifying the parent %s, want exactly 1", parentFields, objectRefTypeFullName, parentName),
 				})
 			}
 		}
