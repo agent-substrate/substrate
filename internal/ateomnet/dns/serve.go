@@ -27,8 +27,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 )
 
-// Server answers an actor's DNS. Satisfied by atunnel.DNSRelay; an interface
-// so this package does not depend on it.
+// Server answers an actor's DNS. Satisfied by *Relay; an interface so callers
+// can substitute a test double.
 type Server interface {
 	ServePacket(ctx context.Context, pc net.PacketConn) error
 	Serve(ctx context.Context, listener net.Listener) error

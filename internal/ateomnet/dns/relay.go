@@ -12,25 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package atunnel
+package dns
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
-	"os"
-	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	// DNSPort is the relay port on the sandbox's gateway.
-	DNSPort = 53
+	// Port is the relay port on the sandbox's gateway.
+	Port = 53
 
 	// Read complete UDP datagrams without truncating EDNS responses.
 	maxDNSDatagram = 65535
@@ -48,10 +45,10 @@ const (
 	dnsExchangeTimeout = 5 * time.Second
 )
 
-// DNSRelay forwards UDP and TCP DNS unchanged to the worker pod's resolvers.
+// Relay forwards UDP and TCP DNS unchanged to the worker pod's resolvers.
 // It listens in the sandbox's gateway namespace and dials from the worker's.
 // DNS bypasses the egress tunnel and is not checked against egress policy.
-type DNSRelay struct {
+type Relay struct {
 	upstreams []string
 	// dialer reaches upstream resolvers from the worker namespace.
 	dialer *net.Dialer
@@ -61,17 +58,17 @@ type DNSRelay struct {
 	connections chan struct{}
 }
 
-// NewDNSRelay forwards to upstreams, each "host:port".
-func NewDNSRelay(upstreams []string) (*DNSRelay, error) {
+// NewRelay forwards to upstreams, each "host:port".
+func NewRelay(upstreams []string) (*Relay, error) {
 	if len(upstreams) == 0 {
-		return nil, fmt.Errorf("atunnel: at least one upstream resolver is required")
+		return nil, fmt.Errorf("dns: at least one upstream resolver is required")
 	}
 	for _, u := range upstreams {
 		if _, _, err := net.SplitHostPort(u); err != nil {
-			return nil, fmt.Errorf("atunnel: invalid upstream resolver %q: %w", u, err)
+			return nil, fmt.Errorf("dns: invalid upstream resolver %q: %w", u, err)
 		}
 	}
-	return &DNSRelay{
+	return &Relay{
 		upstreams:   upstreams,
 		dialer:      &net.Dialer{Timeout: dnsExchangeTimeout},
 		inFlight:    make(chan struct{}, maxInFlightDNS),
@@ -79,42 +76,8 @@ func NewDNSRelay(upstreams []string) (*DNSRelay, error) {
 	}, nil
 }
 
-// ResolvConfNameservers reads nameservers from resolv.conf as "host:53".
-func ResolvConfNameservers(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("atunnel: reading resolv.conf: %w", err)
-	}
-	defer f.Close()
-
-	var out []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if i := strings.IndexAny(line, "#;"); i >= 0 {
-			line = strings.TrimSpace(line[:i])
-		}
-		rest, ok := strings.CutPrefix(line, "nameserver")
-		if !ok {
-			continue
-		}
-		address := strings.TrimSpace(rest)
-		if address == "" || net.ParseIP(address) == nil {
-			continue
-		}
-		out = append(out, net.JoinHostPort(address, "53"))
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("atunnel: reading resolv.conf: %w", err)
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("atunnel: %s names no usable nameserver", path)
-	}
-	return out, nil
-}
-
 // ServePacket answers UDP queries until ctx is canceled or the socket fails.
-func (r *DNSRelay) ServePacket(ctx context.Context, pc net.PacketConn) error {
+func (r *Relay) ServePacket(ctx context.Context, pc net.PacketConn) error {
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -135,7 +98,7 @@ func (r *DNSRelay) ServePacket(ctx context.Context, pc net.PacketConn) error {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			return fmt.Errorf("atunnel: reading actor DNS query: %w", err)
+			return fmt.Errorf("dns: reading actor DNS query: %w", err)
 		}
 		// Copied: the buffer is reused by the next read.
 		query := make([]byte, n)
@@ -144,7 +107,7 @@ func (r *DNSRelay) ServePacket(ctx context.Context, pc net.PacketConn) error {
 		select {
 		case r.inFlight <- struct{}{}:
 		default:
-			slog.DebugContext(ctx, "atunnel dropped a DNS query; too many in flight")
+			slog.DebugContext(ctx, "dns relay dropped a DNS query; too many in flight")
 			continue
 		}
 		wg.Add(1)
@@ -153,18 +116,18 @@ func (r *DNSRelay) ServePacket(ctx context.Context, pc net.PacketConn) error {
 			defer func() { <-r.inFlight }()
 			answer, err := r.exchangeUDP(ctx, query)
 			if err != nil {
-				slog.WarnContext(ctx, "atunnel could not resolve an actor DNS query", slog.Any("err", err))
+				slog.WarnContext(ctx, "dns relay could not resolve an actor DNS query", slog.Any("err", err))
 				return
 			}
 			if _, err := pc.WriteTo(answer, from); err != nil && ctx.Err() == nil {
-				slog.WarnContext(ctx, "atunnel could not return a DNS answer", slog.Any("err", err))
+				slog.WarnContext(ctx, "dns relay could not return a DNS answer", slog.Any("err", err))
 			}
 		}()
 	}
 }
 
 // Serve relays TCP DNS connections until ctx is canceled or the listener closes.
-func (r *DNSRelay) Serve(ctx context.Context, listener net.Listener) error {
+func (r *Relay) Serve(ctx context.Context, listener net.Listener) error {
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -186,12 +149,12 @@ func (r *DNSRelay) Serve(ctx context.Context, listener net.Listener) error {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			return fmt.Errorf("atunnel: accepting actor DNS connection: %w", err)
+			return fmt.Errorf("dns: accepting actor DNS connection: %w", err)
 		}
 		select {
 		case r.connections <- struct{}{}:
 		default:
-			slog.DebugContext(ctx, "atunnel refused a DNS connection; too many open")
+			slog.DebugContext(ctx, "dns relay refused a DNS connection; too many open")
 			_ = conn.Close()
 			continue
 		}
@@ -204,7 +167,7 @@ func (r *DNSRelay) Serve(ctx context.Context, listener net.Listener) error {
 	}
 }
 
-func (r *DNSRelay) exchangeUDP(ctx context.Context, query []byte) ([]byte, error) {
+func (r *Relay) exchangeUDP(ctx context.Context, query []byte) ([]byte, error) {
 	var errs error
 	// deferred holds a server-failure answer to fall back on, see below.
 	var deferred []byte
@@ -251,7 +214,7 @@ func (r *DNSRelay) exchangeUDP(ctx context.Context, query []byte) ([]byte, error
 	if deferred != nil {
 		return deferred, nil
 	}
-	return nil, fmt.Errorf("atunnel: no upstream resolver answered: %w", errs)
+	return nil, fmt.Errorf("dns: no upstream resolver answered: %w", errs)
 }
 
 // Response codes that say the resolver failed rather than answered. NXDOMAIN
@@ -289,7 +252,7 @@ func rcodeError(rcode byte) error {
 }
 
 // relayTCP copies a DNS stream without parsing its length-prefixed messages.
-func (r *DNSRelay) relayTCP(ctx context.Context, downstream net.Conn) {
+func (r *Relay) relayTCP(ctx context.Context, downstream net.Conn) {
 	defer downstream.Close()
 
 	var upstream net.Conn
@@ -304,7 +267,7 @@ func (r *DNSRelay) relayTCP(ctx context.Context, downstream net.Conn) {
 		break
 	}
 	if upstream == nil {
-		slog.WarnContext(ctx, "atunnel could not reach any resolver for an actor DNS connection", slog.Any("err", errs))
+		slog.WarnContext(ctx, "dns relay could not reach any resolver for an actor DNS connection", slog.Any("err", errs))
 		return
 	}
 	defer upstream.Close()

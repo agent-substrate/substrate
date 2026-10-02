@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -94,7 +95,7 @@ type Tunnel struct {
 	// actor network's transparent TCP redirect.
 	EgressPort uint16
 	// DNSRelay answers the sandbox's DNS from inside its own namespace.
-	DNSRelay *atunnel.DNSRelay
+	DNSRelay *dns.Relay
 
 	cfg Config
 }
@@ -109,11 +110,11 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	}
 	// The pod's own resolvers, so an actor resolves exactly what the worker
 	// resolves, cluster DNS included.
-	nameservers, err := atunnel.ResolvConfNameservers(resolvConfPath)
+	nameservers, err := dns.ResolvConfNameservers(resolvConfPath)
 	if err != nil {
 		return nil, fmt.Errorf("while reading the worker pod resolvers: %w", err)
 	}
-	dnsRelay, err := atunnel.NewDNSRelay(nameservers)
+	dnsRelay, err := dns.NewRelay(nameservers)
 	if err != nil {
 		return nil, fmt.Errorf("while building the actor DNS relay: %w", err)
 	}

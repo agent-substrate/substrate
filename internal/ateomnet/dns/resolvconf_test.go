@@ -23,6 +23,53 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+func TestResolvConfNameservers(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:    "cluster resolv.conf",
+			content: "search ate-system.svc.cluster.local svc.cluster.local\nnameserver 10.96.0.10\noptions ndots:5\n",
+			want:    []string{"10.96.0.10:53"},
+		},
+		{
+			name:    "several, in order",
+			content: "nameserver 10.96.0.10\nnameserver 8.8.8.8\n",
+			want:    []string{"10.96.0.10:53", "8.8.8.8:53"},
+		},
+		{
+			name:    "comments and blanks",
+			content: "# generated\n\n  nameserver 10.96.0.10  # cluster\n;nameserver 1.1.1.1\n",
+			want:    []string{"10.96.0.10:53"},
+		},
+		{name: "no nameserver", content: "search cluster.local\n", wantErr: true},
+		{name: "unparsable address", content: "nameserver not-an-ip\n", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "resolv.conf")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ResolvConfNameservers(path)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ResolvConfNameservers() = %v, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolvConfNameservers: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("nameservers mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestSandboxResolvConf(t *testing.T) {
 	// The shape kubelet writes into a pod.
 	pod := "nameserver 10.96.0.10\n" +

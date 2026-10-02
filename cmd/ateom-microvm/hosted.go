@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -86,7 +87,7 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 	session, err := ateomnet.ServeSandbox(ctx, ateomnet.SandboxNetworkConfig{
 		ActorUID:   uid,
 		EgressPort: s.tunnel.EgressPort,
-		DNSPort:    atunnel.DNSPort,
+		DNSPort:    dns.Port,
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()
