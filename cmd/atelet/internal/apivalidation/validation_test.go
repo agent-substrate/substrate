@@ -265,12 +265,6 @@ func TestValidateRunRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.Invalid(containerName, nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "reserved container name",
-		obj: valid(func(r *ateletpb.RunRequest) {
-			r.Spec.Containers[0].Name = "pause"
-		}),
-		want: field.ErrorList{field.Invalid(containerName, nil, "")},
-	}, {
 		name: "duplicate container name",
 		obj: valid(func(r *ateletpb.RunRequest) {
 			r.Spec.Containers = append(r.Spec.Containers, &ateletpb.Container{Name: "worker", Image: testDigestImage})
@@ -494,9 +488,9 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	}, {
 		name: "spec errors surface at the spec's path",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "pause", Image: testDigestImage}}}
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_pause", Image: testDigestImage}}}
 		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "unspecified type",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
@@ -659,9 +653,9 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}, {
 		name: "spec errors surface at the spec's path",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "pause", Image: testDigestImage}}}
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_pause", Image: testDigestImage}}}
 		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "unspecified type",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }),
@@ -923,9 +917,9 @@ func TestValidateTerminateRequest(t *testing.T) {
 	}, {
 		name: "spec errors surface at the spec's path",
 		obj: valid(func(r *ateletpb.TerminateRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "pause", Image: testDigestImage}}}
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_pause", Image: testDigestImage}}}
 		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "unset template identity is allowed",
 		obj: valid(func(r *ateletpb.TerminateRequest) {
@@ -1405,10 +1399,6 @@ func TestValidateContainer(t *testing.T) {
 			name: "invalid name: uppercase",
 			obj:  valid(func(c *ateletpb.Container) { c.Name = "Main" }),
 			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
-		}, {
-			name: "reserved name pause",
-			obj:  valid(func(c *ateletpb.Container) { c.Name = "pause" }),
-			want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "")},
 		}, {
 			name: "missing image",
 			obj:  valid(func(c *ateletpb.Container) { c.Image = "" }),

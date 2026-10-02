@@ -29,16 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// ValidateCustom_Container_Name rejects the container name reserved for the
-// sandbox-infra bundle, which shares the OCI bundle directory namespace and
-// races its concurrent writer.
-func ValidateCustom_Container_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if *value == "pause" {
-		return field.ErrorList{field.Invalid(fldPath, *value, `"pause" is reserved for sandbox infrastructure`)}
-	}
-	return nil
-}
-
 func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidatePinnedImage(fldPath, *value)
 }

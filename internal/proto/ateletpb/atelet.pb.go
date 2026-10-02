@@ -1906,7 +1906,6 @@ type Container struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # "pause" is reserved for sandbox infrastructure
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// +k8s:required
 	// +k8s:maxLength=512 # matches the template Container.image's bound

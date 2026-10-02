@@ -519,7 +519,6 @@ message VolumeMount {
 message Container {
   // +k8s:required
   // +k8s:format=k8s-short-name
-  // +k8s:customValidation # "pause" is reserved for sandbox infrastructure
   string name = 1;
 
   // +k8s:required
