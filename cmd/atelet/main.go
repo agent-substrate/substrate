@@ -113,6 +113,9 @@ var (
 
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
+
+	benchmarkStubHerderFlag  = pflag.Bool("benchmark-stub-herder", false, "Benchmarks only: answer Run, Restore, Checkpoint, UploadPausedCheckpoint and Terminate with success without starting or saving any workload, so ate-api-server and Postgres can be load-tested past the node's restore capacity. Never enable on a cluster that runs real actors.")
+	benchmarkStubHerderDelay = pflag.Duration("benchmark-stub-herder-delay", 0, "With --benchmark-stub-herder, how long each stubbed call takes before it succeeds.")
 )
 
 func main() {
@@ -397,7 +400,13 @@ func main() {
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
-	ateletpb.RegisterAteomHerderServer(svr, wmService)
+	var herder ateletpb.AteomHerderServer = wmService
+	if *benchmarkStubHerderFlag {
+		slog.WarnContext(ctx, "Serving the benchmark stub herder: actor lifecycle calls succeed without running any workload",
+			slog.Duration("delay", *benchmarkStubHerderDelay))
+		herder = &benchmarkStubHerder{delay: *benchmarkStubHerderDelay}
+	}
+	ateletpb.RegisterAteomHerderServer(svr, herder)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
 
