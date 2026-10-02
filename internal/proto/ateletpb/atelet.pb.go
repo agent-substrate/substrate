@@ -2870,12 +2870,8 @@ type RestoreRequest struct {
 	// The files of the snapshot referenced by `config`, as recorded when it
 	// was taken.
 	SnapshotFiles []string `protobuf:"bytes,17,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
-	// True when the snapshot referenced by `config` is owned in the golden
-	// atespace: a golden snapshot, including the golden tag an actor created
-	// from it reads until its first suspend. Used only to label metrics.
-	FromGoldenSnapshot bool `protobuf:"varint,18,opt,name=from_golden_snapshot,json=fromGoldenSnapshot,proto3" json:"from_golden_snapshot,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
@@ -3029,13 +3025,6 @@ func (x *RestoreRequest) GetSnapshotFiles() []string {
 		return x.SnapshotFiles
 	}
 	return nil
-}
-
-func (x *RestoreRequest) GetFromGoldenSnapshot() bool {
-	if x != nil {
-		return x.FromGoldenSnapshot
-	}
-	return false
 }
 
 type isRestoreRequest_Config interface {
@@ -3278,7 +3267,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\rsandbox_class\x18\v \x01(\tR\fsandboxClass\x12.\n" +
 	"\x13data_snapshot_files\x18\f \x03(\tR\x11dataSnapshotFiles\"G\n" +
 	"\x1eUploadPausedCheckpointResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xd0\x06\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x9e\x06\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3297,8 +3286,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
 	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12%\n" +
-	"\x0esnapshot_files\x18\x11 \x03(\tR\rsnapshotFiles\x120\n" +
-	"\x14from_golden_snapshot\x18\x12 \x01(\bR\x12fromGoldenSnapshotB\b\n" +
+	"\x0esnapshot_files\x18\x11 \x03(\tR\rsnapshotFilesB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*\x9a\x01\n" +

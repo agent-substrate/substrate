@@ -278,6 +278,12 @@ func TestAssetsAfterCollateral(t *testing.T) {
 }
 
 func TestRestoreSnapshotKind(t *testing.T) {
+	external := func(uri string) *ateletpb.RestoreRequest {
+		return &ateletpb.RestoreRequest{
+			Type:   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+			Config: &ateletpb.RestoreRequest_ExternalConfig{ExternalConfig: &ateletpb.ExternalRestoreConfiguration{SnapshotUri: uri}},
+		}
+	}
 	tests := []struct {
 		name string
 		req  *ateletpb.RestoreRequest
@@ -289,13 +295,23 @@ func TestRestoreSnapshotKind(t *testing.T) {
 			want: ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "external golden snapshot",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL, FromGoldenSnapshot: true},
+			name: "golden tag an actor borrows",
+			req:  external("gs://bucket/root/atespaces/" + resources.GoldenActorAtespace + "/tags/" + snapshotOwnerUID),
 			want: ateattr.SnapshotKindGolden,
 		},
 		{
+			name: "golden actor's own snapshot",
+			req:  external("gs://bucket/root/atespaces/" + resources.GoldenActorAtespace + "/actors/" + snapshotOwnerUID + "/snapshots/snap-1"),
+			want: ateattr.SnapshotKindGolden,
+		},
+		{
+			name: "user tag an actor borrows",
+			req:  external("gs://bucket/root/atespaces/ate-demo/tags/" + snapshotOwnerUID),
+			want: ateattr.SnapshotKindLatest,
+		},
+		{
 			name: "external snapshot of the actor",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
+			req:  external(testSnapshotURI),
 			want: ateattr.SnapshotKindLatest,
 		},
 	}

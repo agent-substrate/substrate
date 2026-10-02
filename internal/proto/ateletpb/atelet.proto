@@ -570,11 +570,6 @@ message RestoreRequest {
   // The files of the snapshot referenced by `config`, as recorded when it
   // was taken.
   repeated string snapshot_files = 17;
-
-  // True when the snapshot referenced by `config` is owned in the golden
-  // atespace: a golden snapshot, including the golden tag an actor created
-  // from it reads until its first suspend. Used only to label metrics.
-  bool from_golden_snapshot = 18;
 }
 
 message RestoreResponse {

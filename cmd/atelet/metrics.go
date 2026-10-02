@@ -153,13 +153,14 @@ func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Du
 }
 
 // restoreSnapshotKind classifies which snapshot a restore reads. A local
-// restore is evident from the wire; golden and latest both arrive as an external
-// URI prefix, so the control plane says which one it sent.
+// restore is evident from the wire. An external one is golden when its URI is
+// owned in the golden atespace: the golden actor's own snapshots, and the
+// golden tag an actor created from it reads until its first suspend.
 func restoreSnapshotKind(req *ateletpb.RestoreRequest) string {
 	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
 		return ateattr.SnapshotKindLocal
 	}
-	if req.GetFromGoldenSnapshot() {
+	if uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri()); err == nil && uri.Atespace() == resources.GoldenActorAtespace {
 		return ateattr.SnapshotKindGolden
 	}
 	return ateattr.SnapshotKindLatest

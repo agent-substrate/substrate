@@ -697,14 +697,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			},
 			SnapshotFiles: src.SnapshotFiles,
 			Scope:         scope,
-			// Golden snapshots, and the golden tag an actor borrows until
-			// its first suspend, are owned in the golden atespace.
-			FromGoldenSnapshot: src.SnapshotURI.Atespace() == resources.GoldenActorAtespace,
-			SandboxAssets:      sandboxAssets,
-			ActorUid:           actor.GetMetadata().Uid,
-			EgressGateway:      egressGateway,
-			CpuMilli:           cpuMilli,
-			MemoryBytes:        memBytes,
+			SandboxAssets: sandboxAssets,
+			ActorUid:      actor.GetMetadata().Uid,
+			EgressGateway: egressGateway,
+			CpuMilli:      cpuMilli,
+			MemoryBytes:   memBytes,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
