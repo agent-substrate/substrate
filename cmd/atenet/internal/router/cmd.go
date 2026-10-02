@@ -22,8 +22,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/env"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 var otlpCollectorEndpointEnv = env.Var[string]{

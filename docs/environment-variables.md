@@ -23,7 +23,7 @@ PostgreSQL connection string in DSN or URI form. Read only when --postgres-conne
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L85)
+- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L88)
 
 ### ATE_API_POSTGRES_SCHEMA (cmd/ateapi/main.go)
 
@@ -31,7 +31,7 @@ PostgreSQL schema name. Read only when --postgres-schema=@env; otherwise the fla
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L92)
+- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L95)
 
 ### ATE_STORAGE_BACKEND (cmd/ateapi/main.go)
 
@@ -39,7 +39,7 @@ Selects the snapshot storage backend. The exact, case-sensitive value s3 selects
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L70)
+- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L73)
 
 ### ATE_STORAGE_BACKEND (cmd/atelet/main.go)
 
@@ -55,7 +55,7 @@ Enables S3 path-style addressing when ATE_STORAGE_BACKEND=s3. Accepted true valu
 
 - Type: bool
 - Declared default: false
-- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L77)
+- Source: [cmd/ateapi/main.go](../cmd/ateapi/main.go#L80)
 
 ### AWS_S3_USE_PATH_STYLE (cmd/atelet/main.go)
 
@@ -67,11 +67,11 @@ Enables S3 path-style addressing when ATE_STORAGE_BACKEND=s3. Accepted true valu
 
 ### OTEL_EXPORTER_OTLP_COMPRESSION (internal/otlprelay/relay.go)
 
-Compression for the OTLP relay. Accepted values are gzip and none, with surrounding whitespace ignored; names are case-sensitive. Nonempty signal-specific settings override this value. Resolved nonempty trace and metric settings must match exactly. If all settings are empty, compression is disabled. Unsupported or conflicting values prevent the relay from starting.
+Compression for the OTLP relay. Accepted values are gzip and none, with surrounding whitespace ignored; names are case-sensitive. Nonempty signal-specific settings override this value. Resolved nonempty trace, metric, and log settings must match exactly. If all settings are empty, compression is disabled. Unsupported or conflicting values prevent the relay from starting.
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L143)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L156)
 
 ### OTEL_EXPORTER_OTLP_ENDPOINT (cmd/atecontroller/main.go)
 
@@ -79,7 +79,7 @@ Default for --otel-exporter-otlp-endpoint. Empty disables injection of worker te
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L53)
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L54)
 
 ### OTEL_EXPORTER_OTLP_ENDPOINT (cmd/atenet/internal/router/cmd.go)
 
@@ -87,15 +87,15 @@ Default for --otlp-collector-address: host:port or http:// URL for Envoy tracing
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/atenet/internal/router/cmd.go](../cmd/atenet/internal/router/cmd.go#L28)
+- Source: [cmd/atenet/internal/router/cmd.go](../cmd/atenet/internal/router/cmd.go#L29)
 
 ### OTEL_EXPORTER_OTLP_ENDPOINT (internal/otlprelay/relay.go)
 
-Collector address for the OTLP relay, as a hostname, host:port, or http:// URL. The default port is 4317. HTTPS and other URL schemes are rejected; the relay uses plaintext gRPC. Nonempty signal-specific endpoints override this value. Resolved nonempty trace and metric settings must match exactly. The relay is disabled when all endpoint settings are empty.
+Collector address for the OTLP relay, as a hostname, host:port, or http:// URL. The default port is 4317. HTTPS and other URL schemes are rejected; the relay uses plaintext gRPC. Nonempty signal-specific endpoints override this value. Resolved nonempty trace, metric, and log settings must match exactly. The relay is disabled when all endpoint settings are empty.
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L116)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L120)
 
 ### OTEL_EXPORTER_OTLP_HEADERS (internal/otlprelay/relay.go)
 
@@ -103,23 +103,47 @@ Headers sent by the OTLP relay, as comma-separated key=value pairs with percent-
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L170)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L192)
+
+### OTEL_EXPORTER_OTLP_LOGS_COMPRESSION (internal/otlprelay/relay.go)
+
+Compression for OTLP relay logs: gzip or none, case-sensitive, with surrounding whitespace ignored. Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it. Resolved nonempty trace, metric, and log settings must match exactly. Unsupported or conflicting values prevent the relay from starting.
+
+- Type: string
+- Declared default: ""
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L183)
+
+### OTEL_EXPORTER_OTLP_LOGS_ENDPOINT (internal/otlprelay/relay.go)
+
+Collector address for OTLP relay logs, as a hostname, host:port, or http:// URL. The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace, metric, and log settings must match exactly because all signals share one connection.
+
+- Type: string
+- Declared default: ""
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L147)
+
+### OTEL_EXPORTER_OTLP_LOGS_HEADERS (internal/otlprelay/relay.go)
+
+Headers sent with OTLP relay logs, as comma-separated key=value pairs with percent-encoded values. Nonempty values replace OTEL_EXPORTER_OTLP_HEADERS entirely; empty values inherit it. Header names are case-insensitive. Malformed entries prevent the relay from starting. Values may contain secrets.
+
+- Type: string
+- Declared default: ""
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L219)
 
 ### OTEL_EXPORTER_OTLP_METRICS_COMPRESSION (internal/otlprelay/relay.go)
 
-Compression for OTLP relay metrics: gzip or none, case-sensitive, with surrounding whitespace ignored. Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it. Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values prevent the relay from starting.
+Compression for OTLP relay metrics: gzip or none, case-sensitive, with surrounding whitespace ignored. Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it. Resolved nonempty trace, metric, and log settings must match exactly. Unsupported or conflicting values prevent the relay from starting.
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L161)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L174)
 
 ### OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (internal/otlprelay/relay.go)
 
-Collector address for OTLP relay metrics, as a hostname, host:port, or http:// URL. The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric settings must match exactly because both signals share one connection.
+Collector address for OTLP relay metrics, as a hostname, host:port, or http:// URL. The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace, metric, and log settings must match exactly because all signals share one connection.
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L134)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L138)
 
 ### OTEL_EXPORTER_OTLP_METRICS_HEADERS (internal/otlprelay/relay.go)
 
@@ -127,23 +151,23 @@ Headers sent with OTLP relay metrics, as comma-separated key=value pairs with pe
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L188)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L210)
 
 ### OTEL_EXPORTER_OTLP_TRACES_COMPRESSION (internal/otlprelay/relay.go)
 
-Compression for OTLP relay traces: gzip or none, case-sensitive, with surrounding whitespace ignored. Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it. Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values prevent the relay from starting.
+Compression for OTLP relay traces: gzip or none, case-sensitive, with surrounding whitespace ignored. Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it. Resolved nonempty trace, metric, and log settings must match exactly. Unsupported or conflicting values prevent the relay from starting.
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L152)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L165)
 
 ### OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (internal/otlprelay/relay.go)
 
-Collector address for OTLP relay traces, as a hostname, host:port, or http:// URL. The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric settings must match exactly because both signals share one connection.
+Collector address for OTLP relay traces, as a hostname, host:port, or http:// URL. The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace, metric, and log settings must match exactly because all signals share one connection.
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L125)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L129)
 
 ### OTEL_EXPORTER_OTLP_TRACES_HEADERS (internal/otlprelay/relay.go)
 
@@ -151,7 +175,7 @@ Headers sent with OTLP relay traces, as comma-separated key=value pairs with per
 
 - Type: string
 - Declared default: ""
-- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L179)
+- Source: [internal/otlprelay/relay.go](../internal/otlprelay/relay.go#L201)
 
 ### OTEL_METRIC_EXPORT_INTERVAL (cmd/atecontroller/main.go)
 
@@ -159,7 +183,7 @@ Metric export interval in milliseconds, used as the default for --otel-metric-ex
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L59)
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L60)
 
 ### OTEL_METRIC_EXPORT_TIMEOUT (cmd/atecontroller/main.go)
 
@@ -167,7 +191,7 @@ Per-export timeout in milliseconds, used as the default for --otel-metric-export
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L67)
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L68)
 
 ### OTEL_TRACES_SAMPLER (cmd/atecontroller/main.go)
 
@@ -175,7 +199,7 @@ Default for --otel-traces-sampler, forwarded to workers when an OTLP endpoint is
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L75)
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L76)
 
 ### OTEL_TRACES_SAMPLER (internal/serverboot/sampling.go)
 
@@ -191,7 +215,7 @@ Default for --otel-traces-sampler-arg, forwarded to workers only when an OTLP en
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L81)
+- Source: [cmd/atecontroller/main.go](../cmd/atecontroller/main.go#L82)
 
 ### OTEL_TRACES_SAMPLER_ARG (internal/serverboot/sampling.go)
 
@@ -209,4 +233,4 @@ Name of the Kubernetes node hosting the atelet pod, injected through the Downwar
 
 - Type: string
 - Declared default: ""
-- Source: [cmd/atelet/statspoller.go](../cmd/atelet/statspoller.go#L468)
+- Source: [cmd/atelet/statspoller.go](../cmd/atelet/statspoller.go#L463)

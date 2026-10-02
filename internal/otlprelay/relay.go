@@ -122,7 +122,7 @@ var endpointVar = env.Var[string]{
 	Default: "",
 	Description: `Collector address for the OTLP relay, as a hostname, host:port, or http:// URL.
 The default port is 4317. HTTPS and other URL schemes are rejected; the relay uses plaintext gRPC.
-Nonempty signal-specific endpoints override this value. Resolved nonempty trace and metric
+Nonempty signal-specific endpoints override this value. Resolved nonempty trace, metric, and log
 settings must match exactly. The relay is disabled when all endpoint settings are empty.`,
 }
 
@@ -131,8 +131,8 @@ var tracesEndpointVar = env.Var[string]{
 	Default: "",
 	Description: `Collector address for OTLP relay traces, as a hostname, host:port, or http:// URL.
 The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override
-OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric
-settings must match exactly because both signals share one connection.`,
+OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace, metric, and log
+settings must match exactly because all signals share one connection.`,
 }
 
 var metricsEndpointVar = env.Var[string]{
@@ -140,8 +140,17 @@ var metricsEndpointVar = env.Var[string]{
 	Default: "",
 	Description: `Collector address for OTLP relay metrics, as a hostname, host:port, or http:// URL.
 The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override
-OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace and metric
-settings must match exactly because both signals share one connection.`,
+OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace, metric, and log
+settings must match exactly because all signals share one connection.`,
+}
+
+var logsEndpointVar = env.Var[string]{
+	Name:    logsEndpointEnv,
+	Default: "",
+	Description: `Collector address for OTLP relay logs, as a hostname, host:port, or http:// URL.
+The default port is 4317; HTTPS and other URL schemes are rejected. Nonempty values override
+OTEL_EXPORTER_OTLP_ENDPOINT; empty values inherit it. Resolved nonempty trace, metric, and log
+settings must match exactly because all signals share one connection.`,
 }
 
 var compressionVar = env.Var[string]{
@@ -149,7 +158,7 @@ var compressionVar = env.Var[string]{
 	Default: "",
 	Description: `Compression for the OTLP relay. Accepted values are gzip and none, with surrounding
 whitespace ignored; names are case-sensitive. Nonempty signal-specific settings override this value.
-Resolved nonempty trace and metric settings must match exactly. If all settings are empty,
+Resolved nonempty trace, metric, and log settings must match exactly. If all settings are empty,
 compression is disabled. Unsupported or conflicting values prevent the relay from starting.`,
 }
 
@@ -158,7 +167,7 @@ var tracesCompressionVar = env.Var[string]{
 	Default: "",
 	Description: `Compression for OTLP relay traces: gzip or none, case-sensitive, with surrounding whitespace ignored.
 Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it.
-Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values
+Resolved nonempty trace, metric, and log settings must match exactly. Unsupported or conflicting values
 prevent the relay from starting.`,
 }
 
@@ -167,7 +176,16 @@ var metricsCompressionVar = env.Var[string]{
 	Default: "",
 	Description: `Compression for OTLP relay metrics: gzip or none, case-sensitive, with surrounding whitespace ignored.
 Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it.
-Resolved nonempty trace and metric settings must match exactly. Unsupported or conflicting values
+Resolved nonempty trace, metric, and log settings must match exactly. Unsupported or conflicting values
+prevent the relay from starting.`,
+}
+
+var logsCompressionVar = env.Var[string]{
+	Name:    logsCompressionEnv,
+	Default: "",
+	Description: `Compression for OTLP relay logs: gzip or none, case-sensitive, with surrounding whitespace ignored.
+Nonempty values override OTEL_EXPORTER_OTLP_COMPRESSION; empty values inherit it.
+Resolved nonempty trace, metric, and log settings must match exactly. Unsupported or conflicting values
 prevent the relay from starting.`,
 }
 
@@ -193,6 +211,15 @@ var metricsHeadersVar = env.Var[string]{
 	Name:    metricsHeadersEnv,
 	Default: "",
 	Description: `Headers sent with OTLP relay metrics, as comma-separated key=value pairs with percent-encoded values.
+Nonempty values replace OTEL_EXPORTER_OTLP_HEADERS entirely; empty values inherit it.
+Header names are case-insensitive. Malformed entries prevent the relay from starting.
+Values may contain secrets.`,
+}
+
+var logsHeadersVar = env.Var[string]{
+	Name:    logsHeadersEnv,
+	Default: "",
+	Description: `Headers sent with OTLP relay logs, as comma-separated key=value pairs with percent-encoded values.
 Nonempty values replace OTEL_EXPORTER_OTLP_HEADERS entirely; empty values inherit it.
 Header names are case-insensitive. Malformed entries prevent the relay from starting.
 Values may contain secrets.`,
@@ -488,7 +515,7 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	logHeaders, err := upstreamHeaders(logsHeadersEnv)
+	logHeaders, err := upstreamHeaders(logsHeadersVar)
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +617,7 @@ func headerNames(md metadata.MD) []string {
 // upstreamCompression resolves the compression algorithm (gzip or none) to use
 // for upstream export.
 func upstreamCompression() (string, error) {
-	resolved, err := resolvePerSignal("compression settings", compressionEnv, tracesCompressionEnv, metricsCompressionEnv, logsCompressionEnv)
+	resolved, err := resolvePerSignal("compression settings", compressionVar, tracesCompressionVar, metricsCompressionVar, logsCompressionVar)
 	if err != nil {
 		return "", err
 	}
@@ -612,7 +639,7 @@ func upstreamCompression() (string, error) {
 // them differently is a misconfiguration rather than something to silently pick
 // a winner for.
 func upstreamTarget() (string, error) {
-	resolved, err := resolvePerSignal("endpoints", endpointEnv, tracesEndpointEnv, metricsEndpointEnv, logsEndpointEnv)
+	resolved, err := resolvePerSignal("endpoints", endpointVar, tracesEndpointVar, metricsEndpointVar, logsEndpointVar)
 	if err != nil {
 		return "", err
 	}
@@ -627,13 +654,13 @@ func upstreamTarget() (string, error) {
 // carries every signal over one connection. The error names the variables the
 // two values came from, since a fallback pulls the generic in under a signal
 // that is not itself set.
-func resolvePerSignal(what, genericEnv string, signalEnvs ...string) (string, error) {
-	generic := strings.TrimSpace(os.Getenv(genericEnv))
+func resolvePerSignal(what string, genericEnv env.Var[string], signalEnvs ...env.Var[string]) (string, error) {
+	generic := strings.TrimSpace(genericEnv.Get())
 	resolved, resolvedEnv := "", ""
-	for _, env := range signalEnvs {
-		v, src := strings.TrimSpace(os.Getenv(env)), env
+	for _, signal := range signalEnvs {
+		v, src := strings.TrimSpace(signal.Get()), signal.Name
 		if v == "" {
-			v, src = generic, genericEnv
+			v, src = generic, genericEnv.Name
 		}
 		if v == "" {
 			continue
