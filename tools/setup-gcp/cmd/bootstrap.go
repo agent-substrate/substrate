@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/spf13/cobra"
@@ -24,50 +25,71 @@ import (
 var bootstrapCmd = &cobra.Command{
 	Use:   "bootstrap",
 	Short: "Fully bootstrap the GCP environment",
-	Long:  `Runs all setup steps in order: enable APIs, create cluster, create bucket, grant IAM permissions, and create dashboards.`,
+	Long:  `Enables APIs, creates the cluster and bucket, grants IAM permissions, and creates dashboards. Use --create-repository to also create an image repository for source builds.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		warnDeprecatedMachineTypeEnv(cmd)
 		if err := resolveProjectID(ctx, &cfg); err != nil {
 			return err
 		}
+		if cfg.CreateArtifactRepository {
+			if err := validateRepositoryFlags(ctx, &cfg); err != nil {
+				return err
+			}
+		}
 		if cfg.BucketName == "" {
 			return errors.New("--bucket-name is required")
 		}
 
 		slog.Info("Starting full bootstrap...")
+		total := 7
+		if cfg.CreateArtifactRepository {
+			total++
+		}
+		step := 0
+		logStep := func(message string) {
+			step++
+			slog.Info(fmt.Sprintf("Step %d/%d: %s", step, total, message))
+		}
 
-		slog.Info("Step 1/7: Enabling required APIs...")
+		logStep("Enabling required APIs...")
 		if err := enableRequiredAPIs(ctx, &cfg); err != nil {
 			return err
 		}
 
-		slog.Info("Step 2/7: Creating GKE Cluster...")
+		if cfg.CreateArtifactRepository {
+			logStep("Creating Artifact Registry repository...")
+			if err := createArtifactRepository(ctx, &cfg); err != nil {
+				return err
+			}
+		}
+
+		logStep("Creating GKE Cluster...")
 		if err := createClusterIdempotent(ctx, &cfg); err != nil {
 			return err
 		}
 
-		slog.Info("Step 3/7: Creating GCS Bucket for snapshots...")
+		logStep("Creating GCS Bucket for snapshots...")
 		if err := createSnapshotBucket(ctx, &cfg); err != nil {
 			return err
 		}
 
-		slog.Info("Step 4/7: Granting GKE Node permissions...")
+		logStep("Granting GKE Node permissions...")
 		if err := grantGkeNodePermissions(ctx, &cfg); err != nil {
 			return err
 		}
 
-		slog.Info("Step 5/7: Granting Atelet permissions...")
+		logStep("Granting Atelet permissions...")
 		if err := grantAteletPermissions(ctx, &cfg); err != nil {
 			return err
 		}
 
-		slog.Info("Step 6/7: Creating IAM policy bindings for bucket...")
+		logStep("Creating IAM policy bindings for bucket...")
 		if err := createIamPolicyBindings(ctx, &cfg); err != nil {
 			return err
 		}
 
-		slog.Info("Step 7/7: Creating Monitoring Dashboards...")
+		logStep("Creating Monitoring Dashboards...")
 		if err := createMonitoringDashboards(ctx, &cfg); err != nil {
 			return err
 		}
@@ -80,8 +102,6 @@ var bootstrapCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(bootstrapCmd)
 
-	// Register bootstrap-specific flags that map to Config fields.
-	// We use distinct names to avoid confusion and match the desired design.
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterName, "cluster-name", getEnv("CLUSTER_NAME", "substrate-poc"), "Name of the GKE cluster [env: CLUSTER_NAME]")
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterLocation, "cluster-location", getEnv("CLUSTER_LOCATION", "us-west1-c"), "Zone or region for the cluster [env: CLUSTER_LOCATION]")
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterVersion, "cluster-version", getEnv("CLUSTER_VERSION", ""), "Kubernetes version [env: CLUSTER_VERSION]")
@@ -92,5 +112,7 @@ func init() {
 	bootstrapCmd.Flags().Int32Var(&cfg.BootDiskSizeGB, "boot-disk-size", getEnv("BOOT_DISK_SIZE_GB", int32(0)), "Boot disk size in GB for the node pool; 0 = GKE default (100 GB) [env: BOOT_DISK_SIZE_GB]")
 	bootstrapCmd.Flags().StringVar(&cfg.BootDiskType, "boot-disk-type", getEnv("BOOT_DISK_TYPE", ""), "Boot disk type for the node pool; empty = GKE default [env: BOOT_DISK_TYPE]")
 	bootstrapCmd.Flags().StringVar(&cfg.BucketName, "bucket-name", getEnv("BUCKET_NAME", ""), "Name of the GCS bucket for snapshots [env: BUCKET_NAME]")
+	bootstrapCmd.Flags().BoolVar(&cfg.CreateArtifactRepository, "create-repository", getEnv("CREATE_ARTIFACT_REPOSITORY", false), "Create an Artifact Registry repository for source builds [env: CREATE_ARTIFACT_REPOSITORY]")
+	bootstrapCmd.Flags().StringVar(&cfg.ArtifactRegistryRepository, "repository-name", getEnv("ARTIFACT_REGISTRY_REPOSITORY", "ate-images"), "Name of the Artifact Registry Docker repository [env: ARTIFACT_REGISTRY_REPOSITORY]")
 	bootstrapCmd.Flags().StringVar(&cfg.DashboardDir, "dashboard-dir", getEnv("DASHBOARD_DIR", "tools/setup-gcp/dashboards"), "Directory containing dashboard JSON files [env: DASHBOARD_DIR]")
 }

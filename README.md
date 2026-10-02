@@ -138,9 +138,9 @@ prints the installed version, off the atelet DaemonSet the install created.
    gcloud auth application-default login --project=${PROJECT_ID}
    ```
 
-3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings):
+3. Provision the required GCP resources (Artifact Registry repository, GKE cluster, GCS, and IAM bindings):
    ```bash
-   go run ./tools/setup-gcp bootstrap
+   go run ./tools/setup-gcp bootstrap --create-repository
    ```
 
    On a fresh project this step also creates the atelet Workload Identity IAM
@@ -150,8 +150,9 @@ prints the installed version, off the atelet DaemonSet the install created.
    note the required Kubernetes beta APIs can only be enabled **at cluster
    creation** — see the [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
 
-4. Deploy the Agent Substrate system to your cluster:
+4. Configure Docker authentication for the regional image registry, then deploy:
    ```bash
+   gcloud auth configure-docker "${GCE_REGION}-docker.pkg.dev"
    ./hack/install-ate.sh --deploy-ate-system
    ```
 
@@ -171,6 +172,7 @@ You can run individual setup steps to create GCP resources as needed. See `go ru
 ```bash
 go run ./tools/setup-gcp create cluster
 go run ./tools/setup-gcp create bucket
+go run ./tools/setup-gcp create repository
 ```
 
 To run the PostgreSQL store backend on Cloud SQL — with IAM database
@@ -192,6 +194,10 @@ If you need to delete the resources created by the setup script, you can use the
 ```bash
 ./hack/teardown.sh --all
 ```
+
+This also deletes the Artifact Registry repository and its images. Use
+`--all --keep-repository` to retain a shared repository or when setup did not
+create one.
 
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 

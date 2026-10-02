@@ -1381,6 +1381,7 @@ gonum.org/v1/gonum/stat/combin
 gonum.org/v1/gonum/stat/distuv
 # google.golang.org/api v0.274.0
 ## explicit; go 1.25.0
+google.golang.org/api/artifactregistry/v1
 google.golang.org/api/googleapi
 google.golang.org/api/googleapi/transport
 google.golang.org/api/iam/v1

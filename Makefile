@@ -14,9 +14,11 @@
 
 # Default project ID, can be overridden
 PROJECT_ID ?= $(shell echo $${USER}-gke-dev)
+GCE_REGION ?= us-west1
+ARTIFACT_REGISTRY_REPOSITORY ?= ate-images
 
-# Ko configuration
-export KO_DOCKER_REPO := gcr.io/$(PROJECT_ID)/ate-images
+# Respect an explicitly configured registry, including kind's local registry.
+export KO_DOCKER_REPO ?= $(GCE_REGION)-docker.pkg.dev/$(PROJECT_ID)/$(ARTIFACT_REGISTRY_REPOSITORY)
 
 # Go commands
 GO := go
