@@ -542,6 +542,100 @@ func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
 	}
 }
 
+// Under --ingress-auth-mode=static-mtls both paths that deliver the router
+// -- the system bundle and the lone router redeploy -- have to carry the
+// static-mtls flags, alone or alongside the cordon component. Whether the
+// router accepts those flags is pinned on the router side, by
+// TestRouterIngressAuthManifestsAreValid.
+func TestRenderRouterStaticMTLS(t *testing.T) {
+	root := repoRoot(t)
+	for _, tc := range []struct {
+		name   string
+		cfg    config.Config
+		path   func(e *Env) string
+		cordon bool
+	}{
+		{
+			name: "base bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "kind bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy, Kind: true},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "router file",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			path: func(e *Env) string { return e.Cfg.Manifest("atenet-router.yaml") },
+		},
+		{
+			name:   "kind bundle with cordon",
+			cfg:    config.Config{Router: config.RouterEnvoy, Kind: true},
+			path:   func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			cordon: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			cfg.IngressAuthMode = config.IngressAuthStaticMTLS
+			cfg.CordonControlPlane = tc.cordon
+			e := &Env{Cfg: &cfg}
+
+			rendered, err := e.render(tc.path(e))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			args := routerArgs(t, rendered)
+			if !slices.Contains(args, "--ingress-auth-mode=static-mtls") {
+				t.Errorf("atenet-router args %v do not select static-mtls", args)
+			}
+			if tc.cordon {
+				if pinned, _ := pinnedWorkloads(t, rendered); pinned["atenet-router"] != "ate-control-plane" {
+					t.Errorf("composing both components dropped the cordon pinning (pinned: %v)", pinned)
+				}
+			}
+		})
+	}
+
+	t.Run("deprecated-insecure leaves the router alone", func(t *testing.T) {
+		e := &Env{Cfg: &config.Config{Root: root, Router: config.RouterEnvoy, IngressAuthMode: config.IngressAuthDeprecatedInsecure}}
+		rendered, err := e.render(e.Cfg.Manifest("atenet-router.yaml"))
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		for _, arg := range routerArgs(t, rendered) {
+			if strings.HasPrefix(arg, "--ingress-auth-mode") {
+				t.Errorf("deprecated-insecure render sets %s", arg)
+			}
+		}
+	})
+}
+
+// routerArgs returns the atenet-router container's args from a rendered
+// manifest.
+func routerArgs(t *testing.T, manifest []byte) []string {
+	t.Helper()
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var deployment appsv1.Deployment
+		if err := yaml.Unmarshal([]byte(doc), &deployment); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		if deployment.Kind != "Deployment" || deployment.Name != "atenet-router" {
+			continue
+		}
+		for _, c := range deployment.Spec.Template.Spec.Containers {
+			if c.Name == "atenet-router" {
+				return c.Args
+			}
+		}
+	}
+	t.Fatal("rendered manifest has no atenet-router container")
+	return nil
+}
+
 // The agentgateway egress overlay mounts the CA pool Secret
 // EnsureEgressMITMCAPoolSecret generates; without it atenet-egress waits on a
 // Secret nobody creates.

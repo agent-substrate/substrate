@@ -245,6 +245,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PodcertWorkersPerSigner:        podcertWorkers,
 		ClusterSize:                    r.String("clusterSize"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
+		IngressAuthMode:                r.String("ingressAuthMode"),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
@@ -359,6 +360,18 @@ func validateResolved(cfg *Config, r *Resolved) error {
 
 	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 {
 		return &InvalidError{Value: size, Want: ClusterSizeSize0 + " or " + ClusterSizeSize10}
+	}
+
+	authMode, _ := r.Value("ingressAuthMode")
+	switch cfg.IngressAuthMode {
+	case IngressAuthDeprecatedInsecure:
+	case IngressAuthStaticMTLS:
+		if cfg.Router != RouterEnvoy {
+			return &ConflictError{A: authMode, B: dataplane,
+				Why: IngressAuthStaticMTLS + " requires dataplane " + RouterEnvoy}
+		}
+	default:
+		return &InvalidError{Value: authMode, Want: IngressAuthDeprecatedInsecure + " or " + IngressAuthStaticMTLS}
 	}
 
 	switch cfg.ActorJWTAlgorithm {

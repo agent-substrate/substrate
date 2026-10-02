@@ -59,8 +59,8 @@ The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database.
 
-Shape the install with the global --atenet-dataplane, --cluster-size, and
---cordon-control-plane flags.`,
+Shape the install with the global --atenet-dataplane, --cluster-size,
+--cordon-control-plane flags, and --ingress-auth-mode flags.`,
 	// Args runs before the root command loads the configuration, so only the
 	// flag is readable here. Checking it keeps an unusable value from costing
 	// a credential fetch, which is the common case; a value arriving from the
