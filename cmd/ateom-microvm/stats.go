@@ -25,11 +25,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/agentstats"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -98,7 +96,7 @@ type guestStatsTarget struct {
 // through the phases whose usage matters most.
 func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "actor_uid is required")
+		return nil, apierror.InvalidArgument("actor_uid is required")
 	}
 
 	// NOT_FOUND rather than FAILED_PRECONDITION: the requested actor is not
@@ -106,14 +104,14 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// worker-to-actor mapping wants re-resolving.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted == nil {
-		return nil, status.Errorf(codes.NotFound, "ateom is not executing actor %q", req.GetActorUid())
+		return nil, apierror.NotFound("ateom is not executing actor %q", req.GetActorUid())
 	}
 	active := &hosted.attribution
 
 	sample, err := s.sampleGuest(ctx, active)
 	if err != nil {
 		if errors.Is(err, errStaleGuestTarget) {
-			return nil, status.Error(codes.Internal, err.Error())
+			return nil, apierror.Internal("%v", err)
 		}
 		// "No numbers right now", never NOT_FOUND: the requested actor IS the
 		// one here. The reasons are all routine -- a poll landing in the boot
@@ -122,14 +120,14 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		// post-restore agent dial failed, or a guest that has stopped
 		// answering. The caller should take the next sample; after a teardown
 		// the next sample is the NOT_FOUND above.
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, apierror.FailedPrecondition("%v", err)
 	}
 
 	// The calls above hold no lock, so a checkpoint plus a fresh run can land
 	// underneath them. Pointer identity catches that: hostActor stores a new
 	// record every time.
 	if s.lookupActor(req.GetActorUid()) != hosted {
-		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
+		return nil, apierror.NotFound("ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
 
 	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
@@ -160,7 +158,7 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 	}
 	wg.Wait()
 	if stale.Load() {
-		return nil, status.Error(codes.Internal, errStaleGuestTarget.Error())
+		return nil, apierror.Internal("%v", errStaleGuestTarget)
 	}
 	samples = slices.DeleteFunc(samples, func(s *ateompb.WorkloadStatsSample) bool { return s == nil })
 

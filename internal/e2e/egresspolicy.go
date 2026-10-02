@@ -24,6 +24,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+// TODO(yufan-su): Move these constructors into an internal/e2e/egresspolicy package.
+
 // EgressAllowAll is what a test that is not about egress policy gives its
 // actor, since the gateway denies an actor with no policy at all: every name
 // and address, as cleartext HTTP on any port and as intercepted HTTPS on 443.
@@ -47,6 +49,57 @@ func EgressAllowHTTP(patterns ...string) *ateapipb.EgressRule {
 // gateway, to the hosts matching patterns on port 443.
 func EgressAllowHTTPS(patterns ...string) *ateapipb.EgressRule {
 	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns}}
+}
+
+// EgressAllowPassthrough is a rule that lets an actor send TLS to the hosts
+// matching patterns on any port, relayed by the gateway without decryption.
+func EgressAllowPassthrough(patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{
+		TlsPassthrough: &ateapipb.TLSPassthroughRule{
+			Hostnames: patterns,
+			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+		},
+	}
+}
+
+// EgressAllowPassthroughOnPorts is EgressAllowPassthrough confined to the
+// given ports.
+func EgressAllowPassthroughOnPorts(ports []int32, patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{
+		TlsPassthrough: &ateapipb.TLSPassthroughRule{
+			Hostnames: patterns,
+			Ports:     &ateapipb.Ports{Numbers: ports},
+		},
+	}
+}
+
+// EgressInjectHeader is an https rule (see EgressAllowHTTPS) that also carries
+// a replace_headers effect: on a match, the gateway resolves credentialURI
+// through its credential provider and replaces header with prefix plus the
+// credential.
+func EgressInjectHeader(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
+	rule := EgressAllowHTTPS(patterns...)
+	rule.Https.Effects = replaceHeaderEffects(header, prefix, credentialURI)
+	return rule
+}
+
+// EgressInjectHeaderHTTP is an http rule (see EgressAllowHTTP) carrying the
+// same effect as EgressInjectHeader. The gateway never puts a credential on
+// cleartext, so a test uses it to prove the effect is skipped there.
+func EgressInjectHeaderHTTP(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
+	rule := EgressAllowHTTP(patterns...)
+	rule.Http.Effects = replaceHeaderEffects(header, prefix, credentialURI)
+	return rule
+}
+
+func replaceHeaderEffects(header, prefix, credentialURI string) *ateapipb.HttpRuleEffects {
+	return &ateapipb.HttpRuleEffects{
+		ReplaceHeaders: []*ateapipb.CredentialHeader{{
+			Header:        header,
+			Prefix:        prefix,
+			CredentialUri: credentialURI,
+		}},
+	}
 }
 
 // EnsureEgressPolicy gives actor an EgressPolicy with exactly rules, replacing

@@ -18,8 +18,6 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
-import "pkg/proto/ateapipb/ateapi.proto";
-
 // AteomSupport provides callouts for ateom.
 //
 // Called by individual ateom pods over a local connection, authenticated with
@@ -48,9 +46,54 @@ service AteomSupport {
 }
 
 message SetWorkerCapacityRequest {
-  // What the worker can supply, in the same vocabulary the control plane
-  // records and an ActorTemplate asks in.
-  ateapi.WorkerResources capacity = 1;
+  // What the worker can supply. atelet converts it to the control plane's
+  // WorkerResources when forwarding.
+  //
+  // +k8s:required
+  WorkerResources capacity = 1;
+}
+
+// WorkerResources is what a worker can supply. It mirrors the control plane's
+// WorkerResources and is validated by the same rules.
+message WorkerResources {
+  // Resources are matched by name against actors' resources for placement.
+  //
+  // +k8s:optional
+  Resources resources = 1;
+
+  // A count of Actors. Workers can use this to limit the number of Actors
+  // that can be placed on them, constraining costs not captured in the
+  // resources above.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int32 actors = 2;
+}
+
+message Resources {
+  // limits is the maximum amount of compute resources allowed. Only "cpu"
+  // and "memory" are supported, each at most once, and each quantity must be
+  // greater than zero; the cpu limit must be less than 1000 cores.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=2
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
+  repeated Limits limits = 1;
+}
+
+// +k8s:customValidation # names, quantity parse/positivity, cpu bound
+message Limits {
+  // +k8s:required
+  // +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
+  string name = 1;
+
+  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
+  // "2Gi").
+  //
+  // +k8s:required
+  // +k8s:maxLength=32 # the Limits hook requires a parseable quantity
+  string quantity = 2;
 }
 
 message SetWorkerCapacityResponse {
@@ -60,11 +103,20 @@ message RequestActorSuspendRequest {
   // The actor the calling worker is hosting. atelet forwards this to the
   // control plane, which serves it only if the actor is assigned to the worker
   // the caller's certificate names.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name, as for MintActorCertificate.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
 }
 
@@ -73,15 +125,27 @@ message RequestActorSuspendResponse {
 
 message MintActorCertificateRequest {
   // The actor for which the certificate should be issued.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_atespace = 3;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 4;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 5;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
+  //
+  // +k8s:required
+  // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
   bytes certificate_signing_request = 1;
 }
 
@@ -441,8 +505,8 @@ message UploadPausedCheckpointRequest {
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
   // The scope the pause checkpoint captured is not sent: atelet reads it from
   // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (micro-VM FULL capture to a DATA
-  // upload by selecting the durable-dir tar) and rejects otherwise.
+  // differ, atelet converts where possible (a FULL capture to a DATA upload
+  // of the data-scope files ateom reported) and rejects otherwise.
   SnapshotScope desired_scope = 8;
 }
 

@@ -103,7 +103,8 @@ func SubstrateCounterFixture() SubstrateFixture {
 	return f
 }
 
-// EgressFixture returns the egress demo for the sandbox class under test.
+// EgressFixture returns the egress demo for the sandbox class under test. Its
+// actors trust the CA the egress gateway mints its leaves from.
 func EgressFixture() Fixture {
 	if IsMicroVM() {
 		return Fixture{

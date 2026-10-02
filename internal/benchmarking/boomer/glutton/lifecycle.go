@@ -58,20 +58,7 @@ const (
 	memLoadKey       = "memload"
 	memReadAll       = "all"
 
-	// ateapi returns Aborted with this message when two callers race an
-	// actor update (see cmd/ateapi/internal/controlapi/workflow_resume.go).
-	// It's transient — the loser retries and one of them wins.
-	concurrentUpdateMsg = "concurrent update conflict, please retry"
-	// Retry budget for ResumeActor concurrent-update conflicts. First retry
-	// is immediate (no initial backoff — conflicts often clear the instant
-	// the racing writer commits); subsequent gaps are 50ms plus uniform
-	// jitter in [0, resumeBackoffJitter) so the losers of one race do not
-	// retry in lockstep and lose the next one the same way.
-	resumeMaxAttempts   = 5
-	resumeMaxBackoff    = 50 * time.Millisecond
-	resumeBackoffJitter = 5 * time.Millisecond
-
-	// Consecutive replaceIfPersistent failures it takes to replace an actor.
+	// Consecutive ReplaceIfPersistent failures it takes to replace an actor.
 	// One blip is not evidence of a wedged actor; three in a row, each
 	// spaced by the wait window, is.
 	maxConsecutiveFailures = 3
@@ -361,63 +348,13 @@ type gluttonActor struct {
 	consecutiveFailures int
 }
 
-// failureAction is what iterate() does about a failed lifecycle RPC: is this
-// actor wedged, or is the cluster busy? Only the first is worth a
-// delete + create.
-type failureAction int
-
-const (
-	// retryLater: a replacement would hit the same error, so keep the actor.
-	retryLater failureAction = iota
-	// replaceNow: this actor can never make progress again.
-	replaceNow
-	// replaceIfPersistent: counts toward maxConsecutiveFailures.
-	replaceIfPersistent
-)
-
-// classifyLifecycleFailure maps an error from ResumeActor / SuspendActor /
-// PauseActor onto what to do about it. Unrecognized codes are recoverable
-// until proven otherwise: a wrapped atelet error arrives as Unknown.
-func classifyLifecycleFailure(err error) failureAction {
-	s, ok := status.FromError(err)
-	if !ok {
-		return replaceIfPersistent
-	}
-	switch s.Code() {
-	case codes.NotFound, codes.DataLoss:
-		// The actor, or the snapshot it would resume from, is gone.
-		return replaceNow
-	case codes.FailedPrecondition:
-		// A state this operation has no edge out of — the left-in-SUSPENDING
-		// case. Nothing glutton can call moves the actor on.
-		return replaceNow
-	case codes.Aborted:
-		if strings.Contains(s.Message(), "crashed") {
-			return replaceNow
-		}
-		// Concurrent update conflict. resume() already spent its retry
-		// budget, but losing every race in one burst is still a race.
-		return replaceIfPersistent
-	case codes.ResourceExhausted, codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
-		// Cluster-wide and load-dependent ("no free workers available", a
-		// restarting ate-api-server): every VU sees these at once, and the
-		// replacement needs the capacity the original was denied.
-		return retryLater
-	case codes.InvalidArgument, codes.PermissionDenied, codes.Unauthenticated, codes.Unimplemented:
-		// A misconfigured run. The replacement is created the same way and
-		// fails the same way.
-		return retryLater
-	}
-	return replaceIfPersistent
-}
-
 // noteFailure records a failed lifecycle RPC against the actor and reports
 // whether the VU should replace it.
 func (u *gluttonActor) noteFailure(err error) bool {
-	switch classifyLifecycleFailure(err) {
-	case replaceNow:
+	switch boomerutil.ClassifyLifecycleFailure(err) {
+	case boomerutil.ReplaceNow:
 		return true
-	case retryLater:
+	case boomerutil.RetryLater:
 		return false
 	}
 	u.consecutiveFailures++
@@ -487,36 +424,18 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 		// the ateapi contract. Kept inside the tracedCall closure so the
 		// reported latency spans every attempt and the span carries the
 		// last attempt's server trailer, same as any other single-shot RPC.
-		var backoff time.Duration // 0 → first retry runs immediately
-		var lastErr error
-		for range resumeMaxAttempts {
-			_, lastErr = u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+		return boomerutil.RetryOnConflict(callCtx, func() error {
+			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 				Actor: u.ref(),
 			}, grpc.Trailer(tr))
-			if lastErr == nil {
-				return nil
-			}
-			if !isConcurrentUpdateConflict(lastErr) {
-				return lastErr
-			}
-			if backoff > 0 {
-				jitter := time.Duration(rand.Float64() * float64(resumeBackoffJitter))
-				select {
-				case <-time.After(backoff + jitter):
-				case <-callCtx.Done():
-					return callCtx.Err()
-				}
-			}
-			backoff = resumeMaxBackoff
-		}
-		return lastErr
+			return err
+		})
 	})
 	if err != nil {
-		// ateapi reports a crashed actor as codes.Aborted with "crashed" in
-		// the message (see workflow_resume.go). Mark the user so iterate()
-		// stops touching it, and surface a CrashCount tick so operators can
-		// see the crash total in the locust stats table.
-		if s, ok := status.FromError(err); ok && s.Code() == codes.Aborted && strings.Contains(s.Message(), "crashed") {
+		// Mark a crashed actor so iterate() stops touching it, and surface a
+		// CrashCount tick so operators can see the crash total in the
+		// locust stats table.
+		if boomerutil.IsCrashed(err) {
 			u.crashed = true
 			bmetrics.RecordFailure("actor", "CrashCount", userClass, 0, "actor entered ACTOR_STATE_CRASHED")
 			slog.Warn("glutton actor crashed; will stop sending requests",
@@ -529,15 +448,6 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 	u.actorRunning = true
 	u.noteSuccess()
 	return nil
-}
-
-// isConcurrentUpdateConflict identifies the transient racy-update error
-// ateapi's workflow_*.go returns as codes.Aborted with the retry-me message.
-// Kept distinct from the "crashed" Aborted check in resume() because the two
-// look the same at the code level and mean opposite things.
-func isConcurrentUpdateConflict(err error) bool {
-	s, ok := status.FromError(err)
-	return ok && s.Code() == codes.Aborted && strings.Contains(s.Message(), concurrentUpdateMsg)
 }
 
 // hibernate takes the actor off its worker by whichever operation the

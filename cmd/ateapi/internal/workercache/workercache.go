@@ -42,10 +42,38 @@ type Cache struct {
 	store          workerListWatcher
 	relistInterval time.Duration
 
-	mu      sync.RWMutex
-	workers map[string]*ateapipb.Worker
+	mu       sync.RWMutex
+	workers  map[string]*ateapipb.Worker
+	handlers []func(*ateapipb.Worker)
 
 	ready atomic.Bool
+}
+
+// AddHandler registers handler to be called with every Worker the cache holds
+// now, every Worker a watch event creates or updates, and every Worker a relist
+// finds new or at a different version, so a change a missed event carried
+// still reaches it. It runs on the goroutine applying the change and must not
+// block.
+func (c *Cache) AddHandler(handler func(*ateapipb.Worker)) {
+	c.mu.Lock()
+	c.handlers = append(c.handlers, handler)
+	current := make([]*ateapipb.Worker, 0, len(c.workers))
+	for _, w := range c.workers {
+		current = append(current, w)
+	}
+	c.mu.Unlock()
+	for _, w := range current {
+		handler(w)
+	}
+}
+
+// notify calls handlers with each of workers.
+func notify(handlers []func(*ateapipb.Worker), workers ...*ateapipb.Worker) {
+	for _, h := range handlers {
+		for _, w := range workers {
+			h(w)
+		}
+	}
 }
 
 // New creates a Cache backed by a given store. relistInterval controls how
@@ -151,9 +179,18 @@ func (c *Cache) relist(ctx context.Context) error {
 		newMap[workerKey(w)] = w
 	}
 	c.mu.Lock()
+	var changed []*ateapipb.Worker
+	for key, w := range newMap {
+		old, ok := c.workers[key]
+		if !ok || old.GetMetadata().GetVersion() != w.GetMetadata().GetVersion() {
+			changed = append(changed, w)
+		}
+	}
 	c.workers = newMap
+	handlers := c.handlers
 	c.mu.Unlock()
-	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", len(newMap)))
+	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", len(newMap)), slog.Int("changed", len(changed)))
+	notify(handlers, changed...)
 	return nil
 }
 
@@ -213,7 +250,7 @@ func (c *Cache) resync(ctx context.Context) *store.WorkerWatch {
 func (c *Cache) applyEvent(event store.WorkerEvent) {
 	key := workerKey(event.Worker)
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	var handlers []func(*ateapipb.Worker)
 	switch event.Type {
 	case store.WorkerEventDeleted:
 		delete(c.workers, key)
@@ -221,8 +258,11 @@ func (c *Cache) applyEvent(event store.WorkerEvent) {
 		existing, ok := c.workers[key]
 		if !ok || event.Worker.GetMetadata().GetVersion() >= existing.GetMetadata().GetVersion() {
 			c.workers[key] = event.Worker
+			handlers = c.handlers
 		}
 	}
+	c.mu.Unlock()
+	notify(handlers, event.Worker)
 }
 
 func workerKey(w *ateapipb.Worker) string {

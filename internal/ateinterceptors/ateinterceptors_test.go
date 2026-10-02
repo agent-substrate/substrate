@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -132,41 +133,48 @@ func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
 	return nil
 }
 
-// TestInternalServerUnaryInterceptorPreservesDetails verifies the interceptor
-// returns status errors intact — preserving the code and any ErrorInfo detail —
-// and collapses plain errors to Internal with no ErrorInfo.
-func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
+func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 	tests := []struct {
-		name          string
-		handlerErr    error
-		wantCode      codes.Code
-		wantReason    string
-		wantErrorInfo bool
+		name       string
+		handlerErr error
+		wantCode   codes.Code
+		wantMsg    string
 	}{
 		{
-			name:          "structured error keeps code and reason",
-			handlerErr:    statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil),
-			wantCode:      codes.DataLoss,
-			wantReason:    "FAILED_SAVE_SNAPSHOT",
-			wantErrorInfo: true,
+			name:       "apierror keeps its code",
+			handlerErr: apierror.FailedPrecondition("snapshot is corrupt"),
+			wantCode:   codes.FailedPrecondition,
+			wantMsg:    "snapshot is corrupt",
 		},
 		{
-			name:          "wrapped plain error collapses to Internal with no ErrorInfo",
-			handlerErr:    fmt.Errorf("while parsing manifest: %w", errors.New("bad json")),
-			wantCode:      codes.Internal,
-			wantErrorInfo: false,
+			name:       "wrapped apierror keeps its code",
+			handlerErr: fmt.Errorf("while restoring: %w", apierror.NotFound("actor not found")),
+			wantCode:   codes.NotFound,
+			wantMsg:    "actor not found",
 		},
 		{
-			name:          "error wrapping a status keeps its code",
-			handlerErr:    fmt.Errorf("while calling downstream: %w", status.Error(codes.Unavailable, "backend down")),
-			wantCode:      codes.Unavailable,
-			wantErrorInfo: false,
+			name:       "upstream status becomes Internal without its details",
+			handlerErr: statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil),
+			wantCode:   codes.Internal,
+			wantMsg:    "rpc error: code = DataLoss desc = boom",
 		},
 		{
-			name:          "plain error collapses to Internal with no ErrorInfo",
-			handlerErr:    errors.New("database connection failed"),
-			wantCode:      codes.Internal,
-			wantErrorInfo: false,
+			name:       "wrapped upstream status becomes Internal",
+			handlerErr: fmt.Errorf("while calling downstream: %w", status.Error(codes.Unavailable, "backend down")),
+			wantCode:   codes.Internal,
+			wantMsg:    "while calling downstream: rpc error: code = Unavailable desc = backend down",
+		},
+		{
+			name:       "wrapped context error keeps the context's code",
+			handlerErr: fmt.Errorf("gave up waiting for the actor's lock: %w", context.Canceled),
+			wantCode:   codes.Canceled,
+			wantMsg:    "gave up waiting for the actor's lock: context canceled",
+		},
+		{
+			name:       "wrapped plain error becomes Internal",
+			handlerErr: fmt.Errorf("while parsing manifest: %w", errors.New("bad json")),
+			wantCode:   codes.Internal,
+			wantMsg:    "while parsing manifest: bad json",
 		},
 	}
 
@@ -186,19 +194,11 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 			if st.Code() != tt.wantCode {
 				t.Errorf("code = %v, want %v", st.Code(), tt.wantCode)
 			}
-
-			info := errorInfoOf(t, err)
-			if !tt.wantErrorInfo {
-				if info != nil {
-					t.Errorf("ErrorInfo = %v, want none", info)
-				}
-				return
+			if st.Message() != tt.wantMsg {
+				t.Errorf("message = %q, want %q", st.Message(), tt.wantMsg)
 			}
-			if info == nil {
-				t.Fatal("status is missing the ErrorInfo detail")
-			}
-			if got := info.GetReason(); got != tt.wantReason {
-				t.Errorf("ErrorInfo.Reason = %q, want %q", got, tt.wantReason)
+			if info := errorInfoOf(t, err); info != nil {
+				t.Errorf("ErrorInfo = %v, want none", info)
 			}
 		})
 	}

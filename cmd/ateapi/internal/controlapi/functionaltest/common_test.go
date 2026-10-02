@@ -650,7 +650,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			WorkerPool:      poolName,
 			WorkerPod:       name,
 			WorkerPodUid:    string(createdPod.UID),
-			Ip:              "127.0.0.1",
+			Ips:             []string{"127.0.0.1"},
 			NodeName:        nodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),

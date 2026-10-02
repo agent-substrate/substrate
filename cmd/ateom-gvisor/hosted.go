@@ -22,11 +22,10 @@ import (
 	"log/slog"
 	"net"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -35,6 +34,8 @@ type hostedActor struct {
 	// Attribution is available during boot.
 	attribution resources.ActorAttribution
 	network     *ateomnet.SandboxSession
+	// resolvConf is the actor's resolver bind source, removed with its network.
+	resolvConf string
 	// Set once the containers exist.
 	session *workloadSession
 }
@@ -48,7 +49,7 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 	if old, ok := s.actors[attribution.UID]; ok {
 		stale = old.network
 	} else if len(s.actors)+s.draining >= s.maxActors {
-		return nil, nil, status.Errorf(codes.ResourceExhausted, "worker is full: %d actors", s.maxActors)
+		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
 	hosted := &hostedActor{attribution: attribution}
 	s.actors[attribution.UID] = hosted
@@ -56,7 +57,7 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 }
 
 // hostActor sets up the actor's network, replacing any stale one.
-func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution) (*hostedActor, error) {
+func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateompb.ActorDirs) (*hostedActor, error) {
 	uid := attribution.UID
 	if uid == "" {
 		return nil, fmt.Errorf("actor UID is required")
@@ -78,9 +79,9 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 	session, err := ateomnet.ServeSandbox(ctx, ateomnet.SandboxNetworkConfig{
 		ActorUID:   uid,
 		Veth:       true,
-		EgressPort: s.atunnelEgressPort,
+		EgressPort: s.tunnel.EgressPort,
 		DNSPort:    atunnel.DNSPort,
-	}, s.atunnelEgress, s.dnsRelay)
+	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()
 		delete(s.actors, uid)
@@ -89,7 +90,8 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 	}
 
 	// Use the actor's gateway as its DNS resolver.
-	if _, err := actorResolvConf(uid); err != nil {
+	resolvConf, err := actorResolvConf(actorDirs)
+	if err != nil {
 		_ = session.Close(ctx)
 		s.actorsMu.Lock()
 		delete(s.actors, uid)
@@ -99,6 +101,7 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 
 	s.actorsMu.Lock()
 	hosted.network = session
+	hosted.resolvConf = resolvConf
 	s.actorsMu.Unlock()
 	return hosted, nil
 }
@@ -122,7 +125,7 @@ func (s *AteomService) unhostActor(ctx context.Context, actorUID string) error {
 		s.actorsMu.Unlock()
 	}()
 
-	removeActorResolvConf(ctx, actorUID)
+	removeActorResolvConf(ctx, hosted.resolvConf)
 	if hosted.network == nil {
 		return nil
 	}

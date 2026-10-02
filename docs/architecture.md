@@ -373,11 +373,14 @@ Handles actor-aware routing and automatic re-animation.
 ### Control Plane Isolation
 
 Control plane components can be kept on nodes of their own,
-away from the workers. Those nodes carry the label
-`ate.dev/workloadType=ate-control-plane` and the taint
-`ate.dev/workloadType=ate-control-plane:NoSchedule`; when
-configured via the installer, the control plane
-workloads select the label and tolerate the taint.
+away from the workers, so a burst of worker or actor load cannot starve them.
+When configured via the installer, the control plane workloads select a
+node label and tolerate the matching `NoSchedule` taint:
+
+* `ate.dev/workloadType=ate-control-plane`: a small pool shared by every
+  control plane workload except postgres. Each workload's replicas are spread
+  across its nodes on a best-effort basis.
+* `ate.dev/workloadType=ate-postgres`: a one-node pool for postgres alone.
 
 ## Actor Lifecycle
 

@@ -7,7 +7,7 @@ guidelines for collaborating on this project.
 
 ## Code of conduct
 
-Please read and internalize our [code of conduct](code-of-conduct.md).  We want
+Please read and internalize our [code of conduct](CODE_OF_CONDUCT.md).  We want
 this to be a welcoming and inclusive community, and we expect everyone to
 adhere to the code of conduct at all times.  If you see someone violating the
 code of conduct, please report it to the maintainers immediately.  We take all

@@ -23,10 +23,10 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/actorlock"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -69,7 +69,7 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}); status.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {
@@ -85,7 +85,7 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 		maxActors: 1,
 		draining:  1,
 	}
-	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}); err == nil {
+	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil); err == nil {
 		t.Error("admitted an actor while a draining one still held the only place")
 	}
 }

@@ -1288,8 +1288,11 @@ type CheckpointWorkloadResponse struct {
 	// (relative names) for atelet to ship to object storage. Each runtime reports
 	// its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
 	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// data_snapshot_files is the subset of snapshot_files that restores the
+	// actor at DATA scope on its own. Empty when the capture holds no durable data.
+	DataSnapshotFiles []string `protobuf:"bytes,2,rep,name=data_snapshot_files,json=dataSnapshotFiles,proto3" json:"data_snapshot_files,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CheckpointWorkloadResponse) Reset() {
@@ -1325,6 +1328,13 @@ func (*CheckpointWorkloadResponse) Descriptor() ([]byte, []int) {
 func (x *CheckpointWorkloadResponse) GetSnapshotFiles() []string {
 	if x != nil {
 		return x.SnapshotFiles
+	}
+	return nil
+}
+
+func (x *CheckpointWorkloadResponse) GetDataSnapshotFiles() []string {
+	if x != nil {
+		return x.DataSnapshotFiles
 	}
 	return nil
 }
@@ -1994,9 +2004,10 @@ const file_ateom_proto_rawDesc = "" +
 	"actor_dirs\x18\v \x01(\v2\x10.ateom.ActorDirsR\tactorDirs\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x91\x06\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x91\x06\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +

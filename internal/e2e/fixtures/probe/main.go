@@ -22,12 +22,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -293,13 +295,53 @@ func memTotalBytes() (int64, error) {
 	return 0, os.ErrNotExist
 }
 
-// fetch GETs ?url= over the actor's normal egress path and reports the
-// outcome, doing TLS with the trust anchors selected by ?roots=: "bundle"
-// (the default) loads the projected trust bundle at trustFile, "system" uses
-// the image's system roots. TestActorEgressMITMTrust documents why each mode
-// passes or fails. TLS failures land in the "error" field rather than the
-// HTTP status: a verification failure is a result for the suite to assert
-// on, not a broken probe.
+// maxFetchBody caps the response body fetch echoes back, so a large origin
+// response cannot balloon the probe's reply. 64 KiB comfortably holds the
+// header-echo documents the suites assert on.
+const maxFetchBody = 64 << 10
+
+// parseFetchHeaders parses repeated ?header=<name>:<value> parameters into
+// request headers. The value is taken verbatim after the first colon.
+func parseFetchHeaders(params []string) (http.Header, error) {
+	headers := http.Header{}
+	for _, p := range params {
+		name, value, ok := strings.Cut(p, ":")
+		if !ok || name == "" {
+			return nil, fmt.Errorf("header parameter %q is not <name>:<value>", p)
+		}
+		headers.Add(name, value)
+	}
+	return headers, nil
+}
+
+// fetch causes probe to issue an HTTP(S) GET to exercise the actor's egress
+// path. Parameters to the fetch are passed as URL query parameters:
+//
+//   - url=<URL to fetch>: required.
+//   - roots=bundle|system: the TLS trust anchors. "bundle" (the default)
+//     loads the projected trust bundle at trustFile; "system" uses the
+//     image's system roots. TestActorEgressMITMTrust documents why each mode
+//     passes or fails.
+//   - header=<name>:<value>: repeatable; set on the request, so a suite can
+//     pre-seed a header and observe whether the gateway overwrites it.
+//   - dial=<host:port>: connect to this address instead of the URL's host,
+//     which still supplies the SNI and the Host header. A suite uses it to
+//     prove the gateway dials the name the SNI claims, not the address the
+//     actor dialed.
+//
+// The reply is a JSON object with the origin's "status" and the first 64 KiB
+// of its "body", so a suite can assert on what the origin received (e.g. an
+// injected credential echoed back by a headers-echo endpoint). Failures land
+// in "error" rather than the HTTP status: a TLS verification failure is a
+// result for the suite to assert on, not a broken probe.
+//
+// Redirects are not followed — a cross-scheme redirect would silently hop
+// between the gateway's cleartext and TLS legs, flipping the very behavior
+// (credential injection) some suites assert on — so the first response is
+// the result.
+//
+// TODO: Accept the parameters as a JSON request body as well, which avoids
+// the escaping that query-string values need.
 func fetch(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]string{}
 	url := r.URL.Query().Get("url")
@@ -319,6 +361,20 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, resp)
 		return
 	}
+	headers, err := parseFetchHeaders(r.URL.Query()["header"])
+	if err != nil {
+		resp["error"] = err.Error()
+		writeJSON(w, resp)
+		return
+	}
+	dial := r.URL.Query().Get("dial")
+	if dial != "" {
+		if _, _, err := net.SplitHostPort(dial); err != nil {
+			resp["error"] = "dial parameter: " + err.Error()
+			writeJSON(w, resp)
+			return
+		}
+	}
 	tlsCfg := &tls.Config{}
 	if roots != "system" {
 		b, err := os.ReadFile(trustFile)
@@ -335,19 +391,44 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		}
 		tlsCfg.RootCAs = pool
 	}
+	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	if dial != "" {
+		var dialer net.Dialer
+		transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, dial)
+		}
+	}
 	client := &http.Client{
 		Timeout:   20 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-	res, err := client.Get(url)
+	// The transport is per request, so don't leave its connection idle.
+	defer client.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		resp["error"] = err.Error()
+		writeJSON(w, resp)
+		return
+	}
+	for name, values := range headers {
+		req.Header[name] = values
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		resp["error"] = err.Error()
 		writeJSON(w, resp)
 		return
 	}
 	defer res.Body.Close()
-	_, _ = io.Copy(io.Discard, res.Body)
 	resp["status"] = strconv.Itoa(res.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxFetchBody))
+	if err != nil {
+		resp["error"] = "reading response body: " + err.Error()
+	}
+	resp["body"] = string(body)
 	writeJSON(w, resp)
 }
 

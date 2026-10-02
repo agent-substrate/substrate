@@ -2812,7 +2812,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-1",
 				WorkerPodUid:    podUID,
-				WorkerPodIp:     "127.0.0.1",
+				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
 			},
 		},
@@ -2843,7 +2843,7 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		WorkerPodUid:    podUID,
-		Ip:              "127.0.0.1",
+		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
 		SandboxClass:    "gvisor",
 		Labels:          map[string]string{poolLabelKey: ns},
@@ -3042,6 +3042,89 @@ func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
 	if got := restoreReq.GetBaseConfig().GetSnapshotUri(); got != golden {
 		t.Errorf("restore base_config uri = %q, want the template's golden %q", got, golden)
 	}
+}
+
+// TestSuspendActor_ReplacedSnapshotReleaseFailure verifies that object storage
+// failing to delete the snapshot a suspend replaces does not fail the suspend.
+// By then the new snapshot is written and the worker released, so the actor
+// must still reach SUSPENDED and stay resumable; the replaced snapshot is left
+// behind rather than the actor wedged in SUSPENDING.
+func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-release-failure")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// A first suspend gives the actor an external snapshot of its own for the
+	// second one to replace.
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor (first) failed: %v", err)
+	}
+	first, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor (first) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	replacedURI := first.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	assertSnapshotOwnedByActor(t, first.GetActor(), replacedURI)
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor (second) failed: %v", err)
+	}
+	tc.objectStore.OnDelete = func(string, string) error {
+		return status.Error(codes.Unavailable, "object storage is unavailable")
+	}
+	second, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	tc.objectStore.OnDelete = nil
+	if err != nil {
+		t.Fatalf("SuspendActor (second) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	if got := second.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state after the second suspend = %v, want SUSPENDED", got)
+	}
+	freshURI := second.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if freshURI == "" || freshURI == replacedURI {
+		t.Errorf("external snapshot after the second suspend = %q, want a new one replacing %q", freshURI, replacedURI)
+	}
+	assertSnapshotPresent(t, tc, freshURI)
+	assertSnapshotPresent(t, tc, replacedURI)
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor after the release failure failed: %v", err)
+	}
+	if got := tc.fakeAtelet.lastRestoreRequest().GetExternalConfig().GetSnapshotUri(); got != freshURI {
+		t.Errorf("restore snapshot uri = %q, want the second suspend's %q", got, freshURI)
+	}
+
+	// A later suspend releases only the snapshot it replaces; the one the
+	// failed release left behind stays until the actor is deleted, which
+	// collects everything under the actor's prefix.
+	third, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor (third) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	lastURI := third.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	assertSnapshotCollected(t, tc, freshURI)
+	assertSnapshotPresent(t, tc, replacedURI)
+
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	assertSnapshotCollected(t, tc, replacedURI)
+	assertSnapshotCollected(t, tc, lastURI)
 }
 
 // TestResumeActor_NoWorkers tests that resuming an actor fails when no free workers are available.
@@ -4058,7 +4141,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -4310,7 +4393,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -4950,8 +5033,9 @@ func TestMintActorJWT_Success(t *testing.T) {
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		ActorUid: createResp.GetMetadata().GetUid(),
-		Audience: []string{"foo"},
+		ActorUid:          createResp.GetMetadata().GetUid(),
+		Audience:          []string{"foo"},
+		ExpirationSeconds: 1800,
 	})
 	if err != nil {
 		t.Fatalf("Error while calling MintActorJWT: %v", err)
@@ -4973,8 +5057,21 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if claims.Issuer != testActorJWTIssuer {
 		t.Errorf("iss = %q, want %q", claims.Issuer, testActorJWTIssuer)
 	}
-	if want := "atespaces:" + testAtespace + ":actors:id1"; claims.Subject != want {
+	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
+	}
+	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
+}
+
+// assertActorJWTLifetime checks that expires_at matches the exp claim and that
+// the token is valid for want after it was issued.
+func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJWTResponse, claims actoridjwt.WireClaims, want time.Duration) {
+	t.Helper()
+	if got, exp := resp.GetExpiresAt().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
+		t.Errorf("expires_at = %v, want the exp claim %v", got, exp)
+	}
+	if got := time.Duration(claims.Expiration-claims.IssuedAt) * time.Second; got != want {
+		t.Errorf("exp - iat = %v, want %v", got, want)
 	}
 }
 

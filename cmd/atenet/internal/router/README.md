@@ -67,15 +67,15 @@ cannot pick the egress path by crafting one. `router` itself does the wiring.
 
 ## egress legs
 
-The egress gateway calls the same ext_proc sidecar from two Envoy filter
-chains on the plain gateway and three on the sdsmint gateway, and the chain
+The egress gateway calls the same ext_proc sidecar from three Envoy filter
+chains, and the chain
 name (`xds.filter_chain_name`) tells the handler which leg it is on:
 
 | Leg (filter chain) | Where | Sees | Decides |
 | --- | --- | --- | --- |
-| `egress` | outer CONNECT, both gateways | actor certificate, the `IP:port` the actor dialed | per TCP connection: identity, and that the actor has a policy with rules |
-| `egress_cleartext` | HTTP the actor sent in the clear, both gateways | `Host`, method, headers, the dialed `IP:port` | **every request**, the `http` rules |
-| `egress_tls_mitm` | TLS the sdsmint gateway terminated | same as cleartext, plus the connection's SNI | **every request**, the `https` rules |
+| `egress` | outer CONNECT | actor certificate, the `IP:port` the actor dialed | per TCP connection: identity, and that the actor has a policy with rules |
+| `egress_cleartext` | HTTP the actor sent in the clear | `Host`, method, headers, the dialed `IP:port` | **every request**, the `http` rules |
+| `egress_tls_mitm` | TLS the gateway terminated | same as cleartext, plus the connection's SNI | **every request**, the `https` rules |
 
 A request leg decides the request on its `Host`, a DNS name or an IP literal,
 and the port the actor dialed: the `http` rules on the cleartext chain, the
@@ -84,8 +84,8 @@ describes. On the MITM chain the connection's SNI and port must fall under an
 `https` rule first, which is the half of that rule the API evaluates at the
 ClientHello. The answer (`dev.ate.egress:dial`) picks the route, and there is
 only one today: the `Host` that was policed is resolved and dialed by name
-through `dynamic_forward_proxy`, with TLS re-originated to it on the sdsmint
-gateway. There is no route without an answer.
+through `dynamic_forward_proxy`, with TLS re-originated to it on the TLS
+leg. There is no route without an answer.
 
 The port a rule names is the one the actor dialed, never a port in the
 request's `Host`. The outer chain shares the CONNECT authority with the inner

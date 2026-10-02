@@ -34,6 +34,7 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Internal proto (atelet / ateom) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
+| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `pkg/`; see `internal/plugins/README.md` |
 
 See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 
@@ -45,6 +46,7 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Binaries**: `make build` (builds images and `kubectl-ate`) or `make build-atectl`
 - **Images**: `make build-images` (uses ko to build container images)
 - **Demos**: `make build-demos`
+- **Release images**: `make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` (every image a pre-built install needs, all tagged `TAG`, including the docker-built `envoy-dataplane`; `make build-envoy-dataplane` builds only that one)
 
 ### Testing and Verification
 - **Run Unit Tests**: `make test`
@@ -59,6 +61,14 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
 - **Comments**: Keep them brief and to the point. Comment the final state of the code, not the path taken to it — a problem that only existed partway through writing the change is noise to the next reader, as is a pointer to a scratch or planning file that isn't in the repository.
 - **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
+
+## Backward Compatibility
+
+<!-- TODO #2004: Remove this section at the v1.0.0 release. -->
+
+Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code to stay compatible with older clients, binaries, protos, flags, or config.
+Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
+Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
 
 ## Commit Messages
 
@@ -83,6 +93,7 @@ See the [metric registry](docs/observability.md#the-metric-registry) section of 
 2. Ensure changes do not break existing tests.
 3. Run `make verify` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
 4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp bootstrap`).
+5. A test that skips when a precondition is missing — Docker, a cluster, an artifact directory — must **fail** on it in CI, because a skip and a pass are the same exit code. Resolve strictness through a named predicate rather than an inline `os.Getenv("CI")`; `cmd/ateapi/internal/store/dockerenv.Required()` is the reference implementation. Prove the strict branch red before merging: a guard only ever observed passing is not known to guard anything. See `docs/dev/best-practices/ci-fail-closed.md`.
 
 ## Security Considerations
 

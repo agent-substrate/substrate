@@ -51,8 +51,21 @@ test_args=(-count=1 -timeout "${ROOT_TEST_TIMEOUT:-10m}" "$@")
 # that under sudo would leave root-owned entries in the user's build cache.
 # The runner is only ever a prefix — the privilege dispatch below is unchanged,
 # because a root-gated package run without root self-skips and reports success.
+# CI requires a JUnit file; see hack/run-e2e.sh for the same precondition.
+if [[ -z "${ROOT_JUNIT_FILE:-}" && "${CI:-}" == "true" ]]; then
+  echo "run-root-tests.sh: ROOT_JUNIT_FILE must be set when CI=true." >&2
+  echo "  Set it to a path unique to this run, e.g." >&2
+  echo "    ROOT_JUNIT_FILE=\"\${ARTIFACTS}/root.xml\"" >&2
+  echo "  CI verifies each run reported at least one test; a run that writes" >&2
+  echo "  no JUnit file cannot be verified." >&2
+  exit 1
+fi
+
 if [[ -n "${ROOT_JUNIT_FILE:-}" ]]; then
   mkdir -p "$(dirname "${ROOT_JUNIT_FILE}")"
+  # Claim the path before running. Runs as the invoking user, before the sudo
+  # dispatch below, so the manifest is not left root-owned.
+  go -C "${ROOT}/tools/junittool" run . register "${ROOT_JUNIT_FILE}"
   runner=("$("${ROOT}/hack/run-tool.sh" --print-bin-path gotestsum)"
     --junitfile "${ROOT_JUNIT_FILE}"
     --jsonfile "${ROOT_JUNIT_FILE%.xml}.json"
