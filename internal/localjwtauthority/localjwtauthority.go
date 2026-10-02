@@ -219,11 +219,20 @@ func (p *ConcretePool) RemoveAuthority(id string) error {
 	if i < 0 {
 		return fmt.Errorf("authority %q not present", id)
 	}
-	if id == p.ActiveForSigning || (p.ActiveForSigning == "" && i == 0) {
+	if id == p.ActiveID() {
 		return fmt.Errorf("authority %q is active for signing", id)
 	}
 	p.Authorities = slices.Delete(p.Authorities, i, i+1)
 	return nil
+}
+
+// ActiveID returns the ID of the authority that signs: ActiveForSigning, or
+// the first authority's when none is designated.
+func (p *ConcretePool) ActiveID() string {
+	if p.ActiveForSigning == "" && len(p.Authorities) > 0 {
+		return p.Authorities[0].ID
+	}
+	return p.ActiveForSigning
 }
 
 // index returns the position of the authority with id, or -1.

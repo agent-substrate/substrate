@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -224,5 +225,35 @@ func TestUpdateJWTPoolMissingSecret(t *testing.T) {
 	})
 	if !k8errors.IsNotFound(err) {
 		t.Errorf("err = %v, want NotFound", err)
+	}
+}
+
+func TestListJWTKeys(t *testing.T) {
+	kc := newPoolClientset(t)
+	secrets := kc.CoreV1().Secrets("ate-system")
+	next, err := localjwtauthority.GenerateAuthority("RS256", "next")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := updateJWTPool(context.Background(), secrets, "actor-id-jwt-pool", func(p *localjwtauthority.ConcretePool) error {
+		return p.AddAuthority(next)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, pool, err := getJWTPool(context.Background(), secrets, "actor-id-jwt-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := printJWTKeys(&out, pool); err != nil {
+		t.Fatal(err)
+	}
+	want := "" +
+		"ACTIVE   KEY ID   ALGORITHM\n" +
+		"*        old      ES256\n" +
+		"         next     RS256\n"
+	if diff := cmp.Diff(want, out.String()); diff != "" {
+		t.Errorf("output (-want +got):\n%s", diff)
 	}
 }

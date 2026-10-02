@@ -17,6 +17,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"text/tabwriter"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
@@ -143,6 +145,23 @@ var makeJwtPoolCmd = &cobra.Command{
 	},
 }
 
+var listJwtKeysCmd = &cobra.Command{
+	Use:   "list-jwt-keys",
+	Short: "List the keys in a JWT authority pool secret",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kc, err := newKubeClient()
+		if err != nil {
+			return err
+		}
+
+		_, pool, err := getJWTPool(cmd.Context(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag)
+		if err != nil {
+			return err
+		}
+		return printJWTKeys(cmd.OutOrStdout(), pool)
+	},
+}
+
 var addJwtKeyCmd = &cobra.Command{
 	Use:   "add-jwt-key",
 	Short: "Add an inactive signing key to a JWT authority pool secret",
@@ -221,24 +240,16 @@ so remove it only after the last of them has expired.`,
 // conflict reruns change against the current pool.
 func updateJWTPool(ctx context.Context, secrets typedcorev1.SecretInterface, name string, change func(*localjwtauthority.ConcretePool) error) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		secret, err := secrets.Get(ctx, name, metav1.GetOptions{})
+		secret, pool, err := getJWTPool(ctx, secrets, name)
 		if err != nil {
-			return fmt.Errorf("while reading pool secret: %w", err)
-		}
-		wire, ok := secret.Data["pool"]
-		if !ok {
-			return fmt.Errorf("secret %s/%s has no \"pool\" key", secret.Namespace, secret.Name)
-		}
-		pool, err := localjwtauthority.Unmarshal(wire)
-		if err != nil {
-			return fmt.Errorf("while parsing pool: %w", err)
+			return err
 		}
 
 		if err := change(pool); err != nil {
 			return err
 		}
 
-		wire, err = localjwtauthority.Marshal(pool)
+		wire, err := localjwtauthority.Marshal(pool)
 		if err != nil {
 			return fmt.Errorf("while marshaling pool: %w", err)
 		}
@@ -248,6 +259,38 @@ func updateJWTPool(ctx context.Context, secrets typedcorev1.SecretInterface, nam
 		}
 		return nil
 	})
+}
+
+// getJWTPool reads the named secret and parses the pool it holds.
+func getJWTPool(ctx context.Context, secrets typedcorev1.SecretInterface, name string) (*corev1.Secret, *localjwtauthority.ConcretePool, error) {
+	secret, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("while reading pool secret: %w", err)
+	}
+	wire, ok := secret.Data["pool"]
+	if !ok {
+		return nil, nil, fmt.Errorf("secret %s/%s has no \"pool\" key", secret.Namespace, secret.Name)
+	}
+	pool, err := localjwtauthority.Unmarshal(wire)
+	if err != nil {
+		return nil, nil, fmt.Errorf("while parsing pool: %w", err)
+	}
+	return secret, pool, nil
+}
+
+// printJWTKeys prints the ID and algorithm of every key in the pool, marking
+// the one that signs. It prints nothing about the private keys.
+func printJWTKeys(out io.Writer, pool *localjwtauthority.ConcretePool) error {
+	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "ACTIVE\tKEY ID\tALGORITHM")
+	for _, authority := range pool.Authorities {
+		active := ""
+		if authority.ID == pool.ActiveID() {
+			active = "*"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", active, authority.ID, authority.Algorithm)
+	}
+	return w.Flush()
 }
 
 // newKubeClient builds a client from the --kubeconfig and --context flags.
@@ -299,6 +342,11 @@ func init() {
 	makeJwtPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "Create the secret with this name")
 	_ = makeJwtPoolCmd.MarkFlagRequired("name")
 	adminCmd.AddCommand(makeJwtPoolCmd)
+
+	listJwtKeysCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "The namespace of the pool secret")
+	listJwtKeysCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "The name of the pool secret")
+	_ = listJwtKeysCmd.MarkFlagRequired("name")
+	adminCmd.AddCommand(listJwtKeysCmd)
 
 	addJwtKeyCmd.Flags().StringVar(&jwtAlgFlag, "alg", "ES256", "Signing algorithm of the new key.  One of [ES256, RS256]")
 	addJwtKeyCmd.Flags().StringVar(&jwtKeyIDFlag, "key-id", "", "The ID of the new key.  Defaults to the base64url SHA-256 of the key's PKIX encoding")
