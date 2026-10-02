@@ -22,7 +22,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
-	"github.com/agent-substrate/substrate/internal/env"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -50,40 +49,6 @@ import (
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
-
-var otelEndpointEnv = env.Var[string]{
-	Name:        "OTEL_EXPORTER_OTLP_ENDPOINT",
-	Default:     "",
-	Description: "Default for --otel-exporter-otlp-endpoint. Empty disables injection of worker telemetry settings; a flag overrides the environment.",
-}
-
-var otelMetricExportIntervalEnv = env.Var[string]{
-	Name:    "OTEL_METRIC_EXPORT_INTERVAL",
-	Default: "",
-	Description: `Metric export interval in milliseconds, used as the default for --otel-metric-export-interval.
-An explicit flag overrides this value. Forwarded unchanged to workers when an OTLP endpoint is set;
-validation is left to the worker SDK. Empty uses the SDK default of 60000 ms.`,
-}
-
-var otelMetricExportTimeoutEnv = env.Var[string]{
-	Name:    "OTEL_METRIC_EXPORT_TIMEOUT",
-	Default: "",
-	Description: `Per-export timeout in milliseconds, used as the default for --otel-metric-export-timeout.
-An explicit flag overrides this value. Forwarded unchanged to workers when an OTLP endpoint is set;
-validation is left to the worker SDK. Empty uses the SDK default of 30000 ms.`,
-}
-
-var otelTracesSamplerEnv = env.Var[string]{
-	Name:        "OTEL_TRACES_SAMPLER",
-	Default:     "",
-	Description: "Default for --otel-traces-sampler, forwarded to workers when an OTLP endpoint is set. Empty keeps the worker sampling default.",
-}
-
-var otelTracesSamplerArgEnv = env.Var[string]{
-	Name:        "OTEL_TRACES_SAMPLER_ARG",
-	Default:     "",
-	Description: "Default for --otel-traces-sampler-arg, forwarded to workers only when an OTLP endpoint and sampler are set.",
-}
 
 var (
 	scheme   = runtime.NewScheme()

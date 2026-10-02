@@ -22,15 +22,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/env"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
-
-var otlpCollectorEndpointEnv = env.Var[string]{
-	Name:        "OTEL_EXPORTER_OTLP_ENDPOINT",
-	Default:     "",
-	Description: "Default for --otlp-collector-address: host:port or http:// URL for Envoy tracing. Empty or invalid values disable Envoy tracing.",
-}
 
 func NewRouterCmd() *cobra.Command {
 	var cfg routerConfig

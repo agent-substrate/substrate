@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/env"
 	"golang.org/x/sync/errgroup"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -458,14 +457,6 @@ func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx
 		}
 		return pools
 	}
-}
-
-var nodeNameEnv = env.Var[string]{
-	Name:    "NODE_NAME",
-	Default: "",
-	Description: `Name of the Kubernetes node hosting the atelet pod, injected through the Downward API
-from spec.nodeName. Used to look up worker-pool labels for actor statistics.
-Unset or empty values omit those labels.`,
 }
 
 // Metric names follow the OTel semantic-convention shape for container

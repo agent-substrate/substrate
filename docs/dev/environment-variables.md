@@ -1,11 +1,14 @@
 # Declaring Go environment variables
 
-Declare production settings beside their consumers with `internal/env`:
+Declare production settings in an `env.go` file beside their consumers with
+`internal/env`. Share declarations with identical defaults and semantics in
+the package that owns the setting, such as `internal/objectstore` for snapshot
+storage settings:
 
 ```go
 var storageBackend = env.Var[string]{
     Name:        "ATE_STORAGE_BACKEND",
-    Default:     "",
+    Default:     "gcs",
     Description: "Snapshot backend: exact s3 selects S3; every other value uses GCS.",
 }
 ```
