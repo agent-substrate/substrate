@@ -58,9 +58,14 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		return err
 	}
 	if readWriteDSN == "" && cloudsql.Adopted {
-		// Keep the credentials paired with an adopted Cloud SQL instance.
-		if readWriteDSN, ownerDSN, err = e.recordedConnectionStrings(ctx); err != nil {
+		// Fill missing credentials from the adopted Cloud SQL configuration.
+		recordedReadWriteDSN, recordedOwnerDSN, err := e.recordedConnectionStrings(ctx)
+		if err != nil {
 			return err
+		}
+		readWriteDSN = recordedReadWriteDSN
+		if ownerDSN == "" {
+			ownerDSN = recordedOwnerDSN
 		}
 	}
 	if readWriteDSN == "" {

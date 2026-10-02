@@ -173,11 +173,14 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 }
 
 func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
+	const recordedDSN = "user=svc@p.iam host=127.0.0.1 dbname=atepg"
+	const explicitOwnerDSN = "user=new-owner@p.iam host=127.0.0.1 dbname=atepg"
 	for _, tc := range []struct {
 		name          string
 		cfg           config.Config
 		wantReadWrite string
 		wantOwner     string
+		wantOwnerDSN  string
 		wantSchema    string
 		wantPoolSize  string
 	}{
@@ -189,21 +192,24 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 			},
 			wantReadWrite: "tenant_readwrite",
 			wantOwner:     "tenant_owner",
+			wantOwnerDSN:  recordedDSN,
 			wantSchema:    "tenant_schema",
 			wantPoolSize:  "20",
 		},
 		{
 			name: "explicit overrides win",
 			cfg: config.Config{
-				PostgresReadWriteRole:    config.DefaultPostgresReadWriteRole,
-				PostgresOwnerRole:        config.DefaultPostgresOwnerRole,
-				PostgresReadWriteRoleSet: true,
-				PostgresOwnerRoleSet:     true,
-				PostgresSchema:           "other_schema",
-				PostgresPoolMaxConns:     "30",
+				PostgresReadWriteRole:         config.DefaultPostgresReadWriteRole,
+				PostgresOwnerRole:             config.DefaultPostgresOwnerRole,
+				PostgresReadWriteRoleSet:      true,
+				PostgresOwnerRoleSet:          true,
+				PostgresOwnerConnectionString: explicitOwnerDSN,
+				PostgresSchema:                "other_schema",
+				PostgresPoolMaxConns:          "30",
 			},
 			wantReadWrite: config.DefaultPostgresReadWriteRole,
 			wantOwner:     config.DefaultPostgresOwnerRole,
+			wantOwnerDSN:  explicitOwnerDSN,
 			wantSchema:    "other_schema",
 			wantPoolSize:  "30",
 		},
@@ -223,8 +229,8 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 				&corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
 					Data: map[string][]byte{
-						"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("user=svc@p.iam host=127.0.0.1 dbname=atepg"),
-						"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      []byte("user=svc@p.iam host=127.0.0.1 dbname=atepg"),
+						"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte(recordedDSN),
+						"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      []byte(recordedDSN),
 						"ATE_API_POSTGRES_SCHEMA":                       []byte("tenant_schema"),
 					},
 				},
@@ -250,10 +256,14 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 			if cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"] != tc.wantReadWrite ||
 				cm.Data["ATE_API_POSTGRES_OWNER_ROLE"] != tc.wantOwner ||
 				cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"] != tc.wantPoolSize ||
-				secret.StringData["ATE_API_POSTGRES_SCHEMA"] != tc.wantSchema {
-				t.Fatalf("identity after redeploy: roles %q/%q, schema %q, pool size %q",
+				secret.StringData["ATE_API_POSTGRES_SCHEMA"] != tc.wantSchema ||
+				secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != recordedDSN ||
+				secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != tc.wantOwnerDSN {
+				t.Fatalf("identity after redeploy: roles %q/%q, schema %q, pool size %q, connections %q/%q",
 					cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"], cm.Data["ATE_API_POSTGRES_OWNER_ROLE"],
-					secret.StringData["ATE_API_POSTGRES_SCHEMA"], cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"])
+					secret.StringData["ATE_API_POSTGRES_SCHEMA"], cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"],
+					secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"],
+					secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"])
 			}
 		})
 	}
