@@ -501,6 +501,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -519,7 +520,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	var registration *registeredActor
 	defer func() {
 		if err != nil && registration != nil {
-			s.systemInfoVolumes.DeregisterOwned(actorUID, registration)
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
@@ -1084,6 +1085,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
 	// node or the disk itself.
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -1149,7 +1151,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// before this defer can read registration, so the handoff is synchronized.
 	defer func() {
 		if err != nil && registration != nil {
-			s.systemInfoVolumes.DeregisterOwned(actorUID, registration)
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
 

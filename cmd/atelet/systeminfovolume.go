@@ -107,8 +107,8 @@ func newSystemInfoVolumeRefresher(getBundle func(string) (*certsv1.ClusterTrustB
 // Register records actorUID's system-info volumes and writes their contents
 // from current cluster state. If actorUID is already registered (for example
 // after a worker pod crash left a stale entry without Terminate), the previous
-// registration is superseded. The returned pointer identifies this
-// registration for failure cleanup.
+// registration is superseded, even if this registration's initial write fails.
+// The failed registration is removed without restoring the previous one.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) (*registeredActor, error) {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
 	// Held until the initial write finishes so a refresh cannot interleave.
@@ -136,7 +136,7 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 				actor.stale = true
 			}
 			r.mu.Unlock()
-			return actor, fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
+			return nil, fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
 		}
 	}
 	return actor, nil
@@ -158,15 +158,18 @@ func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	}
 }
 
-// DeregisterOwned removes actorUID only when it still points at owner. This
+// DeregisterOwned removes owner only when its UID still points at it. This
 // protects a newer registration from cleanup belonging to an older operation.
-func (r *systemInfoVolumeRefresher) DeregisterOwned(actorUID string, owner *registeredActor) {
+func (r *systemInfoVolumeRefresher) DeregisterOwned(owner *registeredActor) {
+	if owner == nil {
+		return
+	}
 	r.mu.Lock()
-	if r.actors[actorUID] != owner {
+	if r.actors[owner.uid] != owner {
 		r.mu.Unlock()
 		return
 	}
-	delete(r.actors, actorUID)
+	delete(r.actors, owner.uid)
 	r.mu.Unlock()
 
 	owner.mu.Lock()

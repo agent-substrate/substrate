@@ -567,7 +567,7 @@ func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
 func TestSystemInfoVolumeRefresher_StaleDeregisterPreservesNewerRegistration(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
-	r := newSystemInfoVolumeRefresher(store.lister, nil)
+	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
 
 	firstDir := t.TempDir()
 	firstVol := &systemInfoVolume{
@@ -582,13 +582,65 @@ func TestSystemInfoVolumeRefresher_StaleDeregisterPreservesNewerRegistration(t *
 
 	// This models cleanup from the first registration after the second one has
 	// become live. It must not remove the newer registration.
-	r.DeregisterOwned("uid-1", first)
+	r.DeregisterOwned(first)
 	if got := r.actors["uid-1"]; got != newer {
 		t.Fatalf("stale cleanup removed the newer registration: got %p, want %p", got, newer)
 	}
-	r.DeregisterOwned("uid-1", newer)
+	r.DeregisterOwned(newer)
 	if got := r.actors["uid-1"]; got != nil {
 		t.Fatalf("owned cleanup left registration B live: got %p", got)
+	}
+}
+
+func TestSystemInfoVolumeRefresher_DeregisterOwnedNil(t *testing.T) {
+	for _, registered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("registered=%v", registered), func(t *testing.T) {
+			r := newSystemInfoVolumeRefresher(ctbLister(t).Get, nil)
+			var current *registeredActor
+			if registered {
+				var err error
+				current, err = r.Register("uid-1", resources.ActorRef{}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("nil owner cleanup panicked: %v", p)
+				}
+			}()
+			r.DeregisterOwned(nil)
+			if r.actors["uid-1"] != current {
+				t.Error("nil owner cleanup removed an existing registration")
+			}
+		})
+	}
+}
+
+func TestSystemInfoVolumeRefresher_FailedReplacementDropsRegistration(t *testing.T) {
+	store := newCTBStore(t)
+	store.set(t, string(testCertPEM(t)))
+	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	dir := t.TempDir()
+	registerTrustVolume(t, r, dir, "uid-1")
+	previous := r.actors["uid-1"]
+	// A file in place of the new volume directory forces a real initial-write
+	// failure after the previous registration has been superseded.
+	blockedRoot := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blockedRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := r.Register("uid-1", resources.ActorRef{}, []*systemInfoVolume{{
+		Name: "trust", Root: blockedRoot, Spec: trustVolumeSpec("ca.pem"),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "while creating") {
+		t.Fatalf("Register error = %v, want initial filesystem write failure", err)
+	}
+	if owner != nil {
+		t.Error("failed Register returned an owner; want nil after self-cleanup")
+	}
+	if r.actors["uid-1"] != nil || !previous.stale {
+		t.Error("failed replacement must drop its entry and leave the superseded registration stale")
 	}
 }
 
@@ -704,14 +756,16 @@ func TestSystemInfoVolumeRegister_TrustBundle(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "not found") || !strings.Contains(err.Error(), `"trust"`) {
 			t.Errorf("Register = %v, want not-found error naming the volume", err)
 		}
-		r.DeregisterOwned("uid-2", owner)
+		if owner != nil {
+			t.Error("failed Register returned an owner; want nil after self-cleanup")
+		}
 		if got := r.actors["uid-2"]; got != nil {
-			t.Errorf("failed initial Register left an entry after owned cleanup: %p", got)
+			t.Errorf("failed initial Register left an entry without caller cleanup: %p", got)
 		}
 	})
 
 	t.Run("failed initial write cleanup preserves a newer registration", func(t *testing.T) {
-		r := newSystemInfoVolumeRefresher(ctbLister(t), nil)
+		r := newSystemInfoVolumeRefresher(ctbLister(t).Get, nil)
 		bad := &systemInfoVolume{Name: "trust", Root: filepath.Join(t.TempDir(), "trust"), Spec: trustVolumeSpec("ca.pem")}
 		owner, err := r.Register("uid-3", resources.ActorRef{Atespace: "team-a", Name: "actor-3"}, []*systemInfoVolume{bad})
 		if err == nil {
@@ -723,7 +777,7 @@ func TestSystemInfoVolumeRegister_TrustBundle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newer Register: %v", err)
 		}
-		r.DeregisterOwned("uid-3", owner)
+		r.DeregisterOwned(owner)
 		if got := r.actors["uid-3"]; got != newer {
 			t.Errorf("failed initial write cleanup removed newer registration: got %p, want %p", got, newer)
 		}
