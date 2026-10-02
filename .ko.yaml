@@ -20,6 +20,9 @@ defaultPlatforms:
 
 baseImageOverrides:
   github.com/agent-substrate/substrate/demos/sandbox: alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+  # atelet needs glibc to run the node's kubelet credential provider, which
+  # some platforms ship dynamically linked (e.g. AKS, GKE Ubuntu).
+  github.com/agent-substrate/substrate/cmd/atelet: gcr.io/distroless/base-debian13:latest@sha256:389cad21f73e4c37b94ffe5b13736d5a92bd5bd3c6c6b38c2be1c881e14ba2bd
   # ateom-microvm needs glibc (for the fetched cloud-hypervisor binary) and mount/umount
   # (to bind the image into the virtiofsd shared dir) — both in debian:13-slim but
   # not in the distroless static default.
